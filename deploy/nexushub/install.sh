@@ -261,6 +261,17 @@ def ensure_section(section, required_values, replace_values=None):
             insert_at += 1
 
 ensure_section(
+    "server",
+    {
+        "listen": '"127.0.0.1:15742"',
+    },
+    {
+        "listen": {
+            '"127.0.0.1:15732"',
+        },
+    },
+)
+ensure_section(
     "security",
     {
         "session_ttl_seconds": "31536000",
@@ -304,7 +315,7 @@ ensure_section(
         "update_command": '"/usr/local/bin/nexushub-codex-update"',
         "prune_command": '"/usr/local/bin/nexushub-codex-prune"',
         "panel_update_command": '"/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"',
-        "panel_precheck_command": '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"',
+        "panel_precheck_command": '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"',
     },
     {
         "update_command": {
@@ -314,6 +325,9 @@ ensure_section(
         "prune_command": {
             '"sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-prune"',
             '"/home/ubuntu/codex-admin/bin/codex-cloud-prune"',
+        },
+        "panel_precheck_command": {
+            '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"',
         },
     },
 )

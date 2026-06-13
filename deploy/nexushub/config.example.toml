@@ -1,5 +1,5 @@
 [server]
-listen = "127.0.0.1:15732"
+listen = "127.0.0.1:15742"
 public_base_url = "https://661313.xyz/nexushub/"
 trust_forwarded_headers = true
 
@@ -32,4 +32,4 @@ update_command = "/usr/local/bin/nexushub-codex-update"
 prune_command = "/usr/local/bin/nexushub-codex-prune"
 doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
 panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
-panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"
+panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"

@@ -21,7 +21,7 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-prune"
-HEALTH_URL="http://127.0.0.1:15732/healthz"
+HEALTH_URL="http://127.0.0.1:15742/healthz"
 GITHUB_TOKEN="${NEXUSHUB_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 CURL="${NEXUSHUB_CURL:-curl}"
 TAR="${NEXUSHUB_TAR:-tar}"
@@ -311,6 +311,8 @@ new_values = {
     "precheck_command": '"/usr/local/bin/nexushub-codex-precheck"',
     "update_command": '"/usr/local/bin/nexushub-codex-update"',
     "prune_command": '"/usr/local/bin/nexushub-codex-prune"',
+    "panel_update_command": '"/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"',
+    "panel_precheck_command": '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"',
 }
 
 changed = False
@@ -357,6 +359,11 @@ def ensure_section(section, required_values, replace_values=None, insert_if_miss
             changed = True
 
 ensure_section(
+    "server",
+    {"listen": '"127.0.0.1:15742"'},
+    {"listen": {'"127.0.0.1:15732"'}},
+)
+ensure_section(
     "paths",
     {
         "data_dir": '"/opt/nexushub"',
@@ -384,7 +391,16 @@ ensure_section(
         },
     },
 )
-ensure_section("update", new_values, replacements)
+ensure_section(
+    "update",
+    new_values,
+    {
+        **replacements,
+        "panel_precheck_command": {
+            '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"',
+        },
+    },
+)
 
 if changed:
     path.write_text("\n".join(lines) + "\n")

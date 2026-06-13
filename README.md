@@ -33,7 +33,7 @@ Conversation create/send/stop and thread actions use the private app-server brid
 /opt/nexushub/webui/
 ```
 
-The daemon listens on `127.0.0.1:15732`. Nginx should proxy public HTTPS traffic to that loopback port.
+The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
 `/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`; the installer imports `CC_SWITCH_LITE_SECRET_KEY` when available so existing encrypted Turnstile settings remain readable, otherwise it generates a new key.
 
 ## App-Server Bridge
@@ -103,7 +103,7 @@ The configured commands run fixed wrappers only, redact sensitive output, and at
 
 ```bash
 sudo systemctl is-active nexushub
-curl -fsS http://127.0.0.1:15732/healthz
+curl -fsS http://127.0.0.1:15742/healthz
 curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```

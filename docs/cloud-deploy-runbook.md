@@ -18,7 +18,7 @@ ssh 43.155.235.227 'sudo -n deploy/nexushub/install.sh --archive /tmp/nexushub-l
 
 The second command assumes a checked-out deployment script already exists at `deploy/nexushub/install.sh` on the host. If only the release archive is present, unpack it first and run the installer from the archive's `nexushub/deploy/install.sh`.
 
-The installed service listens on `127.0.0.1:15732`.
+The installed service listens on `127.0.0.1:15742`.
 
 Ensure `/opt/nexushub/config.toml` keeps the bridge local:
 
@@ -30,7 +30,7 @@ bridge_transport = "websocket"
 bridge_timeout_seconds = 20
 ```
 
-Nginx should proxy only `/nexushub/` to `127.0.0.1:15732`; do not expose root app-server, `/v1`, `/responses`, or metrics publicly.
+Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose root app-server, `/v1`, `/responses`, or metrics publicly.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -43,7 +43,7 @@ ssh 43.155.235.227 "sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' /opt/ne
 
 ```bash
 ssh 43.155.235.227 'sudo -n systemctl is-active nexushub'
-ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15732/healthz'
+ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
 curl -fsS https://661313.xyz/nexushub/
 ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
 ```
@@ -76,5 +76,5 @@ Restore binary and WebUI from the newest backup, then restart:
 
 ```bash
 sudo systemctl restart nexushub
-curl -fsS http://127.0.0.1:15732/healthz
+curl -fsS http://127.0.0.1:15742/healthz
 ```

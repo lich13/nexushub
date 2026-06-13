@@ -19,7 +19,7 @@ flowchart TD
     Nginx[Nginx /nexushub/] --> API
 ```
 
-The daemon listens on `127.0.0.1:15732` and is intended to be exposed only through an HTTPS reverse proxy under `/nexushub/`. Codex create/send/stop/thread actions use the local app-server bridge first. Official Codex state remains the source of truth for thread and rollout reads.
+The daemon listens on `127.0.0.1:15742` and is intended to be exposed only through an HTTPS reverse proxy under `/nexushub/`. Codex create/send/stop/thread actions use the local app-server bridge first. Official Codex state remains the source of truth for thread and rollout reads.
 
 ## Technology Stack
 

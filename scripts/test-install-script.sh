@@ -4,9 +4,43 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 INSTALL_SH="${ROOT}/deploy/nexushub/install.sh"
 UPDATE_SH="${ROOT}/deploy/nexushub/update.sh"
+DEPLOY_CLOUD_SH="${ROOT}/scripts/deploy-cloud.sh"
+CONFIG_EXAMPLE="${ROOT}/deploy/nexushub/config.example.toml"
+NGINX_LOCATION="${ROOT}/deploy/nexushub/nginx-location.conf"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
+
+python3 - "${CONFIG_EXAMPLE}" "${NGINX_LOCATION}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" <<'PY'
+from pathlib import Path
+import sys
+
+config, nginx, install, update, deploy = [Path(arg).read_text() for arg in sys.argv[1:]]
+
+checks = {
+    "config.example server listen": (config, 'listen = "127.0.0.1:15742"'),
+    "config.example panel precheck": (config, "http://127.0.0.1:15742/healthz"),
+    "nginx proxy target": (nginx, "proxy_pass http://127.0.0.1:15742/;"),
+    "install config migration": (install, "http://127.0.0.1:15742/healthz"),
+    "install legacy listen migration": (install, '"listen": \'"127.0.0.1:15742"\''),
+    "update health URL": (update, 'HEALTH_URL="http://127.0.0.1:15742/healthz"'),
+    "deploy smoke health URL": (deploy, "http://127.0.0.1:15742/healthz"),
+}
+
+missing = [name for name, (text, needle) in checks.items() if needle not in text]
+if missing:
+    raise SystemExit("NexusHub deploy templates must use a port distinct from codex-cloud-panel: " + ", ".join(missing))
+
+for name, text in {
+    "config.example": config,
+    "nginx-location.conf": nginx,
+    "deploy-cloud.sh": deploy,
+}.items():
+    if "127.0.0.1:15732" in text:
+        raise SystemExit(f"{name} must not point NexusHub at legacy codex-cloud-panel port 15732")
+
+print("NexusHub deploy port isolation: ok")
+PY
 
 python3 - "${INSTALL_SH}" <<'PY'
 from pathlib import Path
@@ -123,11 +157,16 @@ def run_config_migration(config_text: str) -> str:
         return config_path.read_text()
 
 legacy_config = """
+[server]
+listen = "127.0.0.1:15732"
+
 [update]
 update_command = "sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-update --no-prune"
 prune_command = "sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-prune"
 """
 migrated = run_config_migration(legacy_config)
+if 'listen = "127.0.0.1:15742"' not in migrated:
+    raise SystemExit("server.listen was not migrated off the legacy codex-cloud-panel port")
 if 'data_dir = "/opt/nexushub"' not in migrated:
     raise SystemExit("paths.data_dir was not inserted")
 if 'db_path = "/opt/nexushub/nexushub.sqlite"' not in migrated:
@@ -142,6 +181,8 @@ if 'update_command = "/usr/local/bin/nexushub-codex-update"' not in migrated:
     raise SystemExit("legacy update_command was not migrated to panel codex wrapper")
 if 'prune_command = "/usr/local/bin/nexushub-codex-prune"' not in migrated:
     raise SystemExit("legacy prune_command was not migrated to panel codex wrapper")
+if 'panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"' not in migrated:
+    raise SystemExit("panel_precheck_command was not inserted with the isolated NexusHub port")
 
 legacy_precheck_config = '''
 [update]
@@ -241,6 +282,9 @@ update_sh = Path(sys.argv[1])
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"
     config.write_text(textwrap.dedent("""
+        [server]
+        listen = "127.0.0.1:15732"
+
         [update]
         update_command = "sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-update --no-prune"
         prune_command = "sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-prune"
@@ -250,6 +294,8 @@ with tempfile.TemporaryDirectory() as tmp:
         check=True,
     )
     migrated = config.read_text()
+    if 'listen = "127.0.0.1:15742"' not in migrated:
+        raise SystemExit("update.sh did not migrate server.listen off the legacy codex-cloud-panel port")
     if 'precheck_command = "/usr/local/bin/nexushub-codex-precheck"' not in migrated:
         raise SystemExit("update.sh did not insert codex precheck command")
     if 'update_command = "/usr/local/bin/nexushub-codex-update"' not in migrated:
@@ -258,6 +304,8 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update.sh did not migrate legacy codex prune command")
     if 'db_path = "/opt/nexushub/nexushub.sqlite"' not in migrated:
         raise SystemExit("update.sh did not insert NexusHub DB path")
+    if 'panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"' not in migrated:
+        raise SystemExit("update.sh did not insert panel precheck with isolated NexusHub port")
 
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"

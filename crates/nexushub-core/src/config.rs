@@ -13,6 +13,8 @@ pub const LEGACY_SESSION_TTL_SECONDS: u64 = 604_800;
 pub const DEFAULT_TURNSTILE_SITE_KEY: &str = "0x4AAAAAADPfCPB_O-N3j6ON";
 pub const DEFAULT_TURNSTILE_EXPECTED_HOSTNAME: &str = "661313.xyz";
 pub const DEFAULT_TURNSTILE_EXPECTED_ACTION: &str = "login";
+const DEFAULT_LOOPBACK_PORT: u16 = 15742;
+const LEGACY_LOOPBACK_PORT: u16 = 15732;
 const LEGACY_PRECHECK_COMMAND_SIMPLE: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
 const LEGACY_PRECHECK_COMMAND_WITH_AUDIT: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && readlink -f /usr/local/bin/codex && readlink -f /usr/local/bin/codex-raw && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && sqlite3 /root/.codex/state_5.sqlite \"select count(*) total, sum(archived_at is null) active, sum(archived_at is not null) archived from threads;\" && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
 
@@ -132,12 +134,14 @@ fn default_panel_update_command() -> String {
 }
 
 fn default_panel_precheck_command() -> String {
-    "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz".to_string()
+    format!(
+        "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"
+    )
 }
 
 impl Default for Config {
     fn default() -> Self {
-        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 15732);
+        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
         let platform = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
         Self {
             server: ServerConfig {
@@ -207,6 +211,12 @@ impl Config {
     }
 
     pub fn normalize(&mut self) {
+        if self.server.listen
+            == SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), LEGACY_LOOPBACK_PORT)
+        {
+            self.server.listen =
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
+        }
         if let Ok(value) = env::var("NEXUSHUB_SECRET_KEY") {
             self.security.secret_key = value;
         }
@@ -260,6 +270,10 @@ impl Config {
             .update
             .panel_precheck_command
             .contains("codex-cloud-panel")
+            || self
+                .update
+                .panel_precheck_command
+                .contains("http://127.0.0.1:15732/healthz")
         {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
@@ -330,7 +344,11 @@ mod tests {
     #[test]
     fn default_config_uses_loopback_panel_port() {
         let config = Config::default();
-        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15732");
+        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
+        assert!(config
+            .update
+            .panel_precheck_command
+            .contains("http://127.0.0.1:15742/healthz"));
         assert_eq!(config.codex.home.to_string_lossy(), "/root/.codex");
     }
 
@@ -405,11 +423,19 @@ mod tests {
         config.security.session_ttl_seconds = 604_800;
         config.codex.host_label = super::legacy_host_label();
         config.security.turnstile_expected_action = None;
+        config.server.listen = "127.0.0.1:15732".parse().unwrap();
+        config.update.panel_precheck_command =
+            "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz".to_string();
 
         config.normalize();
 
         assert_eq!(config.security.session_ttl_seconds, 31_536_000);
         assert_eq!(config.codex.host_label, "43.155.235.227");
+        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
+        assert!(config
+            .update
+            .panel_precheck_command
+            .contains("http://127.0.0.1:15742/healthz"));
         assert_eq!(
             config.security.turnstile_expected_action.as_deref(),
             Some("login")
