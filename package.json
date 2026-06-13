@@ -1,10 +1,10 @@
 {
   "name": "nexushub",
   "private": true,
-  "version": "0.1.43",
+  "version": "0.1.44",
   "scripts": {
     "build:ui": "pnpm --dir webui build",
     "test:install": "bash scripts/test-install-script.sh",
-    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && pnpm --dir webui build && npm run test:install"
+    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@11.0.8 --dir webui test && corepack pnpm@11.0.8 --dir webui build && npm run test:install"
   }
 }

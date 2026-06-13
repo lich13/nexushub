@@ -56,6 +56,27 @@ pub fn default_panel_update_command() -> String {
     "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest".to_string()
 }
 
+pub fn panel_prune_command() -> String {
+    r#"python3 - <<'PY'
+from pathlib import Path
+import shutil
+
+root = Path("/opt/nexushub/backups/release-updates")
+if not root.exists():
+    print("no release update backups")
+    raise SystemExit(0)
+
+backups = sorted(path for path in root.iterdir() if path.is_dir())
+remove = backups[:-3]
+for path in remove:
+    shutil.rmtree(path)
+    print(f"removed {path}")
+
+print(f"kept {len(backups) - len(remove)} release update backups")
+PY"#
+    .to_string()
+}
+
 pub fn analyze_job_failure(
     kind: &str,
     output: &str,
@@ -298,5 +319,19 @@ fn analysis_for(category: JobFailureCategory) -> JobFailureAnalysis {
         category,
         explanation: explanation.to_string(),
         suggestions: suggestions.into_iter().map(str::to_string).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panel_prune_command;
+
+    #[test]
+    fn panel_prune_command_keeps_recent_release_update_backups() {
+        let command = panel_prune_command();
+
+        assert!(command.contains("/opt/nexushub/backups/release-updates"));
+        assert!(command.contains("backups[:-3]"));
+        assert!(command.contains("shutil.rmtree"));
     }
 }

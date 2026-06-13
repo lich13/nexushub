@@ -5,7 +5,7 @@
 Current scope:
 
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
-- Encrypted Turnstile secret storage compatible with cc-switch-lite key import.
+- Encrypted Turnstile secret storage compatible with legacy codex-cloud-panel and cc-switch-lite key import.
 - Desktop-style conversation workspace backed by the controlled app-server bridge.
 - Thread read model from `/root/.codex/state_5.sqlite`, `session_index.jsonl`, and rollout files.
 - Running / reply-needed / recoverable / archived status cards.
@@ -34,7 +34,7 @@ Conversation create/send/stop and thread actions use the private app-server brid
 ```
 
 The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
-`/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`; the installer imports `CC_SWITCH_LITE_SECRET_KEY` when available so existing encrypted Turnstile settings remain readable, otherwise it generates a new key.
+`/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`. The installer preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
 
 ## App-Server Bridge
 
@@ -94,7 +94,7 @@ sudo /usr/local/bin/nexushub-update --repo lich13/nexushub --version latest
 
 Use the WebUI Ops page for split updates:
 
-- `面板更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`.
+- `面板更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`; its prune action removes old `/opt/nexushub/backups/release-updates` backups while keeping the latest three.
 - `Codex 更新` runs the existing cloud Codex wrapper chain for precheck / update / prune.
 
 The configured commands run fixed wrappers only, redact sensitive output, and attach a structured explanation when a job fails.

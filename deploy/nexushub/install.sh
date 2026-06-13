@@ -144,9 +144,33 @@ ensure_secret_key() {
     return
   fi
 
+  read_legacy_secret() {
+    local key="$1"
+    local path="$2"
+    [[ -f "${path}" ]] || return 0
+    awk -v want="${key}" '
+      BEGIN { FS="=" }
+      $1 == want {
+        value=$0
+        sub(/^[^=]*=/, "", value)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+          value=substr(value, 2, length(value)-2)
+        }
+        print value
+        exit
+      }
+    ' "${path}"
+  }
+
   local secret=""
+  if [[ -f /etc/codex-cloud-panel/env ]]; then
+    secret="$(read_legacy_secret CODEX_CLOUD_PANEL_SECRET_KEY /etc/codex-cloud-panel/env)"
+  fi
   if [[ -f /etc/cc-switch-lite/env ]]; then
-    secret="$(grep -E '^CC_SWITCH_LITE_SECRET_KEY=' /etc/cc-switch-lite/env | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+    if [[ -z "${secret}" ]]; then
+      secret="$(read_legacy_secret CC_SWITCH_LITE_SECRET_KEY /etc/cc-switch-lite/env)"
+    fi
   fi
   if [[ -z "${secret}" ]]; then
     secret="$(python3 - <<'PY'

@@ -114,6 +114,7 @@ pub fn router(state: AppState) -> Router {
             post(panel_update_precheck),
         )
         .route("/api/system/panel/update/start", post(panel_update_start))
+        .route("/api/system/panel/update/prune", post(panel_update_prune))
         .route(
             "/api/system/codex/update/precheck",
             post(codex_update_precheck),
@@ -2119,6 +2120,25 @@ async fn panel_update_start(State(state): State<AppState>, headers: HeaderMap) -
     ok(json!({"job_id": id}))
 }
 
+async fn panel_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        "panel.update.prune_started",
+        Some("system"),
+        Some("panel"),
+        None,
+        json!({}),
+    )?;
+    let id = state.jobs.start_shell_job(
+        "panel_update_prune",
+        "Panel backup prune",
+        update::panel_prune_command(),
+    )?;
+    ok(json!({"job_id": id}))
+}
+
 async fn codex_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
@@ -3367,13 +3387,18 @@ mod tests {
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, filter_thread_summaries,
         followup_request, merge_thread_summaries, prune_hidden_thread_summaries,
-        requested_thread_limit, seed_thread_event_blocks, thread_block_page,
+        requested_thread_limit, router, seed_thread_event_blocks, thread_block_page,
         thread_event_block_key, thread_list_fetch_limit, thread_title, turnstile_login_action,
         SendMessageRequest, TurnstileLoginAction,
     };
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
     use nexushub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
     use nexushub_core::{
-        db::{JobRecord, ThreadFollowUp},
+        config::Config,
+        db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
         uploads::{PreparedAttachment, UploadKind},
     };
     use serde_json::json;
@@ -3383,8 +3408,36 @@ mod tests {
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
+    use tower::ServiceExt;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn authenticated_test_state() -> (crate::state::AppState, String, String) {
+        let mut config = Config::default();
+        config.security.cookie_secure = false;
+        config.update.panel_precheck_command = "true".to_string();
+        config.update.panel_update_command = "true".to_string();
+        config.update.prune_command = "true".to_string();
+
+        let db = PanelDb::open(":memory:").unwrap();
+        db.upsert_admin("admin-id", "admin", "hash").unwrap();
+        db.create_session(NewSession {
+            id: "session-id",
+            admin_id: "admin-id",
+            token: "session-token",
+            csrf_token: "csrf-token",
+            user_agent: None,
+            ip: None,
+            expires_at: PanelDb::now() + 60,
+        })
+        .unwrap();
+
+        (
+            crate::state::AppState::new(config, db),
+            "session-token".to_string(),
+            "csrf-token".to_string(),
+        )
+    }
 
     fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
         ThreadSummary {
@@ -3476,6 +3529,48 @@ mod tests {
         assert_eq!(restored.service_tier.as_deref(), Some("priority"));
         assert_eq!(restored.reasoning_effort.as_deref(), Some("xhigh"));
         assert_eq!(restored.network_access, Some(true));
+    }
+
+    #[tokio::test]
+    async fn panel_prune_route_requires_csrf_and_starts_fixed_panel_job() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let missing_csrf = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/system/panel/update/prune")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/system/panel/update/prune")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let job_id = payload["job_id"].as_str().unwrap();
+        let job = state.db.job(job_id).unwrap().unwrap();
+
+        assert_eq!(job.kind, "panel_update_prune");
+        assert_eq!(job.title, "Panel backup prune");
     }
 
     #[test]

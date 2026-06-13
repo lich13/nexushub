@@ -20,6 +20,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: pnpm --dir webui install
-      - run: pnpm --dir webui build
+      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: corepack pnpm@11.0.8 --dir webui test
+      - run: corepack pnpm@11.0.8 --dir webui build
       - run: bash scripts/test-install-script.sh

@@ -20,6 +20,8 @@ The second command assumes a checked-out deployment script already exists at `de
 
 The installed service listens on `127.0.0.1:15742`.
 
+For migrations from `codex-cloud-panel`, keep the encrypted Turnstile secret readable by preserving the old encryption key. The installer preserves an existing `/opt/nexushub/env` `NEXUSHUB_SECRET_KEY`; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key if no legacy key exists. Verify by comparing hashes only, never by printing secret values.
+
 Ensure `/opt/nexushub/config.toml` keeps the bridge local:
 
 ```toml
@@ -62,6 +64,7 @@ Then log in and verify:
 - archive delete execute uses button confirmation only, with no typed confirmation text;
 - panel update and Codex update are separate cards;
 - failed update jobs show structured explanation and suggested next actions;
+- panel prune removes old NexusHub release-update backups while keeping the latest three;
 - Codex update / prune buttons start only the configured fixed wrappers.
 
 ## Rollback
