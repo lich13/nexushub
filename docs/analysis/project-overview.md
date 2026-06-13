@@ -60,11 +60,11 @@ Canonical Linux packaging is `bash scripts/package-linux.sh` on Linux x86_64. Lo
 
 ## Testing Baseline
 
-Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers and message-store behavior plus a TypeScript/Vite build. Current gaps are end-to-end browser tests, live bridge integration tests, real cloud deploy smoke, macOS launchd packaging, and Windows Service packaging.
+Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers and message-store behavior plus a TypeScript/Vite build. The Linux release and cloud deploy path have been verified for `v0.1.43` under `/nexushub/`. Current gaps are end-to-end browser interaction tests, macOS launchd packaging, and Windows Service packaging.
 
 ## Project Governance Baseline
 
-`AGENTS.md` and `CLAUDE.md` are the active instruction surfaces. `docs/progress/MASTER.md` is the active LOCAL_ONLY progress tracker. There is no repo-local memory file; durable memory remains the active agent's native memory unless the user explicitly asks for a repo fallback.
+`AGENTS.md` and `CLAUDE.md` are the active instruction surfaces. `docs/progress/MASTER.md` tracks the released Linux state. There is no repo-local memory file; durable memory remains the active agent's native memory unless the user explicitly asks for a repo fallback.
 
 ## External Integrations
 
@@ -73,7 +73,6 @@ Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script 
 - Codex rollout/session files under Codex home.
 - Fixed cloud Codex admin wrappers under `/home/ubuntu/codex-admin/bin`.
 - Turnstile login verification and encrypted secret storage.
-- GitHub Releases for intended `lich13/nexushub` updates once a remote exists.
+- GitHub Releases for `lich13/nexushub` updates.
 - Nginx reverse proxy under `/nexushub/`.
 - Claude Code read-only files under `~/.claude`.
-

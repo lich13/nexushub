@@ -6,8 +6,8 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 
 - Read `README.md`, `DESIGN.md`, and `docs/progress/MASTER.md` before non-trivial edits.
 - If `docs/progress/MASTER.md` exists, resume from its current phase instead of restarting the plan.
-- Current tracking mode is `LOCAL_ONLY` until a real remote and valid GitHub auth are added.
-- Intended upstream is `lich13/nexushub`; local git may not have that remote configured yet.
+- Current upstream is `https://github.com/lich13/nexushub`.
+- The production Linux deployment is `https://661313.xyz/nexushub/` on `43.155.235.227`; the legacy `codex-cloud-panel` path remains separate.
 
 ## Safety Boundaries
 
@@ -34,4 +34,3 @@ bash scripts/test-install-script.sh
 ```
 
 `bash scripts/package-linux.sh` is canonical only on Linux x86_64. `ALLOW_HOST_MISMATCH=1` is for local smoke archives only.
-

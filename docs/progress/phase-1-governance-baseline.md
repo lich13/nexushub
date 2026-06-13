@@ -1,6 +1,6 @@
 # Phase 1: Governance Baseline
 
-**Goal**: Establish NexusHub identity, safety rules, and LOCAL_ONLY continuity.  
+**Goal**: Establish NexusHub identity, safety rules, and release/deploy continuity.<br>
 **Status**: Complete
 
 ## Tasks
@@ -18,7 +18,7 @@
   - Effort: M
   - Test Expectation: Docs-only; verify links and files.
   - Memory Impact: Progress surface updated.
-  - Acceptance: Required spec-driven docs exist and `MASTER.md` records LOCAL_ONLY mode.
+  - Acceptance: Required spec-driven docs exist and `MASTER.md` records the current delivery mode.
   - Notes: Completed 2026-06-13.
 
 - [x] **Task 1.3**: Align README/runbook with NexusHub scope
@@ -31,11 +31,10 @@
 
 ## Phase Notes
 
-Tracking is LOCAL_ONLY because the local repo has no remote and `gh auth status` reports an invalid keyring token.
+Initial tracking started local-only. Current tracking is GitHub-backed with `origin` at `https://github.com/lich13/nexushub` and Linux deployment verified under `/nexushub/`.
 
 ## Phase Completion Checklist
 
 - [x] All tasks above are checked off
 - [x] MASTER.md phase count updated
 - [x] MASTER.md "Current Status" updated to next phase
-

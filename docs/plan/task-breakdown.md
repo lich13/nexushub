@@ -5,7 +5,7 @@
 - **Total Phases**: 6
 - **Total Tasks**: 16
 - **Estimated Total Effort**: XL
-- **Tracking Mode**: LOCAL_ONLY
+- **Tracking Mode**: GitHub release plus cloud deployment verified
 
 ## S.U.P.E.R Design Constraints
 
@@ -23,14 +23,14 @@
 
 ## Phase 1: Governance Baseline
 
-**Goal**: Establish NexusHub identity, safety rules, and LOCAL_ONLY continuity.
+**Goal**: Establish NexusHub identity, safety rules, and release/deploy continuity.
 **Prerequisite**: Fresh NexusHub repo exists.
 **S.U.P.E.R Focus**: P, E, R
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
 | 1.1 | Add `AGENTS.md` and `CLAUDE.md` | P0 | S | - | A | P, R | Docs-only; verify files and final commands | Instruction surfaces updated | Shared and Claude-specific rules document bridge, safety, Claude read-only, Sentinel preview, and verification commands |
-| 1.2 | Create analysis, plan, and progress docs | P0 | M | 1.1 | A | P, E | Docs-only; verify links and files | Progress surface updated | Required spec-driven docs exist and `docs/progress/MASTER.md` records LOCAL_ONLY mode |
+| 1.2 | Create analysis, plan, and progress docs | P0 | M | 1.1 | A | P, E | Docs-only; verify links and files | Progress surface updated | Required spec-driven docs exist and `docs/progress/MASTER.md` records current release/deploy state |
 | 1.3 | Align README/runbook with NexusHub scope | P1 | S | - | B | E, R | Docs-only; run stale-string and command checks | None | README describes provider previews, `/opt/nexushub/nexushub.sqlite`, and Linux package caveats |
 
 ### Parallel Lanes
@@ -119,18 +119,17 @@
 
 ## Phase 6: Verification and Release Readiness
 
-**Goal**: Verify local repo readiness and record release/deploy boundaries.
+**Goal**: Verify repo readiness, release assets, and cloud deployment.
 **Prerequisite**: Phases 1-5.
 **S.U.P.E.R Focus**: P, E, R
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
 | 6.1 | Run full local verification | P0 | M | 1-5 | A | P, R | Full Rust/WebUI/script commands | Progress telemetry updated | Formatting, tests, clippy, WebUI test/build, install-script test pass or failures are documented |
-| 6.2 | Document release/deploy gap | P0 | S | 6.1 | A | E, R | Docs-only | Progress surface updated | No claim of GitHub release/cloud deploy is made until remote/release exists |
+| 6.2 | Document release/deploy state | P0 | S | 6.1 | A | E, R | Docs-only | Progress surface updated | GitHub release assets and cloud deployment evidence are recorded after verification |
 
 ### Parallel Lanes
 
 | Lane | Tasks | Combined Effort | Merge Risk | Key Files |
 |:--|:--|:--|:--|:--|
 | A | 6.1, 6.2 | M | Low | progress docs, final verification |
-

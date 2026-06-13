@@ -50,7 +50,7 @@ Deployment safety is the second core risk. `/opt/nexushub` is now the canonical 
 - No end-to-end browser test currently proves the provider navigation and mobile layout in a real browser.
 - Live bridge behavior is hard to test without the cloud app-server.
 - macOS launchd and Windows Service flows need future dry-run tests.
-- Release/deploy validation has not been run for this fresh repo because no remote/release exists yet.
+- Linux release/deploy validation has been run for `v0.1.43` on `43.155.235.227` under `/nexushub/`; keep repeating that verification for every release.
 
 ## Project Governance Risks
 
@@ -61,4 +61,3 @@ The repo started without `AGENTS.md`, `CLAUDE.md`, or `docs/progress/MASTER.md`.
 - Existing codex-cloud-panel browser sessions are not preserved after renaming the cookie to `nexushub_session`.
 - Legacy install config paths are migrated only when they match known old values.
 - `/home/ubuntu/codex-admin/bin/codex-cloud-*` wrapper names intentionally remain because they belong to the existing cloud Codex chain.
-

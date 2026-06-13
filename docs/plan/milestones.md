@@ -7,4 +7,4 @@
 | 3 | Provider Preview Ready | After Phase 3 | Provider, Claude Code, Sentinel, platform, and plugin APIs are typed and tested | Complete |
 | 4 | WebUI Preview Ready | After Phase 4 | New navigation and preview pages build without regressing Codex chat surface | Complete |
 | 5 | Service Model Ready | After Phase 5 | Linux install/update paths verified, macOS/Windows clearly marked preview | Complete |
-| 6 | Local Handoff Ready | After Phase 6 | Full verification run completed and release/deploy boundary documented | Complete |
+| 6 | Released Linux Handoff Ready | After Phase 6 | Full verification run completed, release assets verified, and `/nexushub/` cloud deployment validated | Complete |
