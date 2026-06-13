@@ -1,0 +1,35 @@
+[server]
+listen = "127.0.0.1:15732"
+public_base_url = "https://661313.xyz/nexushub/"
+trust_forwarded_headers = true
+
+[codex]
+home = "/root/.codex"
+workspace = "/home/ubuntu/codex-workspace"
+app_server_service = "codex-app-server-root.service"
+app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"
+bridge_enabled = true
+bridge_transport = "websocket"
+bridge_timeout_seconds = 20
+host_label = "43.155.235.227"
+
+[security]
+cookie_secure = true
+session_ttl_seconds = 31536000
+login_rate_limit_per_minute = 8
+turnstile_expected_hostname = "661313.xyz"
+turnstile_expected_action = "login"
+
+[paths]
+data_dir = "/opt/nexushub"
+db_path = "/opt/nexushub/nexushub.sqlite"
+webui_dir = "/opt/nexushub/webui"
+log_dir = "/opt/nexushub/logs"
+
+[update]
+precheck_command = "/usr/local/bin/nexushub-codex-precheck"
+update_command = "/usr/local/bin/nexushub-codex-update"
+prune_command = "/usr/local/bin/nexushub-codex-prune"
+doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
+panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
+panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"

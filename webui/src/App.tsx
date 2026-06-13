@@ -1,0 +1,3583 @@
+import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Archive,
+  Bot,
+  CheckCircle2,
+  ChevronRight,
+  Cloud,
+  ClipboardCheck,
+  Copy,
+  Database,
+  Edit3,
+  Files,
+  GitFork,
+  GitBranch,
+  Goal,
+  HardDrive,
+  KeyRound,
+  Lock,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Plug,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  ShieldCheck,
+  SlidersHorizontal,
+  Square,
+  TerminalSquare,
+  Trash2,
+  TriangleAlert,
+  Undo2,
+  X
+} from "lucide-react";
+import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  acceptPlan,
+  answerApproval,
+  answerElicitation,
+  archiveThread,
+  cancelFollowUp,
+  changePassword,
+  clearGoalMode,
+  createThread,
+  deleteUpload,
+  dryRunArchiveDelete,
+  dryRunHiddenThreadDelete,
+  forkThread,
+  getCodexConfig,
+  getGoalMode,
+  getPublicSettings,
+  getSecurity,
+  getSystemStatus,
+  getSystemVersion,
+  getThread,
+  getThreadBlocks,
+  listFollowUps,
+  listModels,
+  listJobs,
+  listPermissionProfiles,
+  listThreads,
+  login,
+  logout,
+  renameThread,
+  revisePlan,
+  restoreThread,
+  saveSecurity,
+  sendMessage,
+  setGoalMode,
+  startArchiveDelete,
+  startHiddenThreadDelete,
+  startUpdateJob,
+  stopThread,
+  steerThread,
+  subscribeThreadEvents,
+  uploadFiles,
+  getClaudeCodeOverview,
+  getPlatformOverview,
+  getSentinelStatus,
+  listPlugins,
+  listProviders,
+  type ThreadSendPayload
+} from "./lib/api";
+import { clearSession, loadSession, saveSession } from "./lib/session";
+import {
+  applyRealtimeBlocksToThreadSlot,
+  applyThreadBlockPageToSlot,
+  applyThreadDetailToSlot,
+  applyThreadSummaryToSlot,
+  createThreadMessageStoreState,
+  getThreadSlot,
+  setActiveThreadSlot,
+  setThreadFeedback as setThreadSlotFeedback,
+  setThreadHiddenActionKey,
+  setThreadHistoryExpanded,
+  setThreadLastResult,
+  setThreadLoadingEarlier,
+  type ThreadMessageSlot,
+  type ThreadMessageStoreState
+} from "./lib/threadMessageStore";
+import type {
+  ArchiveDeletePlan,
+  AgentProviderInfo,
+  BridgeActionResult,
+  ClaudeOverview,
+  CodexConfig,
+  CodexModel,
+  FollowUpQueueItem,
+  HiddenThreadDeletePlan,
+  JobRecord,
+  MessageBlock,
+  PendingElicitation,
+  PermissionProfile,
+  PlatformOverview,
+  PluginInfo,
+  SecuritySettings,
+  SentinelStatus as SentinelStatusData,
+  SessionUser,
+  SystemStatus,
+  SystemVersion,
+  ThreadDetail,
+  ThreadStatus,
+  ThreadSummary,
+  UploadRecord
+} from "./types";
+
+type View = "chat" | "claude" | "sentinel" | "files" | "git" | "terminal" | "plugins" | "ops" | "security";
+type SelectedThread = string | "__new" | null;
+type PermissionPresetId = "ask" | "auto" | "full" | "custom";
+type RunConfig = {
+  model: string;
+  serviceTier: string;
+  reasoning: string;
+  cwd: string;
+  permissionPreset: PermissionPresetId;
+  permissionProfile: string;
+  approvalPolicy: string;
+  sandboxMode: string;
+  networkAccess: boolean | null;
+  collaborationMode: string;
+};
+
+type MessageScrollSnapshot = {
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
+};
+
+type MessageBlockState = {
+  blocks: MessageBlock[];
+  totalBlocks: number;
+  hasMoreBlocks: boolean;
+  beforeCursor: string | null;
+  visibleUpdateRevision: number;
+};
+
+type ComposerUpload = UploadRecord & {
+  local_status?: "uploading" | "ready" | "error";
+  local_error?: string | null;
+};
+
+type ThreadTitleLike = {
+  title?: string | null;
+  [key: string]: unknown;
+};
+
+type ThreadListItemLike = ThreadTitleLike & {
+  status?: ThreadStatus | string | null;
+  latest_message?: string | null;
+};
+
+export const statusTabs = [
+  { id: "all", label: "全部" },
+  { id: "running", label: "运行中" },
+  { id: "reply-needed", label: "待回复" },
+  { id: "recoverable", label: "异常" }
+];
+
+export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
+  { id: "chat", label: "对话", icon: <MessageSquare /> },
+  { id: "claude", label: "Claude", icon: <Bot /> },
+  { id: "sentinel", label: "Sentinel", icon: <TriangleAlert /> },
+  { id: "files", label: "文件", icon: <Files /> },
+  { id: "git", label: "Git", icon: <GitBranch /> },
+  { id: "terminal", label: "终端", icon: <TerminalSquare /> },
+  { id: "plugins", label: "插件", icon: <Plug /> },
+  { id: "ops", label: "运维", icon: <HardDrive /> },
+  { id: "security", label: "安全", icon: <ShieldCheck /> }
+];
+
+const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
+const permissionPresets: Array<{ id: PermissionPresetId; label: string; description: string; icon: ReactNode }> = [
+  { id: "ask", label: "请求批准", description: "编辑外部文件和使用互联网时始终询问", icon: <Lock size={17} /> },
+  { id: "auto", label: "替我审批", description: "仅对检测到的风险操作请求批准", icon: <ShieldCheck size={17} /> },
+  { id: "full", label: "完全访问权限", description: "可不受限制地访问互联网和文件", icon: <CheckCircle2 size={17} /> },
+  { id: "custom", label: "自定义 (config.toml)", description: "使用 config.toml 中定义的权限", icon: <SlidersHorizontal size={17} /> }
+];
+const defaultCwd = "/home/ubuntu/codex-workspace";
+const defaultSessionTtlDays = 365;
+const secondsPerDay = 86400;
+export const codexCommands = [
+  "codex",
+  "exec",
+  "review",
+  "resume",
+  "fork",
+  "archive",
+  "unarchive",
+  "login",
+  "logout",
+  "mcp",
+  "plugin",
+  "mcp-server",
+  "app-server",
+  "remote-control",
+  "app",
+  "completion",
+  "doctor",
+  "sandbox",
+  "apply",
+  "cloud",
+  "exec-server",
+  "debug models",
+  "debug app-server",
+  "features",
+  "update"
+];
+
+type TurnstileWidgetId = string;
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (container: HTMLElement, options: {
+        sitekey: string;
+        action?: string;
+        theme?: "dark" | "light" | "auto";
+        callback?: (token: string) => void;
+        "expired-callback"?: () => void;
+        "error-callback"?: () => void;
+      }) => TurnstileWidgetId;
+      reset: (widgetId?: TurnstileWidgetId) => void;
+      remove?: (widgetId: TurnstileWidgetId) => void;
+    };
+  }
+}
+
+export default function App() {
+  const [session, setSession] = useState<SessionUser | null>(() => loadSession());
+  const [view, setView] = useState<View>("chat");
+  const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
+
+  const toggleNavCollapsed = () => {
+    setNavCollapsed((current) => {
+      const next = !current;
+      localStorage.setItem("nexushub.nav-collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
+
+  if (!session) {
+    return <LoginScreen onLogin={(user) => {
+      saveSession(user);
+      setSession(user);
+    }} />;
+  }
+
+  return (
+    <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+      {navCollapsed ? (
+        <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
+      ) : (
+        <SideNav view={view} setView={setView} onCollapse={toggleNavCollapsed} onLogout={async () => {
+          await logout(session.csrf_token);
+          clearSession();
+          setSession(null);
+        }} />
+      )}
+      <main className="main-workspace">
+        <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} />
+        {view === "chat" && (
+          <ChatWorkspace
+            csrfToken={session.csrf_token}
+            mobileThreadsOpen={mobileThreadsOpen}
+            setMobileThreadsOpen={setMobileThreadsOpen}
+          />
+        )}
+        {view === "claude" && <ClaudeWorkspace />}
+        {view === "sentinel" && <SentinelWorkspace />}
+        {view === "files" && <PreviewWorkspace kind="files" />}
+        {view === "git" && <PreviewWorkspace kind="git" />}
+        {view === "terminal" && <PreviewWorkspace kind="terminal" />}
+        {view === "plugins" && <PluginsWorkspace />}
+        {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} />}
+        {view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+      </main>
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileStatus, setTurnstileStatus] = useState<"idle" | "loading" | "ready" | "verified" | "error">("idle");
+  const widgetRef = useRef<TurnstileWidgetId | null>(null);
+  const turnstileRef = useRef<HTMLDivElement | null>(null);
+  const publicSettings = useQuery({ queryKey: ["public-settings"], queryFn: getPublicSettings });
+  const turnstileEnabled = Boolean(publicSettings.data?.turnstile_enabled && publicSettings.data.turnstile_site_key);
+  const turnstileRequired = Boolean(publicSettings.data?.turnstile_required);
+  const turnstileAction = publicSettings.data?.turnstile_action || "login";
+
+  useEffect(() => {
+    if (!turnstileEnabled || !publicSettings.data?.turnstile_site_key || !turnstileRef.current) {
+      setTurnstileStatus("idle");
+      setTurnstileToken("");
+      return;
+    }
+
+    let cancelled = false;
+    setTurnstileToken("");
+    setTurnstileStatus("loading");
+    ensureTurnstileScript()
+      .then(() => {
+        if (cancelled || !turnstileRef.current || !window.turnstile) return;
+        if (widgetRef.current && window.turnstile.remove) {
+          window.turnstile.remove(widgetRef.current);
+          widgetRef.current = null;
+        }
+        turnstileRef.current.innerHTML = "";
+        widgetRef.current = window.turnstile.render(turnstileRef.current, {
+          sitekey: publicSettings.data.turnstile_site_key,
+          action: turnstileAction,
+          theme: "dark",
+          callback: (token) => {
+            setTurnstileToken(token);
+            setTurnstileStatus("verified");
+          },
+          "expired-callback": () => {
+            setTurnstileToken("");
+            setTurnstileStatus("ready");
+          },
+          "error-callback": () => {
+            setTurnstileToken("");
+            setTurnstileStatus("error");
+          }
+        });
+        setTurnstileStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setTurnstileStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+      if (widgetRef.current && window.turnstile?.remove) {
+        window.turnstile.remove(widgetRef.current);
+        widgetRef.current = null;
+      }
+    };
+  }, [turnstileAction, turnstileEnabled, publicSettings.data?.turnstile_site_key]);
+
+  const resetTurnstile = () => {
+    if (widgetRef.current && window.turnstile) {
+      window.turnstile.reset(widgetRef.current);
+      setTurnstileToken("");
+      setTurnstileStatus("ready");
+    }
+  };
+
+  const mutation = useMutation({
+    mutationFn: () => login(username, password, turnstileToken),
+    onSuccess: onLogin,
+    onError: (err: Error) => {
+      setError(err.message);
+      resetTurnstile();
+    }
+  });
+
+  return (
+    <div className="login-shell">
+      <form className="login-panel" onSubmit={(event) => {
+        event.preventDefault();
+        setError(null);
+        if (turnstileEnabled && !turnstileToken.trim()) {
+          setError("请先完成 Turnstile 验证");
+          return;
+        }
+        mutation.mutate();
+      }}>
+        <div className="brand-mark"><Cloud size={24} /></div>
+        <h1>NexusHub</h1>
+        <p>root app-server 专用控制台</p>
+        <label>
+          <span>管理员</span>
+          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" />
+        </label>
+        {turnstileEnabled && (
+          <div className="turnstile-box">
+            <div ref={turnstileRef} />
+            <span>
+              {turnstileRequired ? "Turnstile 强制验证" : "Turnstile 登录验证"}
+              {turnstileStatus === "verified" ? "：已完成" : turnstileStatus === "loading" ? "：加载中" : turnstileStatus === "error" ? "：加载失败" : ""}
+            </span>
+          </div>
+        )}
+        {error && <div className="inline-error">{error}</div>}
+        <button className="primary-button" disabled={mutation.isPending}>
+          <Lock size={18} />
+          登录
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function ensureTurnstileScript(): Promise<void> {
+  if (window.turnstile) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById("cloudflare-turnstile-script") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Turnstile script failed")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "cloudflare-turnstile-script";
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Turnstile script failed"));
+    document.head.appendChild(script);
+  });
+}
+
+function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView: (view: View) => void; onCollapse: () => void; onLogout: () => void }) {
+  return (
+    <aside className="side-nav">
+      <div className="nav-brand">
+        <div className="brand-mark"><Cloud size={22} /></div>
+        <div>
+          <strong>NexusHub</strong>
+          <span>Agent Ops</span>
+        </div>
+        <button className="icon-button nav-collapse-button" onClick={onCollapse} title="隐藏导航"><PanelLeftClose size={17} /></button>
+      </div>
+      <nav>
+        {navigationItems.map((item) => (
+          <NavButton key={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
+            {item.label}
+          </NavButton>
+        ))}
+      </nav>
+      <button className="ghost-button nav-logout" onClick={onLogout}><LogOut size={17} />退出</button>
+    </aside>
+  );
+}
+
+function NavButton({ icon, active, onClick, children }: { icon: ReactNode; active: boolean; onClick: () => void; children: ReactNode }) {
+  return <button className={`nav-button ${active ? "active" : ""}`} onClick={onClick}>{icon}{children}</button>;
+}
+
+function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => void; view: View; setView: (view: View) => void }) {
+  const current = navigationItems.find((item) => item.id === view);
+  return (
+    <>
+      <div className="mobile-topbar">
+        <button className="icon-button" onClick={onOpenThreads} disabled={view !== "chat"} title={view === "chat" ? "打开线程" : "线程列表仅用于对话"}>
+          <Menu size={20} />
+        </button>
+        <span>{current?.label ?? "NexusHub"}</span>
+        <div className="topbar-dot" />
+      </div>
+      <div className="mobile-tabs">
+        {navigationItems.map((item) => (
+          <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
+            {item.icon}
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen }: {
+  csrfToken?: string | null;
+  mobileThreadsOpen: boolean;
+  setMobileThreadsOpen: (open: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const [status, setStatus] = useState("all");
+  const [q, setQ] = useState("");
+  const [selectedId, setSelectedId] = useState<SelectedThread>(null);
+  const messageStore = useThreadMessageStoreController();
+  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000 });
+  const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
+  const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
+  const selectedThreadSummary = useMemo(
+    () => visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null,
+    [visibleThreads, resolvedSelected]
+  );
+  const detail = useQuery({
+    queryKey: ["thread", resolvedSelected],
+    queryFn: () => getThread(resolvedSelected!),
+    enabled: Boolean(resolvedSelected),
+    refetchInterval: (query) => {
+      const current = query.state.data as ThreadDetail | undefined;
+      return threadDetailRefetchInterval(current, selectedThreadSummary);
+    }
+  });
+  const selectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
+
+  useEffect(() => {
+    if (!resolvedSelected || !selectedThreadSummary) return;
+    qc.setQueryData<ThreadDetail>(["thread", resolvedSelected], (current) => {
+      if (!current) return current;
+      return mergeThreadDetailSummaryFromList(current, selectedThreadSummary);
+    });
+  }, [qc, resolvedSelected, selectedThreadSummary]);
+
+  useEffect(() => {
+    messageStore.setActive(resolvedSelected);
+  }, [messageStore, resolvedSelected]);
+
+  useEffect(() => {
+    if (!resolvedSelected || !selectedThreadSummary) return;
+    const slot = messageStore.getSlot(resolvedSelected);
+    if (!slot.summary) {
+      messageStore.applySummary(resolvedSelected, selectedThreadSummary);
+    }
+  }, [messageStore, resolvedSelected, selectedThreadSummary]);
+
+  useEffect(() => {
+    if (!resolvedSelected || !selectedDetail) return;
+    messageStore.applyDetail(resolvedSelected, selectedDetail);
+  }, [messageStore, resolvedSelected, selectedDetail]);
+
+  const selectThread = (id: SelectedThread) => {
+    setSelectedId(id);
+    setMobileThreadsOpen(false);
+  };
+
+  const list = (
+    <ThreadList
+      status={status}
+      q={q}
+      setQ={setQ}
+      setStatus={setStatus}
+      threads={visibleThreads}
+      selectedId={resolvedSelected}
+      onSelect={selectThread}
+      onNew={() => selectThread("__new")}
+      onRefresh={() => qc.invalidateQueries({ queryKey: ["threads"] })}
+      loading={threads.isLoading}
+    />
+  );
+
+  return (
+    <div className="chat-layout">
+      <aside className="thread-column desktop-only">{list}</aside>
+      {mobileThreadsOpen && (
+        <div className="drawer-backdrop" onClick={() => setMobileThreadsOpen(false)}>
+          <aside className="thread-drawer" onClick={(event) => event.stopPropagation()}>
+            <button className="icon-button drawer-close" onClick={() => setMobileThreadsOpen(false)} title="关闭"><X size={18} /></button>
+            {list}
+          </aside>
+        </div>
+      )}
+      <section className="conversation-column">
+        {resolvedSelected && (selectedDetail || messageStore.getSlot(resolvedSelected).summary) ? (
+          <Conversation
+            threadId={resolvedSelected}
+            detail={selectedDetail ?? threadDetailFromSlot(resolvedSelected, messageStore.getSlot(resolvedSelected), selectedThreadSummary)}
+            slot={messageStore.getSlot(resolvedSelected)}
+            messageStore={messageStore}
+            csrfToken={csrfToken}
+            onSelect={(id) => selectThread(id)}
+          />
+        ) : (
+          <EmptyConversation
+            loading={Boolean(resolvedSelected && detail.isLoading)}
+            csrfToken={csrfToken}
+            onCreated={(id) => selectThread(id)}
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onNew, onRefresh, loading }: {
+  status: string;
+  q: string;
+  setQ: (value: string) => void;
+  setStatus: (value: string) => void;
+  threads: ThreadSummary[];
+  selectedId: string | null;
+  onSelect: (id: SelectedThread) => void;
+  onNew: () => void;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="thread-list">
+      <div className="section-title thread-title-row">
+        <div>
+          <span>root app-server</span>
+          <strong>线程</strong>
+        </div>
+        <div className="thread-title-actions">
+          <button className="icon-button compact" onClick={onRefresh} title="刷新线程"><RefreshCw size={16} /></button>
+          <button className="icon-button compact primary-icon" onClick={onNew} title="新建线程"><Plus size={16} /></button>
+        </div>
+      </div>
+      <label className="search-box">
+        <Search size={16} />
+        <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="搜索标题或 ID" />
+      </label>
+      <div className="segmented">
+        {statusTabs.map((tab) => (
+          <button key={tab.id} className={status === tab.id ? "active" : ""} onClick={() => setStatus(tab.id)}>{tab.label}</button>
+        ))}
+      </div>
+      <div className="thread-scroll">
+        {loading && <div className="muted-row">正在读取 Codex 状态...</div>}
+        {threads.map((thread) => {
+          const title = threadListItemText(thread);
+          const preview = threadListItemPreviewText(thread);
+          const running = isThreadListItemRunning(thread);
+          return (
+            <button key={thread.id} className={`thread-item ${selectedId === thread.id ? "selected" : ""}${running ? " running" : ""}`} onClick={() => onSelect(thread.id)} title={title}>
+              <span className="thread-item-content">
+                <span className="thread-item-title">{title}</span>
+                <span className="thread-item-meta">
+                  {running ? (
+                    <span className="thread-running-indicator" aria-label="运行中" title="运行中">
+                      <span className="thread-running-spinner" aria-hidden="true" />
+                    </span>
+                  ) : (
+                    <span className={`thread-item-status ${thread.status}`}>{threadListItemStatusText(thread)}</span>
+                  )}
+                  {preview && <span className="thread-item-preview">{preview}</span>}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+        {!loading && threads.length === 0 && <div className="muted-row">没有匹配线程</div>}
+      </div>
+    </div>
+  );
+}
+
+function useCodexRunOptions() {
+  const models = useQuery({ queryKey: ["codex-models"], queryFn: listModels, staleTime: 60000 });
+  const profiles = useQuery({ queryKey: ["codex-permission-profiles"], queryFn: listPermissionProfiles, staleTime: 60000 });
+  const config = useQuery({ queryKey: ["codex-config"], queryFn: getCodexConfig, staleTime: 60000 });
+  return {
+    models: models.data?.available ? models.data.data ?? [] : [],
+    profiles: profiles.data?.available ? profiles.data.data ?? [] : [],
+    config: config.data?.available ? config.data.data : undefined,
+    unavailable: {
+      models: models.data && !models.data.available,
+      profiles: profiles.data && !profiles.data.available,
+      config: config.data && !config.data.available
+    }
+  };
+}
+
+function makeRunConfig(config?: CodexConfig, summary?: ThreadSummary): RunConfig {
+  return {
+    model: summary?.model ?? config?.model ?? "gpt-5.5",
+    serviceTier: normalizeServiceTier(config?.service_tier),
+    reasoning: config?.reasoning_effort ?? "xhigh",
+    cwd: summary?.cwd ?? config?.cwd ?? defaultCwd,
+    permissionPreset: permissionPresetFromConfig(config),
+    permissionProfile: config?.permission_profile ?? "",
+    approvalPolicy: config?.approval_policy ?? "never",
+    sandboxMode: config?.sandbox_mode ?? "danger-full-access",
+    networkAccess: config?.network_access ?? true,
+    collaborationMode: ""
+  };
+}
+
+function permissionPresetFromConfig(config?: CodexConfig): PermissionPresetId {
+  if (!config?.approval_policy && !config?.sandbox_mode && !config?.permission_profile) return "custom";
+  if (config?.approval_policy === "on-request" && config?.sandbox_mode === "workspace-write") return "ask";
+  if (config?.approval_policy === "untrusted" && config?.sandbox_mode === "workspace-write") return "auto";
+  if (config?.approval_policy === "never" && config?.sandbox_mode === "danger-full-access") return "full";
+  return "custom";
+}
+
+export function defaultRunConfig(): RunConfig {
+  return makeRunConfig();
+}
+
+export function applyPermissionPreset(config: RunConfig, preset: PermissionPresetId): RunConfig {
+  if (preset === "custom") {
+    return {
+      ...config,
+      permissionPreset: preset,
+      permissionProfile: "",
+      approvalPolicy: "",
+      sandboxMode: "",
+      networkAccess: null
+    };
+  }
+  if (preset === "full") {
+    return {
+      ...config,
+      permissionPreset: preset,
+      permissionProfile: "",
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      networkAccess: true
+    };
+  }
+  return {
+    ...config,
+    permissionPreset: preset,
+    permissionProfile: "",
+    approvalPolicy: preset === "auto" ? "untrusted" : "on-request",
+    sandboxMode: "workspace-write",
+    networkAccess: true
+  };
+}
+
+export function threadListItemText(thread: ThreadTitleLike): string {
+  return thread.title?.trim() || "未命名线程";
+}
+
+export function filterVisibleThreadSummaries<T extends Partial<ThreadSummary>>(threads: T[]): T[] {
+  return threads.filter(isVisibleMainThread);
+}
+
+export function isVisibleMainThread(thread: Partial<ThreadSummary>): boolean {
+  if (thread.status === "Archived" || thread.archived_at) return false;
+  if (nonEmptyString(thread.parentThreadId ?? thread.parent_thread_id)) return false;
+  if (nonEmptyString(thread.agentPath ?? thread.agent_path)) return false;
+  if (nonEmptyString(thread.agentNickname ?? thread.agent_nickname)) return false;
+  if (nonEmptyString(thread.agentRole ?? thread.agent_role)) return false;
+  if (fieldContainsSubagent(thread.threadSource ?? thread.thread_source)) return false;
+  if (fieldContainsSubagent(thread.sourceKind ?? thread.source_kind)) return false;
+  if (sourceValueContainsSubagent(thread.source)) return false;
+  return !isInternalExecThread(thread);
+}
+
+export function threadListItemStatusText(thread: ThreadListItemLike): string {
+  return threadStatusLabel(thread.status);
+}
+
+export function threadListItemPreviewText(thread: ThreadListItemLike): string {
+  return cleanThreadPreviewText(thread.latest_message);
+}
+
+export function cleanThreadPreviewText(value?: string | null): string {
+  const source = value?.trim();
+  if (!source) return "";
+  return extractPlanText(source).replace(/\s+/g, " ").trim();
+}
+
+export function conversationTitleText(thread: ThreadTitleLike): string {
+  return thread.title?.trim() || "未命名线程";
+}
+
+function isPlaceholderThreadTitle(title?: string | null): boolean {
+  const value = title?.trim() ?? "";
+  return !value || value === "未命名线程" || value === "Untitled thread" || value === "Untitled";
+}
+
+export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
+  const next = { ...current, ...incoming };
+  if (!isPlaceholderThreadTitle(current.title) && isPlaceholderThreadTitle(incoming.title)) {
+    next.title = current.title;
+  }
+  if (!isUserVisibleLastEventKind(incoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
+    next.last_event_kind = current.last_event_kind;
+  }
+  return next;
+}
+
+export function lastEventKindText(summary: Pick<ThreadSummary, "last_event_kind">): string {
+  const value = summary.last_event_kind?.trim();
+  if (!isUserVisibleLastEventKind(value)) return "unknown";
+  return value || "unknown";
+}
+
+function isUserVisibleLastEventKind(value?: string | null): boolean {
+  const event = value?.trim();
+  return Boolean(event && !event.startsWith("app-server.") && !event.startsWith("panel."));
+}
+
+export function mergeThreadDetailSummaryFromList(detail: ThreadDetail, incoming: Partial<ThreadSummary>): ThreadDetail {
+  return {
+    ...detail,
+    summary: mergeIncomingThreadSummary(detail.summary, incoming) as ThreadSummary
+  };
+}
+
+export function threadMatchesListFilter(thread: Partial<ThreadSummary>, status = "all", q = ""): boolean {
+  if (!isVisibleMainThread(thread)) return false;
+  if (status !== "all") {
+    if (status === "running" && !isThreadListItemRunning(thread)) return false;
+    if (status === "reply-needed" && thread.status !== "ReplyNeeded") return false;
+    if (status === "recoverable" && thread.status !== "Recoverable") return false;
+    if (!["running", "reply-needed", "recoverable"].includes(status) && thread.status !== status) return false;
+  }
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return [
+    thread.id,
+    thread.title,
+    thread.latest_message
+  ].some((value) => String(value ?? "").toLowerCase().includes(needle));
+}
+
+export function mergeThreadSummaryIntoListCache(
+  rows: ThreadSummary[] | undefined,
+  incoming: ThreadSummary,
+  status = "all",
+  q = ""
+): ThreadSummary[] | undefined {
+  if (!rows) return rows;
+  const existing = rows.find((thread) => thread.id === incoming.id);
+  const merged = existing ? mergeIncomingThreadSummary(existing, incoming) as ThreadSummary : incoming;
+  const matches = threadMatchesListFilter(merged, status, q);
+  if (!matches) {
+    return existing ? rows.filter((thread) => thread.id !== incoming.id) : rows;
+  }
+  if (existing) {
+    return rows.map((thread) => thread.id === incoming.id ? merged : thread);
+  }
+  return [merged, ...rows];
+}
+
+function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
+  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
+    const [, status = "all", q = ""] = query.queryKey as [string, string?, string?];
+    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
+      mergeThreadSummaryIntoListCache(rows, incoming, status, q)
+    );
+  }
+}
+
+export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
+  if (detail) return isThreadRunning(detail.summary, detail.blocks, null) ? 2000 : 5000;
+  return selectedSummary && isThreadRunning(selectedSummary, [], null) ? 2000 : 5000;
+}
+
+export function shouldAutoFollowMessageStream(snapshot: MessageScrollSnapshot, threshold = 96): boolean {
+  return snapshot.scrollHeight - snapshot.scrollTop - snapshot.clientHeight <= threshold;
+}
+
+function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
+  const blocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
+  return {
+    blocks,
+    totalBlocks: detail.total_blocks ?? blocks.length,
+    hasMoreBlocks: Boolean(detail.has_more_blocks),
+    beforeCursor: detail.before_cursor ?? null,
+    visibleUpdateRevision: 0
+  };
+}
+
+function mergeIncomingMessageBlockState(current: MessageBlockState, detail: ThreadDetail): MessageBlockState {
+  const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
+  const nextBlocks = mergeMessageBlocks(current.blocks, incomingBlocks);
+  return {
+    blocks: nextBlocks,
+    totalBlocks: detail.total_blocks ?? Math.max(current.totalBlocks, nextBlocks.length),
+    hasMoreBlocks: Boolean(detail.has_more_blocks ?? current.hasMoreBlocks),
+    beforeCursor: detail.before_cursor ?? current.beforeCursor,
+    visibleUpdateRevision: nextBlocks === current.blocks ? current.visibleUpdateRevision : current.visibleUpdateRevision + 1
+  };
+}
+
+export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
+  const existingIndex = current.findIndex((block) => block.id === next.id);
+  if (existingIndex === -1) return [...current, next];
+
+  const existing = current[existingIndex];
+  if (existing === next || messageBlocksEqual(existing, next)) return current;
+
+  const updated = [...current];
+  updated[existingIndex] = next;
+  return updated;
+}
+
+export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
+  if (!incoming.length) return current;
+  let changed = false;
+  let next = current;
+  const ordered = mode === "prepend" ? [...incoming].reverse() : incoming;
+  for (const block of ordered) {
+    if (mode === "prepend" && !next.some((item) => item.id === block.id)) {
+      next = [block, ...next];
+      changed = true;
+      continue;
+    }
+    const updated = upsertMessageBlock(next, block);
+    if (updated !== next) {
+      next = updated;
+      changed = true;
+    }
+  }
+  return changed ? next : current;
+}
+
+function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+export type ComposerActionMode = "send" | "stop" | "followup" | "disabled";
+
+export function isThreadRunning(summary: Partial<ThreadSummary>, blocks: MessageBlock[] = [], lastResult?: Partial<BridgeActionResult> | null): boolean {
+  if (summary.status === "Running" || Boolean(summary.active_turn_id || summary.active_job_id)) return true;
+  if (blocks.some(isRunningToolBlock)) return true;
+  if (summary.status !== "Recent" && Boolean(lastResult?.turn_id || lastResult?.job_id)) return true;
+  return false;
+}
+
+export function isThreadListItemRunning(thread: Partial<ThreadSummary>): boolean {
+  return isThreadRunning(thread, [], null);
+}
+
+export function isRunningToolBlock(block: MessageBlock): boolean {
+  if (!isToolBlock(block)) return false;
+  const status = block.status?.trim();
+  return Boolean(status && ["pending", "running", "in_progress", "inProgress", "active"].includes(status));
+}
+
+export function composerActionMode(running: boolean, draft: string, canStop: boolean, attachmentCount = 0): ComposerActionMode {
+  const hasContent = draft.trim().length > 0 || attachmentCount > 0;
+  if (running && hasContent) return "followup";
+  if (running) return canStop ? "stop" : "disabled";
+  return hasContent ? "send" : "disabled";
+}
+
+export function composerActionLabel(mode: ComposerActionMode): string {
+  if (mode === "stop") return "停止";
+  if (mode === "followup") return "跟进";
+  if (mode === "send") return "发送";
+  return "发送";
+}
+
+export function composerActionTitle(mode: ComposerActionMode): string {
+  if (mode === "stop") return "停止当前运行中的 turn";
+  if (mode === "followup") return "跟进当前 turn；不可用时自动加入跟进队列";
+  if (mode === "send") return "发送新 turn";
+  return "输入消息后发送";
+}
+
+export function readyComposerUploads(uploads: ComposerUpload[]): ComposerUpload[] {
+  return uploads.filter((upload) => upload.status === "ready" && upload.local_status !== "error");
+}
+
+export function composerUploadIds(uploads: ComposerUpload[]): string[] {
+  return readyComposerUploads(uploads).map((upload) => upload.id).filter(Boolean);
+}
+
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units[units.length - 1]) {
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${bytes} B`;
+}
+
+export function uploadKindLabel(kind?: string | null): string {
+  if (kind === "markdown") return "Markdown";
+  if (kind === "spreadsheet") return "表格";
+  if (kind === "document") return "文档";
+  if (kind === "pdf") return "PDF";
+  if (kind === "image") return "图片";
+  return "文本";
+}
+
+export function uploadStatusText(upload: Pick<ComposerUpload, "status" | "local_status" | "error_preview" | "local_error">): string {
+  if (upload.local_status === "uploading" || upload.status === "uploading") return "上传中";
+  if (upload.local_status === "error" || upload.status === "error") return upload.local_error || upload.error_preview || "上传失败";
+  return "已就绪";
+}
+
+const uploadAccept = [
+  ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log",
+  ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".kt", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".sh", ".zsh", ".bash", ".sql", ".html", ".css", ".scss", ".xml",
+  ".xlsx", ".xls", ".docx", ".pdf", ".png", ".jpg", ".jpeg", ".webp"
+].join(",");
+
+function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [uploads, setUploads] = useState<ComposerUpload[]>([]);
+  const [uploadInProgress, setUploadInProgress] = useState(false);
+  const [removingUploadId, setRemovingUploadId] = useState<string | null>(null);
+  const readyUploads = useMemo(() => readyComposerUploads(uploads), [uploads]);
+
+  const openPicker = () => {
+    if (!uploadInProgress) inputRef.current?.click();
+  };
+
+  const onFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+
+    const pending = files.map((file, index): ComposerUpload => ({
+      id: `uploading-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+      name: file.name || `file-${index + 1}`,
+      mime: file.type || "application/octet-stream",
+      size: file.size,
+      sha256: "",
+      kind: "text",
+      status: "uploading",
+      local_status: "uploading"
+    }));
+    const pendingIds = new Set(pending.map((item) => item.id));
+    setUploads((current) => [...current, ...pending]);
+    setUploadInProgress(true);
+    setFeedback?.("正在上传附件...");
+
+    try {
+      const outcome = await uploadFiles(files, csrfToken);
+      setUploads((current) => [
+        ...current.filter((item) => !pendingIds.has(item.id)),
+        ...outcome.files.map((file) => ({ ...file, local_status: "ready" as const }))
+      ]);
+      setFeedback?.(`已上传 ${outcome.files.length} 个附件`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setUploads((current) => current.map((item) => pendingIds.has(item.id)
+        ? {
+          ...item,
+          status: "error",
+          local_status: "error",
+          local_error: message,
+          error_preview: message
+        }
+        : item));
+      setFeedback?.(message);
+    } finally {
+      setUploadInProgress(false);
+    }
+  };
+
+  const removeUpload = async (upload: ComposerUpload) => {
+    setUploads((current) => current.filter((item) => item.id !== upload.id));
+    if (upload.status !== "ready") return;
+    setRemovingUploadId(upload.id);
+    try {
+      await deleteUpload(upload.id, csrfToken);
+    } catch (error) {
+      setFeedback?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRemovingUploadId(null);
+    }
+  };
+
+  const clearUploads = () => setUploads([]);
+
+  return {
+    inputRef,
+    uploads,
+    readyUploads,
+    uploadInProgress,
+    removingUploadId,
+    openPicker,
+    onFileInputChange,
+    removeUpload,
+    clearUploads
+  };
+}
+
+function ComposerAttachmentList({
+  uploads,
+  removingUploadId,
+  onRemove
+}: {
+  uploads: ComposerUpload[];
+  removingUploadId?: string | null;
+  onRemove: (upload: ComposerUpload) => void;
+}) {
+  if (uploads.length === 0) return null;
+  return (
+    <div className="attachment-list" aria-label="已选择附件">
+      {uploads.map((upload) => {
+        const errored = upload.local_status === "error" || upload.status === "error";
+        const uploading = upload.local_status === "uploading" || upload.status === "uploading";
+        return (
+          <div key={upload.id} className={errored ? "attachment-chip error" : uploading ? "attachment-chip uploading" : "attachment-chip"}>
+            <div className="attachment-copy">
+              <strong title={upload.name}>{upload.name}</strong>
+              <small>{uploadKindLabel(upload.kind)} · {formatFileSize(upload.size)} · {uploadStatusText(upload)}</small>
+            </div>
+            <button
+              type="button"
+              className="icon-button compact attachment-remove"
+              onClick={() => onRemove(upload)}
+              disabled={removingUploadId === upload.id}
+              title="移除附件"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type CurrentActionKind = "plan" | "question";
+type CurrentActionQuestion = PendingElicitation["questions"][number];
+type PlanActionSubmission = { action: "accept" } | { action: "revise"; instructions: string };
+
+export function currentActionKey(plan: MessageBlock | null | undefined, pending: PendingElicitation | null | undefined): string | null {
+  if (plan) {
+    return `plan:${plan.turn_id ?? "turn"}:${plan.item_id ?? plan.call_id ?? plan.id}`;
+  }
+  if (pending) {
+    return `question:${pending.turn_id ?? "turn"}:${pending.item_id ?? pending.questions[0]?.id ?? "request"}`;
+  }
+  return null;
+}
+
+export function shouldShowCurrentActionCard(actionKey: string | null | undefined, hiddenActionKey: string | null | undefined): boolean {
+  return Boolean(actionKey && actionKey !== hiddenActionKey);
+}
+
+export function selectionFromDigitKey(key: string, total: number): number | null {
+  if (!/^[1-9]$/.test(key)) return null;
+  const index = Number(key) - 1;
+  return index >= 0 && index < total ? index : null;
+}
+
+export function moveActionSelection(current: number, total: number, delta: number): number {
+  if (total <= 0) return 0;
+  return (current + delta + total) % total;
+}
+
+export function currentPlanActionOptions(): { label: string; description: string }[] {
+  return [
+    { label: "是，实施此计划", description: "按聊天记录里的 Proposed Plan 继续执行" },
+    { label: "否，请告知 Codex 如何调整", description: "补充修改要求后重新生成计划" }
+  ];
+}
+
+export function planActionSubmission(selected: number, revision: string): PlanActionSubmission | null {
+  if (selected === 0) return { action: "accept" };
+  if (selected === 1 && revision.trim()) return { action: "revise", instructions: revision.trim() };
+  return null;
+}
+
+export function questionAnswersReady(questions: CurrentActionQuestion[], answers: Record<string, string | string[] | undefined>): boolean {
+  return questions.every((question) => {
+    const value = answers[question.id];
+    if (Array.isArray(value)) return value.some((item) => item.trim().length > 0);
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+export function questionAnswerPayload(questions: CurrentActionQuestion[], answers: Record<string, string | string[] | undefined>): Record<string, string[]> {
+  return Object.fromEntries(questions.map((question) => {
+    const value = answers[question.id];
+    return [question.id, Array.isArray(value) ? value : value ? [value] : []];
+  }));
+}
+
+export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, status?: Pick<SystemStatus, "hidden_thread_count" | "app_server_hidden_thread_count" | "app_server_source_counts" | "state_db_integrity">): { hidden: number; visible: number; sourceCounts: string; integrity: string } {
+  const hidden = plan?.hidden_threads ?? status?.app_server_hidden_thread_count ?? status?.hidden_thread_count ?? 0;
+  return {
+    hidden,
+    visible: plan?.visible_threads ?? 0,
+    sourceCounts: sourceCountsText(plan?.hidden_source_counts ?? status?.app_server_source_counts),
+    integrity: plan?.integrity ?? status?.state_db_integrity ?? "unknown"
+  };
+}
+
+export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
+  return (plan?.hidden_threads ?? 0) > 0;
+}
+
+function currentActionKindFromBlocks(
+  blocks: MessageBlock[],
+  plan: MessageBlock | null | undefined,
+  pending: PendingElicitation | null | undefined
+): CurrentActionKind | null {
+  if (!plan && !pending) return null;
+  if (plan && !pending) return "plan";
+  if (!plan && pending) return "question";
+  const planIndex = blocks.findIndex((block) => isActionablePlanBlock(block, plan));
+  const questionIndex = blocks.findIndex((block) => isActionableQuestionBlock(block, pending));
+  if (planIndex === -1 && questionIndex === -1) return plan ? "plan" : "question";
+  if (questionIndex === -1) return "plan";
+  if (planIndex === -1) return "question";
+  return questionIndex >= planIndex ? "question" : "plan";
+}
+
+export function modelSupportsServiceTier(models: CodexModel[], modelId: string, tierId: string): boolean {
+  const model = models.find((item) => item.id === modelId);
+  return Boolean(model?.service_tiers?.some((tier) => tier.id === tierId));
+}
+
+function normalizeServiceTier(value?: string | null): string {
+  if (value === "fast") return "priority";
+  return value?.trim() || "";
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function fieldContainsSubagent(value: unknown): boolean {
+  return typeof value === "string" && value.toLowerCase().includes("subagent");
+}
+
+function sourceValueContainsSubagent(value: unknown): boolean {
+  if (typeof value === "string") return value.toLowerCase().includes("subagent");
+  if (Array.isArray(value)) return value.some(sourceValueContainsSubagent);
+  if (typeof value === "object" && value) {
+    return Object.entries(value).some(([key, item]) => key.toLowerCase().includes("subagent") || sourceValueContainsSubagent(item));
+  }
+  return false;
+}
+
+function isInternalExecThread(thread: Partial<ThreadSummary>): boolean {
+  if (normalizeString(thread.source) !== "exec") return false;
+  if (!explicitlyNoUserEvent(thread.hasUserEvent ?? thread.has_user_event)) return false;
+
+  const threadSource = normalizeString(thread.threadSource ?? thread.thread_source);
+  if (threadSource && threadSource !== "user") return false;
+
+  return [
+    thread.title,
+    thread.firstUserMessage ?? thread.first_user_message,
+    thread.preview,
+    thread.latest_message
+  ].some((value) => typeof value === "string" && isInternalThreadPromptText(value));
+}
+
+function explicitlyNoUserEvent(value: unknown): boolean {
+  return value === false || value === 0 || value === "0";
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isInternalThreadPromptText(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  if (!text) return false;
+
+  const readonlyProbe = text.includes("只读验证")
+    || text.includes("只读核查")
+    || text.includes("不要修改文件")
+    || text.includes("不改文件")
+    || text.includes("read-only")
+    || text.includes("readonly");
+  const agentProbe = text.includes("spawn_agent")
+    || text.includes("子代理")
+    || text.includes("subagent")
+    || text.includes("model_reasoning_effort=xhigh");
+  if (readonlyProbe && agentProbe) return true;
+
+  const strongSubagentInstruction = text.includes("你是子代理")
+    || text.includes("你是并行子代理")
+    || text.includes("you are a subagent");
+  const fixedAgentConfig = text.includes("gpt-5.5")
+    || text.includes("xhigh")
+    || text.includes("model_reasoning_effort=xhigh");
+  return strongSubagentInstruction && fixedAgentConfig;
+}
+
+function threadDetailFromSlot(threadId: string, slot: ThreadMessageSlot, fallback?: ThreadSummary | null): ThreadDetail {
+  return {
+    summary: slot.summary ?? fallback ?? {
+      id: threadId,
+      title: "读取中",
+      status: "Recent" as ThreadStatus,
+      message_count: 0
+    },
+    messages: [],
+    blocks: slot.blocks,
+    raw_event_count: slot.totalBlocks,
+    total_blocks: slot.totalBlocks,
+    has_more_blocks: slot.hasMoreBlocks,
+    before_cursor: slot.beforeCursor
+  };
+}
+
+type ThreadMessageStoreController = {
+  store: ThreadMessageStoreState;
+  setActive: (threadId: string | null) => void;
+  getSlot: (threadId: string) => ThreadMessageSlot;
+  isActive: (threadId: string) => boolean;
+  applyDetail: (threadId: string, detail: ThreadDetail) => void;
+  applySummary: (threadId: string, summary: ThreadSummary) => void;
+  patchSummary: (threadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => void;
+  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
+  applyBlockPage: (threadId: string, page: Awaited<ReturnType<typeof getThreadBlocks>>, expectedCursor?: string | null) => void;
+  setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
+  setFeedback: (threadId: string, feedback: string | null) => void;
+  setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
+  setHistoryExpanded: (threadId: string, expanded: boolean) => void;
+  setHiddenActionKey: (threadId: string, key: string | null) => void;
+};
+
+function fallbackThreadSummary(threadId: string): ThreadSummary {
+  return {
+    id: threadId,
+    title: "读取中",
+    status: "Recent",
+    message_count: 0
+  };
+}
+
+function useThreadMessageStoreController(): ThreadMessageStoreController {
+  const storeRef = useRef<ThreadMessageStoreState>(createThreadMessageStoreState());
+  const [, setRevision] = useState(0);
+  const notify = useCallback((threadId: string | null) => {
+    if (threadId && storeRef.current.activeThreadId !== threadId) return;
+    setRevision((value) => value + 1);
+  }, []);
+  const setActive = useCallback((nextThreadId: string | null) => {
+    setActiveThreadSlot(storeRef.current, nextThreadId);
+    notify(nextThreadId);
+  }, [notify]);
+  const getSlotForThread = useCallback((nextThreadId: string) => getThreadSlot(storeRef.current, nextThreadId), []);
+  const isActive = useCallback((nextThreadId: string) => storeRef.current.activeThreadId === nextThreadId, []);
+  const applyDetail = useCallback((nextThreadId: string, nextDetail: ThreadDetail) => {
+    applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
+    notify(nextThreadId);
+  }, [notify]);
+  const applySummary = useCallback((nextThreadId: string, nextSummary: ThreadSummary) => {
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
+    notify(nextThreadId);
+  }, [notify]);
+  const patchSummary = useCallback((nextThreadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => {
+    const slot = getThreadSlot(storeRef.current, nextThreadId);
+    const base = slot.summary ?? fallbackThreadSummary(nextThreadId);
+    const next = typeof patch === "function" ? patch(base) : { ...base, ...patch };
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, next);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyRealtimeBlocks = useCallback((nextThreadId: string, blocks: MessageBlock[]) => {
+    applyRealtimeBlocksToThreadSlot(storeRef.current, nextThreadId, blocks);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyBlockPage = useCallback((nextThreadId: string, page: Awaited<ReturnType<typeof getThreadBlocks>>, expectedCursor?: string | null) => {
+    applyThreadBlockPageToSlot(storeRef.current, nextThreadId, page, expectedCursor);
+    notify(nextThreadId);
+  }, [notify]);
+  const setLoadingEarlier = useCallback((nextThreadId: string, loading: boolean, error: string | null = null) => {
+    setThreadLoadingEarlier(storeRef.current, nextThreadId, loading, error);
+    notify(nextThreadId);
+  }, [notify]);
+  const setFeedbackForThread = useCallback((nextThreadId: string, feedback: string | null) => {
+    setThreadSlotFeedback(storeRef.current, nextThreadId, feedback);
+    notify(nextThreadId);
+  }, [notify]);
+  const setLastResultForThread = useCallback((nextThreadId: string, result: BridgeActionResult | null) => {
+    setThreadLastResult(storeRef.current, nextThreadId, result);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHistoryExpanded = useCallback((nextThreadId: string, expanded: boolean) => {
+    setThreadHistoryExpanded(storeRef.current, nextThreadId, expanded);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHiddenActionKeyForThread = useCallback((nextThreadId: string, key: string | null) => {
+    setThreadHiddenActionKey(storeRef.current, nextThreadId, key);
+    notify(nextThreadId);
+  }, [notify]);
+
+  return useMemo(() => ({
+    store: storeRef.current,
+    setActive,
+    getSlot: getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlier,
+    setFeedback: setFeedbackForThread,
+    setLastResult: setLastResultForThread,
+    setHistoryExpanded,
+    setHiddenActionKey: setHiddenActionKeyForThread
+  }), [
+    setActive,
+    getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlier,
+    setFeedbackForThread,
+    setLastResultForThread,
+    setHistoryExpanded,
+    setHiddenActionKeyForThread
+  ]);
+}
+
+function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect }: {
+  threadId: string;
+  detail: ThreadDetail;
+  slot: ThreadMessageSlot;
+  messageStore: ThreadMessageStoreController;
+  csrfToken?: string | null;
+  onSelect: (id: SelectedThread) => void;
+}) {
+  const qc = useQueryClient();
+  const messageStreamRef = useRef<HTMLDivElement | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowMessagesRef = useRef(true);
+  const previousThreadIdRef = useRef(threadId);
+  const [draft, setDraft] = useState("");
+  const runOptions = useCodexRunOptions();
+  const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
+  const [renameValue, setRenameValue] = useState(detail.summary.title);
+  const updateMessageFollowState = useCallback(() => {
+    shouldFollowMessagesRef.current = messageStreamRef.current
+      ? shouldAutoFollowMessageStream(messageStreamRef.current)
+      : true;
+  }, []);
+  const followNextMessageUpdate = useCallback(() => {
+    shouldFollowMessagesRef.current = true;
+  }, []);
+  const setActiveFeedback = useCallback((message: string | null) => {
+    messageStore.setFeedback(threadId, message);
+  }, [messageStore, threadId]);
+  const attachments = useComposerAttachments(csrfToken, setActiveFeedback);
+  const fallbackBlockState = initialMessageBlockState(detail);
+  const summary = slot.summary ?? detail.summary;
+  const blocks = slot.blocks.length ? slot.blocks : fallbackBlockState.blocks;
+  const messageBlockState: MessageBlockState = {
+    blocks,
+    totalBlocks: slot.totalBlocks || fallbackBlockState.totalBlocks,
+    hasMoreBlocks: slot.hasMoreBlocks || fallbackBlockState.hasMoreBlocks,
+    beforeCursor: slot.beforeCursor ?? fallbackBlockState.beforeCursor,
+    visibleUpdateRevision: slot.visibleUpdateRevision
+  };
+  const lastResult = slot.lastResult;
+  const feedback = slot.feedback;
+  const showAllHistory = slot.showAllHistory;
+  const hiddenActionKey = slot.hiddenActionKey;
+
+  useEffect(() => {
+    setRunConfig(makeRunConfig(runOptions.config, detail.summary));
+  }, [detail.summary, runOptions.config]);
+
+  useEffect(() => {
+    const sameThread = previousThreadIdRef.current === threadId;
+    if (!sameThread) shouldFollowMessagesRef.current = true;
+    setRenameValue((current) => {
+      if (!sameThread) return detail.summary.title;
+      const merged = mergeIncomingThreadSummary({ id: threadId, title: current }, detail.summary);
+      return merged.title ?? current;
+    });
+    if (!sameThread) {
+      setDraft("");
+      attachments.clearUploads();
+      messageStore.setFeedback(threadId, null);
+    }
+    previousThreadIdRef.current = threadId;
+  }, [detail.summary, messageStore, threadId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeThreadEvents(threadId, {
+      onBlocks: (incomingBlocks, eventThreadId) => {
+        if (messageStore.isActive(eventThreadId)) {
+          updateMessageFollowState();
+        }
+        messageStore.applyRealtimeBlocks(eventThreadId, incomingBlocks);
+      },
+      onSummary: (next, eventThreadId) => {
+        messageStore.applySummary(eventThreadId, next);
+        updateThreadListCaches(qc, next);
+        qc.invalidateQueries({ queryKey: ["threads"] });
+      },
+      onError: (message, eventThreadId) => {
+        messageStore.setFeedback(eventThreadId, message);
+        qc.invalidateQueries({ queryKey: ["thread", eventThreadId], refetchType: "all" });
+        qc.invalidateQueries({ queryKey: ["threads"], refetchType: "all" });
+      }
+    });
+    return unsubscribe;
+  }, [messageStore, qc, threadId, updateMessageFollowState]);
+
+  const pending = useMemo(() => currentPendingElicitation(summary.pending_elicitation, summary.active_turn_id) ?? pendingFromBlocks(blocks, summary.status, summary.active_turn_id), [summary.pending_elicitation, summary.status, summary.active_turn_id, blocks]);
+  const planBlock = useMemo(() => latestActionBlock(blocks, summary.status, summary.active_turn_id, isPlanBlock), [blocks, summary.status, summary.active_turn_id]);
+  const approvalBlock = useMemo(() => latestActionBlock(blocks, summary.status, summary.active_turn_id, isApprovalBlock), [blocks, summary.status, summary.active_turn_id]);
+  const currentActionKind = useMemo(() => currentActionKindFromBlocks(blocks, planBlock, pending), [blocks, planBlock, pending]);
+  const currentActionPlan = currentActionKind === "plan" ? planBlock : null;
+  const currentActionPending = currentActionKind === "question" ? pending : null;
+  const currentActionId = currentActionKey(currentActionPlan, currentActionPending);
+  const showCurrentActionCard = shouldShowCurrentActionCard(currentActionId, hiddenActionKey);
+  const conversationSourceBlocks = useMemo(() => blocksWithCurrentPending(blocks, pending), [blocks, pending]);
+  const visibleConversationBlocks = useMemo(() => (
+    prioritizeCurrentActionBlocks(
+      visibleConversationBlocksForHistory(conversationSourceBlocks, showAllHistory, planBlock, pending),
+      planBlock,
+      pending
+    )
+  ), [conversationSourceBlocks, showAllHistory, planBlock, pending]);
+
+  useEffect(() => {
+    if (!shouldFollowMessagesRef.current) return;
+    requestAnimationFrame(() => {
+      messageEndRef.current?.scrollIntoView({ block: "end" });
+    });
+  }, [messageBlockState.visibleUpdateRevision, threadId, pending?.questions.length, planBlock?.id, approvalBlock?.id]);
+
+  useEffect(() => {
+    if (!currentActionId) messageStore.setHiddenActionKey(threadId, null);
+  }, [currentActionId, messageStore, threadId]);
+
+  const running = isThreadRunning(summary, blocks, lastResult);
+  const canStop = running || Boolean(summary.active_turn_id || summary.active_job_id || lastResult?.turn_id || lastResult?.job_id);
+  const actionMode = composerActionMode(running, draft, canStop, attachments.readyUploads.length);
+  const followUps = useQuery({
+    queryKey: ["thread-followups", summary.id],
+    queryFn: () => listFollowUps(summary.id),
+    refetchInterval: running ? 3000 : 8000
+  });
+  const followUpItems = followUps.data?.items ?? [];
+  const payloadRunConfig = useMemo(
+    () => runConfigWithSupportedServiceTier(runConfig, runOptions.models),
+    [runConfig, runOptions.models]
+  );
+  const loadEarlierMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, cursor }: { threadId: string; cursor: string }) => {
+      if (!cursor) throw new Error("没有更早的消息");
+      const beforeHeight = messageStreamRef.current?.scrollHeight ?? 0;
+      messageStore.setLoadingEarlier(requestThreadId, true);
+      const page = await getThreadBlocks(requestThreadId, { limit: 120, before: cursor });
+      return { threadId: requestThreadId, cursor, page, beforeHeight };
+    },
+    onSuccess: ({ threadId: loadedThreadId, cursor, page, beforeHeight }) => {
+      messageStore.applyBlockPage(loadedThreadId, page, cursor);
+      requestAnimationFrame(() => {
+        if (!messageStore.isActive(loadedThreadId)) return;
+        const stream = messageStreamRef.current;
+        if (!stream) return;
+        stream.scrollTop += Math.max(0, stream.scrollHeight - beforeHeight);
+      });
+    },
+    onError: (err: Error, variables) => {
+      const failedThreadId = variables?.threadId ?? summary.id;
+      messageStore.setLoadingEarlier(failedThreadId, false, err.message);
+      messageStore.setFeedback(failedThreadId, err.message);
+    }
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, message, config, uploads }: { threadId: string; message: string; config: RunConfig; uploads: Pick<UploadRecord, "id">[] }) => {
+      const payload = buildPayload(message, config, uploads);
+      const result = await sendMessage(requestThreadId, payload, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: resultThreadId, result }) => {
+      messageStore.setLastResult(resultThreadId, result);
+      if (result.job_id || result.turn_id) {
+        messageStore.patchSummary(resultThreadId, (current) => ({
+          ...current,
+          status: "Running",
+          active_turn_id: result.turn_id ?? current.active_turn_id,
+          active_job_id: result.job_id ?? current.active_job_id
+        }));
+      }
+      if (messageStore.isActive(resultThreadId)) {
+        setDraft("");
+        attachments.clearUploads();
+      }
+      messageStore.setFeedback(resultThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, turnId, jobId }: { threadId: string; turnId?: string | null; jobId?: string | null }) => {
+      await stopThread(requestThreadId, { turn_id: turnId, job_id: jobId }, csrfToken);
+      return { threadId: requestThreadId };
+    },
+    onSuccess: ({ threadId: stoppedThreadId }) => {
+      messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", stoppedThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const steerMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, message, config, uploads }: { threadId: string; message: string; config: RunConfig; uploads: Pick<UploadRecord, "id">[] }) => {
+      const payload = buildPayload(message, config, uploads);
+      const result = await steerThread(requestThreadId, payload, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: resultThreadId, result }) => {
+      messageStore.setLastResult(resultThreadId, result);
+      if (messageStore.isActive(resultThreadId)) {
+        setDraft("");
+        attachments.clearUploads();
+      }
+      messageStore.setFeedback(resultThreadId, result.fallback ? (result.message ?? "已加入跟进队列") : "已跟进当前 turn");
+      qc.invalidateQueries({ queryKey: ["thread-followups", resultThreadId] });
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const cancelFollowUpMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, followUpId }: { threadId: string; followUpId: string }) => {
+      await cancelFollowUp(requestThreadId, followUpId, csrfToken);
+      return { threadId: requestThreadId };
+    },
+    onSuccess: ({ threadId: cancelledThreadId }) => {
+      messageStore.setFeedback(cancelledThreadId, "跟进已取消");
+      qc.invalidateQueries({ queryKey: ["thread-followups", cancelledThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, status }: { threadId: string; status: ThreadStatus }) => {
+      const wasArchived = status === "Archived";
+      if (wasArchived) {
+        await restoreThread(requestThreadId, csrfToken);
+      } else {
+        await archiveThread(requestThreadId, csrfToken);
+      }
+      return { threadId: requestThreadId, wasArchived };
+    },
+    onSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
+      messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", archivedThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, title: requestedTitle }: { threadId: string; title: string }) => {
+      const title = requestedTitle.trim();
+      await renameThread(requestThreadId, requestedTitle, csrfToken);
+      return { threadId: requestThreadId, title };
+    },
+    onSuccess: ({ threadId: renamedThreadId, title }) => {
+      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
+      if (title) messageStore.patchSummary(renamedThreadId, { title });
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", renamedThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const forkMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId }: { threadId: string }) => {
+      const result = await forkThread(requestThreadId, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: forkedThreadId, result }) => {
+      messageStore.setLastResult(forkedThreadId, result);
+      messageStore.setFeedback(forkedThreadId, actionMessage(result));
+      if (result.thread_id) onSelect(result.thread_id);
+      qc.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const answerMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, answers }: { threadId: string; answers: Record<string, string[]> }) => {
+      const result = await answerElicitation(requestThreadId, answers, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: answeredThreadId, result }) => {
+      messageStore.setLastResult(answeredThreadId, result);
+      messageStore.setFeedback(answeredThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const planAcceptMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, block }: { threadId: string; block: MessageBlock }) => {
+      const result = await acceptPlan(requestThreadId, { turn_id: block.turn_id, item_id: block.item_id }, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: planThreadId, result }) => {
+      messageStore.setLastResult(planThreadId, result);
+      messageStore.setFeedback(planThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", planThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const planReviseMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, block, instructions }: { threadId: string; block: MessageBlock; instructions: string }) => {
+      const result = await revisePlan(requestThreadId, { turn_id: block.turn_id, item_id: block.item_id, instructions }, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: planThreadId, result }) => {
+      messageStore.setLastResult(planThreadId, result);
+      messageStore.setFeedback(planThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", planThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const approvalMutation = useMutation({
+    mutationFn: async ({ threadId: requestThreadId, block, decision }: { threadId: string; block: MessageBlock; decision: string }) => {
+      const result = await answerApproval(requestThreadId, {
+        turn_id: block.turn_id,
+        item_id: block.item_id ?? block.call_id,
+        decision
+      }, csrfToken);
+      return { threadId: requestThreadId, result };
+    },
+    onSuccess: ({ threadId: approvalThreadId, result }) => {
+      messageStore.setLastResult(approvalThreadId, result);
+      messageStore.setFeedback(approvalThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", approvalThreadId] });
+    },
+    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+  });
+
+  const loadEarlierPending = slot.loadingEarlier;
+  const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
+  const stopPending = stopMutation.isPending && stopMutation.variables?.threadId === summary.id;
+  const steerPending = steerMutation.isPending && steerMutation.variables?.threadId === summary.id;
+  const cancelFollowUpPending = cancelFollowUpMutation.isPending && cancelFollowUpMutation.variables?.threadId === summary.id;
+  const forkPending = forkMutation.isPending && forkMutation.variables?.threadId === summary.id;
+  const renamePending = renameMutation.isPending && renameMutation.variables?.threadId === summary.id;
+  const archivePending = archiveMutation.isPending && archiveMutation.variables?.threadId === summary.id;
+  const answerPending = answerMutation.isPending && answerMutation.variables?.threadId === summary.id;
+  const planAcceptPending = planAcceptMutation.isPending && planAcceptMutation.variables?.threadId === summary.id;
+  const planRevisePending = planReviseMutation.isPending && planReviseMutation.variables?.threadId === summary.id;
+  const approvalPending = approvalMutation.isPending && approvalMutation.variables?.threadId === summary.id;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (attachments.uploadInProgress) return;
+    if (actionMode === "send" && !sendPending) {
+      followNextMessageUpdate();
+      sendMutation.mutate({
+        threadId: summary.id,
+        message: draft,
+        config: payloadRunConfig,
+        uploads: [...attachments.readyUploads]
+      });
+    } else if (actionMode === "followup" && !steerPending) {
+      followNextMessageUpdate();
+      steerMutation.mutate({
+        threadId: summary.id,
+        message: draft,
+        config: payloadRunConfig,
+        uploads: [...attachments.readyUploads]
+      });
+    } else if (actionMode === "stop" && !stopPending) {
+      stopMutation.mutate({
+        threadId: summary.id,
+        turnId: lastResult?.turn_id ?? summary.active_turn_id,
+        jobId: lastResult?.job_id ?? summary.active_job_id
+      });
+    }
+  };
+  const conversationTitle = conversationTitleText(summary);
+  const actionBusy = sendPending || stopPending || steerPending || attachments.uploadInProgress;
+  const actionLabel = composerActionLabel(actionMode);
+  const actionTitle = composerActionTitle(actionMode);
+
+  return (
+    <div className="conversation-shell">
+      <div className="conversation-main">
+        <header className="conversation-header">
+          <div className="conversation-title-copy">
+            <span className="eyebrow">{summary.cwd || "/root/.codex"}</span>
+            <h2 className="conversation-title" title={conversationTitle}>{conversationTitle}</h2>
+          </div>
+          <div className="header-actions">
+            <StatusChip status={summary.status} />
+            <button
+              className="icon-button"
+              disabled={!canStop || stopPending}
+              onClick={() => stopMutation.mutate({
+                threadId: summary.id,
+                turnId: lastResult?.turn_id ?? summary.active_turn_id,
+                jobId: lastResult?.job_id ?? summary.active_job_id
+              })}
+              title="停止当前 turn"
+            >
+              <Square size={17} />
+            </button>
+          </div>
+        </header>
+
+        {summary.status === "ReplyNeeded" && (
+          <div className="reply-banner">
+            <TriangleAlert size={18} />
+            <span>{pending ? "Plan Mode 正在等待选择。" : "Plan Mode 正在等待确认。"}</span>
+          </div>
+        )}
+        {feedback && <div className="feedback-banner">{feedback}</div>}
+
+        {approvalBlock && (
+          <div className="action-stack">
+            {approvalBlock && (
+              <ApprovalCard
+                key={`approval-${approvalBlock.id}`}
+                block={approvalBlock}
+                onDecision={(decision) => {
+                  followNextMessageUpdate();
+                  approvalMutation.mutate({ threadId: summary.id, block: approvalBlock, decision });
+                }}
+                pending={approvalPending}
+              />
+            )}
+          </div>
+        )}
+
+        <div className="message-stream" ref={messageStreamRef} onScroll={updateMessageFollowState}>
+          {messageBlockState.hasMoreBlocks && (
+            <button
+              className="load-earlier-button"
+              disabled={slot.loadingEarlier || !messageBlockState.beforeCursor}
+              onClick={() => {
+                if (!messageBlockState.beforeCursor) return;
+                loadEarlierMutation.mutate({ threadId: summary.id, cursor: messageBlockState.beforeCursor });
+              }}
+              type="button"
+            >
+              {slot.loadingEarlier ? "正在加载..." : "加载更早消息"}
+            </button>
+          )}
+          {visibleConversationBlocks.map((block) => (
+            <MessageBlockView
+              key={block.id}
+              block={block}
+              activePlan={isActionablePlanBlock(block, planBlock)}
+              planPending={planAcceptPending || planRevisePending}
+              activeQuestion={isActionableQuestionBlock(block, pending)}
+              questionPending={answerPending}
+              onShowHistory={() => messageStore.setHistoryExpanded(threadId, true)}
+              historyExpanded={showAllHistory}
+            />
+          ))}
+          {visibleConversationBlocks.length === 0 && !approvalBlock && !planBlock && !pending && <div className="muted-row">没有可展示的 rollout 消息。</div>}
+          <div ref={messageEndRef} aria-hidden="true" />
+        </div>
+
+        {showCurrentActionCard && (currentActionPlan || currentActionPending) && (
+          <CurrentActionCard
+            plan={currentActionPlan}
+            pending={currentActionPending}
+            onAcceptPlan={(block) => {
+              followNextMessageUpdate();
+              planAcceptMutation.mutate({ threadId: summary.id, block });
+            }}
+            onRevisePlan={(block, instructions) => {
+              followNextMessageUpdate();
+              planReviseMutation.mutate({ threadId: summary.id, block, instructions });
+            }}
+            planPending={planAcceptPending || planRevisePending}
+            onSubmitQuestion={(answers) => {
+              followNextMessageUpdate();
+              answerMutation.mutate({ threadId: summary.id, answers });
+            }}
+            questionPending={answerPending}
+            onDismiss={() => messageStore.setHiddenActionKey(threadId, currentActionId)}
+          />
+        )}
+
+        <form className="composer" onSubmit={submit}>
+          <input
+            ref={attachments.inputRef}
+            className="visually-hidden"
+            type="file"
+            multiple
+            accept={uploadAccept}
+            onChange={attachments.onFileInputChange}
+          />
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送到 root Codex app-server"}
+          />
+          <ComposerAttachmentList
+            uploads={attachments.uploads}
+            removingUploadId={attachments.removingUploadId}
+            onRemove={attachments.removeUpload}
+          />
+          <RunConfigControls
+            config={runConfig}
+            setConfig={setRunConfig}
+            models={runOptions.models}
+            profiles={runOptions.profiles}
+            unavailable={runOptions.unavailable}
+            onPickFiles={attachments.openPicker}
+            uploadInProgress={attachments.uploadInProgress}
+          />
+          {followUpItems.length > 0 && (
+            <FollowUpQueue
+              items={followUpItems}
+              onCancel={(item) => cancelFollowUpMutation.mutate({ threadId: summary.id, followUpId: item.id })}
+              cancelling={cancelFollowUpPending}
+            />
+          )}
+          <div className="composer-actions">
+            <span>{lastResult ? actionMessage(lastResult) : `CSRF ${csrfToken ? "已就绪" : "未恢复"}`}</span>
+            <button className="primary-button composer-action-button" disabled={actionMode === "disabled" || actionBusy} title={actionTitle}>
+              {actionMode === "stop" ? <Square size={17} /> : actionMode === "followup" ? <Goal size={17} /> : <Send size={17} />}
+              {actionLabel}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <aside className="conversation-inspector">
+        <Panel title="线程设置" icon={<SlidersHorizontal size={18} />}>
+          <Metric label="Thread ID" value={summary.id} />
+          <Metric label="Active turn" value={summary.active_turn_id ?? lastResult?.turn_id ?? "none"} tone={summary.active_turn_id ? "success" : undefined} />
+          <Metric label="Active job" value={summary.active_job_id ?? lastResult?.job_id ?? "none"} tone={summary.active_job_id ? "success" : undefined} />
+          <Metric label="Last event" value={lastEventKindText(summary)} />
+          <Metric label="Blocks" value={`${blocks.length}/${messageBlockState.totalBlocks}`} />
+          <div className="copy-row">
+            <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(summary.id)}><Copy size={17} />复制 ID</button>
+            <button className="secondary-button" onClick={() => forkMutation.mutate({ threadId: summary.id })} disabled={forkPending}><GitFork size={17} />Fork</button>
+          </div>
+        </Panel>
+
+        <Panel title="名称与归档" icon={<Edit3 size={18} />}>
+          <label className="field-label">线程标题<input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></label>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => renameMutation.mutate({ threadId: summary.id, title: renameValue })} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
+            <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })} disabled={archivePending}>
+              {summary.status === "Archived" ? <Undo2 size={17} /> : <Archive size={17} />}
+              {summary.status === "Archived" ? "恢复" : "归档"}
+            </button>
+          </div>
+        </Panel>
+
+        <GoalCard threadId={summary.id} csrfToken={csrfToken} />
+
+        <Panel title="Codex 命令" icon={<TerminalSquare size={18} />}>
+          <div className="command-grid">
+            {codexCommands.map((command) => (
+              <span key={command} className="command-chip">{command}</span>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="运行路径" icon={<HardDrive size={18} />}>
+          <Metric label="Workspace" value={runConfig.cwd || defaultCwd} />
+          <Metric label="Model" value={runConfig.model || "default"} />
+          <Metric label="Reasoning" value={runConfig.reasoning || "default"} />
+          <Metric label="Permissions" value={permissionLabel(runConfig.permissionPreset)} />
+          <Metric label="Network" value="enabled" tone="success" />
+        </Panel>
+      </aside>
+    </div>
+  );
+}
+
+function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false }: {
+  config: RunConfig;
+  setConfig: (config: RunConfig) => void;
+  models: CodexModel[];
+  profiles: PermissionProfile[];
+  unavailable: { models?: boolean; profiles?: boolean; config?: boolean };
+  onPickFiles?: () => void;
+  uploadInProgress?: boolean;
+}) {
+  const modelList = models.some((item) => item.id === config.model)
+    ? models
+    : config.model
+      ? [{ id: config.model, label: config.model }, ...models]
+      : models;
+  const activePreset = permissionPresets.find((item) => item.id === config.permissionPreset) ?? permissionPresets[2];
+  const supportsFast = modelSupportsServiceTier(modelList, config.model, "priority");
+  const serviceTier = supportsFast ? config.serviceTier : "";
+  return (
+    <div className="composer-config">
+      <div className="composer-toolbar">
+        <button
+          type="button"
+          className="composer-chip icon-only"
+          title={uploadInProgress ? "附件上传中" : "上传本地文件"}
+          onClick={onPickFiles}
+          disabled={!onPickFiles || uploadInProgress}
+        >
+          <Plus size={15} />
+        </button>
+        {supportsFast && (
+          <button
+            type="button"
+            className={serviceTier === "priority" ? "composer-chip active" : "composer-chip"}
+            onClick={() => setConfig({ ...config, serviceTier: serviceTier === "priority" ? "" : "priority" })}
+            title="使用 Codex priority service tier"
+          >
+            <RefreshCw size={15} />Fast
+          </button>
+        )}
+        <button
+          type="button"
+          className={config.collaborationMode === "plan" ? "composer-chip active" : "composer-chip"}
+          onClick={() => setConfig({ ...config, collaborationMode: config.collaborationMode === "plan" ? "" : "plan" })}
+        >
+          <ClipboardCheck size={15} />Plan Mode
+        </button>
+        <span className="composer-chip muted"><Goal size={15} />Pursue Goal</span>
+        <label className="permission-menu-trigger">
+          <ShieldCheck size={15} />
+          <select value={config.permissionPreset} onChange={(event) => setConfig(applyPermissionPreset(config, event.target.value as PermissionPresetId))}>
+            {permissionPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="composer-grid main-config">
+        <label>
+          <span>模型</span>
+          {modelList.length > 0 ? (
+            <select value={config.model} onChange={(event) => {
+              const model = event.target.value;
+              setConfig({
+                ...config,
+                model,
+                serviceTier: modelSupportsServiceTier(modelList, model, "priority") ? config.serviceTier : ""
+              });
+            }}>
+              {modelList.map((item) => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}
+            </select>
+          ) : (
+            <input value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} placeholder={unavailable.models ? "模型接口不可用" : "model"} />
+          )}
+        </label>
+        <label>
+          <span>Reasoning</span>
+          <select value={config.reasoning} onChange={(event) => setConfig({ ...config, reasoning: event.target.value })}>
+            {reasoningOptions.map((value) => <option key={value || "default"} value={value}>{value || "default"}</option>)}
+          </select>
+        </label>
+        <label className="cwd-field">
+          <span>CWD</span>
+          <input value={config.cwd} onChange={(event) => setConfig({ ...config, cwd: event.target.value })} />
+        </label>
+      </div>
+      <div className="permission-summary">
+        <div className="permission-summary-icon">{activePreset.icon}</div>
+        <div>
+          <strong>{activePreset.label}</strong>
+          <span>{activePreset.description}</span>
+        </div>
+      </div>
+      {unavailable.config && <div className="config-note">Codex 默认配置接口不可用，使用当前表单值发送。</div>}
+    </div>
+  );
+}
+
+function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: string | null }) {
+  const qc = useQueryClient();
+  const goal = useQuery({ queryKey: ["codex-goal", threadId], queryFn: () => getGoalMode(threadId), refetchInterval: 8000 });
+  const goalState = goal.data?.available ? goal.data.data : null;
+  const [objective, setObjective] = useState(goalState?.objective ?? "");
+  const [tokenBudget, setTokenBudget] = useState(goalState?.token_budget ? String(goalState.token_budget) : "");
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!goalState) return;
+    setObjective(goalState.objective ?? "");
+    setTokenBudget(goalState.token_budget ? String(goalState.token_budget) : "");
+  }, [goalState?.objective, goalState?.token_budget, goalState]);
+
+  const saveGoal = useMutation({
+    mutationFn: () => setGoalMode({
+      enabled: Boolean(objective.trim()),
+      objective: objective.trim() || null,
+      token_budget: tokenBudget.trim() ? Number(tokenBudget) : null
+    }, threadId, csrfToken),
+    onSuccess: (result) => {
+      setFeedback(result.available ? "Goal 已保存" : "Goal API 不可用");
+      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
+    },
+    onError: (err: Error) => setFeedback(err.message)
+  });
+  const clearGoal = useMutation({
+    mutationFn: () => clearGoalMode(threadId, csrfToken),
+    onSuccess: (result) => {
+      setFeedback(result.available ? "Goal 已清除" : "Goal API 不可用");
+      setObjective("");
+      setTokenBudget("");
+      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
+    },
+    onError: (err: Error) => setFeedback(err.message)
+  });
+
+  return (
+    <Panel title="Goal" icon={<Goal size={18} />}>
+      {goal.data && !goal.data.available ? (
+        <div className="config-note">Goal API 不可用</div>
+      ) : (
+        <>
+          <Metric label="状态" value={formatGoalStatus(goalState)} tone={goalState?.enabled ? "success" : undefined} />
+          <label className="field-label">目标<textarea value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="本线程要持续追踪的目标" /></label>
+          <label className="field-label">Token budget<input type="number" min={1} value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} placeholder="可选" /></label>
+          {feedback && <div className="config-note">{feedback}</div>}
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => saveGoal.mutate()} disabled={saveGoal.isPending || (!objective.trim() && !tokenBudget.trim())}><CheckCircle2 size={17} />保存</button>
+            <button className="danger-button soft" onClick={() => clearGoal.mutate()} disabled={clearGoal.isPending}><Trash2 size={17} />清除</button>
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function FollowUpQueue({ items, onCancel, cancelling }: { items: FollowUpQueueItem[]; onCancel: (item: FollowUpQueueItem) => void; cancelling: boolean }) {
+  const visible = items.filter((item) => item.status !== "submitted" || item.submitted_at);
+  if (!visible.length) return null;
+  return (
+    <div className="follow-up-queue">
+      {visible.slice(0, 4).map((item) => (
+        <div className="follow-up-item" key={item.id}>
+          <div className="follow-up-copy">
+            <span>{followUpStatusLabel(item.status)}</span>
+            <strong>{followUpMessagePreview(item)}</strong>
+          </div>
+          {item.status === "pending" && (
+            <button type="button" className="icon-button compact" disabled={cancelling} onClick={() => onCancel(item)} title="取消跟进">
+              <X size={15} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function followUpStatusLabel(status?: string | null): string {
+  if (status === "pending") return "待跟进";
+  if (status === "submitting") return "提交中";
+  if (status === "submitted") return "已提交";
+  if (status === "cancelled") return "已取消";
+  if (status === "error") return "失败";
+  return status || "未知";
+}
+
+export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" | "error" | "status">): string {
+  const source = item.status === "error" && item.error ? item.error : item.message;
+  const compact = source.replace(/\s+/g, " ").trim();
+  if (compact.length <= 120) return compact || "空跟进";
+  return `${compact.slice(0, 120)}...`;
+}
+
+function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean; csrfToken?: string | null; onCreated: (id: string) => void }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState("");
+  const runOptions = useCodexRunOptions();
+  const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig());
+  const [result, setResult] = useState<BridgeActionResult | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const attachments = useComposerAttachments(csrfToken, setFeedback);
+  useEffect(() => {
+    if (runOptions.config) {
+      setRunConfig(makeRunConfig(runOptions.config));
+    }
+  }, [runOptions.config]);
+  const payloadRunConfig = useMemo(
+    () => runConfigWithSupportedServiceTier(runConfig, runOptions.models),
+    [runConfig, runOptions.models]
+  );
+  const mutation = useMutation({
+    mutationFn: () => createThread(buildPayload(draft, payloadRunConfig, attachments.readyUploads), csrfToken),
+    onSuccess: (next) => {
+      setResult(next);
+      setDraft("");
+      attachments.clearUploads();
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      if (next.thread_id) onCreated(next.thread_id);
+    },
+    onError: (err: Error) => setFeedback(err.message)
+  });
+  if (loading) {
+    return <div className="empty-state"><Bot size={32} /><strong>正在读取线程</strong></div>;
+  }
+  return (
+    <div className="new-thread-state">
+      <Bot size={34} />
+      <strong>新建 Codex 线程</strong>
+      <span>通过受控 app-server bridge 启动，失败时自动降级为 codex exec job。</span>
+      <form className="composer new-composer" onSubmit={(event) => {
+        event.preventDefault();
+        if (!attachments.uploadInProgress && (draft.trim() || attachments.readyUploads.length)) mutation.mutate();
+      }}>
+        <input
+          ref={attachments.inputRef}
+          className="visually-hidden"
+          type="file"
+          multiple
+          accept={uploadAccept}
+          onChange={attachments.onFileInputChange}
+        />
+        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入第一条消息" />
+        <ComposerAttachmentList
+          uploads={attachments.uploads}
+          removingUploadId={attachments.removingUploadId}
+          onRemove={attachments.removeUpload}
+        />
+        <RunConfigControls
+          config={runConfig}
+          setConfig={setRunConfig}
+          models={runOptions.models}
+          profiles={runOptions.profiles}
+          unavailable={runOptions.unavailable}
+          onPickFiles={attachments.openPicker}
+          uploadInProgress={attachments.uploadInProgress}
+        />
+        <div className="composer-actions">
+          <span>{feedback ?? (result ? actionMessage(result) : "新线程会在列表中自动出现")}</span>
+          <button className="primary-button" disabled={(!draft.trim() && !attachments.readyUploads.length) || attachments.uploadInProgress || mutation.isPending}><Play size={17} />启动</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function MessageBlockView({
+  block,
+  activePlan = false,
+  planPending = false,
+  activeQuestion = false,
+  questionPending = false,
+  onShowHistory,
+  historyExpanded = false
+}: {
+  block: MessageBlock;
+  activePlan?: boolean;
+  planPending?: boolean;
+  activeQuestion?: boolean;
+  questionPending?: boolean;
+  onShowHistory?: () => void;
+  historyExpanded?: boolean;
+}) {
+  if (isHistoryCollapsedBlock(block)) {
+    return <HistoryCollapseCell block={block} onShowHistory={onShowHistory} expanded={historyExpanded} />;
+  }
+  if (isPlanBlock(block)) {
+    return (
+      <ProposedPlanCell
+        block={block}
+        active={activePlan}
+        pending={planPending}
+      />
+    );
+  }
+  if (isQuestionBlock(block)) {
+    if (activeQuestion) return <QuestionCell block={block} pendingSubmit={questionPending} />;
+    return <QuestionResultCell block={block} />;
+  }
+  if (isQuestionResultBlock(block)) {
+    return <QuestionResultCell block={block} />;
+  }
+  if (isToolBlock(block)) {
+    return <ToolBlockView block={block} />;
+  }
+  if (!shouldRenderConversationMessage(block)) {
+    return null;
+  }
+  const presentation = conversationMessagePresentation(block);
+  return (
+    <article className={presentation.rowClassName}>
+      <div className="chat-meta">
+        <span>{roleLabel(block.role)}</span>
+        <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
+      </div>
+      <div className={presentation.bodyClassName}>{messageBlockText(block)}</div>
+    </article>
+  );
+}
+
+function ToolBlockView({ block }: { block: MessageBlock }) {
+  const [open, setOpen] = useState(false);
+  const summary = toolBlockSummary(block);
+  return (
+    <details
+      className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>
+        <span className="tool-title">{toolBlockTitle(block)}</span>
+        <small>{toolBlockStatus(block)}</small>
+        <ChevronRight size={16} />
+      </summary>
+      {summary && <div className="tool-summary">{summary}</div>}
+      {open && <pre>{toolBlockDetailText(block)}</pre>}
+    </details>
+  );
+}
+
+function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: MessageBlock; onShowHistory?: () => void; expanded: boolean }) {
+  const kind = historyCollapseKind(block);
+  const label = firstDisplayLine(block.summary) ?? firstDisplayLine(block.text) ?? (kind === "tool" ? "历史工具活动已折叠" : kind === "action" ? "历史计划和问题已折叠" : "较早消息已折叠");
+  const eyebrow = kind === "tool" ? "Tool activity" : kind === "action" ? "Plan & questions" : "Earlier messages";
+  return (
+    <article className="history-collapse-cell">
+      <div>
+        <span>{eyebrow}</span>
+        <strong>{label}</strong>
+      </div>
+      {onShowHistory && (
+        <button className="secondary-button" disabled={expanded} onClick={onShowHistory} type="button">
+          {expanded ? "已显示全部" : "显示全部历史"}
+        </button>
+      )}
+    </article>
+  );
+}
+
+function ProposedPlanCell({ block, active, pending }: { block: MessageBlock; active: boolean; pending: boolean }) {
+  return (
+    <article className={active ? "plan-cell active" : "plan-cell"}>
+      <div className="message-meta">
+        <span>Proposed Plan</span>
+        <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
+      </div>
+      <div className="plan-body">{extractPlanText(block.text || "")}</div>
+      {active && pending && <div className="action-inline-status">正在提交计划操作...</div>}
+    </article>
+  );
+}
+
+function QuestionResultCell({ block }: { block: MessageBlock }) {
+  const answers = block.answers ?? [];
+  return (
+    <article className="question-result-cell">
+      <div className="message-meta">
+        <span>Questions</span>
+        <small>{block.status || "completed"}</small>
+      </div>
+      {answers.length > 0 ? (
+        <div className="answered-list">
+          {answers.map((answer) => (
+            <div className="answered-row" key={answer.question_id}>
+              <span>{answer.question_id}</span>
+              <strong>{answer.answers.length ? answer.answers.join(", ") : "未回答"}</strong>
+              {answer.note && <small>{answer.note}</small>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p>Questions answered</p>
+      )}
+    </article>
+  );
+}
+
+function QuestionCell({ block, pendingSubmit }: { block: MessageBlock; pendingSubmit: boolean }) {
+  return (
+    <article className="question-cell active-choice">
+      <div className="message-meta">
+        <span>Questions</span>
+        <small>{block.turn_id || block.item_id || block.call_id || "request_user_input"}</small>
+      </div>
+      {block.questions.map((question) => (
+        <div key={question.id} className="question-block">
+          <strong>{question.question}</strong>
+          <div className="choice-grid">
+            {question.options.map((option, index) => (
+              <button
+                key={`${question.id}-${option.label}`}
+                className="choice-option"
+                disabled
+                type="button"
+              >
+                <span>{index + 1}</span>
+                <strong>{option.label}</strong>
+                {option.description && <small>{option.description}</small>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      {pendingSubmit && <div className="action-inline-status">正在提交选择...</div>}
+    </article>
+  );
+}
+
+function CurrentActionCard({
+  plan,
+  pending,
+  onAcceptPlan,
+  onRevisePlan,
+  planPending,
+  onSubmitQuestion,
+  questionPending,
+  onDismiss
+}: {
+  plan?: MessageBlock | null;
+  pending?: PendingElicitation | null;
+  onAcceptPlan: (block: MessageBlock) => void;
+  onRevisePlan: (block: MessageBlock, instructions: string) => void;
+  planPending: boolean;
+  onSubmitQuestion: (answers: Record<string, string[]>) => void;
+  questionPending: boolean;
+  onDismiss: () => void;
+}) {
+  const isPlan = Boolean(plan);
+  const busy = isPlan ? planPending : questionPending;
+  const questions = pending?.questions ?? [];
+  const questionSignature = questions.map((question) => `${question.id}:${question.options.map((option) => option.label).join("|")}`).join(";");
+  const [selected, setSelected] = useState(0);
+  const [revision, setRevision] = useState("");
+  const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[] | undefined>>({});
+  const options = isPlan ? currentPlanActionOptions() : questions[0]?.options ?? [];
+  const selectedPlanRequiresRevision = isPlan && selected === 1;
+  const ready = isPlan
+    ? Boolean(plan && planActionSubmission(selected, revision))
+    : questionAnswersReady(questions, questionAnswers);
+
+  function submitAction() {
+    if (busy || !ready) return;
+    if (plan) {
+      const submission = planActionSubmission(selected, revision);
+      if (!submission) return;
+      if (submission.action === "accept") {
+        onAcceptPlan(plan);
+      } else {
+        onRevisePlan(plan, submission.instructions);
+      }
+      return;
+    }
+    if (pending) onSubmitQuestion(questionAnswerPayload(questions, questionAnswers));
+  }
+
+  useEffect(() => {
+    setSelected(0);
+    setRevision("");
+    setQuestionAnswers((current) => {
+      const initial: Record<string, string | string[] | undefined> = {};
+      for (const question of questions) {
+        initial[question.id] = current[question.id] ?? question.options[0]?.label;
+      }
+      return initial;
+    });
+  }, [plan?.id, pending?.turn_id, pending?.item_id, questionSignature]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editable = target?.closest("input, textarea, select, [contenteditable='true']");
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDismiss();
+        return;
+      }
+      if (!editable && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        event.preventDefault();
+        setSelected((current) => moveActionSelection(current, options.length, event.key === "ArrowDown" ? 1 : -1));
+        return;
+      }
+      if (!editable) {
+        const digitSelection = selectionFromDigitKey(event.key, options.length);
+        if (digitSelection !== null) {
+          event.preventDefault();
+          setSelected(digitSelection);
+          if (!isPlan && questions[0]?.options[digitSelection]) {
+            setQuestionAnswers((current) => ({ ...current, [questions[0].id]: questions[0].options[digitSelection].label }));
+          }
+          return;
+        }
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        submitAction();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, isPlan, onDismiss, options.length, questions, ready, revision, selected, questionAnswers]);
+
+  const chooseQuestionOption = (questionId: string, label: string, index: number) => {
+    setSelected(index);
+    setQuestionAnswers((current) => ({ ...current, [questionId]: label }));
+  };
+
+  return (
+    <section className="current-action-card" aria-live="polite">
+      <div className="current-action-header">
+        <div>
+          <span>{isPlan ? "Plan Mode" : "Questions"}</span>
+          <strong>{isPlan ? "实施此计划?" : questions[0]?.question ?? "Codex 正在等待选择"}</strong>
+        </div>
+        <small>↑↓ 选择 · 1-9 快选</small>
+      </div>
+      <div className="current-action-options">
+        {isPlan ? options.map((option, index) => (
+          <button
+            type="button"
+            key={option.label}
+            className={selected === index ? "current-action-option selected" : "current-action-option"}
+            onClick={() => setSelected(index)}
+          >
+            <span>{index + 1}</span>
+            <div>
+              <strong>{option.label}</strong>
+              <small>{option.description}</small>
+            </div>
+          </button>
+        )) : questions.map((question) => (
+          <div className="current-action-question" key={question.id}>
+            {questions.length > 1 && <strong>{question.question}</strong>}
+            {question.options.map((option, index) => (
+              <button
+                type="button"
+                key={`${question.id}-${option.label}`}
+                className={questionAnswers[question.id] === option.label ? "current-action-option selected" : "current-action-option"}
+                onClick={() => chooseQuestionOption(question.id, option.label, index)}
+              >
+                <span>{index + 1}</span>
+                <div>
+                  <strong>{option.label}</strong>
+                  {option.description && <small>{option.description}</small>}
+                </div>
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      {selectedPlanRequiresRevision && (
+        <textarea
+          className="current-action-textarea"
+          value={revision}
+          onChange={(event) => setRevision(event.target.value)}
+          placeholder="告诉 Codex 需要怎样调整计划"
+        />
+      )}
+      <div className="current-action-footer">
+        <button className="secondary-button ghost" type="button" onClick={onDismiss}>
+          忽略 <kbd>ESC</kbd>
+        </button>
+        <button className="primary-button" type="button" disabled={!ready || busy} onClick={submitAction}>
+          提交 <kbd>↵</kbd>
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onDecision: (decision: string) => void; pending: boolean }) {
+  return (
+    <article className="approval-card action-request">
+      <div className="message-meta">
+        <span>审批请求</span>
+        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
+      </div>
+      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
+      <div className="button-row">
+        <button className="primary-button" disabled={pending} onClick={() => onDecision("accept")}>
+          <ClipboardCheck size={17} />批准
+        </button>
+        <button className="danger-button soft" disabled={pending} onClick={() => onDecision("decline")}>
+          <X size={17} />拒绝
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ClaudeWorkspace() {
+  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000 });
+  const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000 });
+  const provider = providerById(providers.data, "claude_code") ?? providerById(providers.data, "claude-code");
+  const data = overview.data?.data;
+  const available = overview.data?.available ?? false;
+  const projectCount = data?.projects.length ?? 0;
+  const sessionCount = totalClaudeSessions(data);
+
+  return (
+    <div className="ops-grid">
+      <Panel title="Provider" icon={<Bot size={18} />}>
+        <Metric label="Name" value={provider?.label ?? "Claude Code"} />
+        <Metric label="Status" value={provider?.status ?? "preview"} tone={provider?.status === "ready" ? "success" : "warning"} />
+        <Metric label="Safety" value={provider?.safety ?? "read-only"} />
+        <Metric label="Capabilities" value={capabilityText(provider)} />
+      </Panel>
+      <Panel title="Claude Home" icon={<HardDrive size={18} />}>
+        <Metric label="Home" value={pathText(data?.home)} />
+        <Metric label="Settings" value={data?.settings_exists ? "present" : available ? "missing" : "unavailable"} tone={data?.settings_exists ? "success" : "warning"} />
+        <Metric label="Projects" value={String(projectCount)} />
+        <Metric label="Sessions" value={String(sessionCount)} />
+      </Panel>
+      <Panel title="Projects" icon={<Files size={18} />} className="wide-panel">
+        <div className="preview-list">
+          {(data?.projects ?? []).slice(0, 12).map((project) => (
+            <article className="preview-item" key={project.id}>
+              <div>
+                <strong>{project.display_name}</strong>
+                <span>{project.id}</span>
+              </div>
+              <small>{project.session_count} sessions</small>
+            </article>
+          ))}
+          {available && projectCount === 0 && <div className="muted-row">未发现 Claude Code 项目</div>}
+          {!available && <div className="muted-row">Claude Code preview endpoint unavailable</div>}
+        </div>
+      </Panel>
+      <Panel title="Recent Sessions" icon={<MessageSquare size={18} />} className="wide-panel">
+        <div className="preview-list compact">
+          {recentClaudeSessions(data).map((session) => (
+            <article className="preview-item" key={session.key}>
+              <div>
+                <strong>{session.title || session.id}</strong>
+                <span>{session.project}</span>
+              </div>
+              <small>{session.message_count} messages · {session.updated_at ?? "unknown"}</small>
+            </article>
+          ))}
+          {available && sessionCount === 0 && <div className="muted-row">暂无会话</div>}
+        </div>
+      </Panel>
+      {data?.settings_preview !== undefined && (
+        <Panel title="Settings Preview" icon={<KeyRound size={18} />} className="wide-panel">
+          <pre className="config-preview">{formatPayload(data.settings_preview)}</pre>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function SentinelWorkspace() {
+  const status = useQuery({ queryKey: ["sentinel-status"], queryFn: getSentinelStatus, refetchInterval: 15000 });
+  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
+  const data = status.data?.data;
+  const available = status.data?.available ?? false;
+
+  return (
+    <div className="ops-grid">
+      <Panel title="Sentinel" icon={<TriangleAlert size={18} />}>
+        <Metric label="Status" value={data?.enabled ? "enabled" : available ? "disabled" : "unavailable"} tone={data?.enabled ? "success" : "warning"} />
+        <Metric label="Service" value={data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "unknown"} />
+        <Metric label="Config" value={pathText(data?.config_path ?? platform.data?.config_file)} />
+        <Metric label="Platform" value={data?.platform ?? platform.data?.kind ?? "unknown"} />
+      </Panel>
+      <Panel title="Hooks" icon={<ClipboardCheck size={18} />}>
+        <Metric label="Codex Hook" value={data?.hook_status ?? "unknown"} tone={data?.hook_status === "managed" ? "success" : "warning"} />
+        <Metric label="Events" value={String(data?.recent_event_count ?? 0)} />
+        <Metric label="Reply-needed" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
+        <Metric label="Recoverable" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
+      </Panel>
+      <Panel title="Notifications" icon={<Cloud size={18} />}>
+        <Metric label="Bark" value={data?.bark_status ?? "unknown"} tone={data?.bark_status === "configured" ? "success" : "warning"} />
+        <Metric label="Dedupe" value="host-scoped" />
+        <Metric label="Reply alerts" value={data?.enabled ? "enabled" : "inactive"} />
+        <Metric label="Recoverable alerts" value={data?.enabled ? "enabled" : "inactive"} />
+      </Panel>
+      <Panel title="Logs DB" icon={<Database size={18} />}>
+        <Metric label="Maintenance" value={data?.logs_db_status ?? "unknown"} tone={data?.logs_db_status === "maintenance_ready" ? "success" : "warning"} />
+        <Metric label="Data dir" value={pathText(platform.data?.data_dir)} />
+        <Metric label="Log dir" value={pathText(platform.data?.log_dir)} />
+      </Panel>
+      {!available && (
+        <Panel title="Endpoint" icon={<TriangleAlert size={18} />} className="wide-panel">
+          <div className="muted-row">Sentinel preview endpoint unavailable</div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function PluginsWorkspace() {
+  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000 });
+  const plugins = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, refetchInterval: 30000 });
+
+  return (
+    <div className="ops-grid">
+      <Panel title="Providers" icon={<Bot size={18} />} className="wide-panel">
+        <div className="provider-grid">
+          {(providers.data ?? []).map((provider) => (
+            <ProviderCard key={provider.id} provider={provider} />
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Built-ins" icon={<Plug size={18} />} className="wide-panel">
+        <div className="preview-list">
+          {(plugins.data ?? []).map((plugin) => (
+            <article className="preview-item" key={plugin.id}>
+              <div>
+                <strong>{plugin.label}</strong>
+                <span>{plugin.id}</span>
+              </div>
+              <small>{plugin.kind} · {plugin.status}</small>
+            </article>
+          ))}
+          {(plugins.data ?? []).length === 0 && <div className="muted-row">暂无插件</div>}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function PreviewWorkspace({ kind }: { kind: "files" | "git" | "terminal" }) {
+  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
+  const meta = {
+    files: { title: "Files", icon: <Files size={18} />, primary: "read-only preview", path: platform.data?.data_dir },
+    git: { title: "Git", icon: <GitBranch size={18} />, primary: "inventory preview", path: platform.data?.data_dir },
+    terminal: { title: "Terminal", icon: <TerminalSquare size={18} />, primary: "fixed jobs only", path: platform.data?.config_file }
+  }[kind];
+
+  return (
+    <div className="ops-grid">
+      <Panel title={meta.title} icon={meta.icon}>
+        <Metric label="Status" value={meta.primary} tone="warning" />
+        <Metric label="Platform" value={platform.data?.kind ?? "unknown"} />
+        <Metric label="Path" value={pathText(meta.path)} />
+        <Metric label="Service" value={platform.data?.service_name ?? "nexushub"} />
+      </Panel>
+      <Panel title="Boundary" icon={<ShieldCheck size={18} />} className="wide-panel">
+        <div className="preview-list compact">
+          <article className="preview-item">
+            <div>
+              <strong>{kind === "terminal" ? "No arbitrary shell" : "Permission gated"}</strong>
+              <span>{kind === "terminal" ? "job runner" : "provider-neutral workspace surface"}</span>
+            </div>
+            <small>{platform.data?.service_kind ?? "service"}</small>
+          </article>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function ProviderCard({ provider }: { provider: AgentProviderInfo }) {
+  return (
+    <article className="provider-card">
+      <div>
+        <strong>{provider.label}</strong>
+        <span className={`provider-status ${provider.status}`}>{provider.status}</span>
+      </div>
+      {provider.description && <p>{provider.description}</p>}
+      <small>{capabilityText(provider)}</small>
+    </article>
+  );
+}
+
+function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000 });
+  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000 });
+  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
+  const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
+  const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
+  const jobMutation = useMutation({ mutationFn: ({ target, action }: { target: "panel" | "codex"; action: "precheck" | "start" | "prune" }) => startUpdateJob(target, action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
+  const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: setPlan });
+  const executeDelete = useMutation({ mutationFn: () => startArchiveDelete(csrfToken), onSuccess: () => {
+    setDeleteArmed(false);
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["system-status"] });
+    qc.invalidateQueries({ queryKey: ["threads"] });
+  } });
+  const hiddenDryRun = useMutation({ mutationFn: () => dryRunHiddenThreadDelete(csrfToken), onSuccess: setHiddenPlan });
+  const executeHiddenDelete = useMutation({ mutationFn: () => startHiddenThreadDelete(csrfToken), onSuccess: (result) => {
+    setHiddenDeleteArmed(false);
+    setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["system-status"] });
+    qc.invalidateQueries({ queryKey: ["threads"] });
+  } });
+  const publicEndpoint = cleanHostValue(status.data?.public_endpoint);
+  const hostname = cleanHostValue(status.data?.hostname) ?? "读取中";
+  const hiddenStats = hiddenThreadDeleteStats(hiddenPlan, status.data);
+
+  return (
+    <div className="ops-grid">
+      <Panel title="系统状态" icon={<HardDrive size={18} />}>
+        <Metric label="Hostname" value={hostname} />
+        <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
+        <Metric label="app-server" value={status.data?.app_server_service.active ? "active/running" : "inactive"} tone={status.data?.app_server_service.active ? "success" : "danger"} />
+        <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
+        <Metric label="Codex Home" value={status.data?.codex_home ?? "/root/.codex"} />
+        <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
+        <Metric label="Socket" value={status.data?.app_server_socket ?? "unknown"} />
+        <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
+        <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
+        <Metric label="app sources" value={sourceCountsText(status.data?.app_server_source_counts)} />
+      </Panel>
+      <Panel title="面板更新" icon={<RefreshCw size={18} />}>
+        <PanelVersionMetrics version={version.data} />
+        <div className="button-row">
+          <button className="secondary-button" onClick={() => jobMutation.mutate({ target: "panel", action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
+          <button className="primary-button" onClick={() => jobMutation.mutate({ target: "panel", action: "start" })}><Play size={17} />Update</button>
+          <button className="danger-button soft" onClick={() => jobMutation.mutate({ target: "panel", action: "prune" })}><Trash2 size={17} />Prune</button>
+        </div>
+      </Panel>
+      <Panel title="Codex 更新" icon={<Bot size={18} />}>
+        <CodexVersionMetrics version={version.data} />
+        <div className="button-row">
+          <button className="secondary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
+          <button className="primary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "start" })}><Play size={17} />一键更新</button>
+          <button className="danger-button soft" onClick={() => jobMutation.mutate({ target: "codex", action: "prune" })}><Trash2 size={17} />单独清理旧版本</button>
+        </div>
+      </Panel>
+      <Panel title="归档清理" icon={<Archive size={18} />}>
+        <div className="button-row">
+          <button className="secondary-button" onClick={() => dryRun.mutate()}><Database size={17} />Dry-run</button>
+          <button className="secondary-button" onClick={() => hiddenDryRun.mutate()}><Database size={17} />扫描隐藏线程</button>
+        </div>
+        <div className="archive-cleanup-grid">
+          <div className="archive-plan cleanup-section">
+            <div className="cleanup-section-title">
+              <strong>归档线程</strong>
+              <span>删除 archived 线程与 rollout</span>
+            </div>
+            <Metric label="active" value={String(plan?.active_threads ?? "dry-run 未执行")} />
+            <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
+            <Metric label="integrity" value={plan?.integrity ?? status.data?.state_db_integrity ?? "unknown"} tone={(plan?.integrity ?? status.data?.state_db_integrity) === "ok" ? "success" : "danger"} />
+            <div className="button-row">
+              {!deleteArmed ? (
+                <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
+              ) : (
+                <>
+                  <button className="danger-button" onClick={() => executeDelete.mutate()} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理</button>
+                  <button className="secondary-button" onClick={() => setDeleteArmed(false)}>取消</button>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="archive-plan cleanup-section">
+            <div className="cleanup-section-title">
+              <strong>隐藏线程</strong>
+              <span>删除 non-archived subagent/internal</span>
+            </div>
+            <Metric label="visible" value={hiddenPlan ? String(hiddenStats.visible) : "dry-run 未执行"} />
+            <Metric label="hidden" value={String(hiddenStats.hidden)} tone={hiddenStats.hidden > 0 ? "warning" : undefined} />
+            <Metric label="sources" value={hiddenStats.sourceCounts} />
+            <Metric label="integrity" value={hiddenStats.integrity} tone={hiddenStats.integrity === "ok" ? "success" : "danger"} />
+            <div className="button-row">
+              {!hiddenDeleteArmed ? (
+                <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan)} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
+              ) : (
+                <>
+                  <button className="danger-button" onClick={() => executeHiddenDelete.mutate()} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
+                  <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)}>取消</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
+        <JobList jobs={jobs.data ?? []} />
+      </Panel>
+    </div>
+  );
+}
+
+function PanelVersionMetrics({ version }: { version?: SystemVersion }) {
+  return (
+    <div className="version-grid">
+      <Metric label="Current" value={version?.panel_current ?? "读取中"} />
+      <Metric
+        label="Latest"
+        value={version?.panel_latest ?? "unknown"}
+        tone={version?.panel_update_available ? "warning" : "success"}
+      />
+      <Metric label="Update" value={version?.panel_update_available ? "available" : "current"} tone={version?.panel_update_available ? "warning" : "success"} />
+    </div>
+  );
+}
+
+function CodexVersionMetrics({ version }: { version?: SystemVersion }) {
+  const updateState = codexUpdateState(version);
+  return (
+    <div className="version-grid">
+      <Metric label="Current" value={version?.codex_current ?? version?.codex_root ?? "读取中"} />
+      <Metric label="Latest" value={version?.codex_latest ?? "unknown"} tone={updateState.tone} />
+      <Metric label="Update" value={updateState.label} tone={updateState.tone} />
+      <Metric label="root codex" value={version?.codex_root ?? "unknown"} />
+      <Metric label="user codex" value={version?.codex_user ?? "unknown"} />
+    </div>
+  );
+}
+
+function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null; username: string }) {
+  const qc = useQueryClient();
+  const security = useQuery({ queryKey: ["security"], queryFn: getSecurity });
+  const [draft, setDraft] = useState<Partial<SecuritySettings> & { turnstile_secret_key?: string }>({});
+  const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
+  const [passwordFeedback, setPasswordFeedback] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: () => saveSecurity(draft, csrfToken),
+    onSuccess: () => {
+      setDraft({});
+      qc.invalidateQueries({ queryKey: ["security"] });
+    }
+  });
+  const passwordMutation = useMutation({
+    mutationFn: () => changePassword(passwordForm.current, passwordForm.next, csrfToken),
+    onSuccess: () => {
+      setPasswordFeedback("密码已更新");
+      setPasswordForm({ current: "", next: "", confirm: "" });
+    },
+    onError: (err: Error) => setPasswordFeedback(err.message)
+  });
+  const merged = { ...security.data, ...draft } as SecuritySettings & { turnstile_secret_key?: string };
+  const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * secondsPerDay);
+  const expectedHostname = merged.turnstile_expected_hostname || "661313.xyz";
+  const expectedAction = normalizeTurnstileAction(merged.turnstile_expected_action);
+  const passwordReady = passwordForm.current && passwordForm.next.length >= 12 && passwordForm.next === passwordForm.confirm;
+  return (
+    <div className="security-layout">
+      <Panel title="Turnstile" icon={<ShieldCheck size={18} />}>
+        <div className="settings-meta-grid">
+          <Metric label="Secret" value={security.data?.turnstile_secret_configured ? "configured" : "not configured"} tone={security.data?.turnstile_secret_configured ? "success" : "warning"} />
+          <Metric label="Mode" value={merged.turnstile_required ? "fail-closed" : "enabled"} />
+          <Metric label="Expected hostname" value={expectedHostname} />
+          <Metric label="Expected action" value={expectedAction} />
+        </div>
+        <label className="toggle-row">
+          <span>启用 Turnstile</span>
+          <input type="checkbox" checked={Boolean(merged.turnstile_enabled)} onChange={(event) => setDraft({ ...draft, turnstile_enabled: event.target.checked })} />
+        </label>
+        <label className="toggle-row">
+          <span>未启用时拒绝登录</span>
+          <input type="checkbox" checked={Boolean(merged.turnstile_required)} onChange={(event) => setDraft({ ...draft, turnstile_required: event.target.checked })} />
+        </label>
+        <label className="field-label">Site Key<input value={merged.turnstile_site_key ?? ""} onChange={(event) => setDraft({ ...draft, turnstile_site_key: event.target.value })} /></label>
+        <label className="field-label">Expected hostname<input value={expectedHostname} onChange={(event) => setDraft({ ...draft, turnstile_expected_hostname: event.target.value })} /></label>
+        <label className="field-label">Expected action<input value={expectedAction} onChange={(event) => setDraft({ ...draft, turnstile_expected_action: event.target.value })} /></label>
+        <label className="field-label">Secret Key<input type="password" placeholder={security.data?.turnstile_secret_configured ? "已配置，留空保留" : "未配置"} onChange={(event) => setDraft({ ...draft, turnstile_secret_key: event.target.value })} /></label>
+        <button className="primary-button" onClick={() => mutation.mutate()}><ShieldCheck size={17} />保存 Turnstile</button>
+      </Panel>
+      <Panel title="登录设置" icon={<KeyRound size={18} />}>
+        <Metric label="管理员" value={username} />
+        <Metric label="Session TTL" value={`${ttlDays} 天`} />
+        <label className="field-label">Session TTL days<input type="number" min={1} value={ttlDays} onChange={(event) => setDraft({ ...draft, session_ttl_seconds: Math.max(1, Number(event.target.value) || defaultSessionTtlDays) * secondsPerDay })} /></label>
+        <button className="secondary-button" onClick={() => mutation.mutate()}><CheckCircle2 size={17} />保存会话设置</button>
+      </Panel>
+      <Panel title="修改密码" icon={<Lock size={18} />} className="wide-panel">
+        <div className="form-grid three">
+          <label className="field-label">当前密码<input type="password" value={passwordForm.current} onChange={(event) => setPasswordForm({ ...passwordForm, current: event.target.value })} /></label>
+          <label className="field-label">新密码<input type="password" value={passwordForm.next} onChange={(event) => setPasswordForm({ ...passwordForm, next: event.target.value })} /></label>
+          <label className="field-label">确认新密码<input type="password" value={passwordForm.confirm} onChange={(event) => setPasswordForm({ ...passwordForm, confirm: event.target.value })} /></label>
+        </div>
+        {passwordFeedback && <div className={passwordFeedback.includes("已更新") ? "form-success" : "form-error"}>{passwordFeedback}</div>}
+        <button className="primary-button" disabled={!passwordReady || passwordMutation.isPending} onClick={() => passwordMutation.mutate()}><KeyRound size={17} />修改密码</button>
+      </Panel>
+    </div>
+  );
+}
+
+function Panel({ title, icon, children, className = "" }: { title: string; icon: ReactNode; children: ReactNode; className?: string }) {
+  return <section className={`panel ${className}`}><header>{icon}<strong>{title}</strong></header>{children}</section>;
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: "success" | "warning" | "danger" }) {
+  return <div className="metric"><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
+}
+
+function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {
+  return providers?.find((provider) => provider.id === id);
+}
+
+function capabilityText(provider?: Pick<AgentProviderInfo, "capabilities"> | null): string {
+  const capabilities = provider?.capabilities ?? [];
+  return capabilities.length ? capabilities.join(", ") : "none";
+}
+
+function pathText(value?: string | null): string {
+  return value && value.trim() ? value : "unknown";
+}
+
+function totalClaudeSessions(overview?: ClaudeOverview): number {
+  return overview?.projects.reduce((total, project) => total + project.session_count, 0) ?? 0;
+}
+
+function recentClaudeSessions(overview?: ClaudeOverview): Array<{
+  key: string;
+  project: string;
+  id: string;
+  title?: string | null;
+  updated_at?: string | null;
+  message_count: number;
+}> {
+  return (overview?.projects ?? [])
+    .flatMap((project) => project.sessions.map((session) => ({
+      key: `${project.id}:${session.id}`,
+      project: project.display_name,
+      ...session
+    })))
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
+    .slice(0, 12);
+}
+
+function JobList({ jobs }: { jobs: JobRecord[] }) {
+  return (
+    <div className="job-list">
+      {jobs.map((job) => (
+        <details key={job.id} className="job-item">
+          <summary>
+            <span>{job.title}</span>
+            <StatusDot status={job.status} />
+            <ChevronRight size={16} />
+          </summary>
+          <div className="job-meta">
+            <span>{job.kind}</span>
+            {job.thread_id && <span>{job.thread_id}</span>}
+            {job.turn_id && <span>{job.turn_id}</span>}
+          </div>
+          {job.failure_analysis && (
+            <div className="job-analysis">
+              <strong>{failureCategoryLabel(job.failure_analysis.category)}</strong>
+              <p>{job.failure_analysis.explanation}</p>
+              <ul>
+                {job.failure_analysis.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
+              </ul>
+            </div>
+          )}
+          <pre>{job.output || job.error || "no output"}</pre>
+        </details>
+      ))}
+      {jobs.length === 0 && <div className="muted-row">暂无后台 job</div>}
+    </div>
+  );
+}
+
+function StatusDot({ status }: { status: string }) {
+  return <span className={`status-dot ${status}`} />;
+}
+
+function StatusChip({ status }: { status: ThreadStatus }) {
+  return <span className={`status-chip ${status}`}>{threadStatusLabel(status)}</span>;
+}
+
+function threadStatusLabel(status?: ThreadStatus | string | null): string {
+  if (status === "ReplyNeeded") return "待回复";
+  if (status === "Recoverable") return "异常";
+  if (status === "Running") return "运行中";
+  if (status === "Archived") return "归档";
+  return "最近";
+}
+
+export function failureCategoryLabel(category: string): string {
+  const labels: Record<string, string> = {
+    release_missing: "Release 缺失",
+    download_sha256_mismatch: "下载或校验失败",
+    systemd_failure: "systemd 失败",
+    nginx_failure: "Nginx 失败",
+    permission_denied_sudo: "权限或 sudo 失败",
+    read_only_file_system: "文件系统只读/安装目录不可写",
+    codex_auth_failure: "Codex 认证失败",
+    sqlite_integrity_failure: "SQLite 完整性失败",
+    network_tls_eof: "网络或 TLS 中断",
+    app_server_unavailable: "app-server 不可用",
+    unknown: "未知失败"
+  };
+  return labels[category] ?? category;
+}
+
+export function buildPayload(message: string, config: RunConfig, attachments: Pick<UploadRecord, "id">[] = []): ThreadSendPayload {
+  const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
+  const payload: ThreadSendPayload = {
+    message,
+    model: config.model.trim() || null,
+    service_tier: config.serviceTier.trim() || null,
+    reasoning_effort: config.reasoning.trim() || null,
+    cwd: config.cwd.trim() || null,
+    permission_profile: config.permissionProfile.trim() || null,
+    approval_policy: config.approvalPolicy.trim() || null,
+    sandbox_mode: config.sandboxMode.trim() || null,
+    network_access: config.networkAccess,
+    collaboration_mode: config.collaborationMode.trim() || null
+  };
+  if (attachmentIds.length > 0) {
+    payload.attachments = attachmentIds;
+  }
+  return payload;
+}
+
+export function runConfigWithSupportedServiceTier(config: RunConfig, models: CodexModel[]): RunConfig {
+  if (!config.serviceTier.trim()) return config;
+  if (modelSupportsServiceTier(models, config.model, config.serviceTier.trim())) return config;
+  return { ...config, serviceTier: "" };
+}
+
+function sourceCountsText(counts?: Record<string, number> | null): string {
+  if (!counts || Object.keys(counts).length === 0) return "unknown";
+  return Object.entries(counts)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value}`)
+    .join(" ");
+}
+
+function permissionLabel(preset: PermissionPresetId): string {
+  return permissionPresets.find((item) => item.id === preset)?.label ?? "完全访问权限";
+}
+
+export function codexUpdateState(version?: Pick<SystemVersion, "codex_update_available">): { label: string; tone: "success" | "warning" | "danger" } {
+  if (version?.codex_update_available === true) {
+    return { label: "available", tone: "warning" };
+  }
+  if (version?.codex_update_available === false) {
+    return { label: "current", tone: "success" };
+  }
+  return { label: "unknown", tone: "warning" };
+}
+
+function actionMessage(result: BridgeActionResult): string {
+  if (result.fallback) return result.message ?? `Fallback job ${result.job_id?.slice(0, 8) ?? ""} 已启动`;
+  return `Bridge ${result.turn_id ? `turn ${result.turn_id.slice(0, 8)}` : "请求"} 已提交`;
+}
+
+function legacyBlocks(detail: ThreadDetail): MessageBlock[] {
+  return detail.messages.map((message, index) => ({
+    id: `legacy-${index}`,
+    role: message.role,
+    kind: message.kind,
+    text: message.text,
+    created_at: message.created_at,
+    questions: []
+  }));
+}
+
+export function pendingFromBlocks(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined): PendingElicitation | null {
+  void status;
+  if (!activeTurnId) return null;
+  const block = [...blocks].reverse().find((item) => item.turn_id === activeTurnId && isQuestionBlock(item) && !isResolvedActionBlock(item));
+  if (!block) return null;
+  return {
+    turn_id: block.turn_id,
+    item_id: block.item_id ?? block.call_id,
+    questions: block.questions
+  };
+}
+
+export function latestActionBlock(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined, predicate: (block: MessageBlock) => boolean): MessageBlock | null {
+  void status;
+  if (!activeTurnId) return null;
+  const matches = [...blocks].reverse().filter((block) => block.turn_id === activeTurnId && predicate(block) && !isResolvedActionBlock(block));
+  if (!matches.length) return null;
+  return matches[0];
+}
+
+export function currentPendingElicitation(pending: PendingElicitation | null | undefined, activeTurnId: string | null | undefined): PendingElicitation | null {
+  if (!pending || !activeTurnId) return null;
+  if (pending.turn_id !== activeTurnId) return null;
+  return pending;
+}
+
+export function isPlanBlock(block: MessageBlock): boolean {
+  const kind = normalizedBlockKind(block);
+  const displayKind = normalizedDisplayKind(block);
+  return displayKind === "plan" || kind.includes("plan") || Boolean(block.text?.includes("<proposed_plan>"));
+}
+
+export function isApprovalBlock(block: MessageBlock): boolean {
+  const kind = normalizedBlockKind(block);
+  const displayKind = normalizedDisplayKind(block);
+  return displayKind === "approval" || kind.includes("requestapproval") || kind.includes("approval") || kind.includes("permissions/request");
+}
+
+export function isQuestionBlock(block: MessageBlock): boolean {
+  const kind = normalizedBlockKind(block);
+  const displayKind = normalizedDisplayKind(block);
+  return displayKind === "question"
+    || (kind === "request_user_input" || kind === "requestuserinput")
+    || kind.includes("request_user_input")
+    || kind.includes("requestuserinput")
+    || (block.questions?.length ?? 0) > 0;
+}
+
+export function isQuestionResultBlock(block: MessageBlock): boolean {
+  const kind = normalizedBlockKind(block);
+  const displayKind = normalizedDisplayKind(block);
+  return displayKind === "question_result"
+    || kind === "request_user_input_result"
+    || (block.answers?.length ?? 0) > 0;
+}
+
+export function isToolBlock(block: MessageBlock): boolean {
+  const kind = normalizedBlockKind(block);
+  return block.role === "tool"
+    || kind.includes("tool")
+    || kind.includes("command")
+    || kind.includes("function_call")
+    || kind.includes("web_search");
+}
+
+export function shouldRenderConversationMessage(block: MessageBlock): boolean {
+  const role = block.role || "";
+  const kind = normalizedBlockKind(block);
+  if (!["assistant", "user"].includes(role)) return false;
+  if ((block.questions?.length ?? 0) > 0) return false;
+  if (kind === "request_user_input" || kind === "requestuserinput") return false;
+  if (isToolBlock(block) || isPlanBlock(block) || isApprovalBlock(block)) return false;
+  if (isInternalContextText(block.text)) return false;
+  return !["reasoning", "agent_reasoning", "session_meta"].includes(kind);
+}
+
+export function shouldRenderConversationBlock(block: MessageBlock): boolean {
+  if (isApprovalBlock(block)) return false;
+  if (isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block)) return true;
+  return isToolBlock(block) || shouldRenderConversationMessage(block);
+}
+
+export function shouldRenderActionStackBlock(block: MessageBlock): boolean {
+  return isApprovalBlock(block) && !isResolvedActionBlock(block);
+}
+
+export function isResolvedActionBlock(block: MessageBlock): boolean {
+  if (block.resolved === true) return true;
+  const status = (block.plan_status ?? block.status ?? "").toLowerCase();
+  return ["completed", "complete", "succeeded", "success", "done", "approved", "declined", "rejected", "cancelled", "canceled", "failed"].includes(status);
+}
+
+export function isActionablePlanBlock(block: MessageBlock, current: MessageBlock | null | undefined): boolean {
+  return Boolean(current && isPlanBlock(block) && !isResolvedActionBlock(block) && sameActionBlock(block, current));
+}
+
+export function isActionableQuestionBlock(block: MessageBlock, current: PendingElicitation | MessageBlock | null | undefined): boolean {
+  if (!current || !isQuestionBlock(block) || isResolvedActionBlock(block)) return false;
+  const currentTurnId = current.turn_id ?? null;
+  if (currentTurnId && block.turn_id !== currentTurnId) return false;
+  const currentItemId = "id" in current ? current.item_id ?? current.call_id ?? current.id : current.item_id ?? null;
+  if (!currentItemId) return Boolean(currentTurnId);
+  return [block.item_id, block.call_id, block.id].some((value) => value === currentItemId);
+}
+
+export function questionAnswerLabels(block: MessageBlock, questionId: string): string[] {
+  return block.answers?.find((answer) => answer.question_id === questionId)?.answers ?? [];
+}
+
+export function blocksWithCurrentPending(blocks: MessageBlock[], pending: PendingElicitation | null): MessageBlock[] {
+  if (!pending || !pending.questions.length) return blocks;
+  const existing = blocks.some((block) => {
+    if (!isQuestionBlock(block)) return false;
+    if (pending.item_id && (block.item_id === pending.item_id || block.call_id === pending.item_id)) return true;
+    if (pending.turn_id && block.turn_id === pending.turn_id) return true;
+    return false;
+  });
+  if (existing) return blocks;
+  return [
+    ...blocks,
+    {
+      id: `pending-question-${pending.turn_id ?? pending.item_id ?? "current"}`,
+      role: "assistant",
+      kind: "request_user_input",
+      display_kind: "question",
+      status: "pending",
+      resolved: false,
+      turn_id: pending.turn_id,
+      item_id: pending.item_id,
+      questions: pending.questions
+    }
+  ];
+}
+
+function sameActionBlock(left: MessageBlock, right: MessageBlock): boolean {
+  const leftIds = [left.id, left.item_id, left.call_id].filter(Boolean);
+  const rightIds = [right.id, right.item_id, right.call_id].filter(Boolean);
+  return left.turn_id === right.turn_id && leftIds.some((leftId) => rightIds.includes(leftId));
+}
+
+function normalizedBlockKind(block: Pick<MessageBlock, "kind">): string {
+  return block.kind.toLowerCase();
+}
+
+function normalizedDisplayKind(block: Pick<MessageBlock, "display_kind">): string {
+  return block.display_kind?.toLowerCase() ?? "";
+}
+
+export type ConversationMessagePresentation = {
+  kind: "user" | "assistant";
+  rowClassName: string;
+  bodyClassName: string;
+};
+
+export function conversationMessagePresentation(block: Pick<MessageBlock, "role">): ConversationMessagePresentation {
+  const kind = block.role === "user" ? "user" : "assistant";
+  return {
+    kind,
+    rowClassName: `chat-row ${kind}`,
+    bodyClassName: kind === "user" ? "chat-bubble" : "assistant-message-body"
+  };
+}
+
+export function visibleConversationBlocksForHistory(
+  blocks: MessageBlock[],
+  showAllHistory: boolean,
+  currentPlan?: MessageBlock | null,
+  currentQuestion?: PendingElicitation | MessageBlock | null
+): MessageBlock[] {
+  const renderable = blocks.filter(shouldRenderConversationBlock);
+  if (showAllHistory) return renderable;
+  return compactConversationBlocks(renderable, 4, 60, 3, currentPlan, currentQuestion);
+}
+
+export function prioritizeCurrentActionBlocks(
+  blocks: MessageBlock[],
+  currentPlan: MessageBlock | null | undefined,
+  currentQuestion: PendingElicitation | MessageBlock | null | undefined
+): MessageBlock[] {
+  const promoted: MessageBlock[] = [];
+  const rest: MessageBlock[] = [];
+  for (const block of blocks) {
+    if (isActionablePlanBlock(block, currentPlan) || isActionableQuestionBlock(block, currentQuestion)) {
+      promoted.push(block);
+    } else {
+      rest.push(block);
+    }
+  }
+  return promoted.length ? [...rest, ...promoted] : blocks;
+}
+
+export function compactConversationBlocks(
+  blocks: MessageBlock[],
+  maxCompletedTools = 4,
+  maxChatMessages = 60,
+  maxActionBlocks = 3,
+  currentPlan?: MessageBlock | null,
+  currentQuestion?: PendingElicitation | MessageBlock | null
+): MessageBlock[] {
+  const hasToolHistoryCollapse = blocks.some((block) => historyCollapseKind(block) === "tool");
+  const completedToolIndexes = hasToolHistoryCollapse
+    ? []
+    : blocks
+      .map((block, index) => ({ block, index }))
+      .filter(({ block }) => isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isRunningToolBlock(block))
+      .map(({ index }) => index);
+  const toolCompacted = hasToolHistoryCollapse
+    ? blocks
+    : compactIndexedBlocks(
+      blocks,
+      completedToolIndexes,
+      maxCompletedTools,
+      "completed-tool-history-collapsed",
+      "tool_history_collapsed",
+      "tool_history",
+      "个历史工具调用已折叠"
+    );
+
+  if (toolCompacted.some((block) => historyCollapseKind(block) === "action")) {
+    return toolCompacted;
+  }
+
+  const actionIndexes = toolCompacted
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => {
+      if (isHistoryCollapsedBlock(block)) return false;
+      if (isActionablePlanBlock(block, currentPlan)) return false;
+      if (isActionableQuestionBlock(block, currentQuestion)) return false;
+      return isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block);
+    })
+    .map(({ index }) => index);
+  const actionCompacted = compactIndexedBlocks(
+    toolCompacted,
+    actionIndexes,
+    maxActionBlocks,
+    "action-history-collapsed",
+    "action_history_collapsed",
+    "action_history",
+    "条历史计划/问题已折叠"
+  );
+
+  if (actionCompacted.some((block) => historyCollapseKind(block) === "chat")) {
+    return actionCompacted;
+  }
+
+  const chatIndexes = actionCompacted
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => shouldRenderConversationMessage(block))
+    .map(({ index }) => index);
+  return compactIndexedBlocks(
+    actionCompacted,
+    chatIndexes,
+    maxChatMessages,
+    "chat-history-collapsed",
+    "chat_history_collapsed",
+    "chat_history",
+    "条历史对话已折叠"
+  );
+}
+
+function compactIndexedBlocks(
+  blocks: MessageBlock[],
+  indexes: number[],
+  maxVisible: number,
+  id: string,
+  kind: string,
+  toolName: string,
+  label: string
+): MessageBlock[] {
+  if (indexes.length <= maxVisible) return blocks;
+  const keep = new Set(indexes.slice(-maxVisible));
+  const hide = new Set(indexes.slice(0, -maxVisible));
+  const hidden = indexes.length - keep.size;
+  const collapsed: MessageBlock = {
+    id,
+    role: "tool",
+    kind,
+    status: "completed",
+    text: `${hidden} ${label}`,
+    summary: `${hidden} ${label}`,
+    tool_name: toolName,
+    truncated: false,
+    questions: []
+  };
+  const compacted: MessageBlock[] = [];
+  let inserted = false;
+  for (const [index, block] of blocks.entries()) {
+    if (hide.has(index) && !keep.has(index)) {
+      if (!inserted) {
+        compacted.push(collapsed);
+        inserted = true;
+      }
+      continue;
+    }
+    compacted.push(block);
+  }
+  return compacted;
+}
+
+function isHistoryCollapsedBlock(block: MessageBlock): boolean {
+  return historyCollapseKind(block) !== null;
+}
+
+function historyCollapseKind(block: MessageBlock): "chat" | "tool" | "action" | null {
+  const kind = block.kind.toLowerCase();
+  if (kind === "chat_history_collapsed") return "chat";
+  if (kind === "tool_history_collapsed") return "tool";
+  if (kind === "action_history_collapsed") return "action";
+  return null;
+}
+
+function isInternalContextText(value?: string | null): boolean {
+  const text = value?.trimStart().toLowerCase();
+  if (!text) return false;
+  return [
+    "<environment_context>",
+    "<permissions instructions>",
+    "<app-context>",
+    "<collaboration_mode>",
+    "<skills_instructions>",
+    "<plugins_instructions>",
+    "<subagent_notification>",
+    "<subagent_context>",
+    "<codex_internal_context",
+    "<goal_context>",
+    "<additional_context>",
+    "<user_instructions>",
+    "<turn_aborted>",
+    "<user_shell_command>",
+    "<legacy_unified_exec_process_limit_warning>",
+    "<legacy_apply_patch_exec_command_warning>",
+    "<legacy_model_mismatch_warning>",
+    "========= memory_summary begins ========="
+  ].some((prefix) => text.startsWith(prefix));
+}
+
+export function toolBlockTitle(block: MessageBlock): string {
+  if (isHistoryCollapsedBlock(block)) {
+    return firstDisplayLine(block.summary)
+      ?? firstDisplayLine(block.text)
+      ?? block.tool_name?.trim()
+      ?? block.kind
+      ?? "tool";
+  }
+  return block.tool_name?.trim() || block.kind || "tool";
+}
+
+export function toolBlockStatus(block: MessageBlock): string {
+  return block.status?.trim() || block.call_id || "completed";
+}
+
+export function toolBlockSummary(block: MessageBlock): string | null {
+  return firstDisplayLine(block.summary)
+    ?? firstDisplayLine(block.text)
+    ?? firstDisplayLine(block.input)
+    ?? null;
+}
+
+export function toolBlockDetailText(block: MessageBlock): string {
+  const sections: string[] = [];
+  const input = block.input?.trim();
+  const output = (block.text?.trim() || formatPayload(block.payload).trim());
+  if (input) sections.push(`Input\n${input}`);
+  if (output) sections.push(`${input ? "Output\n" : ""}${output}`);
+  if (block.truncated) sections.push("[output truncated]");
+  return sections.join("\n\n") || "No output";
+}
+
+export function messageBlockText(block: MessageBlock): string {
+  return block.text?.trim() || formatPayload(block.payload) || "";
+}
+
+function firstDisplayLine(value?: string | null): string | null {
+  const line = value?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
+  return line || null;
+}
+
+function formatGoalStatus(goal: { enabled?: boolean; status?: string | null } | null | undefined): string {
+  if (!goal?.enabled) return goal?.status ?? "idle";
+  return goal.status ?? "active";
+}
+
+function cleanHostValue(value?: string | null): string | null {
+  const cleaned = value?.trim();
+  const legacyAlias = ["tencent", "wanka"].join("-");
+  if (!cleaned || cleaned === legacyAlias) return null;
+  return cleaned;
+}
+
+function secondsToDays(seconds: number): number {
+  return Math.max(1, Math.round(seconds / secondsPerDay));
+}
+
+function normalizeTurnstileAction(value?: string | null): string {
+  const action = value?.trim();
+  return action || "login";
+}
+
+export function extractPlanText(value: string): string {
+  return value
+    .replace(/<\/?proposed_plan>/g, "")
+    .trim() || value || "Plan 内容等待 Codex 写入。";
+}
+
+function blockKindLabel(kind: string): string {
+  if (kind.includes("agentMessage")) return "assistant";
+  if (kind.includes("userMessage")) return "user";
+  if (kind.includes("function")) return "tool";
+  return kind;
+}
+
+function roleLabel(role: string): string {
+  if (role === "assistant") return "Codex";
+  if (role === "user") return "User";
+  if (role === "tool") return "Tool";
+  return role || "System";
+}
+
+function formatPayload(payload: unknown): string {
+  if (!payload) return "";
+  if (typeof payload === "string") return payload;
+  return JSON.stringify(payload, null, 2);
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}

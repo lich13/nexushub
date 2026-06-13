@@ -1,0 +1,22 @@
+[Unit]
+Description=NexusHub
+After=network-online.target codex-app-server-root.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/opt/nexushub/env
+ExecStart=/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml serve
+Restart=always
+RestartSec=5
+WorkingDirectory=/opt/nexushub
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/root/.codex /opt/nexushub /opt/nexushub/logs
+
+[Install]
+WantedBy=multi-user.target
