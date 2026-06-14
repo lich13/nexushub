@@ -10,7 +10,6 @@ NGINX_LOCATION="${ROOT}/deploy/nexushub/nginx-location.conf"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
-PROBE_LEGACY_CLEANUP="${ROOT}/deploy/nexushub/nexushub-probe-legacy-cleanup"
 
 python3 - "${CONFIG_EXAMPLE}" "${NGINX_LOCATION}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" <<'PY'
 from pathlib import Path
@@ -161,7 +160,7 @@ with tempfile.TemporaryDirectory() as tmp:
 print("install secret key inheritance behavior: ok")
 PY
 
-python3 - "${INSTALL_SH}" "${CODEX_PRECHECK_WRAPPER}" "${CODEX_UPDATE_WRAPPER}" "${CODEX_PRUNE_WRAPPER}" "${PROBE_LEGACY_CLEANUP}" <<'PY'
+python3 - "${INSTALL_SH}" "${UPDATE_SH}" "${CODEX_PRECHECK_WRAPPER}" "${CODEX_UPDATE_WRAPPER}" "${CODEX_PRUNE_WRAPPER}" <<'PY'
 from pathlib import Path
 import re
 import subprocess
@@ -169,11 +168,12 @@ import sys
 import tempfile
 
 install_path = Path(sys.argv[1])
-precheck_wrapper = Path(sys.argv[2])
-update_wrapper = Path(sys.argv[3])
-prune_wrapper = Path(sys.argv[4])
-legacy_cleanup = Path(sys.argv[5])
+update_path = Path(sys.argv[2])
+precheck_wrapper = Path(sys.argv[3])
+update_wrapper = Path(sys.argv[4])
+prune_wrapper = Path(sys.argv[5])
 install_text = install_path.read_text()
+update_text = update_path.read_text()
 
 for needle in [
     'CONFIG_DIR="${INSTALL_DIR}"',
@@ -230,17 +230,28 @@ for needle in [
     "CODEX_PRECHECK_WRAPPER_BIN",
     "CODEX_UPDATE_WRAPPER_BIN",
     "CODEX_PRUNE_WRAPPER_BIN",
-    "PROBE_LEGACY_CLEANUP_BIN",
     "nexushub-codex-precheck",
     "nexushub-codex-update",
     "nexushub-codex-prune",
-    "nexushub-probe-legacy-cleanup",
 ]:
     if needle not in install_text:
         raise SystemExit(f"install.sh missing {needle}")
 
-if not legacy_cleanup.exists():
-    raise SystemExit(f"missing legacy cleanup helper: {legacy_cleanup}")
+for name, text in {
+    "install.sh": install_text,
+    "update.sh": update_text,
+}.items():
+    for forbidden in [
+        "PROBE_LEGACY_CLEANUP",
+        "nexushub-probe-legacy-cleanup",
+        "probe-legacy-cleanup",
+    ]:
+        if forbidden in text:
+            raise SystemExit(f"{name} must not package one-time legacy cleanup helper: {forbidden}")
+
+legacy_cleanup_path = install_path.parent / "nexushub-probe-legacy-cleanup"
+if legacy_cleanup_path.exists():
+    raise SystemExit(f"one-time legacy cleanup helper should not be packaged: {legacy_cleanup_path}")
 
 match = re.search(r"python3 - \"\$\{CONFIG_FILE\}\" <<'PY'\n(?P<body>.*?)\nPY", install_text, re.S)
 if not match:
@@ -459,165 +470,6 @@ if 'log_dir = "/opt/nexushub/logs"' not in migrated_paths:
 
 print("codex update/prune wrapper install and migration behavior: ok")
 PY
-
-bash -n "${PROBE_LEGACY_CLEANUP}"
-
-python3 - "${PROBE_LEGACY_CLEANUP}" <<'PY'
-from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text()
-required = {
-    "dry-run mode": "--dry-run",
-    "execute mode": "--execute",
-    "service detection": "systemctl is-active codex-sentinel-server.service",
-    "unit detection": "/etc/systemd/system/codex-sentinel-server.service",
-    "opt detection": "/opt/codex-sentinel-server",
-    "etc detection": "/etc/codex-sentinel-server",
-    "state detection": "/var/lib/codex-sentinel-server",
-    "bin detection": "/usr/local/bin/codex-sentinel-server",
-    "hook detection": "/root/.codex/hooks.json",
-    "backup root": "/opt/nexushub/backups/probe-legacy",
-    "health gate service": "systemctl is-active nexushub",
-    "health gate endpoint": "http://127.0.0.1:15742/healthz",
-    "stop legacy service": "systemctl stop codex-sentinel-server.service",
-    "disable legacy service": "systemctl disable codex-sentinel-server.service",
-    "daemon reload": "systemctl daemon-reload",
-    "hook filtering": "codex-sentinel-server",
-}
-missing = [name for name, needle in required.items() if needle not in text]
-if missing:
-    raise SystemExit("legacy cleanup helper missing required behavior: " + ", ".join(missing))
-
-for forbidden in [
-    "/Users/gosu/Documents",
-    "rm -rf /Users",
-    "codex-sentinel-lite",
-]:
-    if forbidden in text:
-        raise SystemExit(f"legacy cleanup helper must not target local source or Lite app paths: {forbidden}")
-
-print("legacy cleanup helper static behavior: ok")
-PY
-
-tmp_legacy="$(mktemp -d)"
-trap 'rm -rf "${tmp_legacy}"' EXIT
-
-mkdir -p \
-  "${tmp_legacy}/etc/systemd/system" \
-  "${tmp_legacy}/opt/codex-sentinel-server/bin" \
-  "${tmp_legacy}/etc/codex-sentinel-server" \
-  "${tmp_legacy}/var/lib/codex-sentinel-server" \
-  "${tmp_legacy}/usr/local/bin" \
-  "${tmp_legacy}/root/.codex" \
-  "${tmp_legacy}/bin"
-
-printf '[Unit]\nDescription=legacy\n' > "${tmp_legacy}/etc/systemd/system/codex-sentinel-server.service"
-printf 'legacy binary\n' > "${tmp_legacy}/opt/codex-sentinel-server/bin/codex-sentinel-server"
-printf 'legacy config\n' > "${tmp_legacy}/etc/codex-sentinel-server/config.toml"
-printf 'legacy state\n' > "${tmp_legacy}/var/lib/codex-sentinel-server/state.sqlite"
-printf 'legacy shim\n' > "${tmp_legacy}/usr/local/bin/codex-sentinel-server"
-cat > "${tmp_legacy}/root/.codex/hooks.json" <<'JSON'
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/opt/codex-sentinel-server/bin/codex-sentinel-server --config /etc/codex-sentinel-server/config.toml hook-stop"
-          },
-          {
-            "type": "command",
-            "command": "/opt/nexushub/bin/nexushubd probe hook-stop --config /opt/nexushub/config.toml"
-          }
-        ]
-      }
-    ]
-  }
-}
-JSON
-
-cat > "${tmp_legacy}/bin/systemctl" <<'SH'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '%s\n' "$*" >> "${SYSTEMCTL_LOG:?}"
-case "$1 $2" in
-  "is-active nexushub") exit 0 ;;
-  "is-active codex-sentinel-server.service") exit 0 ;;
-  "stop codex-sentinel-server.service") exit 0 ;;
-  "disable codex-sentinel-server.service") exit 0 ;;
-  "daemon-reload ") exit 0 ;;
-esac
-if [[ "$1" == "daemon-reload" ]]; then
-  exit 0
-fi
-printf 'unexpected systemctl command: %s\n' "$*" >&2
-exit 64
-SH
-chmod +x "${tmp_legacy}/bin/systemctl"
-
-cat > "${tmp_legacy}/bin/curl" <<'SH'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '%s\n' "$*" >> "${CURL_LOG:?}"
-case "$*" in
-  *"http://127.0.0.1:15742/healthz"*) exit 0 ;;
-esac
-printf 'unexpected curl command: %s\n' "$*" >&2
-exit 64
-SH
-chmod +x "${tmp_legacy}/bin/curl"
-
-legacy_env=(
-  "PATH=${tmp_legacy}/bin:${PATH}"
-  "SYSTEMCTL_LOG=${tmp_legacy}/systemctl.log"
-  "CURL_LOG=${tmp_legacy}/curl.log"
-  "NEXUSHUB_LEGACY_CLEANUP_ALLOW_NON_ROOT=1"
-  "NEXUSHUB_LEGACY_CLEANUP_TIMESTAMP=20260614-120000"
-  "NEXUSHUB_LEGACY_UNIT_PATH=${tmp_legacy}/etc/systemd/system/codex-sentinel-server.service"
-  "NEXUSHUB_LEGACY_OPT_DIR=${tmp_legacy}/opt/codex-sentinel-server"
-  "NEXUSHUB_LEGACY_ETC_DIR=${tmp_legacy}/etc/codex-sentinel-server"
-  "NEXUSHUB_LEGACY_STATE_DIR=${tmp_legacy}/var/lib/codex-sentinel-server"
-  "NEXUSHUB_LEGACY_BIN_PATH=${tmp_legacy}/usr/local/bin/codex-sentinel-server"
-  "NEXUSHUB_LEGACY_HOOKS_JSON=${tmp_legacy}/root/.codex/hooks.json"
-  "NEXUSHUB_LEGACY_BACKUP_ROOT=${tmp_legacy}/opt/nexushub/backups/probe-legacy"
-  "NEXUSHUB_INSTALL_OWNER=$(id -un)"
-  "NEXUSHUB_INSTALL_GROUP=$(id -gn)"
-)
-
-env "${legacy_env[@]}" bash "${PROBE_LEGACY_CLEANUP}" --dry-run > "${tmp_legacy}/dry-run.txt"
-grep -q "DRY-RUN" "${tmp_legacy}/dry-run.txt"
-grep -q "codex-sentinel-server.service" "${tmp_legacy}/dry-run.txt"
-test -f "${tmp_legacy}/etc/systemd/system/codex-sentinel-server.service"
-test -d "${tmp_legacy}/opt/codex-sentinel-server"
-grep -q "codex-sentinel-server" "${tmp_legacy}/root/.codex/hooks.json"
-
-env "${legacy_env[@]}" bash "${PROBE_LEGACY_CLEANUP}" --execute > "${tmp_legacy}/execute.txt"
-backup_dir="${tmp_legacy}/opt/nexushub/backups/probe-legacy/20260614-120000"
-test -f "${backup_dir}/etc-systemd-system-codex-sentinel-server.service"
-test -f "${backup_dir}/opt-codex-sentinel-server/bin/codex-sentinel-server"
-test -f "${backup_dir}/etc-codex-sentinel-server/config.toml"
-test -f "${backup_dir}/var-lib-codex-sentinel-server/state.sqlite"
-test -f "${backup_dir}/usr-local-bin-codex-sentinel-server"
-test -f "${backup_dir}/root-codex-hooks.json"
-test ! -e "${tmp_legacy}/etc/systemd/system/codex-sentinel-server.service"
-test ! -e "${tmp_legacy}/opt/codex-sentinel-server"
-test ! -e "${tmp_legacy}/etc/codex-sentinel-server"
-test ! -e "${tmp_legacy}/var/lib/codex-sentinel-server"
-test ! -e "${tmp_legacy}/usr/local/bin/codex-sentinel-server"
-grep -q "nexushubd probe hook-stop" "${tmp_legacy}/root/.codex/hooks.json"
-if grep -q "codex-sentinel-server" "${tmp_legacy}/root/.codex/hooks.json"; then
-  echo "legacy cleanup execute should remove codex-sentinel-server hook commands" >&2
-  exit 1
-fi
-grep -q "is-active nexushub" "${tmp_legacy}/systemctl.log"
-grep -q "is-active codex-sentinel-server.service" "${tmp_legacy}/systemctl.log"
-grep -q "stop codex-sentinel-server.service" "${tmp_legacy}/systemctl.log"
-grep -q "disable codex-sentinel-server.service" "${tmp_legacy}/systemctl.log"
-grep -q "http://127.0.0.1:15742/healthz" "${tmp_legacy}/curl.log"
-
-echo "legacy cleanup helper dry-run and execute behavior: ok"
 
 bash -n "${UPDATE_SH}"
 

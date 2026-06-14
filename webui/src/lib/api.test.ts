@@ -236,7 +236,6 @@ describe("archive delete API compatibility", () => {
     const {
       getClaudeCodeOverview,
       getPlatformOverview,
-      getProbeDashboard,
       getProbeSettings,
       getProbeStatus,
       listProviders
@@ -274,20 +273,6 @@ describe("archive delete API compatibility", () => {
         recoverable_count: 0,
         config_path: "/opt/nexushub/config.toml"
       },
-      "/api/probe/dashboard": {
-        status: {
-          enabled: true,
-          flavor: "builtin",
-          hook_status: "managed",
-          bark_status: "not_configured",
-          logs_db_status: "maintenance_ready"
-        },
-        running: [],
-        reply_needed: [],
-        recoverable: [],
-        recent_events: [],
-        diagnostics: { doctor: { state_db_exists: true }, hook_status: { server_stop_hook_installed: true } }
-      },
       "/api/probe/settings": {
         codex: {
           home: "/root/.codex",
@@ -309,14 +294,12 @@ describe("archive delete API compatibility", () => {
     await expect(getClaudeCodeOverview()).resolves.toMatchObject({ available: true, data: { settings_exists: true } });
     await expect(getPlatformOverview()).resolves.toMatchObject({ kind: "linux", data_dir: "/opt/nexushub" });
     await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "builtin", service_name: "nexushub" } });
-    await expect(getProbeDashboard()).resolves.toMatchObject({ available: true, data: { status: { flavor: "builtin" } } });
     await expect(getProbeSettings()).resolves.toMatchObject({ available: true, data: { probe: { poll_seconds: 15 } } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
       "/api/providers",
       "/api/providers/claude-code/overview",
       "/api/platform",
       "/api/probe/status",
-      "/api/probe/dashboard",
       "/api/probe/settings"
     ]);
   });
@@ -336,15 +319,11 @@ describe("archive delete API compatibility", () => {
   test("Probe demo data labels the builtin NexusHub service consistently", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
-    const { getProbeDashboard, getProbeStatus } = await import("./api");
+    const { getProbeStatus } = await import("./api");
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
       data: { flavor: "builtin", service_kind: "systemd", service_name: "nexushub" }
-    });
-    await expect(getProbeDashboard()).resolves.toMatchObject({
-      available: true,
-      data: { status: { flavor: "builtin", service_name: "nexushub" } }
     });
   });
 
@@ -366,8 +345,16 @@ describe("archive delete API compatibility", () => {
     expect(result.data?.recent_sessions?.[0]).toMatchObject({ id: "session-a", project_display_name: "/Users/gosu/demo" });
   });
 
-  test("Probe maintenance uses plan then confirmed execute routes", async () => {
-    const { executeProbePlan, planProbeAction, saveProbeSettings } = await loadRealApi();
+  test("Probe slim API surface keeps logs DB maintenance read-only", async () => {
+    const api = await loadRealApi() as Record<string, unknown>;
+    const { getProbeLogsDbStatus, saveProbeSettings, startProbeJob } = api as typeof import("./api");
+    expect(api.getProbeRunning).toBeUndefined();
+    expect(api.getProbeReplyNeeded).toBeUndefined();
+    expect(api.getProbeRecoverable).toBeUndefined();
+    expect(api.getProbeDashboard).toBeUndefined();
+    expect(api.planProbeAction).toBeUndefined();
+    expect(api.executeProbePlan).toBeUndefined();
+
     const fetchMock = vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
       const textPath = String(path);
       if (textPath.endsWith("/settings")) {
@@ -376,20 +363,32 @@ describe("archive delete API compatibility", () => {
           headers: { "content-type": "application/json" }
         });
       }
-      return new Response(JSON.stringify({
-        plan_id: textPath.includes("logs-db") ? "probe-logs-db-test" : "probe-hooks-test",
-        job_id: textPath.endsWith("/execute") || textPath.endsWith("/install") && String((options as RequestInit & { body?: string }).body ?? "").includes("confirmed") ? "job-1" : undefined
-      }), {
+      if (textPath.endsWith("/logs-db/status")) {
+        return new Response(JSON.stringify({
+          status: "maintenance_ready",
+          path: "/root/.codex/logs_2.sqlite",
+          old_rows: 12,
+          retained_rows: 34,
+          db_size_bytes: 4096,
+          wal_size_bytes: 128,
+          shm_size_bytes: 256,
+          last_run_at: "2026-06-15T01:00:00Z",
+          next_run_at: "2026-06-15T07:00:00Z",
+          recent_result: "ok"
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ job_id: "bark-job-1" }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(planProbeAction("logs-db-maintain", "csrf-token")).resolves.toMatchObject({ plan_id: "probe-logs-db-test" });
-    await expect(executeProbePlan("logs-db-maintain", "probe-logs-db-test", "csrf-token")).resolves.toEqual({ job_id: "job-1" });
-    await expect(planProbeAction("hooks-install", "csrf-token")).resolves.toMatchObject({ plan_id: "probe-hooks-test" });
-    await expect(executeProbePlan("hooks-install", "probe-hooks-test", "csrf-token")).resolves.toEqual({ job_id: "job-1" });
+    await expect(getProbeLogsDbStatus()).resolves.toMatchObject({ available: true, data: { path: "/root/.codex/logs_2.sqlite", retained_rows: 34 } });
+    await expect(startProbeJob("bark-test", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
     await saveProbeSettings({
       codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
       probe: {
@@ -406,10 +405,8 @@ describe("archive delete API compatibility", () => {
       (options as RequestInit & { body?: string }).body ? JSON.parse(String((options as RequestInit & { body?: string }).body)) : null
     ]);
     expect(calls).toEqual([
-      ["/api/probe/logs-db/plan", "POST", "csrf-token", null],
-      ["/api/probe/logs-db/execute", "POST", "csrf-token", { plan_id: "probe-logs-db-test", confirmed: true }],
-      ["/api/probe/hooks/install", "POST", "csrf-token", null],
-      ["/api/probe/hooks/install", "POST", "csrf-token", { plan_id: "probe-hooks-test", confirmed: true }],
+      ["/api/probe/logs-db/status", undefined, null, null],
+      ["/api/probe/bark/test", "POST", "csrf-token", null],
       ["/api/probe/settings", "PATCH", "csrf-token", {
         codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
         probe: {

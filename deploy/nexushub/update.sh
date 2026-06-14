@@ -5,7 +5,6 @@ IFS=$'\n\t'
 
 APP_NAME="nexushub"
 ASSET_NAME="nexushub-linux-x86_64.tar.gz"
-PROBE_LEGACY_CLEANUP_NAME="nexushub-probe-legacy-cleanup"
 REPO="lich13/nexushub"
 VERSION="latest"
 ARCHIVE_PATH=""
@@ -22,7 +21,6 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-prune"
-PROBE_LEGACY_CLEANUP_BIN="/usr/local/bin/${APP_NAME}-probe-legacy-cleanup"
 HEALTH_URL="http://127.0.0.1:15742/healthz"
 GITHUB_TOKEN="${NEXUSHUB_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 CURL="${NEXUSHUB_CURL:-curl}"
@@ -536,7 +534,6 @@ main() {
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-precheck" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-update" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-prune" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
-    [[ -f "${ROOT}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" "${PROBE_LEGACY_CLEANUP_BIN}"
   fi
   migrate_codex_update_config
 

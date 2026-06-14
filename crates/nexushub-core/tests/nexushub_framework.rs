@@ -7,6 +7,7 @@ use nexushub_core::{
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
 };
+use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{fs, path::PathBuf, time::SystemTime};
 
@@ -86,7 +87,12 @@ fn provider_registry_exposes_codex_and_claude_preview() {
 
 #[tokio::test]
 async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
-    let config = Config::default();
+    let root = temp_dir("nexushub-probe-status");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    seed_codex_logs_db(&codex_home.join("logs_2.sqlite"), &[]);
+    let mut config = Config::default();
+    config.codex.home = codex_home;
     let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
         .status()
         .await
@@ -100,11 +106,29 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     assert!(status.binary_path.is_none());
     assert_eq!(status.lifecycle_status, "managed");
     assert_eq!(status.doctor_status, "ready");
+    assert_eq!(status.logs_db_status, "ok");
     assert_eq!(
         status.config_path,
         PathBuf::from("/opt/nexushub/config.toml")
     );
     assert_eq!(status.recent_event_count, 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn probe_status_surfaces_missing_codex_logs_db() {
+    let root = temp_dir("nexushub-probe-status-missing-logs");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        .status()
+        .await
+        .unwrap();
+
+    assert_eq!(status.logs_db_status, "missing_db");
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -267,6 +291,117 @@ fn probe_logs_db_plan_includes_deletion_vacuum_and_skip_reason() {
     assert_eq!(enabled_plan.payload["deletion"]["chunk_rows"], 500);
     assert_eq!(enabled_plan.payload["vacuum"]["enabled"], true);
     assert_eq!(enabled_plan.payload["skip_reason"], serde_json::Value::Null);
+}
+
+#[test]
+fn probe_logs_db_status_reads_codex_logs_2_sqlite_counts_and_file_metadata() {
+    let root = temp_dir("nexushub-codex-logs-status");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let logs_path = codex_home.join("logs_2.sqlite");
+    let now = chrono::Utc::now().timestamp();
+    seed_codex_logs_db(&logs_path, &[now - 300_000, now - 200_000, now - 60]);
+    fs::write(logs_path.with_extension("sqlite-wal"), b"wal").unwrap();
+    fs::write(logs_path.with_extension("sqlite-shm"), b"shm-data").unwrap();
+
+    let mut config = Config::default();
+    config.codex.home = codex_home.clone();
+    config.probe.logs_db.retention_days = 2;
+    let status =
+        ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux)).logs_db_status();
+
+    assert_eq!(status.target, "codex_logs_2");
+    assert_eq!(status.path, logs_path);
+    assert_eq!(status.status, "ok");
+    assert_eq!(status.logs_db_status, "ok");
+    assert_eq!(status.total_rows, 3);
+    assert_eq!(status.old_rows, 2);
+    assert_eq!(status.retained_rows, 1);
+    assert!(status.database_size > 0);
+    assert_eq!(status.wal_size, 3);
+    assert!(status.shm_size >= 8);
+    assert!(status.page_count > 0);
+    assert_eq!(status.freelist_count, 0);
+    assert_eq!(status.retention_days, 2);
+    assert!(status.deletion.skip_reason.is_none());
+}
+
+#[test]
+fn probe_logs_db_status_does_not_count_panel_probe_tables() {
+    let root = temp_dir("nexushub-codex-logs-empty");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let logs_path = codex_home.join("logs_2.sqlite");
+    seed_codex_logs_db(&logs_path, &[]);
+
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    let status =
+        ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux)).logs_db_status();
+
+    assert_eq!(status.target, "codex_logs_2");
+    assert_eq!(status.total_rows, 0);
+    assert_eq!(status.old_rows, 0);
+    assert_eq!(status.retained_rows, 0);
+}
+
+#[test]
+fn probe_logs_db_maintenance_deletes_old_codex_logs_in_chunks() {
+    let root = temp_dir("nexushub-codex-logs-maintain");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let logs_path = codex_home.join("logs_2.sqlite");
+    let now = chrono::Utc::now().timestamp();
+    seed_codex_logs_db(
+        &logs_path,
+        &[now - 500_000, now - 400_000, now - 300_000, now - 100],
+    );
+
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    config.probe.logs_db.retention_days = 2;
+    config.probe.logs_db.delete_chunk_rows = 2;
+    config.probe.logs_db.max_delete_rows_per_run = 3;
+    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+    let result = runtime.maintain_logs_db(false).unwrap();
+    assert_eq!(result.status, "ok");
+    assert_eq!(result.target, "codex_logs_2");
+    assert_eq!(result.deleted_rows, 3);
+    assert_eq!(result.old_rows_before, 3);
+    assert_eq!(result.remaining_old_rows, 0);
+
+    let status = runtime.logs_db_status();
+    assert_eq!(status.total_rows, 1);
+    assert_eq!(status.old_rows, 0);
+    assert_eq!(status.retained_rows, 1);
+}
+
+#[test]
+fn probe_logs_db_maintenance_reports_invalid_codex_logs_schema_as_result() {
+    let root = temp_dir("nexushub-codex-logs-invalid-maintain");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let logs_path = codex_home.join("logs_2.sqlite");
+    let conn = Connection::open(&logs_path).unwrap();
+    conn.execute_batch("CREATE TABLE not_logs(id INTEGER PRIMARY KEY);")
+        .unwrap();
+
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    let result = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        .maintain_logs_db(false)
+        .unwrap();
+
+    assert!(!result.ok);
+    assert_eq!(result.target, "codex_logs_2");
+    assert_eq!(result.status, "missing_logs_table");
+    assert_eq!(result.deleted_rows, 0);
+    assert!(result
+        .error
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -458,4 +593,35 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{label}-{unique}"))
+}
+
+fn seed_codex_logs_db(path: &std::path::Path, timestamps: &[i64]) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            ts_nanos INTEGER NOT NULL,
+            level TEXT NOT NULL,
+            target TEXT NOT NULL,
+            feedback_log_body TEXT,
+            module_path TEXT,
+            file TEXT,
+            line INTEGER,
+            thread_id TEXT,
+            process_uuid TEXT,
+            estimated_bytes INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+        "#,
+    )
+    .unwrap();
+    for ts in timestamps {
+        conn.execute(
+            "INSERT INTO logs(ts, ts_nanos, level, target, estimated_bytes) VALUES(?1, 0, 'INFO', 'test', 1)",
+            params![ts],
+        )
+        .unwrap();
+    }
 }

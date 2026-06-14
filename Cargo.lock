@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-core"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "nexushubd"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1374,6 +1374,7 @@ dependencies = [
  "nexushub-core",
  "rand 0.8.6",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

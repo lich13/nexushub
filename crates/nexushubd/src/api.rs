@@ -7,7 +7,6 @@ use crate::{
     turnstile::verify_turnstile,
 };
 use axum::{
-    body::Bytes,
     extract::connect_info::ConnectInfo,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -30,7 +29,7 @@ use nexushub_core::{
     },
     db::{JobRecord, NewSession, ThreadFollowUp},
     platform::PlatformPaths,
-    probe::{ProbeActionPlanKind, ProbeRuntime},
+    probe::ProbeRuntime,
     providers::ProviderRegistry,
     update,
     uploads::{
@@ -85,50 +84,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/platform", get(platform_overview))
         .route("/api/plugins", get(list_plugins))
         .route("/api/probe/status", get(get_probe_status))
-        .route("/api/probe/dashboard", get(get_probe_dashboard))
         .route(
             "/api/probe/settings",
             get(get_probe_settings).patch(patch_probe_settings),
         )
         .route("/api/probe/lifecycle", get(get_probe_lifecycle))
-        .route("/api/probe/diagnostics", get(get_probe_diagnostics))
-        .route("/api/probe/events", get(get_probe_events))
-        .route("/api/probe/running", get(get_probe_running))
-        .route("/api/probe/reply-needed", get(get_probe_reply_needed))
-        .route("/api/probe/recoverable", get(get_probe_recoverable))
-        .route("/api/probe/thread-probe/:id", get(get_probe_thread_probe))
         .route("/api/probe/hook-status", get(get_probe_hook_status))
         .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
-        .route("/api/probe/hooks/install", post(probe_hooks_install))
         .route("/api/probe/bark/test", post(probe_bark_test))
-        .route("/api/probe/logs-db/plan", post(probe_logs_db_plan))
-        .route("/api/probe/logs-db/execute", post(probe_logs_db_execute))
-        .route("/api/probe/logs-db/maintain", post(probe_logs_db_plan))
-        .route("/api/probe/lifecycle/repair", post(probe_lifecycle_repair))
-        .route("/api/probe/service/restart", post(probe_service_restart))
-        .route("/api/probe/legacy/import", post(probe_legacy_import))
-        .route(
-            "/api/probe/legacy-cleanup/dry-run",
-            post(probe_legacy_cleanup_dry_run),
-        )
-        .route(
-            "/api/probe/legacy-cleanup/execute",
-            post(probe_legacy_cleanup_execute),
-        )
-        .route("/api/sentinel/status", get(get_probe_status))
-        .route("/api/sentinel/dashboard", get(get_probe_dashboard))
-        .route("/api/sentinel/running", get(get_probe_running))
-        .route("/api/sentinel/reply-needed", get(get_probe_reply_needed))
-        .route("/api/sentinel/recoverable", get(get_probe_recoverable))
-        .route(
-            "/api/sentinel/thread-probe/:id",
-            get(get_probe_thread_probe),
-        )
-        .route("/api/sentinel/hook-status", get(get_probe_hook_status))
-        .route(
-            "/api/sentinel/logs-db/status",
-            get(get_probe_logs_db_status),
-        )
         .route(
             "/api/providers/claude-code/jobs/version-check",
             post(claude_code_version_check),
@@ -279,31 +242,6 @@ async fn get_probe_status(State(state): State<AppState>, headers: HeaderMap) -> 
     ok(probe_status_value(state).await)
 }
 
-#[derive(Debug, Deserialize)]
-struct ProbeListQuery {
-    limit: Option<usize>,
-}
-
-async fn get_probe_dashboard(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let runtime = probe_runtime(&state);
-    let status = probe_status_value(state.clone()).await;
-    let running = load_probe_threads(&state, "running", state.config().probe.recent_limit).await?;
-    let reply_needed =
-        load_probe_threads(&state, "reply-needed", state.config().probe.recent_limit).await?;
-    let recoverable =
-        load_probe_threads(&state, "recoverable", state.config().probe.recent_limit).await?;
-    let diagnostics = runtime.diagnostics();
-    ok(json!({
-        "status": status,
-        "running": running,
-        "reply_needed": reply_needed,
-        "recoverable": recoverable,
-        "recent_events": state.db.list_probe_events(state.config().probe.recent_limit as u32)?,
-        "diagnostics": diagnostics,
-    }))
-}
-
 async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(probe_settings_value(&state)?)
@@ -422,84 +360,6 @@ async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) 
     ok(value)
 }
 
-async fn get_probe_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_runtime(&state).diagnostics())
-}
-
-async fn get_probe_events(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ProbeListQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = query
-        .limit
-        .unwrap_or(state.config().probe.recent_limit)
-        .clamp(1, 500);
-    ok(json!({"items": state.db.list_probe_events(limit as u32)?}))
-}
-
-async fn get_probe_running(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ProbeListQuery>,
-) -> ApiResponse {
-    probe_thread_list_response(state, headers, "running", query.limit).await
-}
-
-async fn get_probe_reply_needed(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ProbeListQuery>,
-) -> ApiResponse {
-    probe_thread_list_response(state, headers, "reply-needed", query.limit).await
-}
-
-async fn get_probe_recoverable(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<ProbeListQuery>,
-) -> ApiResponse {
-    probe_thread_list_response(state, headers, "recoverable", query.limit).await
-}
-
-async fn probe_thread_list_response(
-    state: AppState,
-    headers: HeaderMap,
-    status: &'static str,
-    limit: Option<usize>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = limit.unwrap_or(50).clamp(1, 200);
-    let threads = load_probe_threads(&state, status, limit).await?;
-    ok(json!({
-        "source": "nexushub_read_model",
-        "items": threads,
-    }))
-}
-
-async fn get_probe_thread_probe(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let detail = load_merged_thread_detail(&state, &id, "probe thread")
-        .await
-        .map_err(api_error_for_thread_detail_load)?;
-    match detail {
-        Some(detail) => ok(json!({
-            "thread_id": id,
-            "summary": detail.summary,
-            "total_blocks": detail.total_blocks,
-            "raw_event_count": detail.raw_event_count,
-            "source": "nexushub_app_server_thread_read",
-        })),
-        None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
-    }
-}
-
 async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!(probe_runtime(&state).hook_status()))
@@ -516,59 +376,30 @@ async fn get_probe_logs_db_status(
     )
     .map_err(anyhow::Error::from)?;
     if let Some(object) = value.as_object_mut() {
-        let counts = state
-            .db
-            .probe_logs_db_counts(config.probe.logs_db.retention_days)?;
-        object.insert("event_count".to_string(), json!(counts.event_count));
-        object.insert("dedupe_count".to_string(), json!(counts.dedupe_count));
-        object.insert(
-            "total_rows".to_string(),
-            json!(counts.event_count + counts.dedupe_count),
-        );
-        object.insert(
-            "pending_cleanup_rows".to_string(),
-            json!(counts.pending_event_count + counts.pending_dedupe_count),
-        );
-        object.insert(
-            "pending_event_count".to_string(),
-            json!(counts.pending_event_count),
-        );
-        object.insert(
-            "pending_dedupe_count".to_string(),
-            json!(counts.pending_dedupe_count),
-        );
         if let Some((raw, updated_at)) = state
             .db
             .get_setting_with_updated_at("probe_logs_db_last_maintain")?
         {
-            object.insert(
-                "last_maintain_at".to_string(),
-                json!(timestamp_to_rfc3339(updated_at).unwrap_or_else(|| updated_at.to_string())),
-            );
-            object.insert(
-                "last_result".to_string(),
-                json!(probe_logs_db_last_result(&raw)),
-            );
-            object.insert(
-                "last_maintain".to_string(),
-                serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw)),
-            );
+            let last_run =
+                timestamp_to_rfc3339(updated_at).unwrap_or_else(|| updated_at.to_string());
+            let next_run_ts = updated_at
+                + i64::from(config.probe.logs_db.maintenance_interval_hours.max(1)) * 3_600;
+            let next_run =
+                timestamp_to_rfc3339(next_run_ts).unwrap_or_else(|| next_run_ts.to_string());
+            let last_result = probe_logs_db_last_result(&raw);
+            let last_run_value = serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw));
+            object.insert("last_run".to_string(), json!(last_run));
+            object.insert("last_run_at".to_string(), json!(last_run));
+            object.insert("last_maintain_at".to_string(), json!(last_run));
+            object.insert("next_run".to_string(), json!(next_run));
+            object.insert("next_run_at".to_string(), json!(next_run));
+            object.insert("next_maintain_at".to_string(), json!(next_run));
+            object.insert("last_result".to_string(), json!(last_result));
+            object.insert("recent_result".to_string(), json!(last_result));
+            object.insert("last_maintain".to_string(), last_run_value);
         }
     }
     ok(value)
-}
-
-async fn probe_hooks_install(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> ApiResponse {
-    if body.is_empty() {
-        return probe_plan_response(state, headers, ProbeActionPlanKind::InstallHooks).await;
-    }
-    let request: ConfirmedPlanRequest = serde_json::from_slice(&body)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::InstallHooks).await
 }
 
 async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -581,138 +412,6 @@ async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> A
         "probe_bark",
     )
     .await
-}
-
-async fn probe_logs_db_plan(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    probe_plan_response(state, headers, ProbeActionPlanKind::LogsDbMaintain).await
-}
-
-async fn probe_logs_db_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<ConfirmedPlanRequest>,
-) -> ApiResponse {
-    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::LogsDbMaintain).await
-}
-
-async fn probe_lifecycle_repair(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_lifecycle_repair",
-        "修复探针生命周期",
-        vec!["probe".to_string(), "lifecycle-repair".to_string()],
-        "probe_lifecycle",
-    )
-    .await
-}
-
-async fn probe_service_restart(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_service_restart",
-        "重启 NexusHub 服务",
-        vec!["probe".to_string(), "service-restart".to_string()],
-        "probe_service",
-    )
-    .await
-}
-
-async fn probe_legacy_import(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_legacy_import",
-        "导入旧 Sentinel 配置",
-        vec!["probe".to_string(), "legacy-import".to_string()],
-        "probe_legacy_import",
-    )
-    .await
-}
-
-async fn probe_legacy_cleanup_dry_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    probe_plan_response(state, headers, ProbeActionPlanKind::LegacyCleanup).await
-}
-
-async fn probe_legacy_cleanup_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<ConfirmedPlanRequest>,
-) -> ApiResponse {
-    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::LegacyCleanup).await
-}
-
-async fn probe_plan_response(
-    state: AppState,
-    headers: HeaderMap,
-    kind: ProbeActionPlanKind,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = probe_runtime(&state).plan_action(kind)?;
-    ok(plan)
-}
-
-#[derive(Debug, Deserialize)]
-struct ConfirmedPlanRequest {
-    plan_id: Option<String>,
-    confirmed: Option<bool>,
-}
-
-async fn probe_execute_confirmed(
-    state: AppState,
-    headers: HeaderMap,
-    request: ConfirmedPlanRequest,
-    kind: ProbeActionPlanKind,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan_id = request.plan_id.as_deref().unwrap_or("").trim();
-    if plan_id.is_empty() || request.confirmed != Some(true) {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "plan_id and confirmed=true are required",
-        ));
-    }
-    let plan = probe_runtime(&state).plan_action(kind)?;
-    let (job_kind, title, group, args) = match kind {
-        ProbeActionPlanKind::InstallHooks => (
-            "probe_hooks_install",
-            "安装探针 Hook",
-            "probe_hooks",
-            vec!["probe".to_string(), "hooks-install".to_string()],
-        ),
-        ProbeActionPlanKind::LogsDbMaintain => (
-            "probe_logs_db_execute",
-            "探针日志库维护",
-            "probe_logs_db",
-            vec!["probe".to_string(), "logs-db-maintain".to_string()],
-        ),
-        ProbeActionPlanKind::LegacyCleanup => (
-            "probe_legacy_cleanup_execute",
-            "旧 Sentinel 清理",
-            "probe_legacy_cleanup",
-            vec!["probe".to_string(), "legacy-cleanup".to_string()],
-        ),
-    };
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        &format!("{job_kind}.confirmed"),
-        Some("probe"),
-        Some(plan_id),
-        None,
-        json!({"plan": plan, "requested_plan_id": plan_id, "args": args}),
-    )?;
-    let command = fixed_probe_shell_command(&state, &args);
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(job_kind, title, command, group)
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
-    ok(json!({"job_id": id}))
 }
 
 async fn start_probe_fixed_job(
@@ -4115,6 +3814,25 @@ fn probe_logs_db_last_result(raw: &str) -> String {
             return format!("{dry_run}: {skip_reason}");
         }
     }
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        if !error.is_empty() {
+            return format!("{dry_run}: {error}");
+        }
+    }
+    if value.get("target").and_then(Value::as_str) == Some("codex_logs_2") {
+        if dry_run == "dry-run" {
+            let would_delete = value
+                .get("would_delete_rows")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            return format!("dry-run: would_delete_rows={would_delete}");
+        }
+        let deleted = value
+            .get("deleted_rows")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        return format!("execute: deleted_rows={deleted}");
+    }
     format!("{dry_run}: events={events}, dedupe={dedupe}")
 }
 
@@ -4243,6 +3961,7 @@ mod tests {
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
         uploads::{PreparedAttachment, UploadKind},
     };
+    use rusqlite::{params, Connection};
     use serde_json::json;
     use std::{
         collections::HashMap,
@@ -4291,6 +4010,37 @@ mod tests {
     fn temp_test_dir(prefix: &str) -> PathBuf {
         let unique = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
         env::temp_dir().join(format!("{}-{}-{unique}", prefix, std::process::id()))
+    }
+
+    fn seed_codex_logs_db(path: &std::path::Path, timestamps: &[i64]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                target TEXT NOT NULL,
+                feedback_log_body TEXT,
+                module_path TEXT,
+                file TEXT,
+                line INTEGER,
+                thread_id TEXT,
+                process_uuid TEXT,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+            "#,
+        )
+        .unwrap();
+        for ts in timestamps {
+            conn.execute(
+                "INSERT INTO logs(ts, ts_nanos, level, target, estimated_bytes) VALUES(?1, 0, 'INFO', 'test', 1)",
+                params![ts],
+            )
+            .unwrap();
+        }
     }
 
     fn authenticated_test_state() -> (crate::state::AppState, String, String) {
@@ -4470,7 +4220,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_status_routes_use_canonical_probe_name_and_keep_sentinel_alias() {
+    async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
         let (state, session_token, _) = authenticated_test_state();
         let app = router(state.clone());
 
@@ -4493,6 +4243,7 @@ mod tests {
         assert_ne!(status["label"], "Sentinel");
         assert!(status["flavor"].as_str().is_some());
         assert!(status["hook_status"].as_str().is_some());
+        assert_eq!(status["logs_db_status"], "missing_db");
 
         let alias = app
             .oneshot(
@@ -4505,70 +4256,46 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(alias.status(), StatusCode::OK);
-        let body = to_bytes(alias.into_body(), usize::MAX).await.unwrap();
-        let alias_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(alias_status["label"], "Probe");
-        assert_eq!(alias_status["flavor"], status["flavor"]);
+        assert_eq!(alias.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn probe_execute_routes_require_plan_id_and_confirmation() {
+    async fn probe_manual_maintenance_routes_are_not_exposed() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
-        let missing_csrf = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/probe/hooks/install")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
-
-        let unconfirmed = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/probe/logs-db/execute")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"plan_id":"probe-logs-db-test"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unconfirmed.status(), StatusCode::BAD_REQUEST);
-
-        for (plan_uri, execute_uri, expected_prefix, kind, title) in [
-            (
-                "/api/probe/logs-db/plan",
-                "/api/probe/logs-db/execute",
-                "probe-logs-db-",
-                "probe_logs_db_execute",
-                "探针日志库维护",
-            ),
-            (
-                "/api/probe/hooks/install",
-                "/api/probe/hooks/install",
-                "probe-hooks-",
-                "probe_hooks_install",
-                "安装探针 Hook",
-            ),
+        for (method, uri) in [
+            ("GET", "/api/probe/diagnostics"),
+            ("POST", "/api/probe/hooks/install"),
+            ("POST", "/api/probe/logs-db/plan"),
+            ("POST", "/api/probe/logs-db/execute"),
+            ("POST", "/api/probe/logs-db/maintain"),
+            ("POST", "/api/probe/legacy-cleanup/dry-run"),
+            ("POST", "/api/probe/legacy-cleanup/execute"),
+            ("GET", "/api/probe/dashboard"),
+            ("GET", "/api/probe/events"),
+            ("GET", "/api/probe/running"),
+            ("GET", "/api/probe/reply-needed"),
+            ("GET", "/api/probe/recoverable"),
+            ("GET", "/api/probe/thread-probe/thread-a"),
+            ("POST", "/api/probe/lifecycle/repair"),
+            ("POST", "/api/probe/service/restart"),
+            ("POST", "/api/probe/legacy/import"),
+            ("GET", "/api/sentinel/status"),
+            ("GET", "/api/sentinel/dashboard"),
+            ("GET", "/api/sentinel/running"),
+            ("GET", "/api/sentinel/reply-needed"),
+            ("GET", "/api/sentinel/recoverable"),
+            ("GET", "/api/sentinel/thread-probe/thread-a"),
+            ("GET", "/api/sentinel/hook-status"),
+            ("GET", "/api/sentinel/logs-db/status"),
         ] {
-            let plan_response = app
+            let response = app
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .method("POST")
-                        .uri(plan_uri)
+                        .method(method)
+                        .uri(uri)
                         .header("cookie", format!("nexushub_session={session_token}"))
                         .header("x-csrf-token", csrf_token.as_str())
                         .body(Body::empty())
@@ -4576,47 +4303,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(plan_response.status(), StatusCode::OK, "{plan_uri}");
-            let body = to_bytes(plan_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            let plan_id = plan["plan_id"].as_str().unwrap();
-            assert!(plan_id.starts_with(expected_prefix));
-
-            let execute_response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(execute_uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .header("content-type", "application/json")
-                        .body(Body::from(format!(
-                            r#"{{"plan_id":"{plan_id}","confirmed":true}}"#
-                        )))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(execute_response.status(), StatusCode::OK, "{execute_uri}");
-            let body = to_bytes(execute_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            let job_id = payload["job_id"].as_str().unwrap();
-            let job = state.db.job(job_id).unwrap().unwrap();
-            assert_eq!(job.kind, kind);
-            assert_eq!(job.title, title);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
         }
     }
 
     #[tokio::test]
-    async fn probe_settings_events_and_sentinel_aliases_are_available() {
-        let (state, session_token, csrf_token, _dir, config_path) =
-            authenticated_test_state_with_config_file();
-        let _config_env = ConfigEnvGuard::set(&config_path);
+    async fn probe_logs_db_status_reports_codex_logs_2_not_panel_probe_tables() {
+        let (state, session_token, _) = authenticated_test_state();
         state
             .db
             .record_probe_event(nexushub_core::db::NewProbeEvent {
@@ -4637,21 +4330,97 @@ mod tests {
             .db
             .set_setting(
                 "probe_logs_db_last_maintain",
-                &json!({"dry_run": true, "events": 7, "dedupe": 2}).to_string(),
+                &json!({"dry_run": false, "deleted_rows": 2, "target": "codex_logs_2"}).to_string(),
+            )
+            .unwrap();
+
+        let dir = temp_test_dir("nexushub-api-codex-logs");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
+        let mut config = state.config();
+        config.codex.home = codex_home.clone();
+        config.probe.logs_db.retention_days = 2;
+        state.replace_config(config);
+
+        let app = router(state.clone());
+        let logs_db = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/logs-db/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logs_db.status(), StatusCode::OK);
+        let body = to_bytes(logs_db.into_body(), usize::MAX).await.unwrap();
+        let logs_db: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(logs_db["target"], "codex_logs_2");
+        assert_eq!(logs_db["path"], logs_path.to_string_lossy().as_ref());
+        assert_eq!(logs_db["total_rows"], 2);
+        assert_eq!(logs_db["old_rows"], 1);
+        assert_eq!(logs_db["retained_rows"], 1);
+        assert_eq!(logs_db["status"], "ok");
+        assert_eq!(logs_db["logs_db_status"], "ok");
+        assert!(logs_db.get("event_count").is_none());
+        assert!(logs_db.get("dedupe_count").is_none());
+        assert!(logs_db["last_run"].as_str().is_some());
+        assert_eq!(logs_db["last_result"], "execute: deleted_rows=2");
+        assert_eq!(logs_db["recent_result"], logs_db["last_result"]);
+    }
+
+    #[tokio::test]
+    async fn probe_settings_hook_status_and_logs_db_status_are_available() {
+        let (state, session_token, csrf_token, _dir, config_path) =
+            authenticated_test_state_with_config_file();
+        let _config_env = ConfigEnvGuard::set(&config_path);
+        let logs_dir = temp_test_dir("nexushub-settings-codex-logs");
+        let codex_home = logs_dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
+        let mut config = state.config();
+        config.codex.home = codex_home;
+        config.probe.logs_db.retention_days = 2;
+        state.replace_config(config.clone());
+        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        state
+            .db
+            .record_probe_event(nexushub_core::db::NewProbeEvent {
+                kind: "hook-stop",
+                thread_id: Some("thread-a"),
+                title: Some("Hook event"),
+                message: Some("stop hook received"),
+                dedupe_key: Some("hook-stop:thread-a"),
+                source: "test",
+                payload: json!({"ok": true}),
+            })
+            .unwrap();
+        state
+            .db
+            .claim_probe_dedupe("probe_event", "test-key", 300)
+            .unwrap();
+        state
+            .db
+            .set_setting(
+                "probe_logs_db_last_maintain",
+                &json!({"dry_run": true, "target": "codex_logs_2", "would_delete_rows": 1})
+                    .to_string(),
             )
             .unwrap();
         let app = router(state.clone());
 
         for uri in [
             "/api/probe/settings",
-            "/api/probe/diagnostics",
-            "/api/probe/events",
-            "/api/sentinel/dashboard",
-            "/api/sentinel/running",
-            "/api/sentinel/reply-needed",
-            "/api/sentinel/recoverable",
-            "/api/sentinel/hook-status",
-            "/api/sentinel/logs-db/status",
+            "/api/probe/hook-status",
+            "/api/probe/logs-db/status",
         ] {
             let response = app
                 .clone()
@@ -4683,14 +4452,16 @@ mod tests {
         assert_eq!(logs_db.status(), StatusCode::OK);
         let body = to_bytes(logs_db.into_body(), usize::MAX).await.unwrap();
         let logs_db: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(logs_db["event_count"], 1);
-        assert_eq!(logs_db["dedupe_count"], 1);
+        assert!(logs_db.get("event_count").is_none());
+        assert!(logs_db.get("dedupe_count").is_none());
+        assert_eq!(logs_db["target"], "codex_logs_2");
         assert_eq!(logs_db["total_rows"], 2);
-        assert!(logs_db["pending_cleanup_rows"].is_number());
+        assert_eq!(logs_db["old_rows"], 1);
+        assert_eq!(logs_db["retained_rows"], 1);
         assert!(logs_db["last_maintain_at"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
-        assert_eq!(logs_db["last_result"], "dry-run: events=7, dedupe=2");
+        assert_eq!(logs_db["last_result"], "dry-run: would_delete_rows=1");
 
         let patch = app
             .oneshot(
@@ -4838,23 +4609,22 @@ mod tests {
         assert_eq!(status["poll_seconds"], 33);
         assert_eq!(status["host_label"], "fresh-host");
 
-        let plan = app
+        let logs_status = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri("/api/probe/logs-db/plan")
+                    .method("GET")
+                    .uri("/api/probe/logs-db/status")
                     .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(plan.status(), StatusCode::OK);
-        let body = to_bytes(plan.into_body(), usize::MAX).await.unwrap();
-        let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(plan["payload"]["retention_days"], 2);
+        assert_eq!(logs_status.status(), StatusCode::OK);
+        let body = to_bytes(logs_status.into_body(), usize::MAX).await.unwrap();
+        let logs_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(logs_status["retention_days"], 2);
 
         let job = app
             .oneshot(

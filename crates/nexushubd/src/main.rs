@@ -14,7 +14,7 @@ use nexushub_core::{
     },
     db::{NewProbeEvent, PanelDb},
     platform::PlatformPaths,
-    probe::{ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
+    probe::{ProbeEventInput, ProbeEventOutcome, ProbeLogsDbMaintenanceResult, ProbeRuntime},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,11 +25,14 @@ use std::{
     path::{Path, PathBuf},
     process::Command as StdCommand,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, time};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const DEFAULT_CONFIG: &str = "/opt/nexushub/config.toml";
+const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
+const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
+static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Parser)]
 #[command(
@@ -104,10 +107,6 @@ enum ProbeCommand {
     LifecycleRepair,
     ServiceRestart,
     LegacyImport,
-    LegacyCleanup {
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 #[tokio::main]
@@ -252,36 +251,12 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             );
         }
         ProbeCommand::LogsDbMaintain { dry_run } => {
-            let (events, dedupe) = db.maintain_probe_events(
-                config.probe.logs_db.retention_days,
-                config.probe.logs_db.max_delete_rows_per_run,
-                dry_run || !config.probe.logs_db.enabled,
-            )?;
+            let result = probe_runtime(config).maintain_logs_db(dry_run)?;
             db.set_setting(
-                "probe_logs_db_last_maintain",
-                &json!({
-                    "dry_run": dry_run,
-                    "events": events,
-                    "dedupe": dedupe,
-                    "enabled": config.probe.logs_db.enabled,
-                    "skip_reason": if config.probe.logs_db.enabled { Value::Null } else { Value::String("logs_db_disabled".to_string()) },
-                })
-                .to_string(),
+                PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
+                &serde_json::to_string(&result)?,
             )?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": true,
-                    "dry_run": dry_run,
-                    "deleted_probe_events": if dry_run { 0 } else { events },
-                    "deleted_probe_dedupe": if dry_run { 0 } else { dedupe },
-                    "would_delete_probe_events": if dry_run { events } else { 0 },
-                    "would_delete_probe_dedupe": if dry_run { dedupe } else { 0 },
-                    "retention_days": config.probe.logs_db.retention_days,
-                    "max_delete_rows_per_run": config.probe.logs_db.max_delete_rows_per_run,
-                    "skip_reason": if config.probe.logs_db.enabled { serde_json::Value::Null } else { serde_json::Value::String("logs_db_disabled".to_string()) },
-                }))?
-            );
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         ProbeCommand::LifecycleRepair => {
             println!(
@@ -297,10 +272,6 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
         }
         ProbeCommand::LegacyImport => {
             let result = import_legacy_sentinel_config(&db)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        ProbeCommand::LegacyCleanup { dry_run } => {
-            let result = run_legacy_cleanup(dry_run)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
@@ -455,31 +426,6 @@ fn url_path_encode(value: &str) -> String {
             _ => format!("%{byte:02X}").chars().collect(),
         })
         .collect()
-}
-
-fn run_legacy_cleanup(dry_run: bool) -> Result<Value> {
-    let script = "/usr/local/bin/nexushub-probe-legacy-cleanup";
-    let mode = if dry_run { "--dry-run" } else { "--execute" };
-    let output = StdCommand::new(script)
-        .arg(mode)
-        .output()
-        .with_context(|| format!("run {script} {mode}"))?;
-    let payload = json!({
-        "ok": output.status.success(),
-        "dry_run": dry_run,
-        "action": "legacy_cleanup",
-        "exit_code": output.status.code(),
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-    });
-    if !output.status.success() {
-        anyhow::bail!(
-            "legacy cleanup failed with exit {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(payload)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -683,6 +629,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let config = Config::load(&config_path)?;
     let db = open_panel_db(&config)?;
     let state = AppState::new(config.clone(), db);
+    spawn_probe_logs_db_scheduler(state.clone());
     let webui_dir = config.paths.webui_dir.clone();
     let app = api::router(state)
         .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
@@ -704,9 +651,91 @@ fn open_panel_db(config: &Config) -> Result<PanelDb> {
     PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box()?)
 }
 
+#[derive(Debug)]
+struct ProbeLogsDbMaintenanceOutcome {
+    ran: bool,
+    result: Option<ProbeLogsDbMaintenanceResult>,
+    skip_reason: Option<String>,
+}
+
+fn spawn_probe_logs_db_scheduler(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            match run_probe_logs_db_maintenance_if_due(state.clone()).await {
+                Ok(outcome) if outcome.ran => {
+                    if let Some(result) = outcome.result {
+                        tracing::info!(
+                            target = result.target.as_str(),
+                            deleted_rows = result.deleted_rows,
+                            remaining_old_rows = result.remaining_old_rows,
+                            "probe logs DB maintenance completed"
+                        );
+                    }
+                }
+                Ok(outcome) => {
+                    tracing::debug!(
+                        skip_reason = outcome.skip_reason.as_deref().unwrap_or("unknown"),
+                        "probe logs DB maintenance skipped"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!("probe logs DB maintenance failed: {err}");
+                }
+            }
+            time::sleep(std::time::Duration::from_secs(
+                PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS,
+            ))
+            .await;
+        }
+    });
+}
+
+async fn run_probe_logs_db_maintenance_if_due(
+    state: AppState,
+) -> Result<ProbeLogsDbMaintenanceOutcome> {
+    let _guard = PROBE_LOGS_DB_MAINTENANCE_LOCK.lock().await;
+    let config = state.config();
+    if !config.probe.logs_db.enabled {
+        return Ok(ProbeLogsDbMaintenanceOutcome {
+            ran: false,
+            result: None,
+            skip_reason: Some("logs_db_disabled".to_string()),
+        });
+    }
+    let interval_seconds =
+        i64::from(config.probe.logs_db.maintenance_interval_hours.max(1)) * 3_600;
+    if let Some((_raw, updated_at)) = state
+        .db
+        .get_setting_with_updated_at(PROBE_LOGS_DB_LAST_MAINTAIN_SETTING)?
+    {
+        if PanelDb::now().saturating_sub(updated_at) < interval_seconds {
+            return Ok(ProbeLogsDbMaintenanceOutcome {
+                ran: false,
+                result: None,
+                skip_reason: Some("not_due".to_string()),
+            });
+        }
+    }
+
+    let result =
+        tokio::task::spawn_blocking(move || probe_runtime(&config).maintain_logs_db(false))
+            .await
+            .context("join probe logs DB maintenance worker")??;
+    state.db.set_setting(
+        PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
+        &serde_json::to_string(&result)?,
+    )?;
+    Ok(ProbeLogsDbMaintenanceOutcome {
+        ran: true,
+        result: Some(result),
+        skip_reason: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{params, Connection};
     use std::time::SystemTime;
 
     #[test]
@@ -820,5 +849,109 @@ log_max_bytes = 5242880
             "sentinel = \"keep\"\n"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_logs_db_scheduler_runs_when_due_and_persists_result() {
+        let dir = temp_test_dir("nexushub-scheduler-due");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
+
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.logs_db.retention_days = 2;
+        config.probe.logs_db.delete_chunk_rows = 10;
+        config.probe.logs_db.max_delete_rows_per_run = 10;
+        let db = PanelDb::open(":memory:").unwrap();
+        let state = AppState::new(config, db.clone());
+
+        let outcome = run_probe_logs_db_maintenance_if_due(state).await.unwrap();
+
+        assert!(outcome.ran);
+        assert_eq!(outcome.result.as_ref().unwrap().target, "codex_logs_2");
+        assert_eq!(outcome.result.as_ref().unwrap().deleted_rows, 1);
+        let stored = db
+            .get_setting(PROBE_LOGS_DB_LAST_MAINTAIN_SETTING)
+            .unwrap()
+            .unwrap();
+        let stored: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored["target"], "codex_logs_2");
+        assert_eq!(stored["deleted_rows"], 1);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_logs_db_scheduler_skips_when_last_run_is_recent() {
+        let dir = temp_test_dir("nexushub-scheduler-recent");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
+
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.logs_db.retention_days = 2;
+        config.probe.logs_db.maintenance_interval_hours = 6;
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_setting(
+            PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
+            &json!({"target": "codex_logs_2", "deleted_rows": 0}).to_string(),
+        )
+        .unwrap();
+        let state = AppState::new(config, db);
+
+        let outcome = run_probe_logs_db_maintenance_if_due(state).await.unwrap();
+
+        assert!(!outcome.ran);
+        assert_eq!(outcome.skip_reason.as_deref(), Some("not_due"));
+        let conn = Connection::open(&logs_path).unwrap();
+        let old_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE ts < ?1",
+                params![now - 172_800],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_rows, 1);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn temp_test_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
+    }
+
+    fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                target TEXT NOT NULL,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+            "#,
+        )
+        .unwrap();
+        for ts in timestamps {
+            conn.execute(
+                "INSERT INTO logs(ts, ts_nanos, level, target, estimated_bytes) VALUES(?1, 0, 'INFO', 'test', 1)",
+                params![ts],
+            )
+            .unwrap();
+        }
     }
 }

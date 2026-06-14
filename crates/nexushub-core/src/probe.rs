@@ -3,9 +3,15 @@ use crate::{
     platform::{PlatformKind, PlatformPaths},
 };
 use anyhow::Result;
+use chrono::{TimeZone, Utc};
+use rusqlite::{params, Connection, ErrorCode, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
@@ -23,6 +29,7 @@ impl ProbeRuntime {
     }
 
     pub async fn status(&self) -> Result<ProbeStatus> {
+        let logs_db_status = self.logs_db_status();
         Ok(ProbeStatus {
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
@@ -44,7 +51,7 @@ impl ProbeRuntime {
                 "not_configured"
             }
             .to_string(),
-            logs_db_status: self.logs_db_status_text(),
+            logs_db_status: logs_db_status.status,
             lifecycle_status: self.lifecycle_status_text(),
             doctor_status: self.doctor_status_text(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -129,7 +136,19 @@ impl ProbeRuntime {
     }
 
     pub fn logs_db_status(&self) -> ProbeLogsDbStatus {
-        ProbeLogsDbStatus::from_config(&self.paths, &self.config.probe.logs_db)
+        ProbeLogsDbStatus::from_config(&self.config, &self.config.probe.logs_db, now_ts())
+    }
+
+    pub fn maintain_logs_db(&self, dry_run: bool) -> Result<ProbeLogsDbMaintenanceResult> {
+        self.maintain_logs_db_with_compaction(dry_run, false)
+    }
+
+    pub fn maintain_logs_db_with_compaction(
+        &self,
+        dry_run: bool,
+        compact: bool,
+    ) -> Result<ProbeLogsDbMaintenanceResult> {
+        maintain_codex_logs_db(&self.config, dry_run, compact, now_ts())
     }
 
     pub fn plan_action(&self, kind: ProbeActionPlanKind) -> Result<ProbeActionPlan> {
@@ -198,23 +217,6 @@ impl ProbeRuntime {
                 }),
                 requires_confirmation: true,
                 command: "nexushubd probe logs-db-maintain".to_string(),
-            }),
-            ProbeActionPlanKind::LegacyCleanup => Ok(ProbeActionPlan {
-                plan_id: format!("probe-legacy-cleanup-{suffix}"),
-                kind: "legacy-cleanup".to_string(),
-                title: "旧 Sentinel 清理".to_string(),
-                summary: "健康门禁通过后备份并清理旧 codex-sentinel-server 运行物".to_string(),
-                steps: legacy_cleanup_paths()
-                    .into_iter()
-                    .map(|path| format!("检查并备份 {path}"))
-                    .collect(),
-                payload: json!({
-                    "paths": legacy_cleanup_paths(),
-                    "requires_health_gate": true,
-                    "backup_root": "/opt/nexushub/backups/probe-legacy"
-                }),
-                requires_confirmation: true,
-                command: "nexushubd probe legacy-cleanup".to_string(),
             }),
         }
     }
@@ -329,15 +331,6 @@ impl ProbeRuntime {
         .to_string()
     }
 
-    fn logs_db_status_text(&self) -> String {
-        if self.config.probe.logs_db.enabled {
-            "maintenance_ready"
-        } else {
-            "disabled"
-        }
-        .to_string()
-    }
-
     fn lifecycle_next_actions(&self) -> Vec<String> {
         let mut actions = Vec::new();
         if self.config.probe.hooks.manage_stop_hook {
@@ -420,7 +413,6 @@ impl ProbeRuntime {
 pub enum ProbeActionPlanKind {
     InstallHooks,
     LogsDbMaintain,
-    LegacyCleanup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -505,16 +497,64 @@ pub struct ProbeHookStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeLogsDbStatus {
+    pub target: String,
     pub status: String,
     pub logs_db_status: String,
     pub path: PathBuf,
     pub enabled: bool,
     pub retention_days: u32,
     pub maintenance_interval_hours: u32,
+    pub cutoff_ts: i64,
+    pub cutoff_utc: String,
+    pub total_rows: u64,
+    pub old_rows: u64,
+    pub retained_rows: u64,
+    pub database_size: u64,
+    pub db_size_bytes: u64,
     pub size_bytes: Option<u64>,
+    pub wal_size: u64,
+    pub wal_size_bytes: u64,
+    pub shm_size: u64,
+    pub shm_size_bytes: u64,
+    pub page_count: u64,
+    pub freelist_count: u64,
+    pub page_size: u64,
+    pub journal_mode: Option<String>,
     pub deletion: ProbeLogsDbDeletionPlan,
     pub vacuum: ProbeLogsDbVacuumPlan,
     pub skip_reason: Option<String>,
+    pub error: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_maintain_at: Option<String>,
+    pub next_run_at: Option<String>,
+    pub next_maintain_at: Option<String>,
+    pub recent_result: Option<String>,
+    pub last_result: Option<String>,
+    pub last_run: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeLogsDbMaintenanceResult {
+    pub ok: bool,
+    pub target: String,
+    pub status: String,
+    pub path: PathBuf,
+    pub dry_run: bool,
+    pub retention_days: u32,
+    pub cutoff_ts: i64,
+    pub old_rows_before: u64,
+    pub deleted_rows: u64,
+    pub would_delete_rows: u64,
+    pub remaining_old_rows: u64,
+    pub total_rows_after: u64,
+    pub chunks: u64,
+    pub checkpoint_attempted: bool,
+    pub checkpoint_result: Option<String>,
+    pub vacuumed: bool,
+    pub quick_check_before_vacuum: Option<String>,
+    pub skip_reason: Option<String>,
+    pub error: Option<String>,
+    pub ran_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -624,23 +664,74 @@ impl ProbeEventOutcome {
 }
 
 impl ProbeLogsDbStatus {
-    fn from_config(paths: &PlatformPaths, config: &ProbeLogsDbConfig) -> Self {
-        let path = paths.data_dir.join("nexushub.sqlite");
-        let size_bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
-        let status = if config.enabled {
-            "maintenance_ready"
-        } else {
-            "disabled"
+    fn from_config(config: &Config, logs_config: &ProbeLogsDbConfig, now: i64) -> Self {
+        let path = codex_logs_db_path(&config.codex.home);
+        let cutoff = logs_cutoff(logs_config.retention_days, now);
+        let mut status = Self::base(path.clone(), logs_config, cutoff);
+        if !logs_config.enabled {
+            return status.with_error("disabled", Some("logs_db_disabled".to_string()));
         }
-        .to_string();
+        if !path.exists() {
+            return status.with_error(
+                "missing_db",
+                Some(format!("Codex logs DB not found: {}", path.display())),
+            );
+        }
+        let conn = match open_codex_logs_connection(&path, logs_config, true) {
+            Ok(conn) => conn,
+            Err(err) => {
+                return status.with_error(sqlite_error_status(&err), Some(err.to_string()));
+            }
+        };
+        match inspect_codex_logs_connection(&conn, &path, cutoff) {
+            Ok(snapshot) => {
+                status.status = "ok".to_string();
+                status.logs_db_status = "ok".to_string();
+                status.total_rows = snapshot.total_rows;
+                status.old_rows = snapshot.old_rows;
+                status.retained_rows = snapshot.total_rows.saturating_sub(snapshot.old_rows);
+                status.database_size = file_size(&path);
+                status.db_size_bytes = status.database_size;
+                status.size_bytes = Some(status.database_size);
+                status.wal_size = file_size(&wal_path(&path));
+                status.wal_size_bytes = status.wal_size;
+                status.shm_size = file_size(&shm_path(&path));
+                status.shm_size_bytes = status.shm_size;
+                status.page_count = snapshot.page_count;
+                status.freelist_count = snapshot.freelist_count;
+                status.page_size = snapshot.page_size;
+                status.journal_mode = snapshot.journal_mode;
+                status
+            }
+            Err(err) => status.with_error(sqlite_error_status(&err), Some(err.to_string())),
+        }
+    }
+
+    fn base(path: PathBuf, config: &ProbeLogsDbConfig, cutoff: i64) -> Self {
         Self {
-            logs_db_status: status.clone(),
-            status,
+            target: "codex_logs_2".to_string(),
+            status: "unknown".to_string(),
+            logs_db_status: "unknown".to_string(),
             path,
             enabled: config.enabled,
             retention_days: config.retention_days,
             maintenance_interval_hours: config.maintenance_interval_hours,
-            size_bytes,
+            cutoff_ts: cutoff,
+            cutoff_utc: ts_to_rfc3339(cutoff),
+            total_rows: 0,
+            old_rows: 0,
+            retained_rows: 0,
+            database_size: 0,
+            db_size_bytes: 0,
+            size_bytes: Some(0),
+            wal_size: 0,
+            wal_size_bytes: 0,
+            shm_size: 0,
+            shm_size_bytes: 0,
+            page_count: 0,
+            freelist_count: 0,
+            page_size: 0,
+            journal_mode: None,
             deletion: ProbeLogsDbDeletionPlan {
                 enabled: config.enabled,
                 retention_days: config.retention_days,
@@ -673,7 +764,310 @@ impl ProbeLogsDbStatus {
             } else {
                 Some("logs_db_disabled".to_string())
             },
+            error: None,
+            last_run_at: None,
+            last_maintain_at: None,
+            next_run_at: None,
+            next_maintain_at: None,
+            recent_result: None,
+            last_result: None,
+            last_run: None,
         }
+    }
+
+    fn with_error(mut self, status: &str, error: Option<String>) -> Self {
+        self.status = status.to_string();
+        self.logs_db_status = status.to_string();
+        self.error = error.clone();
+        self.skip_reason = error.or_else(|| self.skip_reason.clone());
+        self.database_size = file_size(&self.path);
+        self.db_size_bytes = self.database_size;
+        self.size_bytes = Some(self.database_size);
+        self.wal_size = file_size(&wal_path(&self.path));
+        self.wal_size_bytes = self.wal_size;
+        self.shm_size = file_size(&shm_path(&self.path));
+        self.shm_size_bytes = self.shm_size;
+        self.deletion.skip_reason = Some(status.to_string());
+        self.vacuum.skip_reason = Some(status.to_string());
+        self
+    }
+}
+
+#[derive(Debug)]
+struct CodexLogsSnapshot {
+    total_rows: u64,
+    old_rows: u64,
+    page_count: u64,
+    freelist_count: u64,
+    page_size: u64,
+    journal_mode: Option<String>,
+}
+
+fn maintain_codex_logs_db(
+    config: &Config,
+    dry_run: bool,
+    compact: bool,
+    now: i64,
+) -> Result<ProbeLogsDbMaintenanceResult> {
+    let logs_config = &config.probe.logs_db;
+    let path = codex_logs_db_path(&config.codex.home);
+    let cutoff = logs_cutoff(logs_config.retention_days, now);
+    let ran_at = ts_to_rfc3339(now);
+    let mut result = ProbeLogsDbMaintenanceResult {
+        ok: false,
+        target: "codex_logs_2".to_string(),
+        status: "unknown".to_string(),
+        path: path.clone(),
+        dry_run,
+        retention_days: logs_config.retention_days,
+        cutoff_ts: cutoff,
+        old_rows_before: 0,
+        deleted_rows: 0,
+        would_delete_rows: 0,
+        remaining_old_rows: 0,
+        total_rows_after: 0,
+        chunks: 0,
+        checkpoint_attempted: false,
+        checkpoint_result: None,
+        vacuumed: false,
+        quick_check_before_vacuum: None,
+        skip_reason: None,
+        error: None,
+        ran_at,
+    };
+    if !logs_config.enabled {
+        result.status = "disabled".to_string();
+        result.skip_reason = Some("logs_db_disabled".to_string());
+        result.error = Some("logs_db_disabled".to_string());
+        return Ok(result);
+    }
+    if !path.exists() {
+        result.status = "missing_db".to_string();
+        result.error = Some(format!("Codex logs DB not found: {}", path.display()));
+        return Ok(result);
+    }
+    let conn = match open_codex_logs_connection(&path, logs_config, false) {
+        Ok(conn) => conn,
+        Err(err) => {
+            result.status = sqlite_error_status(&err).to_string();
+            result.error = Some(err.to_string());
+            return Ok(result);
+        }
+    };
+    if let Err(err) = ensure_logs_table(&conn) {
+        result.status = sqlite_error_status(&err).to_string();
+        result.error = Some(err.to_string());
+        return Ok(result);
+    }
+
+    let old_rows_before = match count_old_logs(&conn, cutoff) {
+        Ok(value) => value,
+        Err(err) => {
+            result.status = sqlite_error_status(&err).to_string();
+            result.error = Some(format!("count old Codex logs in {}: {err}", path.display()));
+            return Ok(result);
+        }
+    };
+    result.old_rows_before = old_rows_before;
+    if dry_run {
+        result.ok = true;
+        result.status = "ok".to_string();
+        result.would_delete_rows =
+            old_rows_before.min(u64::from(logs_config.max_delete_rows_per_run.max(1)));
+        result.remaining_old_rows = old_rows_before;
+        match count_total_logs(&conn) {
+            Ok(value) => result.total_rows_after = value,
+            Err(err) => {
+                result.ok = false;
+                result.status = sqlite_error_status(&err).to_string();
+                result.error = Some(format!("count Codex logs in {}: {err}", path.display()));
+            }
+        }
+        return Ok(result);
+    }
+
+    let max_rows = u64::from(logs_config.max_delete_rows_per_run.max(1));
+    let chunk_rows = u64::from(logs_config.delete_chunk_rows.max(1));
+    while result.deleted_rows < max_rows {
+        let limit = (max_rows - result.deleted_rows).min(chunk_rows);
+        let changed = match conn.execute(
+            "DELETE FROM logs WHERE rowid IN (
+                SELECT rowid FROM logs WHERE ts < ?1 ORDER BY ts ASC, ts_nanos ASC, id ASC LIMIT ?2
+            )",
+            params![cutoff, limit as i64],
+        ) {
+            Ok(changed) => changed as u64,
+            Err(err) => {
+                result.status = sqlite_error_status(&err).to_string();
+                result.error = Some(format!(
+                    "delete old Codex logs from {}: {err}",
+                    path.display()
+                ));
+                result.remaining_old_rows = old_rows_before.saturating_sub(result.deleted_rows);
+                result.total_rows_after = count_total_logs(&conn).unwrap_or(0);
+                return Ok(result);
+            }
+        };
+        if changed == 0 {
+            break;
+        }
+        result.deleted_rows += changed;
+        result.chunks += 1;
+    }
+    result.ok = true;
+    result.status = "ok".to_string();
+    match count_old_logs(&conn, cutoff) {
+        Ok(value) => result.remaining_old_rows = value,
+        Err(err) => {
+            result.ok = false;
+            result.status = sqlite_error_status(&err).to_string();
+            result.error = Some(format!(
+                "count remaining old Codex logs in {}: {err}",
+                path.display()
+            ));
+            return Ok(result);
+        }
+    }
+    match count_total_logs(&conn) {
+        Ok(value) => result.total_rows_after = value,
+        Err(err) => {
+            result.ok = false;
+            result.status = sqlite_error_status(&err).to_string();
+            result.error = Some(format!("count Codex logs in {}: {err}", path.display()));
+            return Ok(result);
+        }
+    }
+
+    result.checkpoint_attempted = true;
+    result.checkpoint_result = conn
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            let busy: i64 = row.get(0)?;
+            let log: i64 = row.get(1)?;
+            let checkpointed: i64 = row.get(2)?;
+            Ok(format!(
+                "mode=PASSIVE, busy={busy}, log={log}, checkpointed={checkpointed}"
+            ))
+        })
+        .ok();
+    if compact {
+        result.skip_reason = Some("vacuum_requires_codex_app_server_stopped".to_string());
+    }
+    Ok(result)
+}
+
+fn inspect_codex_logs_connection(
+    conn: &Connection,
+    path: &Path,
+    cutoff: i64,
+) -> rusqlite::Result<CodexLogsSnapshot> {
+    ensure_logs_table(conn)?;
+    Ok(CodexLogsSnapshot {
+        total_rows: count_total_logs(conn)?,
+        old_rows: count_old_logs(conn, cutoff)?,
+        page_count: pragma_u64(conn, "page_count")?
+            .unwrap_or_else(|| file_size(path).div_ceil(4096)),
+        freelist_count: pragma_u64(conn, "freelist_count")?.unwrap_or(0),
+        page_size: pragma_u64(conn, "page_size")?.unwrap_or(0),
+        journal_mode: pragma_string(conn, "journal_mode")?,
+    })
+}
+
+fn open_codex_logs_connection(
+    path: &Path,
+    config: &ProbeLogsDbConfig,
+    readonly: bool,
+) -> rusqlite::Result<Connection> {
+    let flags = if readonly {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+    };
+    let conn = Connection::open_with_flags(path, flags)?;
+    conn.busy_timeout(Duration::from_millis(config.busy_timeout_ms))?;
+    Ok(conn)
+}
+
+fn ensure_logs_table(conn: &Connection) -> rusqlite::Result<()> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='logs'",
+        [],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
+fn count_total_logs(conn: &Connection) -> rusqlite::Result<u64> {
+    conn.query_row("SELECT COUNT(*) FROM logs", [], |row| row.get::<_, i64>(0))
+        .map(|value| value.max(0) as u64)
+}
+
+fn count_old_logs(conn: &Connection, cutoff: i64) -> rusqlite::Result<u64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM logs WHERE ts < ?1",
+        params![cutoff],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value.max(0) as u64)
+}
+
+fn pragma_u64(conn: &Connection, name: &str) -> rusqlite::Result<Option<u64>> {
+    let sql = format!("PRAGMA {name}");
+    conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
+        .map(|value| Some(value.max(0) as u64))
+}
+
+fn pragma_string(conn: &Connection, name: &str) -> rusqlite::Result<Option<String>> {
+    let sql = format!("PRAGMA {name}");
+    conn.query_row(&sql, [], |row| row.get::<_, String>(0))
+        .map(Some)
+}
+
+fn logs_cutoff(retention_days: u32, now: i64) -> i64 {
+    now - i64::from(retention_days.max(1)) * 86_400
+}
+
+fn codex_logs_db_path(codex_home: &Path) -> PathBuf {
+    codex_home.join("logs_2.sqlite")
+}
+
+fn wal_path(path: &Path) -> PathBuf {
+    path.with_extension("sqlite-wal")
+}
+
+fn shm_path(path: &Path) -> PathBuf {
+    path.with_extension("sqlite-shm")
+}
+
+fn file_size(path: &Path) -> u64 {
+    fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+}
+
+fn now_ts() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+fn ts_to_rfc3339(ts: i64) -> String {
+    Utc.timestamp_opt(ts, 0)
+        .single()
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+fn sqlite_error_status(err: &rusqlite::Error) -> &'static str {
+    match err {
+        rusqlite::Error::InvalidQuery => "missing_logs_table",
+        rusqlite::Error::SqliteFailure(error, _) => match error.code {
+            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => "busy",
+            ErrorCode::CannotOpen => "permission_denied",
+            _ => "error",
+        },
+        _ => "error",
     }
 }
 
@@ -700,15 +1094,4 @@ fn dedupe_component(value: &str) -> String {
     } else {
         normalized
     }
-}
-
-fn legacy_cleanup_paths() -> Vec<&'static str> {
-    vec![
-        "/etc/systemd/system/codex-sentinel-server.service",
-        "/opt/codex-sentinel-server",
-        "/etc/codex-sentinel-server",
-        "/var/lib/codex-sentinel-server",
-        "/usr/local/bin/codex-sentinel-server",
-        "/root/.codex/hooks.json",
-    ]
 }

@@ -4,7 +4,6 @@ set -Eeuo pipefail
 APP_NAME="nexushub"
 SERVICE_NAME="nexushub"
 BIN_NAME="nexushubd"
-PROBE_LEGACY_CLEANUP_NAME="nexushub-probe-legacy-cleanup"
 INSTALL_DIR="/opt/${APP_NAME}"
 INSTALL_BIN="${INSTALL_DIR}/bin/${BIN_NAME}"
 CONFIG_DIR="${INSTALL_DIR}"
@@ -20,7 +19,6 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-prune"
-PROBE_LEGACY_CLEANUP_BIN="/usr/local/bin/${APP_NAME}-probe-legacy-cleanup"
 NGINX_SNIPPET="/etc/nginx/snippets/${APP_NAME}.conf"
 
 ARCHIVE_PATH=""
@@ -114,9 +112,6 @@ install_payload() {
     if [[ -f "${root}/deploy/${APP_NAME}-codex-prune" ]]; then
       install -m 0755 -o root -g root "${root}/deploy/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
     fi
-    if [[ -f "${root}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" ]]; then
-      install -m 0755 -o root -g root "${root}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" "${PROBE_LEGACY_CLEANUP_BIN}"
-    fi
   fi
 }
 
@@ -126,7 +121,6 @@ install_codex_wrappers() {
   install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
   install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
   install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
-  install -m 0755 -o root -g root "${source_dir}/${PROBE_LEGACY_CLEANUP_NAME}" "${PROBE_LEGACY_CLEANUP_BIN}"
 }
 
 install_config() {

@@ -1063,11 +1063,6 @@ button { cursor: pointer; }
   gap: 14px;
   align-items: start;
 }
-.probe-section-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
 .probe-card-stack,
 .probe-settings-form {
   display: grid;
@@ -1079,28 +1074,6 @@ button { cursor: pointer; }
   padding: 0 10px;
   background: rgba(255,255,255,0.03);
 }
-.probe-advanced {
-  border: 1px solid rgba(29,56,82,0.78);
-  border-radius: 8px;
-  background: rgba(11,23,38,0.44);
-  padding: 0;
-}
-.probe-advanced summary {
-  min-height: 44px;
-  padding: 0 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--primary-hover);
-  cursor: pointer;
-  font-weight: 650;
-}
-.probe-advanced[open] summary {
-  border-bottom: 1px solid rgba(29,56,82,0.78);
-}
-.probe-advanced .probe-section-grid {
-  padding: 14px;
-}
 .probe-toggle-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1111,37 +1084,6 @@ button { cursor: pointer; }
   border-radius: 8px;
   padding: 0 10px;
   background: rgba(255,255,255,0.03);
-}
-.probe-plan {
-  border: 1px solid rgba(125,211,252,0.24);
-  border-radius: 8px;
-  background: rgba(56,189,248,0.08);
-  padding: 10px 12px;
-  margin: 10px 0;
-  display: grid;
-  gap: 8px;
-}
-.probe-plan.compact { margin: 0; }
-.probe-plan p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-.probe-plan ol {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--text);
-}
-.probe-plan li {
-  margin: 3px 0;
-}
-.probe-plan pre {
-  margin: 0;
-  border-top: 1px solid rgba(125,211,252,0.2);
-  padding-top: 8px;
-  color: #c7dceb;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .preview-list {
   display: grid;
@@ -1772,10 +1714,9 @@ button { cursor: pointer; }
   .drawer-close { position: absolute; right: 10px; top: 10px; z-index: 2; }
   .thread-list { padding-top: 58px; }
   .ops-grid, .security-layout { grid-template-columns: 1fr; padding: 12px; }
-  .provider-grid, .form-grid.three, .probe-section-grid, .probe-toggle-grid { grid-template-columns: 1fr; }
+  .provider-grid, .form-grid.three, .probe-toggle-grid { grid-template-columns: 1fr; }
   .probe-layout { padding: 14px; }
   .probe-header { align-items: stretch; flex-direction: column; }
-  .probe-section-tabs { justify-content: flex-start; }
   .preview-item { align-items: flex-start; flex-direction: column; }
   .form-grid.three { grid-template-columns: 1fr; }
   .copy-row { grid-template-columns: 1fr; }

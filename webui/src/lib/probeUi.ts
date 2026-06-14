@@ -1,13 +1,12 @@
-import type { ProbeActionPlan, ProbeJobAction, ProbeSettings } from "../types";
+import type { ProbeSettings } from "../types";
 
 export const PROBE_NAV_LABEL = "探针";
 
 export const probeSections = [
   { id: "overview", label: "总览" },
-  { id: "threads", label: "线程" },
-  { id: "events", label: "事件" },
-  { id: "diagnostics", label: "诊断" },
-  { id: "settings", label: "设置与迁移" }
+  { id: "bark", label: "Bark" },
+  { id: "runtime", label: "运行设置" },
+  { id: "logs-db", label: "Codex 日志库维护" }
 ] as const;
 
 export type ProbeSectionId = typeof probeSections[number]["id"];
@@ -89,24 +88,6 @@ export const PROBE_MAC_DEFAULTS = {
     minimum_free_space_mb: 1024
   }
 } as const;
-
-export type ProbeActionUiState = {
-  action: ProbeJobAction;
-  phase: "idle" | "planning" | "awaiting-confirmation" | "executing" | "executed" | "error";
-  plan: ProbeActionPlan | null;
-  error: string | null;
-  jobId: string | null;
-  canExecute: boolean;
-  confirmLabel: string;
-};
-
-export type ProbeActionUiEvent =
-  | { type: "planning" }
-  | { type: "planned"; plan: ProbeActionPlan }
-  | { type: "executing" }
-  | { type: "executed"; jobId: string }
-  | { type: "error"; message: string }
-  | { type: "reset" };
 
 export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsDraft {
   return {
@@ -285,43 +266,6 @@ export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   }
   if (!draft.notifications.server_url.trim()) errors.push("Bark 服务 URL 不能为空");
   return errors;
-}
-
-export function createProbeActionState(action: ProbeJobAction): ProbeActionUiState {
-  return {
-    action,
-    phase: "idle",
-    plan: null,
-    error: null,
-    jobId: null,
-    canExecute: false,
-    confirmLabel: "确认执行"
-  };
-}
-
-export function reduceProbeActionState(state: ProbeActionUiState, event: ProbeActionUiEvent): ProbeActionUiState {
-  if (event.type === "reset") return createProbeActionState(state.action);
-  if (event.type === "planning") {
-    return { ...state, phase: "planning", error: null, plan: null, jobId: null, canExecute: false };
-  }
-  if (event.type === "planned") {
-    return {
-      ...state,
-      phase: "awaiting-confirmation",
-      plan: event.plan,
-      error: null,
-      jobId: null,
-      canExecute: Boolean(event.plan.plan_id),
-      confirmLabel: "确认执行"
-    };
-  }
-  if (event.type === "executing") {
-    return { ...state, phase: "executing", error: null, canExecute: false };
-  }
-  if (event.type === "executed") {
-    return { ...state, phase: "executed", error: null, jobId: event.jobId, canExecute: false };
-  }
-  return { ...state, phase: "error", error: event.message, canExecute: Boolean(state.plan?.plan_id) };
 }
 
 function toBoundedInteger(value: unknown, fallback: number): number | null {

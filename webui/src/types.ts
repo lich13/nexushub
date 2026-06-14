@@ -399,31 +399,6 @@ export type ProbeStatus = {
   host_label?: string | null;
 };
 
-export type ProbeThread = Partial<ThreadSummary> & {
-  id: string;
-  title?: string | null;
-  status?: ThreadStatus | string | null;
-};
-
-export type ProbeEvent = {
-  id?: string | null;
-  kind?: string | null;
-  thread_id?: string | null;
-  title?: string | null;
-  created_at?: string | number | null;
-  message?: string | null;
-  [key: string]: unknown;
-};
-
-export type ProbeDashboard = {
-  status?: Partial<ProbeStatus> | null;
-  running?: ProbeThread[];
-  reply_needed?: ProbeThread[];
-  recoverable?: ProbeThread[];
-  recent_events?: ProbeEvent[];
-  diagnostics?: Record<string, unknown> | null;
-};
-
 export type ProbeSettings = {
   codex: {
     home: string;
@@ -505,36 +480,46 @@ export type ProbeSettings = {
   };
 };
 
-export type ProbeActionPlan = {
-  plan_id: string;
-  kind: string;
-  title: string;
-  summary?: string | null;
-  steps: string[];
-  payload?: unknown;
-  requires_confirmation: boolean;
-  command?: string | null;
-};
-
-export type ProbeHookStatus = {
-  status?: string | null;
-  hook_status?: string | null;
-  installed?: boolean | null;
-  managed?: boolean | null;
-  [key: string]: unknown;
-};
-
 export type ProbeLogsDbStatus = {
   status?: string | null;
   logs_db_status?: string | null;
+  target?: string | null;
   path?: string | null;
   size_bytes?: number | null;
+  db_size_bytes?: number | null;
+  database_size_bytes?: number | null;
+  database_size?: number | null;
+  wal_size_bytes?: number | null;
+  wal_bytes?: number | null;
+  wal_size?: number | null;
+  shm_size_bytes?: number | null;
+  shm_bytes?: number | null;
+  shm_size?: number | null;
+  old_rows?: number | null;
+  retained_rows?: number | null;
+  retained_row_count?: number | null;
+  total_rows?: number | null;
+  row_count?: number | null;
+  event_count?: number | null;
+  pending_cleanup_rows?: number | null;
+  stale_rows?: number | null;
+  would_delete_probe_events?: number | null;
+  last_run_at?: string | number | null;
+  last_maintain_at?: string | number | null;
+  last_maintenance_at?: string | number | null;
+  last_maintain?: string | number | null;
+  next_run_at?: string | number | null;
+  next_maintain_at?: string | number | null;
+  next_maintenance_at?: string | number | null;
+  recent_result?: string | number | boolean | null;
+  last_result?: string | number | boolean | null;
+  last_maintain_result?: string | number | boolean | null;
+  last_run?: unknown;
+  skip_reason?: string | null;
   [key: string]: unknown;
 };
 
 export type SentinelStatus = ProbeStatus;
-
-export type ProbeJobAction = "hooks-install" | "bark-test" | "logs-db-maintain" | "legacy-cleanup";
 
 export type ClaudeCodeJobAction = "version-check" | "update-precheck" | "update-start" | "smoke" | "cache-status";
 

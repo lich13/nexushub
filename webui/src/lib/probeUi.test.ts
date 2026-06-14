@@ -3,12 +3,10 @@ import type { ProbeSettings } from "../types";
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
-  createProbeActionState,
   PROBE_NAV_LABEL,
   probeNumberInputDraftValue,
   probeSections,
   probeSettingsValidation,
-  reduceProbeActionState
 } from "./probeUi";
 
 const settings: ProbeSettings = {
@@ -92,14 +90,13 @@ const settings: ProbeSettings = {
 };
 
 describe("Probe UI helpers", () => {
-  test("uses Chinese probe labels and the five required sections", () => {
+  test("uses Chinese probe labels and only slim first-screen sections", () => {
     expect(PROBE_NAV_LABEL).toBe("探针");
     expect(probeSections.map((section) => section.label)).toEqual([
       "总览",
-      "线程",
-      "事件",
-      "诊断",
-      "设置与迁移"
+      "Bark",
+      "运行设置",
+      "Codex 日志库维护"
     ]);
   });
 
@@ -257,37 +254,4 @@ describe("Probe UI helpers", () => {
     ]);
   });
 
-  test("requires plan then confirm execute for logs-db and Hook actions", () => {
-    const initial = createProbeActionState("logs-db-maintain");
-    const planned = reduceProbeActionState(initial, {
-      type: "planned",
-      plan: {
-        plan_id: "plan-1",
-        kind: "logs-db-maintain",
-        title: "Logs DB 维护",
-        steps: ["dry-run", "compact"],
-        requires_confirmation: true
-      }
-    });
-
-    expect(planned.phase).toBe("awaiting-confirmation");
-    expect(planned.canExecute).toBe(true);
-    expect(planned.confirmLabel).toBe("确认执行");
-
-    const executed = reduceProbeActionState(planned, { type: "executed", jobId: "job-1" });
-    expect(executed.phase).toBe("executed");
-    expect(executed.jobId).toBe("job-1");
-
-    const hookState = reduceProbeActionState(createProbeActionState("hooks-install"), {
-      type: "planned",
-      plan: {
-        plan_id: "hook-plan",
-        kind: "hooks-install",
-        title: "Hook 安装",
-        steps: ["检查", "安装"],
-        requires_confirmation: true
-      }
-    });
-    expect(hookState.canExecute).toBe(true);
-  });
 });

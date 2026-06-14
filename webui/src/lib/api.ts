@@ -15,13 +15,8 @@ import type {
   PermissionProfile,
   PlatformOverview,
   PluginInfo,
-  ProbeDashboard,
-  ProbeActionPlan,
-  ProbeHookStatus,
-  ProbeJobAction,
   ProbeLogsDbStatus,
   ProbeSettings,
-  ProbeThread,
   ProbeStatus,
   PublicSettings,
   SecuritySettings,
@@ -441,28 +436,6 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
   return optionalApiFetch<ProbeStatus>("/api/probe/status");
 }
 
-export async function getProbeDashboard(): Promise<OptionalResult<ProbeDashboard>> {
-  if (USE_DEMO) {
-    return {
-      available: true,
-      data: {
-        status: demoProbeStatus(),
-        running: demoThreads("running", ""),
-        reply_needed: demoThreads("reply-needed", ""),
-        recoverable: demoThreads("recoverable", ""),
-        recent_events: [
-          { id: "probe-event-demo", kind: "reply-needed", thread_id: "019e95a0-demo", title: "Plan Mode 修复", message: "等待用户回复", created_at: new Date().toISOString() }
-        ],
-        diagnostics: {
-          doctor: { state_db_exists: true },
-          hook_status: { server_stop_hook_installed: true }
-        }
-      }
-    };
-  }
-  return optionalApiFetch<ProbeDashboard>("/api/probe/dashboard");
-}
-
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
   if (USE_DEMO) {
     return {
@@ -482,74 +455,31 @@ export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfTo
   });
 }
 
-export async function getProbeRunning(): Promise<OptionalResult<ThreadSummary[]>> {
-  if (USE_DEMO) return { available: true, data: demoThreads("running", "") };
-  return optionalProbeThreads("/api/probe/running");
-}
-
-export async function getProbeReplyNeeded(): Promise<OptionalResult<ThreadSummary[]>> {
-  if (USE_DEMO) return { available: true, data: demoThreads("reply-needed", "") };
-  return optionalProbeThreads("/api/probe/reply-needed");
-}
-
-export async function getProbeRecoverable(): Promise<OptionalResult<ThreadSummary[]>> {
-  if (USE_DEMO) return { available: true, data: demoThreads("recoverable", "") };
-  return optionalProbeThreads("/api/probe/recoverable");
-}
-
-export async function getProbeHookStatus(): Promise<OptionalResult<ProbeHookStatus>> {
-  if (USE_DEMO) return { available: true, data: { status: "managed", hook_status: "managed", installed: true, managed: true } };
-  return optionalApiFetch<ProbeHookStatus>("/api/probe/hook-status");
-}
-
 export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
   if (USE_DEMO) return {
     available: true,
     data: {
       status: "maintenance_ready",
       logs_db_status: "maintenance_ready",
-      path: "/opt/nexushub/logs/probe.sqlite",
+      target: "codex_logs_2",
+      path: "/root/.codex/logs_2.sqlite",
       total_rows: 128,
-      event_count: 120,
-      dedupe_count: 8,
-      pending_cleanup_rows: 6,
+      old_rows: 6,
+      retained_rows: 122,
+      database_size: 524288,
+      db_size_bytes: 524288,
+      wal_size: 4096,
+      wal_size_bytes: 4096,
+      shm_size: 32768,
+      shm_size_bytes: 32768,
       size_bytes: 524288,
       last_maintain_at: "2026-06-14T18:15:32Z",
-      last_result: "dry-run: events=6, dedupe=0"
+      next_run_at: "2026-06-15T00:15:32Z",
+      last_result: "dry-run: would_delete_rows=6",
+      recent_result: "dry-run: would_delete_rows=6"
     }
   };
   return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
-}
-
-export async function planProbeAction(action: ProbeJobAction, csrfToken?: string | null): Promise<ProbeActionPlan> {
-  if (USE_DEMO) {
-    return {
-      plan_id: action === "logs-db-maintain" ? "probe-logs-db-demo" : `probe-${action}-demo`,
-      kind: action,
-      title: action,
-      summary: "demo",
-      steps: ["demo"],
-      requires_confirmation: true
-    };
-  }
-  return apiFetch<ProbeActionPlan>(probePlanRoutes[action], { method: "POST", csrfToken });
-}
-
-export async function executeProbePlan(action: ProbeJobAction, planId: string, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  const result = await apiFetch<{ job_id: string }>(probeExecuteRoutes[action], {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ plan_id: planId, confirmed: true })
-  });
-  return { job_id: result.job_id };
-}
-
-async function optionalProbeThreads(path: string): Promise<OptionalResult<ThreadSummary[]>> {
-  const result = await optionalApiFetch<ThreadSummary[] | { items?: ProbeThread[] }>(path);
-  if (!result.available) return result as OptionalResult<ThreadSummary[]>;
-  const data = Array.isArray(result.data) ? result.data : (result.data?.items ?? []);
-  return { available: true, data: data as ThreadSummary[] };
 }
 
 export async function saveSecurity(settings: Partial<SecuritySettings> & { turnstile_secret_key?: string }, csrfToken?: string | null) {
@@ -655,25 +585,10 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
   );
 }
 
+type ProbeJobAction = "bark-test";
+
 const probeJobRoutes: Record<ProbeJobAction, string> = {
-  "hooks-install": "/api/probe/hooks/install",
-  "bark-test": "/api/probe/bark/test",
-  "logs-db-maintain": "/api/probe/logs-db/maintain",
-  "legacy-cleanup": "/api/probe/legacy-cleanup/dry-run"
-};
-
-const probePlanRoutes: Record<ProbeJobAction, string> = {
-  "hooks-install": "/api/probe/hooks/install",
-  "bark-test": "/api/probe/bark/test",
-  "logs-db-maintain": "/api/probe/logs-db/plan",
-  "legacy-cleanup": "/api/probe/legacy-cleanup/dry-run"
-};
-
-const probeExecuteRoutes: Record<ProbeJobAction, string> = {
-  "hooks-install": "/api/probe/hooks/install",
-  "bark-test": "/api/probe/bark/test",
-  "logs-db-maintain": "/api/probe/logs-db/execute",
-  "legacy-cleanup": "/api/probe/legacy-cleanup/execute"
+  "bark-test": "/api/probe/bark/test"
 };
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
