@@ -24,8 +24,8 @@ checks = {
     "config.example probe section": (config, "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50"),
     "config.example probe hooks": (config, "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true"),
     "config.example probe notifications": (config, "[probe.notifications]\nenabled = false\nserver_url = \"https://api.day.app\""),
-    "config.example probe observability": (config, "[probe.observability]\nhook_event_max_lines = 120\nhook_cooldown_max_lines = 80\nlog_max_bytes = 262144"),
-    "config.example probe logs db": (config, "[probe.logs_db]\nenabled = true\nretention_days = 14\nmaintenance_interval_hours = 24"),
+    "config.example probe observability": (config, "[probe.observability]\nhook_event_max_lines = 500\nhook_cooldown_max_lines = 1000\nlog_max_bytes = 5242880"),
+    "config.example probe logs db": (config, "[probe.logs_db]\nenabled = true\nretention_days = 2\nmaintenance_interval_hours = 6"),
     "nginx proxy target": (nginx, "proxy_pass http://127.0.0.1:15742/;"),
     "install config migration": (install, "http://127.0.0.1:15742/healthz"),
     "install legacy listen migration": (install, '"listen": \'"127.0.0.1:15742"\''),
@@ -294,19 +294,19 @@ for needle in [
     "notify_completion = true",
     "notify_reply_needed = true",
     "notify_recoverable = true",
-    "[probe.observability]\nhook_event_max_lines = 120\nhook_cooldown_max_lines = 80\nlog_max_bytes = 262144",
-    "[probe.logs_db]\nenabled = true\nretention_days = 14\nmaintenance_interval_hours = 24",
+    "[probe.observability]\nhook_event_max_lines = 500\nhook_cooldown_max_lines = 1000\nlog_max_bytes = 5242880",
+    "[probe.logs_db]\nenabled = true\nretention_days = 2\nmaintenance_interval_hours = 6",
     "maintain_on_codex_exit = true",
-    "codex_exit_grace_seconds = 10",
-    "codex_exit_max_wait_seconds = 120",
-    "delete_chunk_rows = 2000",
-    "max_delete_rows_per_run = 50000",
-    "busy_timeout_ms = 5000",
+    "codex_exit_grace_seconds = 5",
+    "codex_exit_max_wait_seconds = 1800",
+    "delete_chunk_rows = 5000",
+    "max_delete_rows_per_run = 100000",
+    "busy_timeout_ms = 500",
     "auto_compact_when_codex_closed = true",
-    "compact_interval_hours = 168",
-    "compact_min_freelist_mb = 64",
+    "compact_interval_hours = 24",
+    "compact_min_freelist_mb = 256",
     "compact_min_freelist_ratio_percent = 20",
-    "minimum_free_space_mb = 256",
+    "minimum_free_space_mb = 1024",
 ]:
     if needle not in migrated:
         raise SystemExit(f"probe default was not inserted by install migration: {needle}")
@@ -379,7 +379,7 @@ if 'reload_app_server_after_install = true' not in migrated_probe:
     raise SystemExit("install migration should fill missing probe.hooks defaults")
 if 'notify_recoverable = true' not in migrated_probe:
     raise SystemExit("install migration should fill missing probe.notifications defaults")
-if 'busy_timeout_ms = 5000' not in migrated_probe:
+if 'busy_timeout_ms = 500' not in migrated_probe:
     raise SystemExit("install migration should fill missing probe.logs_db defaults")
 
 legacy_paths_config = """
@@ -639,19 +639,19 @@ with tempfile.TemporaryDirectory() as tmp:
         "notify_completion = true",
         "notify_reply_needed = true",
         "notify_recoverable = true",
-        "[probe.observability]\nhook_event_max_lines = 120\nhook_cooldown_max_lines = 80\nlog_max_bytes = 262144",
-        "[probe.logs_db]\nenabled = true\nretention_days = 14\nmaintenance_interval_hours = 24",
+        "[probe.observability]\nhook_event_max_lines = 500\nhook_cooldown_max_lines = 1000\nlog_max_bytes = 5242880",
+        "[probe.logs_db]\nenabled = true\nretention_days = 2\nmaintenance_interval_hours = 6",
         "maintain_on_codex_exit = true",
-        "codex_exit_grace_seconds = 10",
-        "codex_exit_max_wait_seconds = 120",
-        "delete_chunk_rows = 2000",
-        "max_delete_rows_per_run = 50000",
-        "busy_timeout_ms = 5000",
+        "codex_exit_grace_seconds = 5",
+        "codex_exit_max_wait_seconds = 1800",
+        "delete_chunk_rows = 5000",
+        "max_delete_rows_per_run = 100000",
+        "busy_timeout_ms = 500",
         "auto_compact_when_codex_closed = true",
-        "compact_interval_hours = 168",
-        "compact_min_freelist_mb = 64",
+        "compact_interval_hours = 24",
+        "compact_min_freelist_mb = 256",
         "compact_min_freelist_ratio_percent = 20",
-        "minimum_free_space_mb = 256",
+        "minimum_free_space_mb = 1024",
     ]:
         if needle not in migrated:
             raise SystemExit(f"probe default was not inserted by update migration: {needle}")
@@ -741,7 +741,7 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update migration should fill missing probe.hooks defaults")
     if 'notify_recoverable = true' not in preserved_probe:
         raise SystemExit("update migration should fill missing probe.notifications defaults")
-    if 'busy_timeout_ms = 5000' not in preserved_probe:
+    if 'busy_timeout_ms = 500' not in preserved_probe:
         raise SystemExit("update migration should fill missing probe.logs_db defaults")
 
 with tempfile.TemporaryDirectory() as tmp:

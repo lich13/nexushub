@@ -5,36 +5,44 @@ use reqwest::Client;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Config,
+    config: Arc<RwLock<Config>>,
     pub db: PanelDb,
     pub jobs: JobRunner,
-    pub bridge: AppServerBridge,
     pub http: Client,
-    pub login_limiter: std::sync::Arc<Mutex<LoginLimiter>>,
-    pub rollout_detail_cache: std::sync::Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
+    pub login_limiter: Arc<Mutex<LoginLimiter>>,
+    pub rollout_detail_cache: Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
 }
 
 impl AppState {
     pub fn new(config: Config, db: PanelDb) -> Self {
         let jobs = JobRunner::new(db.clone());
-        let bridge = AppServerBridge::new(config.clone());
+        let login_rate_limit = config.security.login_rate_limit_per_minute;
         Self {
-            config: config.clone(),
+            config: Arc::new(RwLock::new(config)),
             db,
             jobs,
-            bridge,
             http: Client::new(),
-            login_limiter: std::sync::Arc::new(Mutex::new(LoginLimiter::new(
-                config.security.login_rate_limit_per_minute,
-            ))),
-            rollout_detail_cache: std::sync::Arc::new(Mutex::new(HashMap::new())),
+            login_limiter: Arc::new(Mutex::new(LoginLimiter::new(login_rate_limit))),
+            rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn config(&self) -> Config {
+        self.config.read().expect("config rwlock").clone()
+    }
+
+    pub fn replace_config(&self, config: Config) {
+        *self.config.write().expect("config rwlock") = config;
+    }
+
+    pub fn bridge(&self) -> AppServerBridge {
+        AppServerBridge::new(self.config())
     }
 }
 

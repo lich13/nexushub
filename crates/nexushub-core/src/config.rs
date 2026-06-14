@@ -259,51 +259,51 @@ fn default_probe_notification_group() -> String {
 }
 
 fn default_hook_event_max_lines() -> usize {
-    120
+    500
 }
 
 fn default_hook_cooldown_max_lines() -> usize {
-    80
+    1_000
 }
 
 fn default_log_max_bytes() -> usize {
-    262_144
+    5 * 1024 * 1024
 }
 
 fn default_logs_retention_days() -> u32 {
-    14
+    2
 }
 
 fn default_logs_maintenance_interval_hours() -> u32 {
-    24
+    6
 }
 
 fn default_codex_exit_grace_seconds() -> u64 {
-    10
+    5
 }
 
 fn default_codex_exit_max_wait_seconds() -> u64 {
-    120
+    1_800
 }
 
 fn default_delete_chunk_rows() -> u32 {
-    2_000
-}
-
-fn default_max_delete_rows_per_run() -> u32 {
-    50_000
-}
-
-fn default_busy_timeout_ms() -> u64 {
     5_000
 }
 
+fn default_max_delete_rows_per_run() -> u32 {
+    100_000
+}
+
+fn default_busy_timeout_ms() -> u64 {
+    500
+}
+
 fn default_compact_interval_hours() -> u32 {
-    168
+    24
 }
 
 fn default_compact_min_freelist_mb() -> u64 {
-    64
+    256
 }
 
 fn default_compact_min_freelist_ratio_percent() -> u32 {
@@ -311,7 +311,7 @@ fn default_compact_min_freelist_ratio_percent() -> u32 {
 }
 
 fn default_minimum_free_space_mb() -> u64 {
-    256
+    1_024
 }
 
 impl Default for ProbeConfig {
@@ -989,7 +989,27 @@ mod tests {
         assert!(config.probe.notifications.notify_reply_needed);
         assert!(config.probe.notifications.notify_recoverable);
         assert!(config.probe.logs_db.enabled);
-        assert_eq!(config.probe.logs_db.retention_days, 14);
+        assert_eq!(config.probe.logs_db.retention_days, 2);
+    }
+
+    #[test]
+    fn default_config_matches_mac_app_probe_runtime_defaults() {
+        let config = Config::default();
+
+        assert_eq!(config.probe.observability.hook_event_max_lines, 500);
+        assert_eq!(config.probe.observability.hook_cooldown_max_lines, 1_000);
+        assert_eq!(config.probe.observability.log_max_bytes, 5 * 1024 * 1024);
+        assert_eq!(config.probe.logs_db.retention_days, 2);
+        assert_eq!(config.probe.logs_db.maintenance_interval_hours, 6);
+        assert_eq!(config.probe.logs_db.codex_exit_grace_seconds, 5);
+        assert_eq!(config.probe.logs_db.codex_exit_max_wait_seconds, 1_800);
+        assert_eq!(config.probe.logs_db.delete_chunk_rows, 5_000);
+        assert_eq!(config.probe.logs_db.max_delete_rows_per_run, 100_000);
+        assert_eq!(config.probe.logs_db.busy_timeout_ms, 500);
+        assert_eq!(config.probe.logs_db.compact_interval_hours, 24);
+        assert_eq!(config.probe.logs_db.compact_min_freelist_mb, 256);
+        assert_eq!(config.probe.logs_db.compact_min_freelist_ratio_percent, 20);
+        assert_eq!(config.probe.logs_db.minimum_free_space_mb, 1_024);
     }
 
     #[test]

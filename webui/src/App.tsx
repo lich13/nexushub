@@ -98,7 +98,7 @@ import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
   createProbeActionState,
-  probeSections,
+  probeNumberInputDraftValue,
   probeSettingsValidation,
   PROBE_NAV_LABEL,
   reduceProbeActionState,
@@ -140,6 +140,7 @@ import type {
   ProbeDashboard,
   ProbeEvent,
   ProbeJobAction,
+  ProbeLogsDbStatus,
   ProbeSettings,
   ProbeStatus,
   ProbeThread,
@@ -2716,12 +2717,12 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
-  const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [actionStates, setActionStates] = useState<Record<ProbePlannedAction, ProbeActionUiState>>(() => ({
     "hooks-install": createProbeActionState("hooks-install"),
     "logs-db-maintain": createProbeActionState("logs-db-maintain"),
     "legacy-cleanup": createProbeActionState("legacy-cleanup")
   }));
+  const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const data = probeStatusData(status.data?.data, dashboard.data?.data);
   const available = status.data?.available ?? false;
   const runningRows = probeRows(dashboard.data?.data?.running, running.data?.data);
@@ -2731,6 +2732,12 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const currentSettings = settings.data?.data;
   const settingsErrors = draft ? probeSettingsValidation(draft) : [];
   const probeJobs = useMemo(() => probeJobRecords(jobs.data ?? []), [jobs.data]);
+  const logsDb = logsDbStatus.data?.data;
+  const visibleThreadCount = runningRows.length + replyRows.length + recoverableRows.length;
+  const barkConfigured = Boolean(currentSettings?.notifications.device_key_configured || draft?.notifications.device_key_configured);
+  const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
+  const serviceText = data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "未知";
+  const statusTone = available && probeEnabled ? "success" : available ? "warning" : "danger";
   const barkMutation = useMutation({
     mutationFn: () => startProbeJob("bark-test", csrfToken),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] })
@@ -2743,13 +2750,21 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       return saveProbeSettings(buildProbeSettingsPayload(draft, currentSettings), csrfToken);
     },
     onSuccess: (saved) => {
-      setSaveFeedback("设置已保存");
-      setDraft(isProbeSettings(saved) ? buildProbeSettingsDraft(saved) : null);
+      if (!isProbeSettings(saved)) {
+        setSaveStatus({ tone: "error", message: "保存响应结构异常，已保留当前输入" });
+        return;
+      }
+      setSaveStatus({ tone: "success", message: "设置已保存" });
+      setDraft(buildProbeSettingsDraft(saved));
       qc.invalidateQueries({ queryKey: ["probe-settings"] });
       qc.invalidateQueries({ queryKey: ["probe-status"] });
       qc.invalidateQueries({ queryKey: ["probe-dashboard"] });
+      qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
     },
-    onError: (err: Error) => setSaveFeedback(err.message)
+    onError: (err: Error) => {
+      setSaveStatus({ tone: "error", message: err.message });
+    }
   });
 
   useEffect(() => {
@@ -2798,112 +2813,121 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
           <span>{PROBE_NAV_LABEL}</span>
           <h1>探针</h1>
         </div>
-        <div className="probe-section-tabs" aria-label="探针模块结构">
-          {probeSections.map((section) => <a key={section.id} href={`#probe-${section.id}`}>{section.label}</a>)}
+        <div className="button-row">
+          <button className="secondary-button" onClick={() => {
+            qc.invalidateQueries({ queryKey: ["probe-status"] });
+            qc.invalidateQueries({ queryKey: ["probe-dashboard"] });
+            qc.invalidateQueries({ queryKey: ["probe-settings"] });
+            qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+          }}><RefreshCw size={17} />刷新</button>
+          <button className="secondary-button" onClick={() => barkMutation.mutate()} disabled={!barkConfigured || barkMutation.isPending}><Cloud size={17} />测试 Bark</button>
         </div>
       </div>
 
-      <ProbeSection id="overview" title="总览" icon={<TriangleAlert size={18} />}>
-        <Panel title="运行状态" icon={<TriangleAlert size={18} />}>
-          <Metric label="状态" value={data?.enabled ? "已启用" : available ? "已停用" : "不可用"} tone={data?.enabled ? "success" : "warning"} />
-          <Metric label="形态" value={probeFlavorLabel(data?.flavor)} />
-          <Metric label="服务" value={data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "未知"} />
-          <Metric label="平台" value={data?.platform ?? platform.data?.kind ?? "未知"} />
-          <Metric label="主机" value={data?.host_label ?? currentSettings?.codex.host_label ?? "未知"} />
-        </Panel>
-        <Panel title="信号摘要" icon={<ClipboardCheck size={18} />}>
-          <Metric label="Hook 状态" value={probeStateLabel(data?.hook_status)} tone={data?.hook_status === "managed" ? "success" : "warning"} />
-          <Metric label="Bark 状态" value={probeStateLabel(data?.bark_status)} tone={data?.bark_status === "configured" ? "success" : "warning"} />
-          <Metric label="日志库" value={probeStateLabel(data?.logs_db_status ?? logsDbStatus.data?.data?.logs_db_status ?? logsDbStatus.data?.data?.status)} tone={(data?.logs_db_status ?? logsDbStatus.data?.data?.status) === "maintenance_ready" ? "success" : "warning"} />
-          <Metric label="最近事件" value={String(data?.recent_event_count ?? events.length)} />
-          <Metric label="待回复" value={String(data?.reply_needed_count ?? replyRows.length)} tone={(data?.reply_needed_count ?? replyRows.length) > 0 ? "warning" : undefined} />
-          <Metric label="可恢复异常" value={String(data?.recoverable_count ?? recoverableRows.length)} tone={(data?.recoverable_count ?? recoverableRows.length) > 0 ? "danger" : undefined} />
-        </Panel>
-      </ProbeSection>
+      <section className={`probe-status-banner tone-${statusTone}`}>
+        <div>
+          <strong>{available ? probeEnabled ? "Probe 正在接管云机观测" : "Probe 已停用" : "Probe 端点不可用"}</strong>
+          <span>{serviceText} · {data?.host_label ?? currentSettings?.codex.host_label ?? platform.data?.kind ?? "未知主机"}</span>
+        </div>
+        <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(data?.logs_db_status ?? logsDb?.logs_db_status ?? logsDb?.status)}</span>
+      </section>
 
-      <ProbeSection id="threads" title="线程" icon={<MessageSquare size={18} />}>
-        <Panel title="运行中" icon={<Play size={18} />}>
-          <ProbeThreadList rows={runningRows} empty="暂无运行中线程" />
-        </Panel>
-        <Panel title="待回复" icon={<MessageSquare size={18} />}>
-          <ProbeThreadList rows={replyRows} empty="暂无待回复线程" />
-        </Panel>
-        <Panel title="可恢复异常" icon={<TriangleAlert size={18} />} className="wide-panel">
-          <ProbeThreadList rows={recoverableRows} empty="暂无可恢复异常" />
-        </Panel>
-      </ProbeSection>
+      <section className="probe-core-metrics" aria-label="探针核心指标">
+        <Metric label="Codex APP" value={probeEnabled ? "运行中" : available ? "停用" : "不可用"} tone={statusTone === "danger" ? "danger" : statusTone} />
+        <Metric label="需回复" value={String(data?.reply_needed_count ?? replyRows.length)} tone={(data?.reply_needed_count ?? replyRows.length) > 0 ? "warning" : undefined} />
+        <Metric label="异常数" value={String(data?.recoverable_count ?? recoverableRows.length)} tone={(data?.recoverable_count ?? recoverableRows.length) > 0 ? "danger" : undefined} />
+        <Metric label="可见线程" value={String(visibleThreadCount)} />
+        <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
+      </section>
 
-      <ProbeSection id="events" title="事件" icon={<ClipboardCheck size={18} />}>
-        <Panel title="最近事件" icon={<ClipboardCheck size={18} />} className="wide-panel">
-          <ProbeEventList events={events} />
-        </Panel>
-      </ProbeSection>
-
-      <ProbeSection id="diagnostics" title="诊断" icon={<Database size={18} />}>
-        <Panel title="诊断状态" icon={<Database size={18} />}>
-          <Metric label="生命周期" value={probeStateLabel(data?.lifecycle_status)} tone={data?.lifecycle_status === "managed" || data?.lifecycle_status === "ok" ? "success" : undefined} />
-          <Metric label="诊断" value={probeStateLabel(data?.doctor_status)} tone={data?.doctor_status === "ready" || data?.doctor_status === "ok" ? "success" : undefined} />
-          <Metric label="Hook 细节" value={hookStatusText(hookStatus.data?.data)} />
-          <Metric label="配置文件" value={pathText(data?.config_path ?? platform.data?.config_file)} />
-          <Metric label="数据目录" value={pathText(platform.data?.data_dir)} />
-          <Metric label="日志目录" value={pathText(platform.data?.log_dir)} />
-        </Panel>
-        <Panel title="诊断输出" icon={<TerminalSquare size={18} />}>
-          <pre className="config-preview">{formatPayload(dashboard.data?.data?.diagnostics ?? {})}</pre>
-        </Panel>
-      </ProbeSection>
-
-      <ProbeSection id="settings" title="设置与迁移" icon={<KeyRound size={18} />}>
-        <Panel title="探针设置" icon={<KeyRound size={18} />} className="wide-panel">
+      <section className="probe-control-grid">
+        <Panel title="Bark" icon={<Cloud size={18} />}>
           {draft ? (
-            <ProbeSettingsForm
+            <ProbeBarkCard
               draft={draft}
               setDraft={setDraft}
-              configuredDeviceKey={Boolean(currentSettings?.notifications.device_key_configured || draft.notifications.device_key_configured)}
+              configuredDeviceKey={barkConfigured}
+              saveStatus={saveStatus}
+              saving={saveMutation.isPending}
+              testing={barkMutation.isPending}
+              onSave={() => saveMutation.mutate()}
+              onTest={() => barkMutation.mutate()}
+            />
+          ) : (
+            <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
+          )}
+        </Panel>
+        <Panel title="运行设置" icon={<SlidersHorizontal size={18} />}>
+          {draft ? (
+            <ProbeRuntimeSettingsCard
+              draft={draft}
+              setDraft={setDraft}
               errors={settingsErrors}
-              feedback={saveFeedback}
+              saveStatus={saveStatus}
               saving={saveMutation.isPending}
               onSave={() => saveMutation.mutate()}
             />
           ) : (
-            <div className="muted-row">{settings.isLoading ? "正在读取探针设置" : "探针设置不可用"}</div>
+            <div className="muted-row">{settings.isLoading ? "正在读取运行设置" : "运行设置不可用"}</div>
           )}
         </Panel>
-        <ProbeActionCard
-          title="Hook 迁移"
-          icon={<ClipboardCheck size={18} />}
-          state={actionStates["hooks-install"]}
-          planLabel="生成 Hook 计划"
-          onPlan={() => planAction("hooks-install")}
-          onExecute={() => executeAction("hooks-install")}
-        />
-        <ProbeActionCard
-          title="Logs DB 维护"
-          icon={<Database size={18} />}
-          state={actionStates["logs-db-maintain"]}
-          planLabel="生成 Logs DB 计划"
-          onPlan={() => planAction("logs-db-maintain")}
-          onExecute={() => executeAction("logs-db-maintain")}
-        />
-        <ProbeActionCard
-          title="旧 Sentinel 清理"
-          icon={<Trash2 size={18} />}
-          state={actionStates["legacy-cleanup"]}
-          planLabel="生成清理预案"
-          onPlan={() => planAction("legacy-cleanup")}
-          onExecute={() => executeAction("legacy-cleanup")}
-        />
-        <Panel title="Bark 测试" icon={<Cloud size={18} />}>
-          <Metric label="配置" value={currentSettings?.notifications.device_key_configured ? "已配置" : "未配置"} tone={currentSettings?.notifications.device_key_configured ? "success" : "warning"} />
-          <Metric label="服务 URL" value={currentSettings?.notifications.server_url ?? "未知"} />
-          <div className="button-row">
-            <button className="secondary-button" onClick={() => barkMutation.mutate()} disabled={barkMutation.isPending}><Cloud size={17} />发送测试</button>
-          </div>
+        <Panel title="日志库维护" icon={<Database size={18} />}>
+          <ProbeLogsDbCard
+            logsDb={logsDb}
+            state={actionStates["logs-db-maintain"]}
+            onPlan={() => planAction("logs-db-maintain")}
+            onExecute={() => executeAction("logs-db-maintain")}
+          />
         </Panel>
-        <Panel title="探针 Job 历史" icon={<TerminalSquare size={18} />} className="wide-panel">
-          <JobList jobs={probeJobs} />
-        </Panel>
-      </ProbeSection>
+      </section>
+
+      <details className="probe-advanced">
+        <summary><TerminalSquare size={18} />高级/维护详情</summary>
+      <div className="probe-section-grid">
+          <Panel title="运行中" icon={<Play size={18} />}>
+            <ProbeThreadList rows={runningRows} empty="暂无运行中线程" />
+          </Panel>
+          <Panel title="待回复" icon={<MessageSquare size={18} />}>
+            <ProbeThreadList rows={replyRows} empty="暂无待回复线程" />
+          </Panel>
+          <Panel title="可恢复异常" icon={<TriangleAlert size={18} />}>
+            <ProbeThreadList rows={recoverableRows} empty="暂无可恢复异常" />
+          </Panel>
+          <Panel title="最近事件" icon={<ClipboardCheck size={18} />}>
+            <ProbeEventList events={events} />
+          </Panel>
+          <Panel title="诊断状态" icon={<Database size={18} />}>
+            <Metric label="生命周期" value={probeStateLabel(data?.lifecycle_status)} tone={data?.lifecycle_status === "managed" || data?.lifecycle_status === "ok" ? "success" : undefined} />
+            <Metric label="诊断" value={probeStateLabel(data?.doctor_status)} tone={data?.doctor_status === "ready" || data?.doctor_status === "ok" ? "success" : undefined} />
+            <Metric label="Hook 细节" value={hookStatusText(hookStatus.data?.data)} />
+            <Metric label="配置文件" value={pathText(data?.config_path ?? platform.data?.config_file)} />
+            <Metric label="数据目录" value={pathText(platform.data?.data_dir)} />
+            <Metric label="日志目录" value={pathText(platform.data?.log_dir)} />
+          </Panel>
+          <Panel title="诊断 JSON" icon={<TerminalSquare size={18} />}>
+            <pre className="config-preview">{formatPayload(dashboard.data?.data?.diagnostics ?? {})}</pre>
+          </Panel>
+          <ProbeActionCard
+            title="Hook 迁移"
+            icon={<ClipboardCheck size={18} />}
+            state={actionStates["hooks-install"]}
+            planLabel="生成 Hook 计划"
+            onPlan={() => planAction("hooks-install")}
+            onExecute={() => executeAction("hooks-install")}
+          />
+          <ProbeActionCard
+            title="旧 Sentinel 清理"
+            icon={<Trash2 size={18} />}
+            state={actionStates["legacy-cleanup"]}
+            planLabel="生成清理预案"
+            onPlan={() => planAction("legacy-cleanup")}
+            onExecute={() => executeAction("legacy-cleanup")}
+          />
+          <Panel title="探针 Job 历史" icon={<TerminalSquare size={18} />} className="wide-panel">
+            <JobList jobs={probeJobs} />
+          </Panel>
+        </div>
+      </details>
 
       {!available && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
@@ -3141,127 +3165,113 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
 }
 
 type ProbePlannedAction = Extract<ProbeJobAction, "hooks-install" | "logs-db-maintain" | "legacy-cleanup">;
+type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
 
-function ProbeSection({ id, title, icon, children }: { id: string; title: string; icon: ReactNode; children: ReactNode }) {
-  return (
-    <section id={`probe-${id}`} className="probe-section">
-      <header className="probe-section-title">{icon}<strong>{title}</strong></header>
-      <div className="probe-section-grid">{children}</div>
-    </section>
-  );
-}
-
-function ProbeSettingsForm({
+function ProbeBarkCard({
   draft,
   setDraft,
   configuredDeviceKey,
+  saveStatus,
+  saving,
+  testing,
+  onSave,
+  onTest
+}: {
+  draft: ProbeSettingsDraft;
+  setDraft: (draft: ProbeSettingsDraft) => void;
+  configuredDeviceKey: boolean;
+  saveStatus: ProbeSaveStatus;
+  saving: boolean;
+  testing: boolean;
+  onSave: () => void;
+  onTest: () => void;
+}) {
+  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
+  return (
+    <div className="probe-card-stack">
+      <Metric label="配置状态" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
+      <label className="field-label">
+        Device Key
+        <input
+          type="password"
+          value={draft.notifications.device_key}
+          placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key"}
+          onChange={(event) => setNotifications({ device_key: event.target.value })}
+        />
+      </label>
+      <div className="button-row">
+        <button className="primary-button" disabled={saving} onClick={onSave}><CheckCircle2 size={17} />保存</button>
+        <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
+      </div>
+      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
+    </div>
+  );
+}
+
+function ProbeRuntimeSettingsCard({
+  draft,
+  setDraft,
   errors,
-  feedback,
+  saveStatus,
   saving,
   onSave
 }: {
   draft: ProbeSettingsDraft;
   setDraft: (draft: ProbeSettingsDraft) => void;
-  configuredDeviceKey: boolean;
   errors: string[];
-  feedback: string | null;
+  saveStatus: ProbeSaveStatus;
   saving: boolean;
   onSave: () => void;
 }) {
-  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
-  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) => setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
-  const setHooks = (patch: Partial<ProbeSettingsDraft["hooks"]>) => setDraft({ ...draft, hooks: { ...draft.hooks, ...patch } });
-  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
   const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
-  const setLogsDb = (patch: Partial<ProbeSettingsDraft["logs_db"]>) => setDraft({ ...draft, logs_db: { ...draft.logs_db, ...patch } });
-
   return (
-    <div className="probe-settings-form">
-      <div className="settings-subsection">
-        <strong>Codex 共享字段</strong>
-      </div>
-      <div className="form-grid three">
-        <label className="field-label">Codex Home<input value={draft.codex.home} onChange={(event) => setCodex({ home: event.target.value })} /></label>
-        <label className="field-label">Workspace<input value={draft.codex.workspace} onChange={(event) => setCodex({ workspace: event.target.value })} /></label>
-        <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
-        <label className="field-label">app-server 服务<input value={draft.codex.app_server_service} onChange={(event) => setCodex({ app_server_service: event.target.value })} /></label>
-        <label className="field-label">app-server Socket<input value={draft.codex.app_server_socket} onChange={(event) => setCodex({ app_server_socket: event.target.value })} /></label>
-        <label className="field-label">Bridge 传输<input value={draft.codex.bridge_transport} onChange={(event) => setCodex({ bridge_transport: event.target.value })} /></label>
-        <label className="field-label">Bridge 超时秒<input type="number" min={1} value={draft.codex.bridge_timeout_seconds} onChange={(event) => setCodex({ bridge_timeout_seconds: Number(event.target.value) })} /></label>
-      </div>
-
-      <div className="settings-subsection">
-        <strong>探针基础与 Hook</strong>
-      </div>
-      <div className="form-grid three">
-        <label className="field-label">轮询间隔 秒<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: Number(event.target.value) })} /></label>
-        <label className="field-label">最近事件数量<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: Number(event.target.value) })} /></label>
-      </div>
-      <div className="probe-toggle-grid">
-        <label className="toggle-row"><span>启用探针</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>启用 Bridge</span><input type="checkbox" checked={draft.codex.bridge_enabled} onChange={(event) => setCodex({ bridge_enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>管理 Stop Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
-        <label className="toggle-row"><span>安装后重载 app-server</span><input type="checkbox" checked={draft.hooks.reload_app_server_after_install} onChange={(event) => setHooks({ reload_app_server_after_install: event.target.checked })} /></label>
-      </div>
-
-      <div className="settings-subsection">
-        <strong>Bark 通知</strong>
-      </div>
-      <div className="form-grid three">
-        <label className="field-label">Bark 服务 URL<input value={draft.notifications.server_url} onChange={(event) => setNotifications({ server_url: event.target.value })} /></label>
-        <label className="field-label">Bark Sound<input value={draft.notifications.sound} onChange={(event) => setNotifications({ sound: event.target.value })} /></label>
-        <label className="field-label">Bark Group<input value={draft.notifications.group} onChange={(event) => setNotifications({ group: event.target.value })} /></label>
-        <label className="field-label">Bark 打开 URL<input value={draft.notifications.url} onChange={(event) => setNotifications({ url: event.target.value })} /></label>
-        <label className="field-label">
-          Bark device_key
-          <input
-            type="password"
-            value={draft.notifications.device_key}
-            placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "未配置"}
-            onChange={(event) => setNotifications({ device_key: event.target.value })}
-          />
-        </label>
-      </div>
-      <div className="probe-toggle-grid">
-        <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>通知任务完成</span><input type="checkbox" checked={draft.notifications.notify_completion} onChange={(event) => setNotifications({ notify_completion: event.target.checked })} /></label>
-        <label className="toggle-row"><span>通知待回复</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
-        <label className="toggle-row"><span>通知可恢复异常</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
-      </div>
-
-      <div className="settings-subsection">
-        <strong>观测与日志读取</strong>
-      </div>
-      <div className="form-grid three">
-        <label className="field-label">Hook 事件最大行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: Number(event.target.value) })} /></label>
-        <label className="field-label">Hook 静默期最大行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: Number(event.target.value) })} /></label>
-        <label className="field-label">日志读取上限 bytes<input type="number" min={1024} max={10485760} value={draft.observability.log_max_bytes} onChange={(event) => setObservability({ log_max_bytes: Number(event.target.value) })} /></label>
-      </div>
-
-      <div className="settings-subsection">
-        <strong>Logs DB 维护</strong>
-      </div>
-      <div className="form-grid three">
-        <label className="field-label">Logs DB 保留天数<input type="number" min={1} max={3650} value={draft.logs_db.retention_days} onChange={(event) => setLogsDb({ retention_days: Number(event.target.value) })} /></label>
-        <label className="field-label">维护间隔 小时<input type="number" min={1} max={8760} value={draft.logs_db.maintenance_interval_hours} onChange={(event) => setLogsDb({ maintenance_interval_hours: Number(event.target.value) })} /></label>
-        <label className="field-label">Codex 退出宽限 秒<input type="number" min={0} max={3600} value={draft.logs_db.codex_exit_grace_seconds} onChange={(event) => setLogsDb({ codex_exit_grace_seconds: Number(event.target.value) })} /></label>
-        <label className="field-label">Codex 退出最长等待 秒<input type="number" min={1} max={7200} value={draft.logs_db.codex_exit_max_wait_seconds} onChange={(event) => setLogsDb({ codex_exit_max_wait_seconds: Number(event.target.value) })} /></label>
-        <label className="field-label">删除分块行数<input type="number" min={1} max={100000} value={draft.logs_db.delete_chunk_rows} onChange={(event) => setLogsDb({ delete_chunk_rows: Number(event.target.value) })} /></label>
-        <label className="field-label">单次最大删除行数<input type="number" min={1} max={1000000} value={draft.logs_db.max_delete_rows_per_run} onChange={(event) => setLogsDb({ max_delete_rows_per_run: Number(event.target.value) })} /></label>
-        <label className="field-label">SQLite busy timeout ms<input type="number" min={100} max={60000} value={draft.logs_db.busy_timeout_ms} onChange={(event) => setLogsDb({ busy_timeout_ms: Number(event.target.value) })} /></label>
-        <label className="field-label">Compact 间隔 小时<input type="number" min={1} max={8760} value={draft.logs_db.compact_interval_hours} onChange={(event) => setLogsDb({ compact_interval_hours: Number(event.target.value) })} /></label>
-        <label className="field-label">Freelist 最小 MB<input type="number" min={0} value={draft.logs_db.compact_min_freelist_mb} onChange={(event) => setLogsDb({ compact_min_freelist_mb: Number(event.target.value) })} /></label>
-        <label className="field-label">Freelist 最小比例 %<input type="number" min={0} max={100} value={draft.logs_db.compact_min_freelist_ratio_percent} onChange={(event) => setLogsDb({ compact_min_freelist_ratio_percent: Number(event.target.value) })} /></label>
-        <label className="field-label">最小剩余空间 MB<input type="number" min={0} value={draft.logs_db.minimum_free_space_mb} onChange={(event) => setLogsDb({ minimum_free_space_mb: Number(event.target.value) })} /></label>
-      </div>
-      <div className="probe-toggle-grid">
-        <label className="toggle-row"><span>启用 Logs DB</span><input type="checkbox" checked={draft.logs_db.enabled} onChange={(event) => setLogsDb({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Codex 退出后维护</span><input type="checkbox" checked={draft.logs_db.maintain_on_codex_exit} onChange={(event) => setLogsDb({ maintain_on_codex_exit: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Codex 关闭时自动 compact</span><input type="checkbox" checked={draft.logs_db.auto_compact_when_codex_closed} onChange={(event) => setLogsDb({ auto_compact_when_codex_closed: event.target.checked })} /></label>
+    <div className="probe-card-stack">
+      <div className="form-grid compact-three">
+        <label className="field-label">Hook 事件行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
+        <label className="field-label">冷却行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
+        <label className="field-label">日志上限 MB<input type="number" min={1} max={10} value={logBytesDraftToMb(draft.observability.log_max_bytes)} onChange={(event) => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })} /></label>
       </div>
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
-      {feedback && <div className={feedback === "设置已保存" ? "form-success" : "form-error"}>{feedback}</div>}
-      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存探针设置</button>
+      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
+      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存运行设置</button>
+    </div>
+  );
+}
+
+function ProbeLogsDbCard({
+  logsDb,
+  state,
+  onPlan,
+  onExecute
+}: {
+  logsDb?: ProbeLogsDbStatus;
+  state: ProbeActionUiState;
+  onPlan: () => void;
+  onExecute: () => void;
+}) {
+  const plan = state.plan;
+  return (
+    <div className="probe-card-stack">
+      <Metric label="状态" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={(logsDb?.logs_db_status ?? logsDb?.status) === "maintenance_ready" ? "success" : "warning"} />
+      <Metric label="总行数" value={probeLogDbNumber(logsDb, ["total_rows", "row_count", "event_count"])} />
+      <Metric label="待清理行数" value={probeLogDbNumber(logsDb, ["pending_cleanup_rows", "stale_rows", "would_delete_probe_events"])} />
+      <Metric label="数据库大小" value={typeof logsDb?.size_bytes === "number" ? formatFileSize(logsDb.size_bytes) : "未知"} />
+      <Metric label="上次维护" value={probeLogDbString(logsDb, ["last_maintain_at", "last_maintenance_at", "last_maintain"])} />
+      <Metric label="上次结果" value={probeLogDbString(logsDb, ["last_result", "last_maintain_result", "skip_reason"])} />
+      <Metric label="数据库路径" value={pathText(logsDb?.path)} />
+      {plan && (
+        <div className="probe-plan compact">
+          <strong>{plan.title}</strong>
+          {plan.summary && <p>{plan.summary}</p>}
+          <ol>{plan.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+        </div>
+      )}
+      {state.error && <div className="form-error">{state.error}</div>}
+      {state.jobId && <div className="form-success">Job 已启动：{state.jobId}</div>}
+      <div className="button-row">
+        <button className="secondary-button" onClick={onPlan} disabled={state.phase === "planning" || state.phase === "executing"}><ClipboardCheck size={17} />生成维护计划</button>
+        <button className="primary-button" onClick={onExecute} disabled={!state.canExecute || state.phase === "executing"}><Play size={17} />执行维护</button>
+      </div>
     </div>
   );
 }
@@ -3420,6 +3430,38 @@ function hookStatusText(status?: Record<string, unknown>): string {
   if (!status) return "未知";
   const value = status.hook_status ?? status.status;
   return typeof value === "string" && value.trim() ? probeStateLabel(value) : "可用";
+}
+
+function logBytesDraftToMb(value: ProbeSettingsDraft["observability"]["log_max_bytes"]): number | "" {
+  if (value === "") return "";
+  return Math.max(1, Math.round(value / (1024 * 1024)));
+}
+
+function mbDraftToLogBytes(value: string): number | "" {
+  const parsed = probeNumberInputDraftValue(value);
+  return parsed === "" ? "" : parsed * 1024 * 1024;
+}
+
+function probeLogDbNumber(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): string {
+  const value = probeLogDbValue(logsDb, keys);
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "未知";
+}
+
+function probeLogDbString(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): string {
+  const value = probeLogDbValue(logsDb, keys);
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return "未知";
+}
+
+function probeLogDbValue(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): unknown {
+  if (!logsDb) return undefined;
+  for (const key of keys) {
+    const value = logsDb[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
 }
 
 function recentClaudeSessions(overview?: ClaudeOverview): Array<{

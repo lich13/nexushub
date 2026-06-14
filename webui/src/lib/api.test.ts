@@ -390,7 +390,14 @@ describe("archive delete API compatibility", () => {
     await expect(executeProbePlan("logs-db-maintain", "probe-logs-db-test", "csrf-token")).resolves.toEqual({ job_id: "job-1" });
     await expect(planProbeAction("hooks-install", "csrf-token")).resolves.toMatchObject({ plan_id: "probe-hooks-test" });
     await expect(executeProbePlan("hooks-install", "probe-hooks-test", "csrf-token")).resolves.toEqual({ job_id: "job-1" });
-    await saveProbeSettings({ probe: { poll_seconds: 20 }, notifications: { device_key: "secret" } }, "csrf-token");
+    await saveProbeSettings({
+      codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+      probe: {
+        poll_seconds: 20,
+        notifications: { enabled: true, device_key: "secret" },
+        logs_db: { enabled: true, retention_days: 2 }
+      }
+    }, "csrf-token");
 
     const calls = fetchMock.mock.calls.map(([path, options]) => [
       path,
@@ -403,8 +410,46 @@ describe("archive delete API compatibility", () => {
       ["/api/probe/logs-db/execute", "POST", "csrf-token", { plan_id: "probe-logs-db-test", confirmed: true }],
       ["/api/probe/hooks/install", "POST", "csrf-token", null],
       ["/api/probe/hooks/install", "POST", "csrf-token", { plan_id: "probe-hooks-test", confirmed: true }],
-      ["/api/probe/settings", "PATCH", "csrf-token", { probe: { poll_seconds: 20 }, notifications: { device_key: "secret" } }]
+      ["/api/probe/settings", "PATCH", "csrf-token", {
+        codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+        probe: {
+          poll_seconds: 20,
+          notifications: { enabled: true, device_key: "secret" },
+          logs_db: { enabled: true, retention_days: 2 }
+        }
+      }]
     ]);
+  });
+
+  test("saveProbeSettings sends only canonical codex and probe keys", async () => {
+    const { saveProbeSettings } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ saved: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveProbeSettings({
+      codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+      probe: {
+        enabled: true,
+        notifications: { enabled: true, device_key: "secret", server_url: "https://api.day.app" },
+        logs_db: { enabled: true, retention_days: 2 }
+      }
+    }, "csrf-token");
+
+    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
+    const body = JSON.parse(options.body);
+    expect(path).toBe("/api/probe/settings");
+    expect(options.method).toBe("PATCH");
+    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(Object.keys(body).sort()).toEqual(["codex", "probe"]);
+    expect(body.probe.notifications).toEqual({
+      enabled: true,
+      device_key: "secret",
+      server_url: "https://api.day.app"
+    });
+    expect(body.probe.logs_db).toEqual({ enabled: true, retention_days: 2 });
   });
 
   test("fixed Claude maintenance jobs use canonical API routes", async () => {

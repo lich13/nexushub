@@ -1008,44 +1008,98 @@ button { cursor: pointer; }
   font-size: 24px;
   letter-spacing: 0;
 }
-.probe-section-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-}
-.probe-section-tabs a {
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--hairline);
+.probe-status-banner {
+  min-height: 74px;
+  border: 1px solid rgba(29,56,82,0.9);
   border-radius: 8px;
-  padding: 0 10px;
-  color: var(--text);
-  text-decoration: none;
-  background: rgba(255,255,255,0.03);
-  font-size: 12px;
+  background: rgba(11,23,38,0.86);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
 }
-.probe-section {
+.probe-status-banner.tone-success { border-color: rgba(34,197,94,0.38); background: rgba(20,83,45,0.18); }
+.probe-status-banner.tone-warning { border-color: rgba(245,158,11,0.38); background: rgba(113,63,18,0.18); }
+.probe-status-banner.tone-danger { border-color: rgba(239,68,68,0.42); background: rgba(127,29,29,0.2); }
+.probe-status-banner div {
+  min-width: 0;
   display: grid;
+  gap: 4px;
+}
+.probe-status-banner strong {
+  color: var(--text);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.probe-status-banner span {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.probe-core-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
-.probe-section-title {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--primary-hover);
-  border-bottom: 1px solid rgba(29,56,82,0.72);
+.probe-core-metrics .metric {
+  min-height: 68px;
+  border: 1px solid rgba(29,56,82,0.82);
+  border-radius: 8px;
+  background: rgba(11,23,38,0.78);
+  padding: 10px 12px;
+  display: grid;
+  align-content: center;
+  justify-content: stretch;
+}
+.probe-core-metrics .metric strong {
+  text-align: left;
+  font-size: 18px;
+}
+.probe-control-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(320px, 1.25fr) minmax(320px, 1.25fr);
+  gap: 14px;
+  align-items: start;
 }
 .probe-section-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
+.probe-card-stack,
 .probe-settings-form {
   display: grid;
   gap: 10px;
+}
+.probe-card-stack .toggle-row {
+  border: 1px solid rgba(29,56,82,0.75);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: rgba(255,255,255,0.03);
+}
+.probe-advanced {
+  border: 1px solid rgba(29,56,82,0.78);
+  border-radius: 8px;
+  background: rgba(11,23,38,0.44);
+  padding: 0;
+}
+.probe-advanced summary {
+  min-height: 44px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary-hover);
+  cursor: pointer;
+  font-weight: 650;
+}
+.probe-advanced[open] summary {
+  border-bottom: 1px solid rgba(29,56,82,0.78);
+}
+.probe-advanced .probe-section-grid {
+  padding: 14px;
 }
 .probe-toggle-grid {
   display: grid;
@@ -1067,6 +1121,7 @@ button { cursor: pointer; }
   display: grid;
   gap: 8px;
 }
+.probe-plan.compact { margin: 0; }
 .probe-plan p {
   margin: 0;
   color: var(--muted);

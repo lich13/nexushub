@@ -24,6 +24,14 @@ pub struct PanelDb {
     crypto: SecretBox,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProbeLogsDbCounts {
+    pub event_count: usize,
+    pub dedupe_count: usize,
+    pub pending_event_count: usize,
+    pub pending_dedupe_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Admin {
     pub id: String,
@@ -388,6 +396,17 @@ impl PanelDb {
             "SELECT value FROM settings WHERE key=?1",
             params![key],
             |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_setting_with_updated_at(&self, key: &str) -> Result<Option<(String, i64)>> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.query_row(
+            "SELECT value, updated_at FROM settings WHERE key=?1",
+            params![key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(Into::into)
@@ -880,6 +899,32 @@ impl PanelDb {
             params![namespace, dedupe_key, now + ttl_seconds.max(1), now],
         )?;
         Ok(changed > 0)
+    }
+
+    pub fn probe_logs_db_counts(&self, retention_days: u32) -> Result<ProbeLogsDbCounts> {
+        let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
+        let now = Self::now();
+        let conn = self.conn.lock().expect("db mutex");
+        let event_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| row.get(0))?;
+        let dedupe_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row.get(0))?;
+        let pending_event_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM probe_events WHERE created_at < ?1",
+            params![cutoff],
+            |row| row.get(0),
+        )?;
+        let pending_dedupe_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM probe_dedupe WHERE expires_at <= ?1",
+            params![now],
+            |row| row.get(0),
+        )?;
+        Ok(ProbeLogsDbCounts {
+            event_count: event_count as usize,
+            dedupe_count: dedupe_count as usize,
+            pending_event_count: pending_event_count as usize,
+            pending_dedupe_count: pending_dedupe_count as usize,
+        })
     }
 
     pub fn maintain_probe_events(

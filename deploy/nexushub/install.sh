@@ -391,28 +391,28 @@ ensure_section(
 ensure_section(
     "probe.observability",
     {
-        "hook_event_max_lines": "120",
-        "hook_cooldown_max_lines": "80",
-        "log_max_bytes": "262144",
+        "hook_event_max_lines": "500",
+        "hook_cooldown_max_lines": "1000",
+        "log_max_bytes": "5242880",
     },
 )
 ensure_section(
     "probe.logs_db",
     {
         "enabled": "true",
-        "retention_days": "14",
-        "maintenance_interval_hours": "24",
+        "retention_days": "2",
+        "maintenance_interval_hours": "6",
         "maintain_on_codex_exit": "true",
-        "codex_exit_grace_seconds": "10",
-        "codex_exit_max_wait_seconds": "120",
-        "delete_chunk_rows": "2000",
-        "max_delete_rows_per_run": "50000",
-        "busy_timeout_ms": "5000",
+        "codex_exit_grace_seconds": "5",
+        "codex_exit_max_wait_seconds": "1800",
+        "delete_chunk_rows": "5000",
+        "max_delete_rows_per_run": "100000",
+        "busy_timeout_ms": "500",
         "auto_compact_when_codex_closed": "true",
-        "compact_interval_hours": "168",
-        "compact_min_freelist_mb": "64",
+        "compact_interval_hours": "24",
+        "compact_min_freelist_mb": "256",
         "compact_min_freelist_ratio_percent": "20",
-        "minimum_free_space_mb": "256",
+        "minimum_free_space_mb": "1024",
     },
 )
 

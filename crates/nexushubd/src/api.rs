@@ -24,7 +24,8 @@ use nexushub_core::{
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{
-        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeNotificationsConfigPatch,
+        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeHooksConfigPatch,
+        ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
         ProbeSettingsPatch,
     },
     db::{JobRecord, NewSession, ThreadFollowUp},
@@ -43,7 +44,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     net::SocketAddr,
-    path::Path as FsPath,
+    path::{Path as FsPath, PathBuf},
     time::{Duration, UNIX_EPOCH},
 };
 use uuid::Uuid;
@@ -228,11 +229,11 @@ async fn healthz() -> ApiResponse {
 async fn public_settings(State(state): State<AppState>) -> ApiResponse {
     let security = state
         .db
-        .security_settings(state.config.security.session_ttl_seconds)?;
+        .security_settings(state.config().security.session_ttl_seconds)?;
     let turnstile_action = state
         .db
         .get_setting("turnstile_expected_action")?
-        .or_else(|| state.config.security.turnstile_expected_action.clone())
+        .or_else(|| state.config().security.turnstile_expected_action.clone())
         .unwrap_or_else(|| "login".to_string());
     ok(json!({
         "site_name": "NexusHub",
@@ -241,7 +242,7 @@ async fn public_settings(State(state): State<AppState>) -> ApiResponse {
         "turnstile_site_key": security.turnstile_site_key.unwrap_or_else(|| nexushub_core::config::DEFAULT_TURNSTILE_SITE_KEY.to_string()),
         "turnstile_action": turnstile_action,
         "admin_configured": state.db.admin_count()? > 0,
-        "base_url": state.config.server.public_base_url,
+        "base_url": state.config().server.public_base_url,
     }))
 }
 
@@ -287,18 +288,18 @@ async fn get_probe_dashboard(State(state): State<AppState>, headers: HeaderMap) 
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let runtime = probe_runtime(&state);
     let status = probe_status_value(state.clone()).await;
-    let running = load_probe_threads(&state, "running", state.config.probe.recent_limit).await?;
+    let running = load_probe_threads(&state, "running", state.config().probe.recent_limit).await?;
     let reply_needed =
-        load_probe_threads(&state, "reply-needed", state.config.probe.recent_limit).await?;
+        load_probe_threads(&state, "reply-needed", state.config().probe.recent_limit).await?;
     let recoverable =
-        load_probe_threads(&state, "recoverable", state.config.probe.recent_limit).await?;
+        load_probe_threads(&state, "recoverable", state.config().probe.recent_limit).await?;
     let diagnostics = runtime.diagnostics();
     ok(json!({
         "status": status,
         "running": running,
         "reply_needed": reply_needed,
         "recoverable": recoverable,
-        "recent_events": state.db.list_probe_events(state.config.probe.recent_limit as u32)?,
+        "recent_events": state.db.list_probe_events(state.config().probe.recent_limit as u32)?,
         "diagnostics": diagnostics,
     }))
 }
@@ -311,8 +312,43 @@ async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -
 #[derive(Debug, Deserialize)]
 struct ProbeSettingsRequest {
     codex: Option<nexushub_core::config::CodexProbeConfigPatch>,
-    probe: Option<ProbeSettingsPatch>,
+    probe: Option<ProbeSettingsRequestPatch>,
     notifications: Option<ProbeNotificationsRequest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProbeSettingsRequestPatch {
+    enabled: Option<bool>,
+    poll_seconds: Option<u64>,
+    recent_limit: Option<usize>,
+    hooks: Option<ProbeHooksConfigPatch>,
+    notifications: Option<ProbeNotificationsRequest>,
+    observability: Option<ProbeObservabilityConfigPatch>,
+    logs_db: Option<ProbeLogsDbConfigPatch>,
+}
+
+impl ProbeSettingsRequestPatch {
+    fn into_config_patch(self) -> (ProbeSettingsPatch, Option<String>) {
+        let (notifications, device_key) = match self.notifications {
+            Some(notifications) => (
+                Some(notifications.patch),
+                normalized_device_key(notifications.device_key),
+            ),
+            None => (None, None),
+        };
+        (
+            ProbeSettingsPatch {
+                enabled: self.enabled,
+                poll_seconds: self.poll_seconds,
+                recent_limit: self.recent_limit,
+                hooks: self.hooks,
+                notifications,
+                observability: self.observability,
+                logs_db: self.logs_db,
+            },
+            device_key,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,36 +365,39 @@ async fn patch_probe_settings(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if let Some(notifications) = request.notifications.as_ref() {
-        if let Some(device_key) = notifications.device_key.as_ref() {
-            if !device_key.trim().is_empty() {
-                state.db.set_secret_setting_bytes(
-                    "probe_bark_device_key",
-                    device_key.trim().as_bytes(),
-                )?;
-            }
-        }
+    let config_path = probe_config_path();
+    if !config_path.exists() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("config file not found: {}", config_path.display()),
+        ));
     }
-    let mut probe_patch = request.probe.unwrap_or_default();
+    let (mut probe_patch, mut device_key) = request
+        .probe
+        .map(ProbeSettingsRequestPatch::into_config_patch)
+        .unwrap_or_default();
     if let Some(notifications) = request.notifications {
+        if let Some(top_level_device_key) = normalized_device_key(notifications.device_key) {
+            device_key = Some(top_level_device_key);
+        }
         let mut nested = probe_patch.notifications.unwrap_or_default();
         merge_probe_notification_patch(&mut nested, notifications.patch);
         probe_patch.notifications = Some(nested);
+    }
+    if let Some(device_key) = device_key {
+        state
+            .db
+            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
     }
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
     };
-    let config_path = std::env::var_os("NEXUSHUB_CONFIG")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| PlatformPaths::current().config_file);
-    let mut response_config = state.config.clone();
-    if config_path.exists() {
-        let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
-        let updated = patch_probe_config_toml(&text, &patch)?;
-        fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
-        response_config = Config::load(&config_path)?;
-    }
+    let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
+    let updated = patch_probe_config_toml(&text, &patch)?;
+    fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
+    let response_config = Config::load(&config_path)?;
+    state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
         "probe_settings.updated",
@@ -377,7 +416,7 @@ async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) 
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "app_server_service".to_string(),
-            json!(state.config.codex.app_server_service),
+            json!(state.config().codex.app_server_service),
         );
     }
     ok(value)
@@ -396,7 +435,7 @@ async fn get_probe_events(
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let limit = query
         .limit
-        .unwrap_or(state.config.probe.recent_limit)
+        .unwrap_or(state.config().probe.recent_limit)
         .clamp(1, 500);
     ok(json!({"items": state.db.list_probe_events(limit as u32)?}))
 }
@@ -471,7 +510,52 @@ async fn get_probe_logs_db_status(
     headers: HeaderMap,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!(probe_runtime(&state).logs_db_status()))
+    let config = state.config();
+    let mut value = serde_json::to_value(
+        ProbeRuntime::new(config.clone(), PlatformPaths::current()).logs_db_status(),
+    )
+    .map_err(anyhow::Error::from)?;
+    if let Some(object) = value.as_object_mut() {
+        let counts = state
+            .db
+            .probe_logs_db_counts(config.probe.logs_db.retention_days)?;
+        object.insert("event_count".to_string(), json!(counts.event_count));
+        object.insert("dedupe_count".to_string(), json!(counts.dedupe_count));
+        object.insert(
+            "total_rows".to_string(),
+            json!(counts.event_count + counts.dedupe_count),
+        );
+        object.insert(
+            "pending_cleanup_rows".to_string(),
+            json!(counts.pending_event_count + counts.pending_dedupe_count),
+        );
+        object.insert(
+            "pending_event_count".to_string(),
+            json!(counts.pending_event_count),
+        );
+        object.insert(
+            "pending_dedupe_count".to_string(),
+            json!(counts.pending_dedupe_count),
+        );
+        if let Some((raw, updated_at)) = state
+            .db
+            .get_setting_with_updated_at("probe_logs_db_last_maintain")?
+        {
+            object.insert(
+                "last_maintain_at".to_string(),
+                json!(timestamp_to_rfc3339(updated_at).unwrap_or_else(|| updated_at.to_string())),
+            );
+            object.insert(
+                "last_result".to_string(),
+                json!(probe_logs_db_last_result(&raw)),
+            );
+            object.insert(
+                "last_maintain".to_string(),
+                serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw)),
+            );
+        }
+    }
+    ok(value)
 }
 
 async fn probe_hooks_install(
@@ -755,7 +839,13 @@ async fn start_claude_code_fixed_job(
 }
 
 fn probe_runtime(state: &AppState) -> ProbeRuntime {
-    ProbeRuntime::new(state.config.clone(), PlatformPaths::current())
+    ProbeRuntime::new(state.config(), PlatformPaths::current())
+}
+
+fn probe_config_path() -> PathBuf {
+    std::env::var_os("NEXUSHUB_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PlatformPaths::current().config_file)
 }
 
 async fn probe_status_value(state: AppState) -> Value {
@@ -763,22 +853,22 @@ async fn probe_status_value(state: AppState) -> Value {
         Ok(mut status) => {
             if let Ok(events) = state
                 .db
-                .list_probe_events(state.config.probe.recent_limit as u32)
+                .list_probe_events(state.config().probe.recent_limit as u32)
             {
                 status.recent_event_count = events.len();
             }
             if let Ok(threads) =
-                load_probe_threads(&state, "running", state.config.probe.recent_limit).await
+                load_probe_threads(&state, "running", state.config().probe.recent_limit).await
             {
                 status.running_count = threads.len();
             }
             if let Ok(threads) =
-                load_probe_threads(&state, "reply-needed", state.config.probe.recent_limit).await
+                load_probe_threads(&state, "reply-needed", state.config().probe.recent_limit).await
             {
                 status.reply_needed_count = threads.len();
             }
             if let Ok(threads) =
-                load_probe_threads(&state, "recoverable", state.config.probe.recent_limit).await
+                load_probe_threads(&state, "recoverable", state.config().probe.recent_limit).await
             {
                 status.recoverable_count = threads.len();
             }
@@ -786,7 +876,7 @@ async fn probe_status_value(state: AppState) -> Value {
         }
         Err(err) => json!({
             "label": "Probe",
-            "enabled": state.config.probe.enabled,
+            "enabled": state.config().probe.enabled,
             "available": false,
             "flavor": "builtin",
             "error": err.to_string(),
@@ -795,7 +885,7 @@ async fn probe_status_value(state: AppState) -> Value {
 }
 
 fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
-    probe_settings_value_for_config(state, &state.config)
+    probe_settings_value_for_config(state, &state.config())
 }
 
 fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
@@ -829,6 +919,13 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
     }))
 }
 
+fn normalized_device_key(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 fn merge_probe_notification_patch(
     target: &mut ProbeNotificationsConfigPatch,
     source: ProbeNotificationsConfigPatch,
@@ -860,10 +957,11 @@ fn merge_probe_notification_patch(
 }
 
 fn fixed_probe_shell_command(state: &AppState, args: &[String]) -> String {
+    let config_path = probe_config_path();
     let mut parts = vec![
         "/opt/nexushub/bin/nexushubd".to_string(),
         "--config".to_string(),
-        PlatformPaths::current().config_file.display().to_string(),
+        config_path.display().to_string(),
     ];
     parts.extend(args.iter().cloned());
     if args.first().is_some_and(|arg| arg == "nexushubd") {
@@ -884,7 +982,7 @@ fn fixed_probe_shell_command(state: &AppState, args: &[String]) -> String {
         "printf '%s\\n' {}; exit 2",
         shell_quote(&format!(
             "Unsupported Probe job for {}",
-            state.config.codex.host_label
+            state.config().codex.host_label
         ))
     )
 }
@@ -898,7 +996,7 @@ async fn load_probe_threads(
     status: &'static str,
     limit: usize,
 ) -> anyhow::Result<Vec<ThreadSummary>> {
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
     let app_fetch_limit = app_server_thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
@@ -906,9 +1004,9 @@ async fn load_probe_threads(
         HashSet::new()
     });
     let mut threads = codex::list_threads(&paths, None, None, local_fetch_limit)?;
-    if state.bridge.enabled() {
-        match state
-            .bridge
+    let bridge = state.bridge();
+    if bridge.enabled() {
+        match bridge
             .thread_list(app_fetch_limit, archived_filter(Some(status)), None)
             .await
         {
@@ -943,7 +1041,7 @@ async fn upload_files(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let root = uploads::upload_root(&state.config.codex.home);
+    let root = uploads::upload_root(&state.config().codex.home);
     let protected_upload_ids = state.db.active_followup_upload_ids().unwrap_or_else(|err| {
         tracing::warn!("active follow-up upload lookup failed: {err}");
         HashSet::new()
@@ -1029,7 +1127,7 @@ async fn delete_upload_file(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let root = uploads::upload_root(&state.config.codex.home);
+    let root = uploads::upload_root(&state.config().codex.home);
     let deleted = uploads::delete_upload(&root, &id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     if deleted {
@@ -1077,7 +1175,7 @@ async fn login(
     }
     let security = state
         .db
-        .security_settings(state.config.security.session_ttl_seconds)?;
+        .security_settings(state.config().security.session_ttl_seconds)?;
     match turnstile_login_action(security.turnstile_enabled, security.turnstile_required) {
         TurnstileLoginAction::Skip => {}
         TurnstileLoginAction::FailClosed => {
@@ -1145,7 +1243,7 @@ async fn login(
         header::SET_COOKIE,
         HeaderValue::from_str(&session_cookie(
             &token,
-            state.config.security.cookie_secure,
+            state.config().security.cookie_secure,
             ttl,
         ))
         .expect("valid cookie"),
@@ -1160,8 +1258,10 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRespons
     let mut response = Json(json!({"ok": true})).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&expired_session_cookie(state.config.security.cookie_secure))
-            .expect("valid cookie"),
+        HeaderValue::from_str(&expired_session_cookie(
+            state.config().security.cookie_secure,
+        ))
+        .expect("valid cookie"),
     );
     Ok(response)
 }
@@ -1331,7 +1431,7 @@ async fn list_threads(
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let response_limit = requested_thread_limit(query.limit);
     let local_fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
     let app_fetch_limit = app_server_thread_list_fetch_limit(query.status.as_deref(), query.limit);
@@ -1340,9 +1440,9 @@ async fn list_threads(
         HashSet::new()
     });
     let mut threads = codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?;
-    if state.bridge.enabled() {
-        match state
-            .bridge
+    let bridge = state.bridge();
+    if bridge.enabled() {
+        match bridge
             .thread_list(
                 app_fetch_limit,
                 archived_filter(query.status.as_deref()),
@@ -1447,10 +1547,10 @@ async fn load_merged_thread_detail(
     id: &str,
     label: &str,
 ) -> anyhow::Result<Option<ThreadDetail>> {
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let mut detail = load_base_thread_detail_cached(state, &paths, id)?;
-    if state.bridge.enabled() {
-        match state.bridge.thread_read(id.to_string(), true).await {
+    if state.bridge().enabled() {
+        match state.bridge().thread_read(id.to_string(), true).await {
             Ok(value) => match detail.as_mut() {
                 Some(detail) => apply_app_server_thread_detail(detail, &value),
                 None => detail = app_server_detail_from_read(&value),
@@ -1572,7 +1672,7 @@ async fn create_thread(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| state.config.codex.workspace.clone());
+        .unwrap_or_else(|| state.config().codex.workspace.clone());
     let bridge_options = BridgeTurnOptions {
         message: effective_message.clone(),
         attachments: prepared_attachments.clone(),
@@ -1586,8 +1686,8 @@ async fn create_thread(
         network_access: payload.network_access,
         collaboration_mode: payload.collaboration_mode.clone(),
     };
-    if state.bridge.enabled() {
-        match state.bridge.start_thread(bridge_options).await {
+    if state.bridge().enabled() {
+        match state.bridge().start_thread(bridge_options).await {
             Ok(result) => {
                 state.db.record_audit(
                     Some(&auth.admin_id),
@@ -1644,7 +1744,7 @@ async fn create_thread(
     }
     let job_id = state.jobs.start_codex_job(
         "Codex new thread",
-        &state.config.codex.home,
+        &state.config().codex.home,
         &cwd,
         args,
         prompt_with_attachment_context(&effective_message, &prepared_attachments),
@@ -1739,7 +1839,7 @@ fn prepare_request_attachments(
             "一次最多发送 5 个附件",
         ));
     }
-    let root = uploads::upload_root(&state.config.codex.home);
+    let root = uploads::upload_root(&state.config().codex.home);
     prepare_uploads(&root, attachment_ids)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
 }
@@ -1753,12 +1853,9 @@ async fn send_message(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    if state.bridge.enabled() {
-        match state
-            .bridge
-            .send_turn(id.clone(), payload.bridge_options())
-            .await
-        {
+    let bridge = state.bridge();
+    if bridge.enabled() {
+        match bridge.send_turn(id.clone(), payload.bridge_options()).await {
             Ok(result) => {
                 state.db.record_audit(
                     Some(&auth.admin_id),
@@ -1785,8 +1882,8 @@ async fn send_message(
     ];
     let job_id = state.jobs.start_codex_job(
         "Codex resume thread",
-        &state.config.codex.home,
-        &state.config.codex.workspace,
+        &state.config().codex.home,
+        &state.config().codex.workspace,
         args,
         prompt_with_attachment_context(
             &effective_message(&payload.message, &payload.prepared_attachments),
@@ -1813,13 +1910,13 @@ async fn send_message(
 }
 
 async fn resolve_active_turn_id(state: &AppState, id: &str) -> Option<String> {
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let mut detail = match load_base_thread_detail_cached(state, &paths, id) {
         Ok(Some(detail)) => Some(detail),
         Ok(None) | Err(_) => None,
     };
-    if state.bridge.enabled() {
-        if let Ok(value) = state.bridge.thread_read(id.to_string(), true).await {
+    if state.bridge().enabled() {
+        if let Ok(value) = state.bridge().thread_read(id.to_string(), true).await {
             match detail.as_mut() {
                 Some(detail) => apply_app_server_thread_detail(detail, &value),
                 None => detail = app_server_detail_from_read(&value),
@@ -1850,11 +1947,11 @@ async fn steer_thread(
         ));
     }
 
-    if state.bridge.enabled() {
+    let bridge = state.bridge();
+    if bridge.enabled() {
         match resolve_active_turn_id(&state, &id).await {
             Some(expected_turn_id) => {
-                match state
-                    .bridge
+                match bridge
                     .steer_turn(
                         id.clone(),
                         expected_turn_id.clone(),
@@ -2065,9 +2162,9 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
         return;
     };
     let request = followup_request(&followup);
-    if state.bridge.enabled() {
-        match state
-            .bridge
+    let bridge = state.bridge();
+    if bridge.enabled() {
+        match bridge
             .send_turn(thread_id.clone(), request.bridge_options())
             .await
         {
@@ -2096,8 +2193,8 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
     ];
     match state.jobs.start_codex_job(
         "Codex queued follow-up",
-        &state.config.codex.home,
-        &state.config.codex.workspace,
+        &state.config().codex.home,
+        &state.config().codex.workspace,
         args,
         prompt_with_attachment_context(
             &effective_message(&request.message, &request.prepared_attachments),
@@ -2199,8 +2296,12 @@ fn followup_response(item: ThreadFollowUp) -> Value {
 }
 
 async fn derive_active_turn_id(state: &AppState, thread_id: &str) -> Option<String> {
-    if state.bridge.enabled() {
-        if let Ok(value) = state.bridge.thread_read(thread_id.to_string(), true).await {
+    if state.bridge().enabled() {
+        if let Ok(value) = state
+            .bridge()
+            .thread_read(thread_id.to_string(), true)
+            .await
+        {
             if let Some(thread) = value.get("thread") {
                 if let Some(turn_id) = app_thread_active_turn_id(thread) {
                     return Some(turn_id);
@@ -2208,7 +2309,7 @@ async fn derive_active_turn_id(state: &AppState, thread_id: &str) -> Option<Stri
             }
         }
     }
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     codex::thread_detail(&paths, thread_id)
         .ok()
         .flatten()
@@ -2240,14 +2341,14 @@ async fn stop_thread(
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let payload = payload.map(|Json(value)| value);
     let turn_id = payload.as_ref().and_then(|value| value.turn_id.clone());
-    let turn_id = if turn_id.is_none() && state.bridge.enabled() {
+    let turn_id = if turn_id.is_none() && state.bridge().enabled() {
         derive_active_turn_id(&state, &id).await
     } else {
         turn_id
     };
     if let Some(turn_id) = turn_id {
-        if state.bridge.enabled() {
-            match state.bridge.stop_turn(id.clone(), turn_id.clone()).await {
+        if state.bridge().enabled() {
+            match state.bridge().stop_turn(id.clone(), turn_id.clone()).await {
                 Ok(()) => {
                     state.db.record_audit(
                         Some(&auth.admin_id),
@@ -2302,12 +2403,12 @@ async fn archive_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if state.bridge.enabled() {
-        if let Err(err) = state.bridge.archive_thread(id.clone()).await {
+    if state.bridge().enabled() {
+        if let Err(err) = state.bridge().archive_thread(id.clone()).await {
             tracing::warn!("app-server bridge archive failed; falling back to state DB: {err}");
         }
     }
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     codex::set_thread_archived(&paths, &id, true)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2327,12 +2428,12 @@ async fn restore_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if state.bridge.enabled() {
-        if let Err(err) = state.bridge.unarchive_thread(id.clone()).await {
+    if state.bridge().enabled() {
+        if let Err(err) = state.bridge().unarchive_thread(id.clone()).await {
             tracing::warn!("app-server bridge restore failed; falling back to state DB: {err}");
         }
     }
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     codex::set_thread_archived(&paths, &id, false)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2362,14 +2463,11 @@ async fn rename_thread(
     if name.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "name cannot be empty"));
     }
-    if state.bridge.enabled() {
-        match state
-            .bridge
-            .rename_thread(id.clone(), name.to_string())
-            .await
-        {
+    let bridge = state.bridge();
+    if bridge.enabled() {
+        match bridge.rename_thread(id.clone(), name.to_string()).await {
             Ok(()) => {
-                let paths = CodexPaths::new(&state.config.codex.home);
+                let paths = CodexPaths::new(&state.config().codex.home);
                 if let Err(err) = codex::set_thread_title(&paths, &id, name) {
                     tracing::warn!("state DB thread title fallback update failed: {err}");
                 }
@@ -2401,7 +2499,7 @@ async fn fork_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    match state.bridge.fork_thread(id.clone()).await {
+    match state.bridge().fork_thread(id.clone()).await {
         Ok(result) => {
             state.db.record_audit(
                 Some(&auth.admin_id),
@@ -2558,7 +2656,7 @@ async fn answer_elicitation(
         network_access: None,
         collaboration_mode: None,
     };
-    match state.bridge.send_turn(id.clone(), bridge_options).await {
+    match state.bridge().send_turn(id.clone(), bridge_options).await {
         Ok(mut result) => {
             result.fallback = true;
             result.message = Some("Elicitation answer sent as a new turn because live server-request response is not available".to_string());
@@ -2590,7 +2688,7 @@ async fn send_bridge_reply(
         collaboration_mode: None,
     };
     state
-        .bridge
+        .bridge()
         .send_turn(thread_id.to_string(), bridge_options)
         .await
         .map_err(|err| {
@@ -2660,9 +2758,9 @@ async fn thread_events(
 
 async fn system_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let mut status = nexushub_core::system::system_status(&state.config).await?;
-    if state.bridge.enabled() {
-        if let Ok(value) = state.bridge.thread_list(500, Some(false), None).await {
+    let mut status = nexushub_core::system::system_status(&state.config()).await?;
+    if state.bridge().enabled() {
+        if let Ok(value) = state.bridge().thread_list(500, Some(false), None).await {
             let (source_counts, hidden_count) = app_server_thread_visibility_diagnostics(&value);
             status.app_server_source_counts = source_counts;
             status.app_server_hidden_thread_count = hidden_count;
@@ -2683,7 +2781,7 @@ struct CwdQuery {
 
 async fn codex_models(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge.model_list().await {
+    match state.bridge().model_list().await {
         Ok(value) => ok(value),
         Err(err) => Err(api_error(
             StatusCode::BAD_GATEWAY,
@@ -2698,7 +2796,7 @@ async fn codex_permission_profiles(
     Query(query): Query<CwdQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge.permission_profile_list(query.cwd).await {
+    match state.bridge().permission_profile_list(query.cwd).await {
         Ok(value) => ok(value),
         Err(err) => Err(api_error(
             StatusCode::BAD_GATEWAY,
@@ -2713,7 +2811,7 @@ async fn codex_config(
     Query(query): Query<CwdQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge.config_read(query.cwd).await {
+    match state.bridge().config_read(query.cwd).await {
         Ok(value) => ok(normalize_config_response(&value, &state)),
         Err(err) => Err(api_error(
             StatusCode::BAD_GATEWAY,
@@ -2745,7 +2843,7 @@ async fn codex_goal_get(
     let Some(thread_id) = non_empty(query.thread_id.as_deref()) else {
         return ok(goal_empty("missing_thread"));
     };
-    match state.bridge.goal_get(thread_id.to_string()).await {
+    match state.bridge().goal_get(thread_id.to_string()).await {
         Ok(value) => ok(normalize_goal_response(&value)),
         Err(err) => Err(api_error(
             StatusCode::BAD_GATEWAY,
@@ -2774,7 +2872,7 @@ async fn codex_goal_set(
         return codex_goal_clear_inner(&state, thread_id).await;
     }
     match state
-        .bridge
+        .bridge()
         .goal_set(
             thread_id.to_string(),
             objective.to_string(),
@@ -2805,7 +2903,7 @@ async fn codex_goal_clear(
 }
 
 async fn codex_goal_clear_inner(state: &AppState, thread_id: &str) -> ApiResponse {
-    match state.bridge.goal_clear(thread_id.to_string()).await {
+    match state.bridge().goal_clear(thread_id.to_string()).await {
         Ok(_) => ok(goal_empty("cleared")),
         Err(err) => Err(api_error(
             StatusCode::BAD_GATEWAY,
@@ -2820,7 +2918,7 @@ async fn panel_update_precheck(State(state): State<AppState>, headers: HeaderMap
     let id = state.jobs.start_shell_job(
         "panel_update_precheck",
         "Panel update precheck",
-        state.config.update.panel_precheck_command.clone(),
+        state.config().update.panel_precheck_command.clone(),
     )?;
     ok(json!({"job_id": id}))
 }
@@ -2839,7 +2937,7 @@ async fn panel_update_start(State(state): State<AppState>, headers: HeaderMap) -
     let id = state.jobs.start_shell_job(
         "panel_update_start",
         "Panel update latest",
-        update::panel_update_command(&state.config.update.panel_update_command),
+        update::panel_update_command(&state.config().update.panel_update_command),
     )?;
     ok(json!({"job_id": id}))
 }
@@ -2871,7 +2969,7 @@ async fn codex_update_precheck(State(state): State<AppState>, headers: HeaderMap
         .start_exclusive_shell_job(
             "codex_update_precheck",
             "Codex update precheck",
-            state.config.update.precheck_command.clone(),
+            state.config().update.precheck_command.clone(),
             "codex_update",
         )
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
@@ -2894,7 +2992,7 @@ async fn codex_update_start(State(state): State<AppState>, headers: HeaderMap) -
         .start_exclusive_shell_job(
             "codex_update_start",
             "Codex update + prune + doctor",
-            state.config.update.update_command.clone(),
+            state.config().update.update_command.clone(),
             "codex_update",
         )
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
@@ -2917,7 +3015,7 @@ async fn codex_update_prune(State(state): State<AppState>, headers: HeaderMap) -
         .start_exclusive_shell_job(
             "codex_update_prune",
             "Codex release prune",
-            state.config.update.prune_command.clone(),
+            state.config().update.prune_command.clone(),
             "codex_update",
         )
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
@@ -2927,7 +3025,7 @@ async fn codex_update_prune(State(state): State<AppState>, headers: HeaderMap) -
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     ok(archive::plan_delete_archived(&paths)?)
 }
 
@@ -2949,7 +3047,7 @@ async fn archive_delete_execute(
             "archive deletion must be confirmed",
         ));
     }
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let result = archive::execute_delete_archived(&paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2968,7 +3066,7 @@ async fn hidden_threads_delete_dry_run(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     ok(archive::plan_delete_hidden(&paths)?)
 }
 
@@ -2985,7 +3083,7 @@ async fn hidden_threads_delete_execute(
             "hidden thread deletion must be confirmed",
         ));
     }
-    let paths = CodexPaths::new(&state.config.codex.home);
+    let paths = CodexPaths::new(&state.config().codex.home);
     let result = archive::execute_delete_hidden(&paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -3061,15 +3159,15 @@ async fn job_events(
 fn security_response(state: &AppState) -> anyhow::Result<Value> {
     let security = state
         .db
-        .security_settings(state.config.security.session_ttl_seconds)?;
+        .security_settings(state.config().security.session_ttl_seconds)?;
     let expected_hostname = state
         .db
         .get_setting("turnstile_expected_hostname")?
-        .or_else(|| state.config.security.turnstile_expected_hostname.clone());
+        .or_else(|| state.config().security.turnstile_expected_hostname.clone());
     let expected_action = state
         .db
         .get_setting("turnstile_expected_action")?
-        .or_else(|| state.config.security.turnstile_expected_action.clone());
+        .or_else(|| state.config().security.turnstile_expected_action.clone());
     Ok(json!({
         "turnstile_enabled": security.turnstile_enabled,
         "turnstile_required": security.turnstile_required,
@@ -4001,6 +4099,25 @@ fn timestamp_to_rfc3339(value: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(value, 0).map(|dt| dt.to_rfc3339())
 }
 
+fn probe_logs_db_last_result(raw: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return raw.to_string();
+    };
+    let dry_run = value
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .map(|value| if value { "dry-run" } else { "execute" })
+        .unwrap_or("maintain");
+    let events = value.get("events").and_then(Value::as_u64).unwrap_or(0);
+    let dedupe = value.get("dedupe").and_then(Value::as_u64).unwrap_or(0);
+    if let Some(skip_reason) = value.get("skip_reason").and_then(Value::as_str) {
+        if !skip_reason.is_empty() {
+            return format!("{dry_run}: {skip_reason}");
+        }
+    }
+    format!("{dry_run}: events={events}, dedupe={dedupe}")
+}
+
 fn job_responses(jobs: Vec<JobRecord>) -> Vec<Value> {
     jobs.into_iter().map(job_response).collect()
 }
@@ -4022,10 +4139,11 @@ fn job_response(job: JobRecord) -> Value {
 
 fn normalize_config_response(value: &Value, state: &AppState) -> Value {
     let config = value.get("config").unwrap_or(value);
+    let default_cwd = state.config().codex.workspace.to_string_lossy().to_string();
     json!({
         "model": config.get("model").and_then(Value::as_str),
         "reasoning_effort": config.get("model_reasoning_effort").or_else(|| config.get("reasoning_effort")).and_then(Value::as_str),
-        "cwd": config.get("cwd").and_then(Value::as_str).unwrap_or_else(|| state.config.codex.workspace.to_str().unwrap_or("/home/ubuntu/codex-workspace")),
+        "cwd": config.get("cwd").and_then(Value::as_str).unwrap_or(default_cwd.as_str()),
         "permission_profile": config.get("default_permissions").or_else(|| config.get("permissions")).and_then(Value::as_str),
         "approval_policy": config.get("approval_policy").and_then(Value::as_str),
         "sandbox_mode": config.get("sandbox_mode").and_then(Value::as_str),
@@ -4066,7 +4184,7 @@ fn cli_config_string(value: &str) -> String {
 }
 
 fn client_ip(headers: &HeaderMap, state: &AppState, source: Option<SocketAddr>) -> Option<String> {
-    if state.config.server.trust_forwarded_headers {
+    if state.config().server.trust_forwarded_headers {
         if let Some(ip) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             return ip.split(',').next().map(|v| v.trim().to_string());
         }
@@ -4110,10 +4228,10 @@ mod tests {
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, filter_thread_summaries,
-        followup_request, merge_thread_summaries, prune_hidden_thread_summaries,
-        requested_thread_limit, router, seed_thread_event_blocks, thread_block_page,
-        thread_event_block_key, thread_list_fetch_limit, thread_title, turnstile_login_action,
-        SendMessageRequest, TurnstileLoginAction,
+        fixed_probe_shell_command, followup_request, merge_thread_summaries,
+        prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
+        thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
+        turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4130,15 +4248,55 @@ mod tests {
         collections::HashMap,
         env, fs,
         path::PathBuf,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex, OnceLock,
+        },
     };
     use tower::ServiceExt;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct ConfigEnvGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl ConfigEnvGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let guard = CONFIG_ENV_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .expect("config env lock");
+            let previous = env::var_os("NEXUSHUB_CONFIG");
+            env::set_var("NEXUSHUB_CONFIG", path);
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for ConfigEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                env::set_var("NEXUSHUB_CONFIG", previous);
+            } else {
+                env::remove_var("NEXUSHUB_CONFIG");
+            }
+        }
+    }
+
+    fn temp_test_dir(prefix: &str) -> PathBuf {
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        env::temp_dir().join(format!("{}-{}-{unique}", prefix, std::process::id()))
+    }
 
     fn authenticated_test_state() -> (crate::state::AppState, String, String) {
         let mut config = Config::default();
         config.security.cookie_secure = false;
+        config.codex.bridge_enabled = false;
         config.update.panel_precheck_command = "true".to_string();
         config.update.panel_update_command = "true".to_string();
         config.update.prune_command = "true".to_string();
@@ -4161,6 +4319,20 @@ mod tests {
             "session-token".to_string(),
             "csrf-token".to_string(),
         )
+    }
+
+    fn authenticated_test_state_with_config_file(
+    ) -> (crate::state::AppState, String, String, PathBuf, PathBuf) {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-config");
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        fs::write(
+            &config_path,
+            toml::to_string_pretty(&state.config()).unwrap(),
+        )
+        .unwrap();
+        (state, session_token, csrf_token, dir, config_path)
     }
 
     fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
@@ -4300,7 +4472,7 @@ mod tests {
     #[tokio::test]
     async fn probe_status_routes_use_canonical_probe_name_and_keep_sentinel_alias() {
         let (state, session_token, _) = authenticated_test_state();
-        let app = router(state);
+        let app = router(state.clone());
 
         let response = app
             .clone()
@@ -4442,7 +4614,9 @@ mod tests {
 
     #[tokio::test]
     async fn probe_settings_events_and_sentinel_aliases_are_available() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
+        let (state, session_token, csrf_token, _dir, config_path) =
+            authenticated_test_state_with_config_file();
+        let _config_env = ConfigEnvGuard::set(&config_path);
         state
             .db
             .record_probe_event(nexushub_core::db::NewProbeEvent {
@@ -4455,7 +4629,18 @@ mod tests {
                 payload: json!({"ok": true}),
             })
             .unwrap();
-        let app = router(state);
+        state
+            .db
+            .claim_probe_dedupe("probe_event", "test-key", 300)
+            .unwrap();
+        state
+            .db
+            .set_setting(
+                "probe_logs_db_last_maintain",
+                &json!({"dry_run": true, "events": 7, "dedupe": 2}).to_string(),
+            )
+            .unwrap();
+        let app = router(state.clone());
 
         for uri in [
             "/api/probe/settings",
@@ -4483,6 +4668,30 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "{uri}");
         }
 
+        let logs_db = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/logs-db/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logs_db.status(), StatusCode::OK);
+        let body = to_bytes(logs_db.into_body(), usize::MAX).await.unwrap();
+        let logs_db: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(logs_db["event_count"], 1);
+        assert_eq!(logs_db["dedupe_count"], 1);
+        assert_eq!(logs_db["total_rows"], 2);
+        assert!(logs_db["pending_cleanup_rows"].is_number());
+        assert!(logs_db["last_maintain_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(logs_db["last_result"], "dry-run: events=7, dedupe=2");
+
         let patch = app
             .oneshot(
                 Request::builder()
@@ -4492,13 +4701,184 @@ mod tests {
                     .header("x-csrf-token", csrf_token.as_str())
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"probe":{"poll_seconds":20},"notifications":{"device_key":"secret-bark-key"}}"#,
+                        r#"{"probe":{"poll_seconds":20,"notifications":{"enabled":true,"device_key":"secret-bark-key"}}}"#,
                     ))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(patch.status(), StatusCode::OK);
+        let body = to_bytes(patch.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["notifications"]["device_key_configured"], true);
+        assert!(payload["notifications"].get("device_key").is_none());
+        assert!(!body
+            .windows(b"secret-bark-key".len())
+            .any(|window| { window == b"secret-bark-key" }));
+        assert_eq!(
+            state
+                .db
+                .get_secret_setting_bytes("probe_bark_device_key")
+                .unwrap()
+                .unwrap(),
+            b"secret-bark-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_settings_patch_requires_csrf() {
+        let (state, session_token, _csrf_token, _dir, config_path) =
+            authenticated_test_state_with_config_file();
+        let _config_env = ConfigEnvGuard::set(&config_path);
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"probe":{"poll_seconds":25}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn probe_settings_patch_rejects_missing_config_file() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-missing-config");
+        fs::create_dir_all(&dir).unwrap();
+        let missing_path = dir.join("missing-config.toml");
+        let _config_env = ConfigEnvGuard::set(&missing_path);
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"probe":{"poll_seconds":25}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["error"].as_str().unwrap().contains("config"));
+    }
+
+    #[tokio::test]
+    async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
+        let (state, session_token, csrf_token, _dir, config_path) =
+            authenticated_test_state_with_config_file();
+        let _config_env = ConfigEnvGuard::set(&config_path);
+        let app = router(state.clone());
+
+        let patch = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"codex":{"host_label":"fresh-host"},"probe":{"poll_seconds":33,"logs_db":{"retention_days":2}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(patch.status(), StatusCode::OK);
+
+        let settings = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(settings.status(), StatusCode::OK);
+        let body = to_bytes(settings.into_body(), usize::MAX).await.unwrap();
+        let settings: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(settings["probe"]["poll_seconds"], 33);
+        assert_eq!(settings["codex"]["host_label"], "fresh-host");
+
+        let status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let body = to_bytes(status.into_body(), usize::MAX).await.unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status["poll_seconds"], 33);
+        assert_eq!(status["host_label"], "fresh-host");
+
+        let plan = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/probe/logs-db/plan")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.status(), StatusCode::OK);
+        let body = to_bytes(plan.into_body(), usize::MAX).await.unwrap();
+        let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(plan["payload"]["retention_days"], 2);
+
+        let job = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/probe/bark/test")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(job.status(), StatusCode::OK);
+        let body = to_bytes(job.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let job_id = payload["job_id"].as_str().unwrap();
+        let job = state.db.job(job_id).unwrap().unwrap();
+        assert_eq!(job.kind, "probe_bark_test");
+        let command =
+            fixed_probe_shell_command(&state, &["probe".to_string(), "bark-test".to_string()]);
+        assert!(command.contains(config_path.to_string_lossy().as_ref()));
+        let config_text = fs::read_to_string(&config_path).unwrap();
+        assert!(config_text.contains("fresh-host"));
     }
 
     #[tokio::test]

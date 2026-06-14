@@ -503,7 +503,21 @@ export async function getProbeHookStatus(): Promise<OptionalResult<ProbeHookStat
 }
 
 export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
-  if (USE_DEMO) return { available: true, data: { status: "maintenance_ready", logs_db_status: "maintenance_ready", path: "/opt/nexushub/logs/probe.sqlite" } };
+  if (USE_DEMO) return {
+    available: true,
+    data: {
+      status: "maintenance_ready",
+      logs_db_status: "maintenance_ready",
+      path: "/opt/nexushub/logs/probe.sqlite",
+      total_rows: 128,
+      event_count: 120,
+      dedupe_count: 8,
+      pending_cleanup_rows: 6,
+      size_bytes: 524288,
+      last_maintain_at: "2026-06-14T18:15:32Z",
+      last_result: "dry-run: events=6, dedupe=0"
+    }
+  };
   return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
 }
 
@@ -1134,7 +1148,19 @@ function demoProbeSettings(): ProbeSettings {
     },
     logs_db: {
       enabled: true,
-      retention_days: 14
+      retention_days: 2,
+      maintenance_interval_hours: 6,
+      maintain_on_codex_exit: true,
+      codex_exit_grace_seconds: 5,
+      codex_exit_max_wait_seconds: 1800,
+      delete_chunk_rows: 5000,
+      max_delete_rows_per_run: 100000,
+      busy_timeout_ms: 500,
+      auto_compact_when_codex_closed: true,
+      compact_interval_hours: 24,
+      compact_min_freelist_mb: 256,
+      compact_min_freelist_ratio_percent: 20,
+      minimum_free_space_mb: 1024
     }
   };
 }

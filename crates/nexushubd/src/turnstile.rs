@@ -58,7 +58,7 @@ pub async fn verify_turnstile(
     let expected_hostname = state
         .db
         .get_setting("turnstile_expected_hostname")?
-        .or_else(|| state.config.security.turnstile_expected_hostname.clone());
+        .or_else(|| state.config().security.turnstile_expected_hostname.clone());
     if let Some(expected) = expected_hostname
         .as_deref()
         .filter(|value| !value.trim().is_empty())
@@ -70,7 +70,7 @@ pub async fn verify_turnstile(
     let expected_action = state
         .db
         .get_setting("turnstile_expected_action")?
-        .or_else(|| state.config.security.turnstile_expected_action.clone());
+        .or_else(|| state.config().security.turnstile_expected_action.clone());
     if let Some(expected) = expected_action
         .as_deref()
         .filter(|value| !value.trim().is_empty())
