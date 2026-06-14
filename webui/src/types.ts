@@ -287,6 +287,7 @@ export type ClaudeSessionSummary = {
   updated_at?: string | null;
   message_count: number;
   file?: string | null;
+  last_message_preview?: string | null;
 };
 
 export type ClaudeProject = {
@@ -297,11 +298,66 @@ export type ClaudeProject = {
   sessions: ClaudeSessionSummary[];
 };
 
+export type ClaudeRecentSession = ClaudeSessionSummary & {
+  project_id: string;
+  project_display_name: string;
+};
+
+export type ClaudeMcpSummary = {
+  config_files: string[];
+  server_count: number;
+  servers: Array<{
+    name: string;
+    command?: string | null;
+    transport?: string | null;
+    args_count: number;
+    env_keys: string[];
+    has_sensitive_env: boolean;
+    raw_config?: unknown;
+  }>;
+};
+
+export type ClaudeInstallationSummary = {
+  claude_home: string;
+  settings_file: string;
+  settings_exists: boolean;
+  settings_local_file: string;
+  settings_local_exists: boolean;
+  user_config_file?: string | null;
+  user_config_exists: boolean;
+  executable_candidates: string[];
+  version_hint?: string | null;
+  health_hints: string[];
+};
+
+export type ClaudeCacheLogStatus = {
+  cache_dir: string;
+  cache_exists: boolean;
+  cache_file_count: number;
+  cache_total_bytes: number;
+  log_dir: string;
+  log_exists: boolean;
+  log_file_count: number;
+  log_total_bytes: number;
+};
+
+export type ClaudeMaintenanceCommand = {
+  name: string;
+  title: string;
+  command: string;
+  description: string;
+};
+
 export type ClaudeOverview = {
   home: string;
   settings_exists: boolean;
   settings_preview?: unknown;
   projects: ClaudeProject[];
+  recent_sessions?: ClaudeRecentSession[];
+  mcp?: ClaudeMcpSummary;
+  installation?: ClaudeInstallationSummary;
+  cache_status?: ClaudeCacheLogStatus;
+  maintenance_commands?: Record<string, ClaudeMaintenanceCommand>;
 };
 
 export type PlatformOverview = {
@@ -321,11 +377,13 @@ export type PluginInfo = {
   kind: "builtin" | "external" | string;
 };
 
-export type SentinelStatus = {
+export type ProbeStatus = {
+  label?: string | null;
   enabled: boolean;
   platform: "linux" | "macos" | "windows" | string;
   service_kind: string;
   service_name: string;
+  flavor?: string | null;
   hook_status: string;
   bark_status: string;
   logs_db_status: string;
@@ -334,6 +392,53 @@ export type SentinelStatus = {
   recoverable_count: number;
   config_path: string;
 };
+
+export type ProbeThread = Partial<ThreadSummary> & {
+  id: string;
+  title?: string | null;
+  status?: ThreadStatus | string | null;
+};
+
+export type ProbeEvent = {
+  id?: string | null;
+  kind?: string | null;
+  thread_id?: string | null;
+  title?: string | null;
+  created_at?: string | number | null;
+  message?: string | null;
+  [key: string]: unknown;
+};
+
+export type ProbeDashboard = {
+  status?: Partial<ProbeStatus> | null;
+  running?: ProbeThread[];
+  reply_needed?: ProbeThread[];
+  recoverable?: ProbeThread[];
+  recent_events?: ProbeEvent[];
+  diagnostics?: Record<string, unknown> | null;
+};
+
+export type ProbeHookStatus = {
+  status?: string | null;
+  hook_status?: string | null;
+  installed?: boolean | null;
+  managed?: boolean | null;
+  [key: string]: unknown;
+};
+
+export type ProbeLogsDbStatus = {
+  status?: string | null;
+  logs_db_status?: string | null;
+  path?: string | null;
+  size_bytes?: number | null;
+  [key: string]: unknown;
+};
+
+export type SentinelStatus = ProbeStatus;
+
+export type ProbeJobAction = "hooks-install" | "bark-test" | "logs-db-maintain";
+
+export type ClaudeCodeJobAction = "version-check" | "update-precheck" | "update-start" | "smoke" | "cache-status";
 
 export type GoalModeState = {
   enabled: boolean;

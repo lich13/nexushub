@@ -236,8 +236,8 @@ describe("archive delete API compatibility", () => {
     const {
       getClaudeCodeOverview,
       getPlatformOverview,
-      getSentinelStatus,
-      listPlugins,
+      getProbeDashboard,
+      getProbeStatus,
       listProviders
     } = await loadRealApi();
     const responses: Record<string, unknown> = {
@@ -257,12 +257,12 @@ describe("archive delete API compatibility", () => {
         service_name: "nexushub",
         service_kind: "systemd"
       },
-      "/api/plugins": [{ id: "sentinel", label: "Sentinel", status: "preview", kind: "builtin" }],
-      "/api/sentinel/status": {
+      "/api/probe/status": {
         enabled: true,
         platform: "linux",
         service_kind: "systemd",
-        service_name: "nexushub",
+        service_name: "codex-sentinel-server",
+        flavor: "server",
         hook_status: "managed",
         bark_status: "not_configured",
         logs_db_status: "maintenance_ready",
@@ -270,6 +270,20 @@ describe("archive delete API compatibility", () => {
         reply_needed_count: 0,
         recoverable_count: 0,
         config_path: "/opt/nexushub/config.toml"
+      },
+      "/api/probe/dashboard": {
+        status: {
+          enabled: true,
+          flavor: "server",
+          hook_status: "managed",
+          bark_status: "not_configured",
+          logs_db_status: "maintenance_ready"
+        },
+        running: [],
+        reply_needed: [],
+        recoverable: [],
+        recent_events: [],
+        diagnostics: { doctor: { state_db_exists: true }, hook_status: { server_stop_hook_installed: true } }
       }
     };
     const fetchMock = vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
@@ -281,19 +295,19 @@ describe("archive delete API compatibility", () => {
     await expect(listProviders()).resolves.toMatchObject([{ id: "codex", status: "ready" }]);
     await expect(getClaudeCodeOverview()).resolves.toMatchObject({ available: true, data: { settings_exists: true } });
     await expect(getPlatformOverview()).resolves.toMatchObject({ kind: "linux", data_dir: "/opt/nexushub" });
-    await expect(listPlugins()).resolves.toMatchObject([{ id: "sentinel", kind: "builtin" }]);
-    await expect(getSentinelStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed" } });
+    await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "server" } });
+    await expect(getProbeDashboard()).resolves.toMatchObject({ available: true, data: { status: { flavor: "server" } } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
       "/api/providers",
       "/api/providers/claude-code/overview",
       "/api/platform",
-      "/api/plugins",
-      "/api/sentinel/status"
+      "/api/probe/status",
+      "/api/probe/dashboard"
     ]);
   });
 
   test("preview provider endpoints return unavailable when the backend has not enabled them", async () => {
-    const { getClaudeCodeOverview, getSentinelStatus } = await loadRealApi();
+    const { getClaudeCodeOverview, getProbeStatus } = await loadRealApi();
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "not found" }), {
       status: 404,
       headers: { "content-type": "application/json" }
@@ -301,7 +315,72 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getClaudeCodeOverview()).resolves.toMatchObject({ available: false });
-    await expect(getSentinelStatus()).resolves.toMatchObject({ available: false });
+    await expect(getProbeStatus()).resolves.toMatchObject({ available: false });
+  });
+
+  test("Probe demo data labels the Sentinel server service consistently", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    const { getProbeDashboard, getProbeStatus } = await import("./api");
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: { flavor: "server", service_kind: "systemd", service_name: "codex-sentinel-server" }
+    });
+    await expect(getProbeDashboard()).resolves.toMatchObject({
+      available: true,
+      data: { status: { flavor: "server", service_name: "codex-sentinel-server" } }
+    });
+  });
+
+  test("Claude Code demo overview includes read-only MCP install and cache summaries", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    const { getClaudeCodeOverview } = await import("./api");
+
+    const result = await getClaudeCodeOverview();
+
+    expect(result).toMatchObject({
+      available: true,
+      data: {
+        mcp: { server_count: 1 },
+        installation: { settings_exists: true, version_hint: "demo" },
+        cache_status: { cache_exists: true, log_exists: true }
+      }
+    });
+    expect(result.data?.recent_sessions?.[0]).toMatchObject({ id: "session-a", project_display_name: "/Users/gosu/demo" });
+  });
+
+  test("fixed Probe and Claude maintenance jobs use canonical API routes", async () => {
+    const { startClaudeCodeJob, startProbeJob } = await loadRealApi();
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => {
+      const segments = String(path).split("/");
+      return new Response(JSON.stringify({ job_id: `${segments[segments.length - 1]}-job` }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startProbeJob("hooks-install", "csrf-token")).resolves.toEqual({ job_id: "install-job" });
+    await expect(startProbeJob("bark-test", "csrf-token")).resolves.toEqual({ job_id: "test-job" });
+    await expect(startProbeJob("logs-db-maintain", "csrf-token")).resolves.toEqual({ job_id: "maintain-job" });
+    await expect(startClaudeCodeJob("version-check", "csrf-token")).resolves.toEqual({ job_id: "version-check-job" });
+    await expect(startClaudeCodeJob("update-precheck", "csrf-token")).resolves.toEqual({ job_id: "precheck-job" });
+    await expect(startClaudeCodeJob("update-start", "csrf-token")).resolves.toEqual({ job_id: "start-job" });
+    await expect(startClaudeCodeJob("smoke", "csrf-token")).resolves.toEqual({ job_id: "smoke-job" });
+    await expect(startClaudeCodeJob("cache-status", "csrf-token")).resolves.toEqual({ job_id: "cache-status-job" });
+
+    expect(fetchMock.mock.calls.map(([path, options]) => [path, (options as RequestInit).method, ((options as RequestInit).headers as Headers).get("x-csrf-token")])).toEqual([
+      ["/api/probe/hooks/install", "POST", "csrf-token"],
+      ["/api/probe/bark/test", "POST", "csrf-token"],
+      ["/api/probe/logs-db/maintain", "POST", "csrf-token"],
+      ["/api/providers/claude-code/jobs/version-check", "POST", "csrf-token"],
+      ["/api/providers/claude-code/jobs/update/precheck", "POST", "csrf-token"],
+      ["/api/providers/claude-code/jobs/update/start", "POST", "csrf-token"],
+      ["/api/providers/claude-code/jobs/smoke", "POST", "csrf-token"],
+      ["/api/providers/claude-code/jobs/cache-status", "POST", "csrf-token"]
+    ]);
   });
 
   test("Job History labels read-only filesystem failures in Chinese", async () => {
@@ -591,19 +670,22 @@ describe("archive delete API compatibility", () => {
     ]);
   });
 
-  test("NexusHub navigation exposes provider and extension workspaces", async () => {
+  test("NexusHub navigation exposes the slim provider workspaces", async () => {
     const app = await import("../App");
 
     expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual([
-      "chat",
+      "codex",
       "claude",
-      "sentinel",
-      "files",
-      "git",
-      "terminal",
-      "plugins",
+      "probe",
       "ops",
       "security"
+    ]);
+    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual([
+      "Codex",
+      "Claude Code",
+      "Probe",
+      "运维",
+      "安全"
     ]);
   });
 

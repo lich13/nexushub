@@ -11,7 +11,6 @@ import {
   Edit3,
   Files,
   GitFork,
-  GitBranch,
   Goal,
   HardDrive,
   KeyRound,
@@ -19,7 +18,6 @@ import {
   LogOut,
   Menu,
   MessageSquare,
-  Plug,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -53,6 +51,13 @@ import {
   getCodexConfig,
   getGoalMode,
   getPublicSettings,
+  getProbeDashboard,
+  getProbeHookStatus,
+  getProbeLogsDbStatus,
+  getProbeRecoverable,
+  getProbeReplyNeeded,
+  getProbeRunning,
+  getProbeStatus,
   getSecurity,
   getSystemStatus,
   getSystemVersion,
@@ -71,8 +76,10 @@ import {
   saveSecurity,
   sendMessage,
   setGoalMode,
+  startClaudeCodeJob,
   startArchiveDelete,
   startHiddenThreadDelete,
+  startProbeJob,
   startUpdateJob,
   stopThread,
   steerThread,
@@ -80,8 +87,6 @@ import {
   uploadFiles,
   getClaudeCodeOverview,
   getPlatformOverview,
-  getSentinelStatus,
-  listPlugins,
   listProviders,
   type ThreadSendPayload
 } from "./lib/api";
@@ -116,9 +121,11 @@ import type {
   PendingElicitation,
   PermissionProfile,
   PlatformOverview,
-  PluginInfo,
+  ProbeDashboard,
+  ProbeEvent,
+  ProbeStatus,
+  ProbeThread,
   SecuritySettings,
-  SentinelStatus as SentinelStatusData,
   SessionUser,
   SystemStatus,
   SystemVersion,
@@ -128,7 +135,7 @@ import type {
   UploadRecord
 } from "./types";
 
-type View = "chat" | "claude" | "sentinel" | "files" | "git" | "terminal" | "plugins" | "ops" | "security";
+type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
@@ -181,13 +188,9 @@ export const statusTabs = [
 ];
 
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
-  { id: "chat", label: "对话", icon: <MessageSquare /> },
-  { id: "claude", label: "Claude", icon: <Bot /> },
-  { id: "sentinel", label: "Sentinel", icon: <TriangleAlert /> },
-  { id: "files", label: "文件", icon: <Files /> },
-  { id: "git", label: "Git", icon: <GitBranch /> },
-  { id: "terminal", label: "终端", icon: <TerminalSquare /> },
-  { id: "plugins", label: "插件", icon: <Plug /> },
+  { id: "codex", label: "Codex", icon: <MessageSquare /> },
+  { id: "claude", label: "Claude Code", icon: <Bot /> },
+  { id: "probe", label: "Probe", icon: <TriangleAlert /> },
   { id: "ops", label: "运维", icon: <HardDrive /> },
   { id: "security", label: "安全", icon: <ShieldCheck /> }
 ];
@@ -251,7 +254,7 @@ declare global {
 
 export default function App() {
   const [session, setSession] = useState<SessionUser | null>(() => loadSession());
-  const [view, setView] = useState<View>("chat");
+  const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
 
@@ -283,7 +286,7 @@ export default function App() {
       )}
       <main className="main-workspace">
         <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} />
-        {view === "chat" && (
+        {view === "codex" && (
           <ChatWorkspace
             csrfToken={session.csrf_token}
             mobileThreadsOpen={mobileThreadsOpen}
@@ -291,11 +294,7 @@ export default function App() {
           />
         )}
         {view === "claude" && <ClaudeWorkspace />}
-        {view === "sentinel" && <SentinelWorkspace />}
-        {view === "files" && <PreviewWorkspace kind="files" />}
-        {view === "git" && <PreviewWorkspace kind="git" />}
-        {view === "terminal" && <PreviewWorkspace kind="terminal" />}
-        {view === "plugins" && <PluginsWorkspace />}
+        {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} />}
         {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} />}
         {view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
       </main>
@@ -476,7 +475,7 @@ function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => v
   return (
     <>
       <div className="mobile-topbar">
-        <button className="icon-button" onClick={onOpenThreads} disabled={view !== "chat"} title={view === "chat" ? "打开线程" : "线程列表仅用于对话"}>
+        <button className="icon-button" onClick={onOpenThreads} disabled={view !== "codex"} title={view === "codex" ? "打开线程" : "线程列表仅用于 Codex"}>
           <Menu size={20} />
         </button>
         <span>{current?.label ?? "NexusHub"}</span>
@@ -2599,25 +2598,54 @@ function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onD
 function ClaudeWorkspace() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000 });
   const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000 });
+  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
   const provider = providerById(providers.data, "claude_code") ?? providerById(providers.data, "claude-code");
   const data = overview.data?.data;
   const available = overview.data?.available ?? false;
   const projectCount = data?.projects.length ?? 0;
   const sessionCount = totalClaudeSessions(data);
+  const settingsSummary = claudeSettingsSummary(data?.settings_preview, data?.mcp);
+  const installation = data?.installation;
+  const cacheStatus = data?.cache_status;
+  const healthText = installation?.health_hints?.length ? installation.health_hints.join(", ") : "ok";
 
   return (
     <div className="ops-grid">
-      <Panel title="Provider" icon={<Bot size={18} />}>
+      <Panel title="Claude Code" icon={<Bot size={18} />}>
         <Metric label="Name" value={provider?.label ?? "Claude Code"} />
-        <Metric label="Status" value={provider?.status ?? "preview"} tone={provider?.status === "ready" ? "success" : "warning"} />
-        <Metric label="Safety" value={provider?.safety ?? "read-only"} />
+        <Metric label="Mode" value="read-only workbench" tone="success" />
+        <Metric label="Status" value={provider?.status ?? (available ? "preview" : "unavailable")} tone={provider?.status === "ready" || available ? "success" : "warning"} />
         <Metric label="Capabilities" value={capabilityText(provider)} />
       </Panel>
       <Panel title="Claude Home" icon={<HardDrive size={18} />}>
-        <Metric label="Home" value={pathText(data?.home)} />
-        <Metric label="Settings" value={data?.settings_exists ? "present" : available ? "missing" : "unavailable"} tone={data?.settings_exists ? "success" : "warning"} />
+        <Metric label="Home" value={pathText(installation?.claude_home ?? data?.home)} />
+        <Metric label="Settings" value={(installation?.settings_exists ?? data?.settings_exists) ? "present" : available ? "missing" : "unavailable"} tone={(installation?.settings_exists ?? data?.settings_exists) ? "success" : "warning"} />
         <Metric label="Projects" value={String(projectCount)} />
         <Metric label="Sessions" value={String(sessionCount)} />
+      </Panel>
+      <Panel title="Runtime Status" icon={<TerminalSquare size={18} />}>
+        <Metric label="Platform" value={platform.data?.kind ?? "unknown"} />
+        <Metric label="Service" value={platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "unknown"} />
+        <Metric label="Boundary" value={provider?.safety ?? "no launch/resume/send/stop"} />
+        <Metric label="Refresh" value={overview.isFetching ? "refreshing" : "idle"} tone={overview.isFetching ? "warning" : undefined} />
+      </Panel>
+      <Panel title="MCP Summary" icon={<ClipboardCheck size={18} />}>
+        <Metric label="MCP config" value={settingsSummary.mcp} tone={settingsSummary.mcp === "not detected" ? "warning" : "success"} />
+        <Metric label="Permissions" value={settingsSummary.permissions} />
+        <Metric label="Config files" value={String(data?.mcp?.config_files?.length ?? 0)} />
+        <Metric label="Settings source" value={data?.settings_exists ? "settings preview" : "not loaded"} />
+      </Panel>
+      <Panel title="Install Health" icon={<CheckCircle2 size={18} />}>
+        <Metric label="Version" value={installation?.version_hint ?? "unknown"} tone={installation?.version_hint ? "success" : "warning"} />
+        <Metric label="Executable" value={installation?.executable_candidates?.[0] ?? "not found"} tone={installation?.executable_candidates?.length ? "success" : "warning"} />
+        <Metric label="User config" value={installation?.user_config_exists ? "found" : "not found"} />
+        <Metric label="Health" value={healthText} tone={installation?.health_hints?.length ? "warning" : "success"} />
+      </Panel>
+      <Panel title="Cache and Logs" icon={<Database size={18} />}>
+        <Metric label="Cache" value={cacheStatus?.cache_exists ? "found" : "missing"} tone={cacheStatus?.cache_exists ? "success" : "warning"} />
+        <Metric label="Cache files" value={String(cacheStatus?.cache_file_count ?? 0)} />
+        <Metric label="Logs" value={cacheStatus?.log_exists ? "found" : "missing"} tone={cacheStatus?.log_exists ? "success" : "warning"} />
+        <Metric label="Log files" value={String(cacheStatus?.log_file_count ?? 0)} />
       </Panel>
       <Panel title="Projects" icon={<Files size={18} />} className="wide-panel">
         <div className="preview-list">
@@ -2634,7 +2662,7 @@ function ClaudeWorkspace() {
           {!available && <div className="muted-row">Claude Code preview endpoint unavailable</div>}
         </div>
       </Panel>
-      <Panel title="Recent Sessions" icon={<MessageSquare size={18} />} className="wide-panel">
+      <Panel title="Session Detail" icon={<MessageSquare size={18} />} className="wide-panel">
         <div className="preview-list compact">
           {recentClaudeSessions(data).map((session) => (
             <article className="preview-item" key={session.key}>
@@ -2657,16 +2685,38 @@ function ClaudeWorkspace() {
   );
 }
 
-function SentinelWorkspace() {
-  const status = useQuery({ queryKey: ["sentinel-status"], queryFn: getSentinelStatus, refetchInterval: 15000 });
+function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000 });
+  const dashboard = useQuery({ queryKey: ["probe-dashboard"], queryFn: getProbeDashboard, refetchInterval: 15000 });
+  const running = useQuery({ queryKey: ["probe-running"], queryFn: getProbeRunning, refetchInterval: 10000 });
+  const replyNeeded = useQuery({ queryKey: ["probe-reply-needed"], queryFn: getProbeReplyNeeded, refetchInterval: 10000 });
+  const recoverable = useQuery({ queryKey: ["probe-recoverable"], queryFn: getProbeRecoverable, refetchInterval: 10000 });
+  const hookStatus = useQuery({ queryKey: ["probe-hook-status"], queryFn: getProbeHookStatus, refetchInterval: 30000 });
+  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000 });
   const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
-  const data = status.data?.data;
+  const data = probeStatusData(status.data?.data, dashboard.data?.data);
   const available = status.data?.available ?? false;
+  const runningRows = probeRows(dashboard.data?.data?.running, running.data?.data);
+  const replyRows = probeRows(dashboard.data?.data?.reply_needed, replyNeeded.data?.data);
+  const recoverableRows = probeRows(dashboard.data?.data?.recoverable, recoverable.data?.data);
+  const events = dashboard.data?.data?.recent_events ?? [];
+  const jobMutation = useMutation({
+    mutationFn: (action: Parameters<typeof startProbeJob>[0]) => startProbeJob(action, csrfToken),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["probe-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-dashboard"] });
+      qc.invalidateQueries({ queryKey: ["probe-hook-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+    }
+  });
 
   return (
     <div className="ops-grid">
-      <Panel title="Sentinel" icon={<TriangleAlert size={18} />}>
+      <Panel title="Probe" icon={<TriangleAlert size={18} />}>
         <Metric label="Status" value={data?.enabled ? "enabled" : available ? "disabled" : "unavailable"} tone={data?.enabled ? "success" : "warning"} />
+        <Metric label="Flavor" value={data?.flavor ?? "unknown"} />
         <Metric label="Service" value={data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "unknown"} />
         <Metric label="Config" value={pathText(data?.config_path ?? platform.data?.config_file)} />
         <Metric label="Platform" value={data?.platform ?? platform.data?.kind ?? "unknown"} />
@@ -2684,91 +2734,34 @@ function SentinelWorkspace() {
         <Metric label="Recoverable alerts" value={data?.enabled ? "enabled" : "inactive"} />
       </Panel>
       <Panel title="Logs DB" icon={<Database size={18} />}>
-        <Metric label="Maintenance" value={data?.logs_db_status ?? "unknown"} tone={data?.logs_db_status === "maintenance_ready" ? "success" : "warning"} />
+        <Metric label="Maintenance" value={data?.logs_db_status ?? logsDbStatus.data?.data?.logs_db_status ?? logsDbStatus.data?.data?.status ?? "unknown"} tone={(data?.logs_db_status ?? logsDbStatus.data?.data?.status) === "maintenance_ready" ? "success" : "warning"} />
+        <Metric label="Hook detail" value={hookStatusText(hookStatus.data?.data)} />
         <Metric label="Data dir" value={pathText(platform.data?.data_dir)} />
         <Metric label="Log dir" value={pathText(platform.data?.log_dir)} />
+        <div className="button-row">
+          <button className="secondary-button" onClick={() => jobMutation.mutate("hooks-install")} disabled={jobMutation.isPending}><ClipboardCheck size={17} />安装 Hooks</button>
+          <button className="secondary-button" onClick={() => jobMutation.mutate("bark-test")} disabled={jobMutation.isPending}><Cloud size={17} />Bark Test</button>
+          <button className="primary-button" onClick={() => jobMutation.mutate("logs-db-maintain")} disabled={jobMutation.isPending}><Database size={17} />维护 Logs DB</button>
+        </div>
+      </Panel>
+      <Panel title="Running" icon={<Play size={18} />}>
+        <ProbeThreadList rows={runningRows} empty="暂无运行中线程" />
+      </Panel>
+      <Panel title="Reply Needed" icon={<MessageSquare size={18} />}>
+        <ProbeThreadList rows={replyRows} empty="暂无待回复线程" />
+      </Panel>
+      <Panel title="Recoverable" icon={<TriangleAlert size={18} />} className="wide-panel">
+        <ProbeThreadList rows={recoverableRows} empty="暂无可恢复异常" />
+      </Panel>
+      <Panel title="Recent Events" icon={<ClipboardCheck size={18} />} className="wide-panel">
+        <ProbeEventList events={events} />
       </Panel>
       {!available && (
         <Panel title="Endpoint" icon={<TriangleAlert size={18} />} className="wide-panel">
-          <div className="muted-row">Sentinel preview endpoint unavailable</div>
+          <div className="muted-row">Probe endpoint unavailable</div>
         </Panel>
       )}
     </div>
-  );
-}
-
-function PluginsWorkspace() {
-  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000 });
-  const plugins = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, refetchInterval: 30000 });
-
-  return (
-    <div className="ops-grid">
-      <Panel title="Providers" icon={<Bot size={18} />} className="wide-panel">
-        <div className="provider-grid">
-          {(providers.data ?? []).map((provider) => (
-            <ProviderCard key={provider.id} provider={provider} />
-          ))}
-        </div>
-      </Panel>
-      <Panel title="Built-ins" icon={<Plug size={18} />} className="wide-panel">
-        <div className="preview-list">
-          {(plugins.data ?? []).map((plugin) => (
-            <article className="preview-item" key={plugin.id}>
-              <div>
-                <strong>{plugin.label}</strong>
-                <span>{plugin.id}</span>
-              </div>
-              <small>{plugin.kind} · {plugin.status}</small>
-            </article>
-          ))}
-          {(plugins.data ?? []).length === 0 && <div className="muted-row">暂无插件</div>}
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function PreviewWorkspace({ kind }: { kind: "files" | "git" | "terminal" }) {
-  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
-  const meta = {
-    files: { title: "Files", icon: <Files size={18} />, primary: "read-only preview", path: platform.data?.data_dir },
-    git: { title: "Git", icon: <GitBranch size={18} />, primary: "inventory preview", path: platform.data?.data_dir },
-    terminal: { title: "Terminal", icon: <TerminalSquare size={18} />, primary: "fixed jobs only", path: platform.data?.config_file }
-  }[kind];
-
-  return (
-    <div className="ops-grid">
-      <Panel title={meta.title} icon={meta.icon}>
-        <Metric label="Status" value={meta.primary} tone="warning" />
-        <Metric label="Platform" value={platform.data?.kind ?? "unknown"} />
-        <Metric label="Path" value={pathText(meta.path)} />
-        <Metric label="Service" value={platform.data?.service_name ?? "nexushub"} />
-      </Panel>
-      <Panel title="Boundary" icon={<ShieldCheck size={18} />} className="wide-panel">
-        <div className="preview-list compact">
-          <article className="preview-item">
-            <div>
-              <strong>{kind === "terminal" ? "No arbitrary shell" : "Permission gated"}</strong>
-              <span>{kind === "terminal" ? "job runner" : "provider-neutral workspace surface"}</span>
-            </div>
-            <small>{platform.data?.service_kind ?? "service"}</small>
-          </article>
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function ProviderCard({ provider }: { provider: AgentProviderInfo }) {
-  return (
-    <article className="provider-card">
-      <div>
-        <strong>{provider.label}</strong>
-        <span className={`provider-status ${provider.status}`}>{provider.status}</span>
-      </div>
-      {provider.description && <p>{provider.description}</p>}
-      <small>{capabilityText(provider)}</small>
-    </article>
   );
 }
 
@@ -2782,6 +2775,7 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
   const jobMutation = useMutation({ mutationFn: ({ target, action }: { target: "panel" | "codex"; action: "precheck" | "start" | "prune" }) => startUpdateJob(target, action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
+  const claudeJobMutation = useMutation({ mutationFn: (action: Parameters<typeof startClaudeCodeJob>[0]) => startClaudeCodeJob(action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
   const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: setPlan });
   const executeDelete = useMutation({ mutationFn: () => startArchiveDelete(csrfToken), onSuccess: () => {
     setDeleteArmed(false);
@@ -2829,6 +2823,15 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
           <button className="secondary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
           <button className="primary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "start" })}><Play size={17} />一键更新</button>
           <button className="danger-button soft" onClick={() => jobMutation.mutate({ target: "codex", action: "prune" })}><Trash2 size={17} />单独清理旧版本</button>
+        </div>
+      </Panel>
+      <Panel title="Claude Code 维护" icon={<Bot size={18} />}>
+        <div className="button-row">
+          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("version-check")}><CheckCircle2 size={17} />版本检查</button>
+          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("update-precheck")}><ClipboardCheck size={17} />更新预检</button>
+          <button className="primary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("update-start")}><Play size={17} />开始更新</button>
+          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("smoke")}><TerminalSquare size={17} />Smoke</button>
+          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("cache-status")}><Database size={17} />缓存状态</button>
         </div>
       </Panel>
       <Panel title="归档清理" icon={<Archive size={18} />}>
@@ -2988,6 +2991,40 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
   return <div className="metric"><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
 }
 
+function ProbeThreadList({ rows, empty }: { rows: ProbeThread[]; empty: string }) {
+  return (
+    <div className="preview-list compact">
+      {rows.slice(0, 8).map((thread) => (
+        <article className="preview-item" key={thread.id}>
+          <div>
+            <strong>{thread.title?.trim() || thread.id}</strong>
+            <span>{thread.cwd ?? thread.id}</span>
+          </div>
+          <small>{thread.status ?? "unknown"}</small>
+        </article>
+      ))}
+      {rows.length === 0 && <div className="muted-row">{empty}</div>}
+    </div>
+  );
+}
+
+function ProbeEventList({ events }: { events: ProbeEvent[] }) {
+  return (
+    <div className="preview-list compact">
+      {events.slice(0, 10).map((event, index) => (
+        <article className="preview-item" key={event.id ?? `${event.thread_id ?? "event"}-${index}`}>
+          <div>
+            <strong>{event.title || event.kind || "Probe event"}</strong>
+            <span>{event.message || event.thread_id || "no detail"}</span>
+          </div>
+          <small>{event.created_at ? String(event.created_at) : "unknown"}</small>
+        </article>
+      ))}
+      {events.length === 0 && <div className="muted-row">暂无 Probe 事件</div>}
+    </div>
+  );
+}
+
 function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {
   return providers?.find((provider) => provider.id === id);
 }
@@ -3005,6 +3042,31 @@ function totalClaudeSessions(overview?: ClaudeOverview): number {
   return overview?.projects.reduce((total, project) => total + project.session_count, 0) ?? 0;
 }
 
+function claudeSettingsSummary(settings: unknown, mcpSummary?: ClaudeOverview["mcp"]): { mcp: string; permissions: string } {
+  const raw = settings && typeof settings === "object" ? settings as Record<string, unknown> : {};
+  const mcp = raw.mcpServers ?? raw.mcp_servers ?? raw.mcp;
+  const permissions = raw.permissions;
+  const serverCount = mcpSummary?.server_count;
+  return {
+    mcp: typeof serverCount === "number" ? `${serverCount} servers` : mcp && typeof mcp === "object" ? `${Object.keys(mcp as Record<string, unknown>).length} servers` : "not detected",
+    permissions: permissions && typeof permissions === "object" ? "configured" : "unknown"
+  };
+}
+
+function probeStatusData(status?: ProbeStatus, dashboard?: ProbeDashboard): Partial<ProbeStatus> | undefined {
+  return status ?? dashboard?.status ?? undefined;
+}
+
+function probeRows(primary?: ProbeThread[], fallback?: ProbeThread[]): ProbeThread[] {
+  return primary ?? fallback ?? [];
+}
+
+function hookStatusText(status?: Record<string, unknown>): string {
+  if (!status) return "unknown";
+  const value = status.hook_status ?? status.status;
+  return typeof value === "string" && value.trim() ? value : "available";
+}
+
 function recentClaudeSessions(overview?: ClaudeOverview): Array<{
   key: string;
   project: string;
@@ -3013,6 +3075,16 @@ function recentClaudeSessions(overview?: ClaudeOverview): Array<{
   updated_at?: string | null;
   message_count: number;
 }> {
+  if (overview?.recent_sessions?.length) {
+    return overview.recent_sessions.slice(0, 12).map((session) => ({
+      key: `${session.project_id}:${session.id}`,
+      project: session.project_display_name,
+      id: session.id,
+      title: session.title,
+      updated_at: session.updated_at,
+      message_count: session.message_count
+    }));
+  }
   return (overview?.projects ?? [])
     .flatMap((project) => project.sessions.map((session) => ({
       key: `${project.id}:${session.id}`,

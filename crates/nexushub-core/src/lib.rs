@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod db;
 pub mod jobs;
 pub mod platform;
+pub mod probe;
 pub mod providers;
 pub mod security;
 pub mod sentinel;

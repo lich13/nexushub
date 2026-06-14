@@ -45,7 +45,7 @@ button { cursor: pointer; }
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 184px minmax(0, 1fr);
   background:
     linear-gradient(180deg, rgba(56,189,248,0.08), transparent 28rem),
     var(--canvas);
@@ -55,13 +55,14 @@ button { cursor: pointer; }
 .side-nav {
   border-right: 1px solid var(--hairline);
   background: rgba(7, 17, 31, 0.92);
-  padding: 18px 14px;
+  padding: 16px 10px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
-.nav-brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 14px; }
+.nav-brand { display: flex; align-items: center; gap: 8px; padding: 4px 4px 12px; min-width: 0; }
+.nav-brand > div:not(.brand-mark) { min-width: 0; }
 .nav-brand strong { display: block; font-size: 15px; }
 .nav-brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .nav-collapse-button { margin-left: auto; width: 34px; height: 34px; }
@@ -80,8 +81,9 @@ button { cursor: pointer; }
   place-items: center;
 }
 .brand-mark {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
   border: 1px solid rgba(56,189,248,0.42);
   background: var(--primary-soft);
   color: var(--primary-hover);
@@ -102,6 +104,8 @@ button { cursor: pointer; }
   align-items: center;
   gap: 10px;
 }
+.nav-button { min-width: 0; }
+.nav-button svg, .ghost-button svg { flex: 0 0 auto; }
 .nav-button svg, .ghost-button svg { width: 18px; height: 18px; }
 .nav-button.active, .nav-button:hover, .ghost-button:hover {
   background: var(--primary-soft);
@@ -1561,15 +1565,18 @@ button { cursor: pointer; }
   }
   .mobile-tabs::-webkit-scrollbar { display: none; }
   .mobile-tabs button {
-    min-width: 76px;
-    flex: 0 0 auto;
+    min-width: 0;
+    flex: 1 1 0;
     border: 0;
     background: transparent;
     color: var(--muted);
     display: grid;
     place-items: center;
-    font-size: 11px;
+    font-size: 10px;
     padding: 5px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .mobile-tabs button svg { width: 18px; height: 18px; }
   .mobile-tabs button.active { color: var(--primary-hover); }

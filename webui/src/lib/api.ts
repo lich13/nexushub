@@ -15,6 +15,12 @@ import type {
   PermissionProfile,
   PlatformOverview,
   PluginInfo,
+  ProbeDashboard,
+  ProbeHookStatus,
+  ProbeJobAction,
+  ProbeLogsDbStatus,
+  ProbeThread,
+  ProbeStatus,
   PublicSettings,
   SecuritySettings,
   SentinelStatus,
@@ -324,22 +330,68 @@ export async function listProviders(): Promise<AgentProviderInfo[]> {
 
 export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOverview>> {
   if (USE_DEMO) {
+    const now = new Date().toISOString();
+    const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
     return {
       available: true,
       data: {
         home: "~/.claude",
         settings_exists: true,
-        settings_preview: { permissions: { allow: ["Read"], deny: ["Write"] }, apiKey: "[redacted]" },
+        settings_preview: {
+          permissions: { allow: ["Read"], deny: ["Write"] },
+          mcpServers: {
+            github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_TOKEN: "[redacted]" } }
+          },
+          apiKey: "[redacted]"
+        },
         projects: [{
           id: "-Users-gosu-demo",
           display_name: "/Users/gosu/demo",
           path_hint: "/Users/gosu/demo",
           session_count: 2,
           sessions: [
-            { id: "session-a", title: "NexusHub provider shell", updated_at: new Date().toISOString(), message_count: 18 },
-            { id: "session-b", title: "只读配置审计", updated_at: new Date(Date.now() - 3600_000).toISOString(), message_count: 7 }
+            { id: "session-a", title: "NexusHub provider shell", updated_at: now, message_count: 18, last_message_preview: "Provider summary ready" },
+            { id: "session-b", title: "只读配置审计", updated_at: oneHourAgo, message_count: 7, last_message_preview: "Settings redacted" }
           ]
-        }]
+        }],
+        recent_sessions: [
+          { project_id: "-Users-gosu-demo", project_display_name: "/Users/gosu/demo", id: "session-a", title: "NexusHub provider shell", updated_at: now, message_count: 18, last_message_preview: "Provider summary ready" },
+          { project_id: "-Users-gosu-demo", project_display_name: "/Users/gosu/demo", id: "session-b", title: "只读配置审计", updated_at: oneHourAgo, message_count: 7, last_message_preview: "Settings redacted" }
+        ],
+        mcp: {
+          config_files: ["~/.claude/settings.json"],
+          server_count: 1,
+          servers: [{ name: "github", command: "npx", transport: null, args_count: 2, env_keys: ["GITHUB_TOKEN"], has_sensitive_env: true }]
+        },
+        installation: {
+          claude_home: "~/.claude",
+          settings_file: "~/.claude/settings.json",
+          settings_exists: true,
+          settings_local_file: "~/.claude/settings.local.json",
+          settings_local_exists: false,
+          user_config_file: "~/.claude.json",
+          user_config_exists: true,
+          executable_candidates: ["/usr/local/bin/claude"],
+          version_hint: "demo",
+          health_hints: []
+        },
+        cache_status: {
+          cache_dir: "~/.claude/cache",
+          cache_exists: true,
+          cache_file_count: 3,
+          cache_total_bytes: 4096,
+          log_dir: "~/.claude/logs",
+          log_exists: true,
+          log_file_count: 2,
+          log_total_bytes: 2048
+        },
+        maintenance_commands: {
+          version_check: { name: "version_check", title: "Claude Code version", command: "claude --version", description: "Print the installed Claude Code CLI version." },
+          update_precheck: { name: "update_precheck", title: "Claude Code update precheck", command: "command -v claude && claude --version && npm view @anthropic-ai/claude-code version", description: "Check current and latest versions." },
+          update_start: { name: "update_start", title: "Claude Code update", command: "npm install -g @anthropic-ai/claude-code@latest && claude --version", description: "Install the latest package." },
+          smoke: { name: "smoke", title: "Claude Code smoke test", command: "claude -p 'Respond with OK for NexusHub smoke check.' --max-turns 1", description: "Run a bounded prompt smoke test." },
+          cache_log_status: { name: "cache_log_status", title: "Claude Code cache and log status", command: "find ~/.claude -maxdepth 2 -type f | wc -l", description: "Print cache and log counts." }
+        }
       }
     };
   }
@@ -365,7 +417,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
   if (USE_DEMO) {
     return [
       { id: "codex", label: "Codex", status: "ready", kind: "builtin" },
-      { id: "sentinel", label: "Sentinel", status: "preview", kind: "builtin" },
+      { id: "probe", label: "Probe", status: "preview", kind: "builtin" },
       { id: "claude-code", label: "Claude Code", status: "preview", kind: "builtin" },
       { id: "system-ops", label: "System/Ops", status: "ready", kind: "builtin" }
     ];
@@ -374,25 +426,71 @@ export async function listPlugins(): Promise<PluginInfo[]> {
 }
 
 export async function getSentinelStatus(): Promise<OptionalResult<SentinelStatus>> {
+  return getProbeStatus();
+}
+
+export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
+  if (USE_DEMO) {
+    return {
+      available: true,
+      data: demoProbeStatus()
+    };
+  }
+  return optionalApiFetch<ProbeStatus>("/api/probe/status");
+}
+
+export async function getProbeDashboard(): Promise<OptionalResult<ProbeDashboard>> {
   if (USE_DEMO) {
     return {
       available: true,
       data: {
-        enabled: true,
-        platform: "linux",
-        service_kind: "systemd",
-        service_name: "nexushub",
-        hook_status: "managed",
-        bark_status: "not_configured",
-        logs_db_status: "maintenance_ready",
-        recent_event_count: 0,
-        reply_needed_count: 0,
-        recoverable_count: 0,
-        config_path: "/opt/nexushub/config.toml"
+        status: demoProbeStatus(),
+        running: demoThreads("running", ""),
+        reply_needed: demoThreads("reply-needed", ""),
+        recoverable: demoThreads("recoverable", ""),
+        recent_events: [
+          { id: "probe-event-demo", kind: "reply-needed", thread_id: "019e95a0-demo", title: "Plan Mode 修复", message: "等待用户回复", created_at: new Date().toISOString() }
+        ],
+        diagnostics: {
+          doctor: { state_db_exists: true },
+          hook_status: { server_stop_hook_installed: true }
+        }
       }
     };
   }
-  return optionalApiFetch<SentinelStatus>("/api/sentinel/status");
+  return optionalApiFetch<ProbeDashboard>("/api/probe/dashboard");
+}
+
+export async function getProbeRunning(): Promise<OptionalResult<ThreadSummary[]>> {
+  if (USE_DEMO) return { available: true, data: demoThreads("running", "") };
+  return optionalProbeThreads("/api/probe/running");
+}
+
+export async function getProbeReplyNeeded(): Promise<OptionalResult<ThreadSummary[]>> {
+  if (USE_DEMO) return { available: true, data: demoThreads("reply-needed", "") };
+  return optionalProbeThreads("/api/probe/reply-needed");
+}
+
+export async function getProbeRecoverable(): Promise<OptionalResult<ThreadSummary[]>> {
+  if (USE_DEMO) return { available: true, data: demoThreads("recoverable", "") };
+  return optionalProbeThreads("/api/probe/recoverable");
+}
+
+export async function getProbeHookStatus(): Promise<OptionalResult<ProbeHookStatus>> {
+  if (USE_DEMO) return { available: true, data: { status: "managed", hook_status: "managed", installed: true, managed: true } };
+  return optionalApiFetch<ProbeHookStatus>("/api/probe/hook-status");
+}
+
+export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
+  if (USE_DEMO) return { available: true, data: { status: "maintenance_ready", logs_db_status: "maintenance_ready", path: "/opt/nexushub/logs/probe.sqlite" } };
+  return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
+}
+
+async function optionalProbeThreads(path: string): Promise<OptionalResult<ThreadSummary[]>> {
+  const result = await optionalApiFetch<ThreadSummary[] | { items?: ProbeThread[] }>(path);
+  if (!result.available) return result as OptionalResult<ThreadSummary[]>;
+  const data = Array.isArray(result.data) ? result.data : (result.data?.items ?? []);
+  return { available: true, data: data as ThreadSummary[] };
 }
 
 export async function saveSecurity(settings: Partial<SecuritySettings> & { turnstile_secret_key?: string }, csrfToken?: string | null) {
@@ -496,6 +594,30 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
     { method: "POST", csrfToken },
     `${target} ${action}`
   );
+}
+
+const probeJobRoutes: Record<ProbeJobAction, string> = {
+  "hooks-install": "/api/probe/hooks/install",
+  "bark-test": "/api/probe/bark/test",
+  "logs-db-maintain": "/api/probe/logs-db/maintain"
+};
+
+export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
+  if (USE_DEMO) return { job_id: `probe-${action}-demo` };
+  return apiFetch<{ job_id: string }>(probeJobRoutes[action], { method: "POST", csrfToken });
+}
+
+const claudeCodeJobRoutes = {
+  "version-check": "/api/providers/claude-code/jobs/version-check",
+  "update-precheck": "/api/providers/claude-code/jobs/update/precheck",
+  "update-start": "/api/providers/claude-code/jobs/update/start",
+  smoke: "/api/providers/claude-code/jobs/smoke",
+  "cache-status": "/api/providers/claude-code/jobs/cache-status"
+} as const;
+
+export async function startClaudeCodeJob(action: keyof typeof claudeCodeJobRoutes, csrfToken?: string | null): Promise<{ job_id: string }> {
+  if (USE_DEMO) return { job_id: `claude-code-${action}-demo` };
+  return apiFetch<{ job_id: string }>(claudeCodeJobRoutes[action], { method: "POST", csrfToken });
 }
 
 export type ThreadSendPayload = {
@@ -901,6 +1023,24 @@ function normalizePermissionProfiles(value: unknown): PermissionProfile[] {
       default: typeof raw.default === "boolean" ? raw.default : null
     }];
   });
+}
+
+function demoProbeStatus(): ProbeStatus {
+  return {
+    label: "Probe",
+    enabled: true,
+    platform: "linux",
+    service_kind: "systemd",
+    service_name: "codex-sentinel-server",
+    flavor: "server",
+    hook_status: "managed",
+    bark_status: "not_configured",
+    logs_db_status: "maintenance_ready",
+    recent_event_count: 1,
+    reply_needed_count: 1,
+    recoverable_count: 0,
+    config_path: "/opt/nexushub/config.toml"
+  };
 }
 
 function demoThreads(status: string, q: string): ThreadSummary[] {

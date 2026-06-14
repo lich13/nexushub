@@ -34,6 +34,7 @@ impl Default for ProviderRegistry {
                     status: "ready".to_string(),
                     description: "Full NexusHub control surface backed by official Codex state DB, rollout files, and app-server bridge.".to_string(),
                     capabilities: vec![
+                        "ready".to_string(),
                         "threads".to_string(),
                         "chat".to_string(),
                         "plan_questions".to_string(),
@@ -48,13 +49,19 @@ impl Default for ProviderRegistry {
                     label: "Claude Code".to_string(),
                     status: "preview".to_string(),
                     description:
-                        "Read-only project, session, and settings discovery from ~/.claude with launch/resume API placeholders.".to_string(),
+                        "Read-only Claude Code overview from ~/.claude, including projects, recent sessions, settings, MCP, install, cache, and log summaries.".to_string(),
                     capabilities: vec![
+                        "readonly".to_string(),
                         "projects".to_string(),
                         "sessions".to_string(),
+                        "recent_sessions".to_string(),
                         "settings_read".to_string(),
+                        "mcp_summary".to_string(),
+                        "install_health".to_string(),
+                        "cache_log_status".to_string(),
+                        "fixed_maintenance_commands".to_string(),
                     ],
-                    safety: "tool permissions remain disabled until explicitly enabled in a later settings flow".to_string(),
+                    safety: "read-only filesystem inspection only; no ~/.claude writes and no launch, resume, send, or stop controls".to_string(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::Cursor,

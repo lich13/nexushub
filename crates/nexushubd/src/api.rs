@@ -78,7 +78,38 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/platform", get(platform_overview))
         .route("/api/plugins", get(list_plugins))
-        .route("/api/sentinel/status", get(get_sentinel_status))
+        .route("/api/probe/status", get(get_probe_status))
+        .route("/api/probe/dashboard", get(get_probe_dashboard))
+        .route("/api/probe/running", get(get_probe_running))
+        .route("/api/probe/reply-needed", get(get_probe_reply_needed))
+        .route("/api/probe/recoverable", get(get_probe_recoverable))
+        .route("/api/probe/thread-probe/:id", get(get_probe_thread_probe))
+        .route("/api/probe/hook-status", get(get_probe_hook_status))
+        .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
+        .route("/api/probe/hooks/install", post(probe_hooks_install))
+        .route("/api/probe/bark/test", post(probe_bark_test))
+        .route("/api/probe/logs-db/maintain", post(probe_logs_db_maintain))
+        .route("/api/sentinel/status", get(get_probe_status))
+        .route(
+            "/api/providers/claude-code/jobs/version-check",
+            post(claude_code_version_check),
+        )
+        .route(
+            "/api/providers/claude-code/jobs/update/precheck",
+            post(claude_code_update_precheck),
+        )
+        .route(
+            "/api/providers/claude-code/jobs/update/start",
+            post(claude_code_update_start),
+        )
+        .route(
+            "/api/providers/claude-code/jobs/smoke",
+            post(claude_code_smoke),
+        )
+        .route(
+            "/api/providers/claude-code/jobs/cache-status",
+            post(claude_code_cache_status),
+        )
         .route("/api/threads", get(list_threads).post(create_thread))
         .route("/api/threads/:id", get(thread_detail))
         .route("/api/threads/:id/blocks", get(thread_blocks))
@@ -198,17 +229,510 @@ async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!([
         {"id": "codex", "label": "Codex", "status": "ready", "kind": "builtin"},
-        {"id": "sentinel", "label": "Sentinel", "status": "preview", "kind": "builtin"},
+        {"id": "probe", "label": "Probe", "status": "preview", "kind": "builtin"},
         {"id": "claude_code", "label": "Claude Code", "status": "preview", "kind": "builtin"},
         {"id": "system_ops", "label": "System / Ops", "status": "ready", "kind": "builtin"}
     ]))
 }
 
-async fn get_sentinel_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+async fn get_probe_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(sentinel::sentinel_status(
-        &PlatformPaths::current(),
-        &SentinelConfig::default(),
+    ok(probe_status_value().await)
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeListQuery {
+    limit: Option<usize>,
+}
+
+async fn get_probe_dashboard(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let status = probe_status_value().await;
+    let running = load_probe_threads(&state, "running", 50).await?;
+    let reply_needed = load_probe_threads(&state, "reply-needed", 50).await?;
+    let recoverable = load_probe_threads(&state, "recoverable", 50).await?;
+    let doctor_args = [probe_doctor_command()];
+    let (hook_status, logs_db_status, doctor) = tokio::join!(
+        probe_json_command(&["hook-status"]),
+        probe_json_command(&["logs-db-status"]),
+        probe_json_command(&doctor_args)
+    );
+    ok(json!({
+        "status": status,
+        "running": running,
+        "reply_needed": reply_needed,
+        "recoverable": recoverable,
+        "recent_events": [],
+        "diagnostics": {
+            "doctor": doctor,
+            "hook_status": hook_status,
+            "logs_db_status": logs_db_status,
+        }
+    }))
+}
+
+async fn get_probe_running(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProbeListQuery>,
+) -> ApiResponse {
+    probe_thread_list_response(state, headers, "running", query.limit).await
+}
+
+async fn get_probe_reply_needed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProbeListQuery>,
+) -> ApiResponse {
+    probe_thread_list_response(state, headers, "reply-needed", query.limit).await
+}
+
+async fn get_probe_recoverable(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProbeListQuery>,
+) -> ApiResponse {
+    probe_thread_list_response(state, headers, "recoverable", query.limit).await
+}
+
+async fn probe_thread_list_response(
+    state: AppState,
+    headers: HeaderMap,
+    status: &'static str,
+    limit: Option<usize>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+    let cli = probe_json_command(&[status, &limit.to_string()]).await;
+    let threads = load_probe_threads(&state, status, limit).await?;
+    ok(json!({
+        "source": "nexushub_read_model",
+        "items": threads,
+        "probe_cli": cli,
+    }))
+}
+
+async fn get_probe_thread_probe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let detail = load_merged_thread_detail(&state, &id, "probe thread")
+        .await
+        .map_err(api_error_for_thread_detail_load)?;
+    let cli = probe_json_command(&["debug-app-server-thread", &id]).await;
+    match detail {
+        Some(detail) => ok(json!({
+            "thread_id": id,
+            "summary": detail.summary,
+            "total_blocks": detail.total_blocks,
+            "raw_event_count": detail.raw_event_count,
+            "probe_cli": cli,
+        })),
+        None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
+    }
+}
+
+async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(probe_json_command(&["hook-status"]).await)
+}
+
+async fn get_probe_logs_db_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(probe_json_command(&["logs-db-status"]).await)
+}
+
+async fn probe_hooks_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_hooks_install",
+        "Probe install hooks",
+        probe_hooks_install_args(),
+        "probe_hooks",
+    )
+    .await
+}
+
+async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_bark_test",
+        "Probe Bark test",
+        vec!["test-bark".to_string()],
+        "probe_bark",
+    )
+    .await
+}
+
+async fn probe_logs_db_maintain(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_logs_db_maintain",
+        "Probe logs DB maintain",
+        vec!["logs-db-maintain".to_string(), "--dry-run".to_string()],
+        "probe_logs_db",
+    )
+    .await
+}
+
+async fn start_probe_fixed_job(
+    state: AppState,
+    headers: HeaderMap,
+    kind: &str,
+    title: &str,
+    args: Vec<String>,
+    group: &str,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        &format!("{kind}.started"),
+        Some("probe"),
+        Some(title),
+        None,
+        json!({"args": args}),
+    )?;
+    let command = fixed_probe_shell_command(&args);
+    let id = state
+        .jobs
+        .start_exclusive_shell_job(kind, title, command, group)
+        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
+    ok(json!({"job_id": id}))
+}
+
+async fn claude_code_version_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    start_claude_code_fixed_job(
+        state,
+        headers,
+        "claude_code_version_check",
+        "Claude Code version check",
+        "command -v claude && claude --version",
+        "claude_code_version_check",
+    )
+    .await
+}
+
+async fn claude_code_update_precheck(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    start_claude_code_fixed_job(
+        state,
+        headers,
+        "claude_code_update_precheck",
+        "Claude Code update precheck",
+        "command -v claude && claude --version && npm view @anthropic-ai/claude-code version",
+        "claude_code_update_precheck",
+    )
+    .await
+}
+
+async fn claude_code_update_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    start_claude_code_fixed_job(
+        state,
+        headers,
+        "claude_code_update_start",
+        "Claude Code update",
+        "npm install -g @anthropic-ai/claude-code@latest && claude --version",
+        "claude_code_update_start",
+    )
+    .await
+}
+
+async fn claude_code_smoke(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_claude_code_fixed_job(
+        state,
+        headers,
+        "claude_code_smoke",
+        "Claude Code smoke",
+        "claude -p 'ping' --output-format json",
+        "claude_code_smoke",
+    )
+    .await
+}
+
+async fn claude_code_cache_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    start_claude_code_fixed_job(
+        state,
+        headers,
+        "claude_code_cache_status",
+        "Claude Code cache/log status",
+        "printf 'Claude home: '; printf '%s\\n' \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"; du -sh \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" 2>/dev/null || true; find \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" -maxdepth 2 -type f 2>/dev/null | wc -l",
+        "claude_code_status",
+    )
+    .await
+}
+
+async fn start_claude_code_fixed_job(
+    state: AppState,
+    headers: HeaderMap,
+    kind: &str,
+    title: &str,
+    command: &str,
+    group: &str,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        &format!("{kind}.started"),
+        Some("claude_code"),
+        Some(title),
+        None,
+        json!({}),
+    )?;
+    let id = state
+        .jobs
+        .start_exclusive_shell_job(kind, title, command.to_string(), group)
+        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
+    ok(json!({"job_id": id}))
+}
+
+#[derive(Debug, Clone)]
+struct ProbeCommandProfile {
+    flavor: &'static str,
+    binary: Option<std::path::PathBuf>,
+    service_kind: &'static str,
+    service_name: &'static str,
+    config_path: std::path::PathBuf,
+}
+
+impl ProbeCommandProfile {
+    fn available(&self) -> bool {
+        self.binary.as_ref().is_some_and(|path| path.exists())
+    }
+}
+
+fn probe_command_profile() -> ProbeCommandProfile {
+    let server_bin =
+        std::path::PathBuf::from("/opt/codex-sentinel-server/bin/codex-sentinel-server");
+    if server_bin.exists() {
+        return ProbeCommandProfile {
+            flavor: "server",
+            binary: Some(server_bin),
+            service_kind: "systemd",
+            service_name: "codex-sentinel-server",
+            config_path: std::path::PathBuf::from("/etc/codex-sentinel-server/config.toml"),
+        };
+    }
+    let lite_bin = std::path::PathBuf::from(
+        "/Applications/Codex Sentinel Lite.app/Contents/MacOS/codex-sentinel-lite",
+    );
+    if lite_bin.exists() {
+        return ProbeCommandProfile {
+            flavor: "lite",
+            binary: Some(lite_bin),
+            service_kind: "launchd",
+            service_name: "local.codex-sentinel-lite",
+            config_path: std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".codex-sentinel-lite/config.toml"),
+        };
+    }
+    ProbeCommandProfile {
+        flavor: "unavailable",
+        binary: None,
+        service_kind: "unknown",
+        service_name: "probe",
+        config_path: PlatformPaths::current().config_file,
+    }
+}
+
+async fn probe_status_value() -> Value {
+    let profile = probe_command_profile();
+    let paths = PlatformPaths::current();
+    let fallback = sentinel::sentinel_status(&paths, &SentinelConfig::default());
+    json!({
+        "label": "Probe",
+        "enabled": fallback.enabled,
+        "available": profile.available(),
+        "platform": paths.kind,
+        "service_kind": profile.service_kind,
+        "service_name": profile.service_name,
+        "flavor": profile.flavor,
+        "binary_path": profile.binary.as_ref().map(|path| path.display().to_string()),
+        "hook_status": if profile.available() { "managed" } else { fallback.hook_status.as_str() },
+        "bark_status": fallback.bark_status,
+        "logs_db_status": if profile.available() { "maintenance_ready" } else { fallback.logs_db_status.as_str() },
+        "recent_event_count": fallback.recent_event_count,
+        "reply_needed_count": fallback.reply_needed_count,
+        "recoverable_count": fallback.recoverable_count,
+        "config_path": profile.config_path,
+    })
+}
+
+fn probe_doctor_command() -> &'static str {
+    if probe_command_profile().flavor == "lite" {
+        "lifecycle-status"
+    } else {
+        "doctor"
+    }
+}
+
+fn probe_hooks_install_args() -> Vec<String> {
+    if probe_command_profile().flavor == "server" {
+        vec![
+            "install-hooks-root".to_string(),
+            "--restart-app-server".to_string(),
+        ]
+    } else {
+        vec!["install-hooks".to_string()]
+    }
+}
+
+async fn probe_json_command(args: &[&str]) -> Value {
+    let profile = probe_command_profile();
+    let Some(binary) = profile.binary.as_ref().filter(|path| path.exists()) else {
+        return json!({
+            "available": false,
+            "flavor": profile.flavor,
+            "error": "Probe binary not found"
+        });
+    };
+    let Some(command_args) = probe_args_for_profile(&profile, args) else {
+        return json!({
+            "available": false,
+            "flavor": profile.flavor,
+            "error": format!("Probe command is not available for {} profile", profile.flavor),
+            "requested": args,
+        });
+    };
+    let output = tokio::time::timeout(
+        Duration::from_secs(12),
+        tokio::process::Command::new(binary)
+            .args(&command_args)
+            .output(),
+    )
+    .await;
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => {
+            return json!({
+                "available": false,
+                "flavor": profile.flavor,
+                "error": err.to_string(),
+            });
+        }
+        Err(_) => {
+            return json!({
+                "available": false,
+                "flavor": profile.flavor,
+                "error": "Probe command timed out",
+            });
+        }
+    };
+    let stdout = nexushub_core::security::redact_output(&String::from_utf8_lossy(&output.stdout));
+    let stderr = nexushub_core::security::redact_output(&String::from_utf8_lossy(&output.stderr));
+    let parsed = serde_json::from_str::<Value>(&stdout).ok();
+    json!({
+        "available": output.status.success(),
+        "flavor": profile.flavor,
+        "exit_code": output.status.code(),
+        "args": command_args,
+        "data": parsed.unwrap_or(Value::Null),
+        "stdout": if stdout.trim().is_empty() { Value::Null } else { Value::String(stdout) },
+        "stderr": if stderr.trim().is_empty() { Value::Null } else { Value::String(stderr) },
+    })
+}
+
+fn probe_args_for_profile(profile: &ProbeCommandProfile, args: &[&str]) -> Option<Vec<String>> {
+    let Some(command) = args.first().copied() else {
+        return Some(Vec::new());
+    };
+    if profile.flavor == "server" {
+        match command {
+            "hook-status" => return Some(vec!["doctor".to_string()]),
+            "debug-app-server-thread" => return None,
+            _ => {}
+        }
+    }
+    if profile.flavor == "lite" && command == "test-bark" {
+        return None;
+    }
+    Some(args.iter().map(|arg| (*arg).to_string()).collect())
+}
+
+fn fixed_probe_shell_command(args: &[String]) -> String {
+    let profile = probe_command_profile();
+    let Some(binary) = profile.binary.as_ref().filter(|path| path.exists()) else {
+        return "printf 'Probe binary not found\\n'; exit 127".to_string();
+    };
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let Some(command_args) = probe_args_for_profile(&profile, &arg_refs) else {
+        return format!(
+            "printf 'Probe command is not available for {} profile\\n'; exit 2",
+            profile.flavor
+        );
+    };
+    std::iter::once(shell_quote(&binary.display().to_string()))
+        .chain(command_args.iter().map(|arg| shell_quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+async fn load_probe_threads(
+    state: &AppState,
+    status: &'static str,
+    limit: usize,
+) -> anyhow::Result<Vec<ThreadSummary>> {
+    let paths = CodexPaths::new(&state.config.codex.home);
+    let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
+    let app_fetch_limit = app_server_thread_list_fetch_limit(Some(status), Some(limit));
+    let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
+        tracing::warn!("failed to read hidden thread metadata for probe: {err}");
+        HashSet::new()
+    });
+    let mut threads = codex::list_threads(&paths, None, None, local_fetch_limit)?;
+    if state.bridge.enabled() {
+        match state
+            .bridge
+            .thread_list(app_fetch_limit, archived_filter(Some(status)), None)
+            .await
+        {
+            Ok(value) => {
+                let app_threads = app_server_thread_summaries(&value, &threads);
+                if !app_threads.is_empty() {
+                    threads = merge_thread_summaries(threads, app_threads);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "app-server thread/list failed in probe; using state DB fallback: {err}"
+                );
+            }
+        }
+    }
+    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    apply_running_jobs_to_threads(state, &mut threads)?;
+    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    Ok(filter_thread_summaries(
+        threads,
+        Some(status),
+        None,
+        limit.clamp(1, 200),
     ))
 }
 
@@ -3571,6 +4095,173 @@ mod tests {
 
         assert_eq!(job.kind, "panel_update_prune");
         assert_eq!(job.title, "Panel backup prune");
+    }
+
+    #[tokio::test]
+    async fn probe_status_routes_use_canonical_probe_name_and_keep_sentinel_alias() {
+        let (state, session_token, _) = authenticated_test_state();
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status["label"], "Probe");
+        assert_ne!(status["label"], "Sentinel");
+        assert!(status["flavor"].as_str().is_some());
+        assert!(status["hook_status"].as_str().is_some());
+
+        let alias = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/sentinel/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(alias.status(), StatusCode::OK);
+        let body = to_bytes(alias.into_body(), usize::MAX).await.unwrap();
+        let alias_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(alias_status["label"], "Probe");
+        assert_eq!(alias_status["flavor"], status["flavor"]);
+    }
+
+    #[tokio::test]
+    async fn probe_fixed_job_routes_require_csrf_and_start_known_jobs() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let missing_csrf = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/probe/hooks/install")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+        for (uri, kind, title) in [
+            (
+                "/api/probe/hooks/install",
+                "probe_hooks_install",
+                "Probe install hooks",
+            ),
+            ("/api/probe/bark/test", "probe_bark_test", "Probe Bark test"),
+            (
+                "/api/probe/logs-db/maintain",
+                "probe_logs_db_maintain",
+                "Probe logs DB maintain",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let job_id = payload["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind);
+            assert_eq!(job.title, title);
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_code_fixed_job_routes_require_csrf_and_start_known_jobs() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let missing_csrf = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/providers/claude-code/jobs/smoke")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+        for (uri, kind, title) in [
+            (
+                "/api/providers/claude-code/jobs/version-check",
+                "claude_code_version_check",
+                "Claude Code version check",
+            ),
+            (
+                "/api/providers/claude-code/jobs/update/precheck",
+                "claude_code_update_precheck",
+                "Claude Code update precheck",
+            ),
+            (
+                "/api/providers/claude-code/jobs/update/start",
+                "claude_code_update_start",
+                "Claude Code update",
+            ),
+            (
+                "/api/providers/claude-code/jobs/smoke",
+                "claude_code_smoke",
+                "Claude Code smoke",
+            ),
+            (
+                "/api/providers/claude-code/jobs/cache-status",
+                "claude_code_cache_status",
+                "Claude Code cache/log status",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let job_id = payload["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind);
+            assert_eq!(job.title, title);
+        }
     }
 
     #[test]
