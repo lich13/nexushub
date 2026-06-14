@@ -437,6 +437,11 @@ ensure_section(
         "hook_cooldown_max_lines": "1000",
         "log_max_bytes": "5242880",
     },
+    {
+        "hook_event_max_lines": {"120"},
+        "hook_cooldown_max_lines": {"80"},
+        "log_max_bytes": {"262144"},
+    },
 )
 ensure_section(
     "probe.logs_db",
@@ -455,6 +460,18 @@ ensure_section(
         "compact_min_freelist_mb": "256",
         "compact_min_freelist_ratio_percent": "20",
         "minimum_free_space_mb": "1024",
+    },
+    {
+        "retention_days": {"14"},
+        "maintenance_interval_hours": {"24"},
+        "codex_exit_grace_seconds": {"10"},
+        "codex_exit_max_wait_seconds": {"120"},
+        "delete_chunk_rows": {"2000"},
+        "max_delete_rows_per_run": {"50000"},
+        "busy_timeout_ms": {"5000"},
+        "compact_interval_hours": {"168"},
+        "compact_min_freelist_mb": {"64"},
+        "minimum_free_space_mb": {"256"},
     },
 )
 

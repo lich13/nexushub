@@ -382,6 +382,64 @@ if 'notify_recoverable = true' not in migrated_probe:
 if 'busy_timeout_ms = 500' not in migrated_probe:
     raise SystemExit("install migration should fill missing probe.logs_db defaults")
 
+legacy_probe_defaults = """
+[probe.observability]
+hook_event_max_lines = 120
+hook_cooldown_max_lines = 80
+log_max_bytes = 262144
+
+[probe.logs_db]
+enabled = true
+retention_days = 14
+maintenance_interval_hours = 24
+maintain_on_codex_exit = true
+codex_exit_grace_seconds = 10
+codex_exit_max_wait_seconds = 120
+delete_chunk_rows = 2000
+max_delete_rows_per_run = 50000
+busy_timeout_ms = 5000
+auto_compact_when_codex_closed = true
+compact_interval_hours = 168
+compact_min_freelist_mb = 64
+compact_min_freelist_ratio_percent = 20
+minimum_free_space_mb = 256
+"""
+migrated_probe_defaults = run_config_migration(legacy_probe_defaults)
+for needle in [
+    "hook_event_max_lines = 500",
+    "hook_cooldown_max_lines = 1000",
+    "log_max_bytes = 5242880",
+    "retention_days = 2",
+    "maintenance_interval_hours = 6",
+    "codex_exit_grace_seconds = 5",
+    "codex_exit_max_wait_seconds = 1800",
+    "delete_chunk_rows = 5000",
+    "max_delete_rows_per_run = 100000",
+    "busy_timeout_ms = 500",
+    "compact_interval_hours = 24",
+    "compact_min_freelist_mb = 256",
+    "minimum_free_space_mb = 1024",
+]:
+    if needle not in migrated_probe_defaults:
+        raise SystemExit(f"old probe default was not migrated by install migration: {needle}")
+for stale in [
+    "hook_event_max_lines = 120",
+    "hook_cooldown_max_lines = 80",
+    "log_max_bytes = 262144",
+    "retention_days = 14",
+    "maintenance_interval_hours = 24",
+    "codex_exit_grace_seconds = 10",
+    "codex_exit_max_wait_seconds = 120",
+    "delete_chunk_rows = 2000",
+    "max_delete_rows_per_run = 50000",
+    "busy_timeout_ms = 5000",
+    "compact_interval_hours = 168",
+    "compact_min_freelist_mb = 64",
+    "minimum_free_space_mb = 256",
+]:
+    if stale in migrated_probe_defaults:
+        raise SystemExit(f"old probe default should be replaced by install migration: {stale}")
+
 legacy_paths_config = """
 [paths]
 data_dir = "/var/lib/codex-cloud-panel"
@@ -655,6 +713,70 @@ with tempfile.TemporaryDirectory() as tmp:
     ]:
         if needle not in migrated:
             raise SystemExit(f"probe default was not inserted by update migration: {needle}")
+
+with tempfile.TemporaryDirectory() as tmp:
+    config = Path(tmp) / "config.toml"
+    config.write_text(textwrap.dedent("""
+        [probe.observability]
+        hook_event_max_lines = 120
+        hook_cooldown_max_lines = 80
+        log_max_bytes = 262144
+
+        [probe.logs_db]
+        enabled = true
+        retention_days = 14
+        maintenance_interval_hours = 24
+        maintain_on_codex_exit = true
+        codex_exit_grace_seconds = 10
+        codex_exit_max_wait_seconds = 120
+        delete_chunk_rows = 2000
+        max_delete_rows_per_run = 50000
+        busy_timeout_ms = 5000
+        auto_compact_when_codex_closed = true
+        compact_interval_hours = 168
+        compact_min_freelist_mb = 64
+        compact_min_freelist_ratio_percent = 20
+        minimum_free_space_mb = 256
+    """).lstrip())
+    subprocess.run(
+        ["bash", "-c", f"source {update_sh}; migrate_codex_update_config {config}"],
+        check=True,
+    )
+    migrated_probe_defaults = config.read_text()
+    for needle in [
+        "hook_event_max_lines = 500",
+        "hook_cooldown_max_lines = 1000",
+        "log_max_bytes = 5242880",
+        "retention_days = 2",
+        "maintenance_interval_hours = 6",
+        "codex_exit_grace_seconds = 5",
+        "codex_exit_max_wait_seconds = 1800",
+        "delete_chunk_rows = 5000",
+        "max_delete_rows_per_run = 100000",
+        "busy_timeout_ms = 500",
+        "compact_interval_hours = 24",
+        "compact_min_freelist_mb = 256",
+        "minimum_free_space_mb = 1024",
+    ]:
+        if needle not in migrated_probe_defaults:
+            raise SystemExit(f"old probe default was not migrated by update migration: {needle}")
+    for stale in [
+        "hook_event_max_lines = 120",
+        "hook_cooldown_max_lines = 80",
+        "log_max_bytes = 262144",
+        "retention_days = 14",
+        "maintenance_interval_hours = 24",
+        "codex_exit_grace_seconds = 10",
+        "codex_exit_max_wait_seconds = 120",
+        "delete_chunk_rows = 2000",
+        "max_delete_rows_per_run = 50000",
+        "busy_timeout_ms = 5000",
+        "compact_interval_hours = 168",
+        "compact_min_freelist_mb = 64",
+        "minimum_free_space_mb = 256",
+    ]:
+        if stale in migrated_probe_defaults:
+            raise SystemExit(f"old probe default should be replaced by update migration: {stale}")
 
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"
