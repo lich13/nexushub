@@ -974,11 +974,10 @@ fn maybe_vacuum_codex_logs(
         .unwrap_or(0);
     let freelist_bytes = freelist_count.saturating_mul(page_size);
     let min_freelist_bytes = config.compact_min_freelist_mb.saturating_mul(1024 * 1024);
-    let freelist_ratio_percent = if page_count == 0 {
-        0
-    } else {
-        freelist_count.saturating_mul(100) / page_count
-    };
+    let freelist_ratio_percent = freelist_count
+        .saturating_mul(100)
+        .checked_div(page_count)
+        .unwrap_or(0);
     if freelist_bytes < min_freelist_bytes {
         result.skip_reason = Some("vacuum_freelist_below_minimum".to_string());
         return;
