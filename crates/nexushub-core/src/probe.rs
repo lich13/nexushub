@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    process::Command as StdCommand,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -950,9 +951,100 @@ fn maintain_codex_logs_db(
         })
         .ok();
     if compact {
-        result.skip_reason = Some("vacuum_requires_codex_app_server_stopped".to_string());
+        maybe_vacuum_codex_logs(&conn, &path, logs_config, &mut result);
     }
     Ok(result)
+}
+
+fn maybe_vacuum_codex_logs(
+    conn: &Connection,
+    path: &Path,
+    config: &ProbeLogsDbConfig,
+    result: &mut ProbeLogsDbMaintenanceResult,
+) {
+    if !config.auto_compact_when_codex_closed {
+        result.skip_reason = Some("vacuum_disabled".to_string());
+        return;
+    }
+    let page_size = pragma_u64(conn, "page_size").ok().flatten().unwrap_or(4096);
+    let page_count = pragma_u64(conn, "page_count").ok().flatten().unwrap_or(0);
+    let freelist_count = pragma_u64(conn, "freelist_count")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    let freelist_bytes = freelist_count.saturating_mul(page_size);
+    let min_freelist_bytes = config.compact_min_freelist_mb.saturating_mul(1024 * 1024);
+    let freelist_ratio_percent = if page_count == 0 {
+        0
+    } else {
+        freelist_count.saturating_mul(100) / page_count
+    };
+    if freelist_bytes < min_freelist_bytes {
+        result.skip_reason = Some("vacuum_freelist_below_minimum".to_string());
+        return;
+    }
+    if freelist_ratio_percent < u64::from(config.compact_min_freelist_ratio_percent) {
+        result.skip_reason = Some("vacuum_freelist_ratio_below_minimum".to_string());
+        return;
+    }
+    if config.minimum_free_space_mb > 0 {
+        let minimum_free_bytes = config.minimum_free_space_mb.saturating_mul(1024 * 1024);
+        match free_space_bytes(path) {
+            Some(free_bytes) if free_bytes >= minimum_free_bytes => {}
+            Some(_) => {
+                result.skip_reason = Some("vacuum_insufficient_free_space".to_string());
+                return;
+            }
+            None => {
+                result.skip_reason = Some("vacuum_free_space_unknown".to_string());
+                return;
+            }
+        }
+    }
+    match quick_check(conn, Duration::from_secs(5)) {
+        Ok(()) => result.quick_check_before_vacuum = Some("ok".to_string()),
+        Err(reason) => {
+            result.quick_check_before_vacuum = Some(reason.clone());
+            result.skip_reason = Some(reason);
+            return;
+        }
+    }
+    match conn.execute_batch("VACUUM") {
+        Ok(()) => {
+            result.vacuumed = true;
+            result.skip_reason = None;
+        }
+        Err(err) => {
+            result.ok = false;
+            result.status = sqlite_error_status(&err).to_string();
+            result.error = Some(format!("vacuum Codex logs DB {}: {err}", path.display()));
+        }
+    }
+}
+
+fn quick_check(conn: &Connection, timeout: Duration) -> std::result::Result<(), String> {
+    let started = Instant::now();
+    conn.progress_handler(1_000, Some(move || started.elapsed() >= timeout));
+    let checked = conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0));
+    conn.progress_handler(0, None::<fn() -> bool>);
+    match checked {
+        Ok(value) if value == "ok" => Ok(()),
+        Ok(value) => Err(format!("quick_check_failed:{value}")),
+        Err(_err) if started.elapsed() >= timeout => Err("quick_check_timeout".to_string()),
+        Err(err) => Err(format!("quick_check_failed:{err}")),
+    }
+}
+
+fn free_space_bytes(path: &Path) -> Option<u64> {
+    let target = path.parent().unwrap_or(path);
+    let output = StdCommand::new("df").arg("-Pk").arg(target).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().nth(1)?;
+    let available_kb = line.split_whitespace().nth(3)?.parse::<u64>().ok()?;
+    Some(available_kb.saturating_mul(1024))
 }
 
 fn inspect_codex_logs_connection(

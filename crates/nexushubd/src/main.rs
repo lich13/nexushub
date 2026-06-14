@@ -31,6 +31,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const DEFAULT_CONFIG: &str = "/opt/nexushub/config.toml";
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
+const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -103,6 +104,8 @@ enum ProbeCommand {
     LogsDbMaintain {
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        compact: bool,
     },
     LifecycleRepair,
     ServiceRestart,
@@ -250,12 +253,19 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 }))?
             );
         }
-        ProbeCommand::LogsDbMaintain { dry_run } => {
-            let result = probe_runtime(config).maintain_logs_db(dry_run)?;
+        ProbeCommand::LogsDbMaintain { dry_run, compact } => {
+            let result = probe_runtime(config)
+                .maintain_logs_db_with_compaction(dry_run, compact && !dry_run)?;
             db.set_setting(
                 PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
                 &serde_json::to_string(&result)?,
             )?;
+            if result.vacuumed {
+                db.set_setting(
+                    PROBE_LOGS_DB_LAST_COMPACT_SETTING,
+                    &serde_json::to_string(&result)?,
+                )?;
+            }
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         ProbeCommand::LifecycleRepair => {
@@ -717,19 +727,59 @@ async fn run_probe_logs_db_maintenance_if_due(
         }
     }
 
-    let result =
-        tokio::task::spawn_blocking(move || probe_runtime(&config).maintain_logs_db(false))
-            .await
-            .context("join probe logs DB maintenance worker")??;
+    let compact = probe_logs_db_compaction_due(&state.db, &config).await?;
+    let result = tokio::task::spawn_blocking(move || {
+        probe_runtime(&config).maintain_logs_db_with_compaction(false, compact)
+    })
+    .await
+    .context("join probe logs DB maintenance worker")??;
     state.db.set_setting(
         PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
         &serde_json::to_string(&result)?,
     )?;
+    if result.vacuumed {
+        state.db.set_setting(
+            PROBE_LOGS_DB_LAST_COMPACT_SETTING,
+            &serde_json::to_string(&result)?,
+        )?;
+    }
     Ok(ProbeLogsDbMaintenanceOutcome {
         ran: true,
         result: Some(result),
         skip_reason: None,
     })
+}
+
+async fn probe_logs_db_compaction_due(db: &PanelDb, config: &Config) -> Result<bool> {
+    if !config.probe.logs_db.auto_compact_when_codex_closed {
+        return Ok(false);
+    }
+    let interval_seconds = i64::from(config.probe.logs_db.compact_interval_hours.max(1)) * 3_600;
+    if let Some((_raw, updated_at)) =
+        db.get_setting_with_updated_at(PROBE_LOGS_DB_LAST_COMPACT_SETTING)?
+    {
+        if PanelDb::now().saturating_sub(updated_at) < interval_seconds {
+            return Ok(false);
+        }
+    }
+    Ok(codex_app_server_is_inactive(&config.codex.app_server_service).await)
+}
+
+async fn codex_app_server_is_inactive(service_name: &str) -> bool {
+    let service_name = service_name.trim();
+    if service_name.is_empty() {
+        return true;
+    }
+    match tokio::process::Command::new("systemctl")
+        .arg("is-active")
+        .arg("--quiet")
+        .arg(service_name)
+        .status()
+        .await
+    {
+        Ok(status) => !status.success(),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -918,6 +968,49 @@ log_max_bytes = 5242880
             )
             .unwrap();
         assert_eq!(old_rows, 1);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_logs_db_scheduler_compacts_when_codex_service_is_not_active() {
+        let dir = temp_test_dir("nexushub-scheduler-compact");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
+        {
+            let conn = Connection::open(&logs_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE bulky_payloads(body BLOB NOT NULL);
+                INSERT INTO bulky_payloads(body) VALUES(zeroblob(1048576));
+                DROP TABLE bulky_payloads;
+                "#,
+            )
+            .unwrap();
+        }
+
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.codex.app_server_service.clear();
+        config.probe.logs_db.retention_days = 2;
+        config.probe.logs_db.delete_chunk_rows = 10;
+        config.probe.logs_db.max_delete_rows_per_run = 10;
+        config.probe.logs_db.compact_min_freelist_mb = 0;
+        config.probe.logs_db.compact_min_freelist_ratio_percent = 0;
+        config.probe.logs_db.minimum_free_space_mb = 0;
+        let db = PanelDb::open(":memory:").unwrap();
+        let state = AppState::new(config, db);
+
+        let outcome = run_probe_logs_db_maintenance_if_due(state).await.unwrap();
+
+        assert!(outcome.ran);
+        let result = outcome.result.as_ref().unwrap();
+        assert_eq!(result.target, "codex_logs_2");
+        assert!(result.vacuumed);
+        assert_eq!(result.quick_check_before_vacuum.as_deref(), Some("ok"));
 
         fs::remove_dir_all(&dir).unwrap();
     }

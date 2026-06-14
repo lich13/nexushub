@@ -378,6 +378,51 @@ fn probe_logs_db_maintenance_deletes_old_codex_logs_in_chunks() {
 }
 
 #[test]
+fn probe_logs_db_compaction_vacuums_only_after_quick_check_and_size_gates() {
+    let root = temp_dir("nexushub-codex-logs-compact");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let logs_path = codex_home.join("logs_2.sqlite");
+    let now = chrono::Utc::now().timestamp();
+    seed_codex_logs_db(&logs_path, &[now - 300_000, now - 250_000, now - 100]);
+    {
+        let conn = Connection::open(&logs_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE bulky_payloads(body BLOB NOT NULL);
+            INSERT INTO bulky_payloads(body) VALUES(zeroblob(1048576));
+            INSERT INTO bulky_payloads(body) VALUES(zeroblob(1048576));
+            DROP TABLE bulky_payloads;
+            "#,
+        )
+        .unwrap();
+    }
+
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    config.probe.logs_db.retention_days = 2;
+    config.probe.logs_db.delete_chunk_rows = 10;
+    config.probe.logs_db.max_delete_rows_per_run = 10;
+    config.probe.logs_db.compact_min_freelist_mb = 0;
+    config.probe.logs_db.compact_min_freelist_ratio_percent = 0;
+    config.probe.logs_db.minimum_free_space_mb = 0;
+    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+    let result = runtime
+        .maintain_logs_db_with_compaction(false, true)
+        .unwrap();
+
+    assert!(result.ok);
+    assert_eq!(result.deleted_rows, 2);
+    assert_eq!(result.remaining_old_rows, 0);
+    assert_eq!(result.quick_check_before_vacuum.as_deref(), Some("ok"));
+    assert!(result.vacuumed);
+    assert!(result.skip_reason.is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn probe_logs_db_maintenance_reports_invalid_codex_logs_schema_as_result() {
     let root = temp_dir("nexushub-codex-logs-invalid-maintain");
     let codex_home = root.join(".codex");
