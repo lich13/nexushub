@@ -7,7 +7,7 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 - Read `README.md`, `DESIGN.md`, and `docs/progress/MASTER.md` before non-trivial edits.
 - If `docs/progress/MASTER.md` exists, resume from its current phase instead of restarting the plan.
 - Current upstream is `https://github.com/lich13/nexushub`.
-- The production Linux deployment is `https://661313.xyz/nexushub/` on `43.155.235.227`; the legacy `codex-cloud-panel` path remains separate.
+- The production Linux deployment is `https://661313.xyz/nexushub/` on `43.155.235.227`; the legacy `/codex-cloud-panel/` public path has been retired and should return `404`.
 
 ## Safety Boundaries
 
