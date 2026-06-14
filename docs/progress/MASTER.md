@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: Probe replacement release/deploy<br>
-**Active Task**: Publish `v0.1.47`, deploy to `43.155.235.227`, import legacy Sentinel config, then clean old `codex-sentinel-server` runtime after Probe health gate
-**Blockers**: None for local release readiness. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
+**Active Phase**: Probe replacement released/deployed<br>
+**Active Task**: `v0.1.47` is deployed to `43.155.235.227`; legacy Sentinel config was imported, root Hook now points to NexusHub Probe, and old `codex-sentinel-server` runtime was backed up and removed
+**Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status
 
@@ -100,6 +100,7 @@ adaptive:
 | 2026-06-14 | Probe replacement | XL | S/P/E/R pass locally | 0 | Built-in Probe config/API/events/UI/deploy cleanup path replaces `codex-sentinel-server` runtime while preserving safety boundaries |
 | 2026-06-14 | Probe replacement QA | M | P/R pass | 0 | Full local verification passed for `v0.1.46`; rendered Probe page verified with Playwright fallback on desktop and mobile, including Hook plan -> confirm flow |
 | 2026-06-14 | Probe legacy import patch | S | P/R pass | 0 | Added real `probe legacy-import` for old `/etc/codex-sentinel-server/config.toml`, storing Bark device key only in encrypted settings; full local verification passed for `v0.1.47` |
+| 2026-06-14 | Probe cloud replacement | M | P/R pass | 0 | Released and deployed `v0.1.47`; imported old config, installed NexusHub root Hook, verified logs-db dry-run/Bark/event ingest, then backed up and removed old Sentinel runtime from `43.155.235.227` |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -133,3 +134,4 @@ bash scripts/test-install-script.sh
 | 2026-06-13 | release-deploy | Published `v0.1.43`, deployed `/nexushub/` to `43.155.235.227`, migrated admin/settings from the legacy panel DB, and verified both new and old services stay active on separate loopback ports |
 | 2026-06-14 | probe-replacement | Reworked Probe from Sentinel preview toward built-in runtime: settings, events/dedupe, hook/logs-db/Bark actions, Chinese Probe UI, install/update config injection, and legacy cleanup helper |
 | 2026-06-14 | probe-local-qa | Bumped to `v0.1.46`; full local verification passed; Probe rendered QA passed with Playwright fallback because Browser `iab` was unavailable |
+| 2026-06-14 | probe-cloud-replacement | Published `v0.1.47`, verified release asset sha256 `9f1675818a4a5a77e1392724f309c07cedbbea8aaf6692005cd74dc615f57bbd`, deployed to `43.155.235.227`, imported legacy config, installed `/root/.codex/hooks.json` NexusHub Probe hook, confirmed Bark/logs-db/event health gates, backed up old Sentinel runtime to `/opt/nexushub/backups/probe-legacy/20260614-181532`, removed old service/runtime paths, and verified both `/nexushub/` and `/codex-cloud-panel/` return HTTP 200 |
