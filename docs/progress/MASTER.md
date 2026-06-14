@@ -2,7 +2,7 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-14
+> **Last Updated**: 2026-06-15
 > **Mode**: RELEASED_LINUX
 
 ## References
@@ -37,8 +37,8 @@
 ## Current Status
 
 **Active Phase**: Probe replacement released/deployed<br>
-**Active Task**: `v0.1.47` is deployed to `43.155.235.227`; legacy Sentinel config was imported, root Hook now points to NexusHub Probe, and old `codex-sentinel-server` runtime was backed up and removed
-**Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
+**Active Task**: `v0.1.49` is deployed to `43.155.235.227`; Probe settings were slimmed to the Mac App style panel, settings save now refreshes runtime config, and the cloud config was migrated to Mac App Probe defaults.
+**Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback. Public settings-save smoke still requires an authenticated browser/session; backend refresh behavior is covered by Rust tests.
 
 ## Governance Status
 
@@ -85,7 +85,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-13"
+  last_updated: "2026-06-15"
 ```
 
 ## Task Telemetry Log
@@ -101,6 +101,8 @@ adaptive:
 | 2026-06-14 | Probe replacement QA | M | P/R pass | 0 | Full local verification passed for `v0.1.46`; rendered Probe page verified with Playwright fallback on desktop and mobile, including Hook plan -> confirm flow |
 | 2026-06-14 | Probe legacy import patch | S | P/R pass | 0 | Added real `probe legacy-import` for old `/etc/codex-sentinel-server/config.toml`, storing Bark device key only in encrypted settings; full local verification passed for `v0.1.47` |
 | 2026-06-14 | Probe cloud replacement | M | P/R pass | 0 | Released and deployed `v0.1.47`; imported old config, installed NexusHub root Hook, verified logs-db dry-run/Bark/event ingest, then backed up and removed old Sentinel runtime from `43.155.235.227` |
+| 2026-06-15 | Probe panel slim/settings refresh | M | S/P/R pass | 0 | Released `v0.1.48` with the Mac App style Probe panel, runtime config refresh after settings save, canonical settings payloads, and local rendered QA via Playwright fallback |
+| 2026-06-15 | Probe default migration follow-up | S | P/R pass | 0 | Released and deployed `v0.1.49`; updater now migrates known old Probe defaults to Mac App defaults, asset sha256 `70a56e0d1d85caea32a248d60e64b2cb3a91bb00a17d682c95aa038e4ece235d`, and cloud config now shows `500/1000/5242880` plus logs-db `2d/6h` defaults |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -136,3 +138,5 @@ bash scripts/test-install-script.sh
 | 2026-06-14 | probe-local-qa | Bumped to `v0.1.46`; full local verification passed; Probe rendered QA passed with Playwright fallback because Browser `iab` was unavailable |
 | 2026-06-14 | probe-cloud-replacement | Published `v0.1.47`, verified release asset sha256 `9f1675818a4a5a77e1392724f309c07cedbbea8aaf6692005cd74dc615f57bbd`, deployed to `43.155.235.227`, imported legacy config, installed `/root/.codex/hooks.json` NexusHub Probe hook, confirmed Bark/logs-db/event health gates, backed up old Sentinel runtime to `/opt/nexushub/backups/probe-legacy/20260614-181532`, removed old service/runtime paths, and verified both `/nexushub/` and `/codex-cloud-panel/` return HTTP 200 |
 | 2026-06-14 | codex-cloud-panel-retirement | Confirmed NexusHub covers the legacy `codex-cloud-panel` surface, removed the remaining cloud runtime files without backing them up per user instruction, added explicit Nginx `404` rules for `/codex-cloud-panel` and `/codex-cloud-panel/`, and reverified `/nexushub/` remains HTTP 200 |
+| 2026-06-15 | probe-panel-slim-settings-refresh | Published `v0.1.48`, verified CI/Release, deployed to `43.155.235.227`, then found the live config still had old Probe defaults because the updater only inserted missing keys |
+| 2026-06-15 | probe-default-migration-follow-up | Published `v0.1.49`, verified release asset sha256 `70a56e0d1d85caea32a248d60e64b2cb3a91bb00a17d682c95aa038e4ece235d`, deployed with a second updater pass so the newly installed updater migrated `/opt/nexushub/config.toml`, confirmed `nexushubd 0.1.49`, health OK, `/nexushub/` HTTP 200, and `/codex-cloud-panel/` HTTP 404 |
