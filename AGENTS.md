@@ -18,7 +18,7 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 - Archive and hidden-thread deletion require dry-run visibility plus button confirmation.
 - Do not add a WebUI network-access checkbox. Generated sandbox policies default network access to enabled.
 - Claude Code provider work is read-only in V1: project/session/settings discovery only. Do not write `~/.claude` or launch/resume/send/stop Claude sessions unless a later task explicitly adds that feature with tests.
-- Sentinel V1 is observation and maintenance oriented. Do not add hidden desktop control, automatic recovery, or competing app-server probes unless the bridge is unavailable and the behavior is explicitly scoped.
+- Probe is now an internal NexusHub replacement path for the cloud `codex-sentinel-server` runtime. Keep it observable and maintenance oriented: no hidden desktop control, no automatic recovery/reply, no arbitrary shell, and no direct destructive deletion endpoint outside the existing dry-run plus confirmation model.
 
 ## Verification
 

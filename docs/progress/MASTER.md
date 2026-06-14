@@ -1,8 +1,8 @@
 # NexusHub Merge and Framework Expansion - Progress Tracker
 
-> **Task**: Create a new NexusHub repo from codex-cloud-panel, preserve Codex behavior, merge Sentinel preview surfaces, and add a Claude Code read-only provider framework.
+> **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-13
+> **Last Updated**: 2026-06-14
 > **Mode**: RELEASED_LINUX
 
 ## References
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: Released Linux handoff complete<br>
-**Active Task**: None  
-**Blockers**: macOS launchd packaging and Windows Service packaging remain preview/planned; no blocker for Linux `/nexushub/`.
+**Active Phase**: Probe replacement release/deploy<br>
+**Active Task**: Publish `v0.1.46`, deploy to `43.155.235.227`, then clean old `codex-sentinel-server` runtime after Probe health gate
+**Blockers**: None for local release readiness. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status
 
@@ -96,7 +96,9 @@ adaptive:
 | 2026-06-13 | 1.2 | M | P/E/R pass | 0 | Added spec docs and later updated them to released Linux state |
 | 2026-06-13 | 1.3 | S | E/R pass | 0 | README DB path and preview scope aligned |
 | 2026-06-13 | 2.2 | S | E/R pass | 0 | Cookie/upload/log/test fixture NexusHub rename with targeted tests |
-| 2026-06-13 | 3.1-3.3 | M | S/P/R pass | 0 | Provider, Claude, Sentinel endpoints added in prior pass |
+| 2026-06-13 | 3.1-3.3 | M | S/P/R pass | 0 | Provider, Claude, and initial Sentinel-compatible endpoints added in prior pass |
+| 2026-06-14 | Probe replacement | XL | S/P/E/R pass locally | 0 | Built-in Probe config/API/events/UI/deploy cleanup path replaces `codex-sentinel-server` runtime while preserving safety boundaries |
+| 2026-06-14 | Probe replacement QA | M | P/R pass | 0 | Full local verification passed for `v0.1.46`; rendered Probe page verified with Playwright fallback on desktop and mobile, including Hook plan -> confirm flow |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -128,3 +130,5 @@ bash scripts/test-install-script.sh
 | 2026-06-13 | fresh-context continuation | Continued previous NexusHub migration, added governance docs, fixed stale non-migration names, prepared for full verification |
 | 2026-06-13 | verification | Verified local handoff with Rust/WebUI/script checks; browser smoke blocked because no in-app Browser target was available |
 | 2026-06-13 | release-deploy | Published `v0.1.43`, deployed `/nexushub/` to `43.155.235.227`, migrated admin/settings from the legacy panel DB, and verified both new and old services stay active on separate loopback ports |
+| 2026-06-14 | probe-replacement | Reworked Probe from Sentinel preview toward built-in runtime: settings, events/dedupe, hook/logs-db/Bark actions, Chinese Probe UI, install/update config injection, and legacy cleanup helper |
+| 2026-06-14 | probe-local-qa | Bumped to `v0.1.46`; full local verification passed; Probe rendered QA passed with Playwright fallback because Browser `iab` was unavailable |

@@ -8,3 +8,4 @@ Follow `AGENTS.md` first. These notes are specific to Claude Code or Claude-orie
 - Verify Codex control through the app-server bridge first. `codex exec --json` is a fallback path only and should be visible in job history when used.
 - Claude Code provider work is currently read-only. Safe reads include `~/.claude/projects`, session JSONL metadata, and redacted `~/.claude/settings.json`; writes to Claude settings or tool permissions require an explicit future task.
 - Do not copy AGPL code, schemas, assets, or plugin ABI from external Claude UI projects. Recreate architecture and interaction patterns independently.
+- Probe is built into NexusHub for cloud replacement of the old `codex-sentinel-server` runtime. Preserve the same safety boundary as AGENTS.md: visible/observable maintenance only, no hidden desktop control, no auto-reply, no arbitrary shell.

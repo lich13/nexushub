@@ -13,7 +13,7 @@
 - **U (Unidirectional Flow)**: Preserve API -> core -> provider/service flow. UI code calls typed API helpers rather than raw fetches from components.
 - **P (Ports over Implementation)**: Provider work must expose serializable structs and stable route contracts before control actions are added.
 - **E (Environment-Agnostic)**: Linux production paths belong in config/defaults; macOS and Windows support remains preview until service installers are verified.
-- **R (Replaceable Parts)**: Codex, Claude Code, Sentinel, and future providers must remain independently replaceable behind registry/API boundaries.
+- **R (Replaceable Parts)**: Codex, Claude Code, built-in Probe, and future providers must remain independently replaceable behind registry/API boundaries.
 
 ## Testing and Governance Constraints
 
@@ -29,7 +29,7 @@
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
-| 1.1 | Add `AGENTS.md` and `CLAUDE.md` | P0 | S | - | A | P, R | Docs-only; verify files and final commands | Instruction surfaces updated | Shared and Claude-specific rules document bridge, safety, Claude read-only, Sentinel preview, and verification commands |
+| 1.1 | Add `AGENTS.md` and `CLAUDE.md` | P0 | S | - | A | P, R | Docs-only; verify files and final commands | Instruction surfaces updated | Shared and Claude-specific rules document bridge, safety, Claude read-only, built-in Probe, and verification commands |
 | 1.2 | Create analysis, plan, and progress docs | P0 | M | 1.1 | A | P, E | Docs-only; verify links and files | Progress surface updated | Required spec-driven docs exist and `docs/progress/MASTER.md` records current release/deploy state |
 | 1.3 | Align README/runbook with NexusHub scope | P1 | S | - | B | E, R | Docs-only; run stale-string and command checks | None | README describes provider previews, `/opt/nexushub/nexushub.sqlite`, and Linux package caveats |
 
@@ -61,7 +61,7 @@
 
 ## Phase 3: Provider Framework
 
-**Goal**: Make Codex, Claude Code, Sentinel, and future CLI providers visible through typed preview surfaces.
+**Goal**: Make Codex, Claude Code, built-in Probe, and future CLI providers visible through typed surfaces.
 **Prerequisite**: Phase 2.
 **S.U.P.E.R Focus**: S, P, R
 
@@ -69,7 +69,7 @@
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
 | 3.1 | Add provider registry and API endpoints | P0 | M | 2.1 | A | S, P, R | Rust provider tests and WebUI API tests | None | `/api/providers`, `/api/platform`, `/api/plugins` return typed data |
 | 3.2 | Add read-only Claude Code discovery | P0 | M | 3.1 | B | S, P, E | Rust tests for discovery/redaction | Instruction rule already documented | `~/.claude/projects` and redacted settings are visible without writes |
-| 3.3 | Add Sentinel preview status | P1 | S | 3.1 | C | S, P, E | Rust provider tests and WebUI API tests | None | Hook/Bark/log maintenance status is exposed without hidden control |
+| 3.3 | Add built-in Probe status | P1 | S | 3.1 | C | S, P, E | Rust provider tests and WebUI API tests | None | Hook/Bark/log maintenance status is exposed without hidden control |
 
 ### Parallel Lanes
 
@@ -77,7 +77,7 @@
 |:--|:--|:--|:--|:--|
 | A | 3.1 | M | Medium | `providers.rs`, `api.rs`, `types.ts`, `api.ts` |
 | B | 3.2 | M | Low | `claude_code.rs`, Claude page |
-| C | 3.3 | S | Low | `sentinel.rs`, Sentinel page |
+| C | 3.3 | S | Low | `probe.rs`, Probe page |
 
 ## Phase 4: WebUI Information Architecture
 
@@ -87,7 +87,7 @@
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
-| 4.1 | Extend navigation for Claude, Sentinel, plugins, ops previews | P0 | M | 3.1 | A | S, R | WebUI tests, typecheck/build | None | Desktop and mobile nav can reach all preview pages |
+| 4.1 | Extend navigation for Claude, Probe, plugins, ops previews | P0 | M | 3.1 | A | S, R | WebUI tests, typecheck/build | None | Desktop and mobile nav can reach all preview pages |
 | 4.2 | Keep Codex chat non-regressed | P0 | L | 4.1 | A | U, R | Existing WebUI tests and manual browser smoke in future | None | Thread list, detail, SSE, Plan/Questions, upload, stop/follow-up remain available |
 | 4.3 | Add preview pages for files/Git/terminal as disabled/planned entries | P2 | S | 4.1 | B | P, R | Typecheck/build | None | UI shows planned provider tooling without exposing shell jobs |
 

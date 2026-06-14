@@ -47,6 +47,7 @@ import {
   deleteUpload,
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
+  executeProbePlan,
   forkThread,
   getCodexConfig,
   getGoalMode,
@@ -57,6 +58,7 @@ import {
   getProbeRecoverable,
   getProbeReplyNeeded,
   getProbeRunning,
+  getProbeSettings,
   getProbeStatus,
   getSecurity,
   getSystemStatus,
@@ -73,6 +75,7 @@ import {
   renameThread,
   revisePlan,
   restoreThread,
+  saveProbeSettings,
   saveSecurity,
   sendMessage,
   setGoalMode,
@@ -88,8 +91,20 @@ import {
   getClaudeCodeOverview,
   getPlatformOverview,
   listProviders,
+  planProbeAction,
   type ThreadSendPayload
 } from "./lib/api";
+import {
+  buildProbeSettingsDraft,
+  buildProbeSettingsPayload,
+  createProbeActionState,
+  probeSections,
+  probeSettingsValidation,
+  PROBE_NAV_LABEL,
+  reduceProbeActionState,
+  type ProbeActionUiState,
+  type ProbeSettingsDraft
+} from "./lib/probeUi";
 import { clearSession, loadSession, saveSession } from "./lib/session";
 import {
   applyRealtimeBlocksToThreadSlot,
@@ -121,8 +136,11 @@ import type {
   PendingElicitation,
   PermissionProfile,
   PlatformOverview,
+  ProbeActionPlan,
   ProbeDashboard,
   ProbeEvent,
+  ProbeJobAction,
+  ProbeSettings,
   ProbeStatus,
   ProbeThread,
   SecuritySettings,
@@ -190,7 +208,7 @@ export const statusTabs = [
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "codex", label: "Codex", icon: <MessageSquare /> },
   { id: "claude", label: "Claude Code", icon: <Bot /> },
-  { id: "probe", label: "Probe", icon: <TriangleAlert /> },
+  { id: "probe", label: PROBE_NAV_LABEL, icon: <TriangleAlert /> },
   { id: "ops", label: "运维", icon: <HardDrive /> },
   { id: "security", label: "安全", icon: <ShieldCheck /> }
 ];
@@ -792,8 +810,8 @@ export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(cur
 
 export function lastEventKindText(summary: Pick<ThreadSummary, "last_event_kind">): string {
   const value = summary.last_event_kind?.trim();
-  if (!isUserVisibleLastEventKind(value)) return "unknown";
-  return value || "unknown";
+  if (!isUserVisibleLastEventKind(value)) return "未知";
+  return value || "未知";
 }
 
 function isUserVisibleLastEventKind(value?: string | null): boolean {
@@ -1192,7 +1210,7 @@ export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, sta
     hidden,
     visible: plan?.visible_threads ?? 0,
     sourceCounts: sourceCountsText(plan?.hidden_source_counts ?? status?.app_server_source_counts),
-    integrity: plan?.integrity ?? status?.state_db_integrity ?? "unknown"
+    integrity: plan?.integrity ?? status?.state_db_integrity ?? "未知"
   };
 }
 
@@ -2689,76 +2707,207 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000 });
   const dashboard = useQuery({ queryKey: ["probe-dashboard"], queryFn: getProbeDashboard, refetchInterval: 15000 });
+  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000 });
   const running = useQuery({ queryKey: ["probe-running"], queryFn: getProbeRunning, refetchInterval: 10000 });
   const replyNeeded = useQuery({ queryKey: ["probe-reply-needed"], queryFn: getProbeReplyNeeded, refetchInterval: 10000 });
   const recoverable = useQuery({ queryKey: ["probe-recoverable"], queryFn: getProbeRecoverable, refetchInterval: 10000 });
   const hookStatus = useQuery({ queryKey: ["probe-hook-status"], queryFn: getProbeHookStatus, refetchInterval: 30000 });
   const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000 });
   const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
+  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
+  const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+  const [actionStates, setActionStates] = useState<Record<ProbePlannedAction, ProbeActionUiState>>(() => ({
+    "hooks-install": createProbeActionState("hooks-install"),
+    "logs-db-maintain": createProbeActionState("logs-db-maintain"),
+    "legacy-cleanup": createProbeActionState("legacy-cleanup")
+  }));
   const data = probeStatusData(status.data?.data, dashboard.data?.data);
   const available = status.data?.available ?? false;
   const runningRows = probeRows(dashboard.data?.data?.running, running.data?.data);
   const replyRows = probeRows(dashboard.data?.data?.reply_needed, replyNeeded.data?.data);
   const recoverableRows = probeRows(dashboard.data?.data?.recoverable, recoverable.data?.data);
   const events = dashboard.data?.data?.recent_events ?? [];
-  const jobMutation = useMutation({
-    mutationFn: (action: Parameters<typeof startProbeJob>[0]) => startProbeJob(action, csrfToken),
-    onSuccess: () => {
+  const currentSettings = settings.data?.data;
+  const settingsErrors = draft ? probeSettingsValidation(draft) : [];
+  const probeJobs = useMemo(() => probeJobRecords(jobs.data ?? []), [jobs.data]);
+  const barkMutation = useMutation({
+    mutationFn: () => startProbeJob("bark-test", csrfToken),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] })
+  });
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!draft) throw new Error("探针设置尚未载入");
+      const errors = probeSettingsValidation(draft);
+      if (errors.length) throw new Error(errors[0]);
+      return saveProbeSettings(buildProbeSettingsPayload(draft, currentSettings), csrfToken);
+    },
+    onSuccess: (saved) => {
+      setSaveFeedback("设置已保存");
+      setDraft(isProbeSettings(saved) ? buildProbeSettingsDraft(saved) : null);
+      qc.invalidateQueries({ queryKey: ["probe-settings"] });
+      qc.invalidateQueries({ queryKey: ["probe-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-dashboard"] });
+    },
+    onError: (err: Error) => setSaveFeedback(err.message)
+  });
+
+  useEffect(() => {
+    if (!currentSettings || draft) return;
+    setDraft(buildProbeSettingsDraft(currentSettings));
+  }, [currentSettings, draft]);
+
+  const updateActionState = (action: ProbePlannedAction, event: Parameters<typeof reduceProbeActionState>[1]) => {
+    setActionStates((current) => ({
+      ...current,
+      [action]: reduceProbeActionState(current[action], event)
+    }));
+  };
+
+  const planAction = async (action: ProbePlannedAction) => {
+    updateActionState(action, { type: "planning" });
+    try {
+      const plan = await planProbeAction(action, csrfToken);
+      updateActionState(action, { type: "planned", plan });
+    } catch (err) {
+      updateActionState(action, { type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const executeAction = async (action: ProbePlannedAction) => {
+    const plan = actionStates[action].plan;
+    if (!plan?.plan_id) return;
+    updateActionState(action, { type: "executing" });
+    try {
+      const result = await executeProbePlan(action, plan.plan_id, csrfToken);
+      updateActionState(action, { type: "executed", jobId: result.job_id });
       qc.invalidateQueries({ queryKey: ["jobs"] });
       qc.invalidateQueries({ queryKey: ["probe-status"] });
       qc.invalidateQueries({ queryKey: ["probe-dashboard"] });
       qc.invalidateQueries({ queryKey: ["probe-hook-status"] });
       qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+    } catch (err) {
+      updateActionState(action, { type: "error", message: err instanceof Error ? err.message : String(err) });
     }
-  });
+  };
 
   return (
-    <div className="ops-grid">
-      <Panel title="Probe" icon={<TriangleAlert size={18} />}>
-        <Metric label="Status" value={data?.enabled ? "enabled" : available ? "disabled" : "unavailable"} tone={data?.enabled ? "success" : "warning"} />
-        <Metric label="Flavor" value={data?.flavor ?? "unknown"} />
-        <Metric label="Service" value={data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "unknown"} />
-        <Metric label="Config" value={pathText(data?.config_path ?? platform.data?.config_file)} />
-        <Metric label="Platform" value={data?.platform ?? platform.data?.kind ?? "unknown"} />
-      </Panel>
-      <Panel title="Hooks" icon={<ClipboardCheck size={18} />}>
-        <Metric label="Codex Hook" value={data?.hook_status ?? "unknown"} tone={data?.hook_status === "managed" ? "success" : "warning"} />
-        <Metric label="Events" value={String(data?.recent_event_count ?? 0)} />
-        <Metric label="Reply-needed" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
-        <Metric label="Recoverable" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
-      </Panel>
-      <Panel title="Notifications" icon={<Cloud size={18} />}>
-        <Metric label="Bark" value={data?.bark_status ?? "unknown"} tone={data?.bark_status === "configured" ? "success" : "warning"} />
-        <Metric label="Dedupe" value="host-scoped" />
-        <Metric label="Reply alerts" value={data?.enabled ? "enabled" : "inactive"} />
-        <Metric label="Recoverable alerts" value={data?.enabled ? "enabled" : "inactive"} />
-      </Panel>
-      <Panel title="Logs DB" icon={<Database size={18} />}>
-        <Metric label="Maintenance" value={data?.logs_db_status ?? logsDbStatus.data?.data?.logs_db_status ?? logsDbStatus.data?.data?.status ?? "unknown"} tone={(data?.logs_db_status ?? logsDbStatus.data?.data?.status) === "maintenance_ready" ? "success" : "warning"} />
-        <Metric label="Hook detail" value={hookStatusText(hookStatus.data?.data)} />
-        <Metric label="Data dir" value={pathText(platform.data?.data_dir)} />
-        <Metric label="Log dir" value={pathText(platform.data?.log_dir)} />
-        <div className="button-row">
-          <button className="secondary-button" onClick={() => jobMutation.mutate("hooks-install")} disabled={jobMutation.isPending}><ClipboardCheck size={17} />安装 Hooks</button>
-          <button className="secondary-button" onClick={() => jobMutation.mutate("bark-test")} disabled={jobMutation.isPending}><Cloud size={17} />Bark Test</button>
-          <button className="primary-button" onClick={() => jobMutation.mutate("logs-db-maintain")} disabled={jobMutation.isPending}><Database size={17} />维护 Logs DB</button>
+    <div className="probe-layout">
+      <div className="probe-header">
+        <div>
+          <span>{PROBE_NAV_LABEL}</span>
+          <h1>探针</h1>
         </div>
-      </Panel>
-      <Panel title="Running" icon={<Play size={18} />}>
-        <ProbeThreadList rows={runningRows} empty="暂无运行中线程" />
-      </Panel>
-      <Panel title="Reply Needed" icon={<MessageSquare size={18} />}>
-        <ProbeThreadList rows={replyRows} empty="暂无待回复线程" />
-      </Panel>
-      <Panel title="Recoverable" icon={<TriangleAlert size={18} />} className="wide-panel">
-        <ProbeThreadList rows={recoverableRows} empty="暂无可恢复异常" />
-      </Panel>
-      <Panel title="Recent Events" icon={<ClipboardCheck size={18} />} className="wide-panel">
-        <ProbeEventList events={events} />
-      </Panel>
+        <div className="probe-section-tabs" aria-label="探针模块结构">
+          {probeSections.map((section) => <a key={section.id} href={`#probe-${section.id}`}>{section.label}</a>)}
+        </div>
+      </div>
+
+      <ProbeSection id="overview" title="总览" icon={<TriangleAlert size={18} />}>
+        <Panel title="运行状态" icon={<TriangleAlert size={18} />}>
+          <Metric label="状态" value={data?.enabled ? "已启用" : available ? "已停用" : "不可用"} tone={data?.enabled ? "success" : "warning"} />
+          <Metric label="形态" value={probeFlavorLabel(data?.flavor)} />
+          <Metric label="服务" value={data ? `${data.service_kind}:${data.service_name}` : platform.data ? `${platform.data.service_kind}:${platform.data.service_name}` : "未知"} />
+          <Metric label="平台" value={data?.platform ?? platform.data?.kind ?? "未知"} />
+          <Metric label="主机" value={data?.host_label ?? currentSettings?.codex.host_label ?? "未知"} />
+        </Panel>
+        <Panel title="信号摘要" icon={<ClipboardCheck size={18} />}>
+          <Metric label="Hook 状态" value={probeStateLabel(data?.hook_status)} tone={data?.hook_status === "managed" ? "success" : "warning"} />
+          <Metric label="Bark 状态" value={probeStateLabel(data?.bark_status)} tone={data?.bark_status === "configured" ? "success" : "warning"} />
+          <Metric label="日志库" value={probeStateLabel(data?.logs_db_status ?? logsDbStatus.data?.data?.logs_db_status ?? logsDbStatus.data?.data?.status)} tone={(data?.logs_db_status ?? logsDbStatus.data?.data?.status) === "maintenance_ready" ? "success" : "warning"} />
+          <Metric label="最近事件" value={String(data?.recent_event_count ?? events.length)} />
+          <Metric label="待回复" value={String(data?.reply_needed_count ?? replyRows.length)} tone={(data?.reply_needed_count ?? replyRows.length) > 0 ? "warning" : undefined} />
+          <Metric label="可恢复异常" value={String(data?.recoverable_count ?? recoverableRows.length)} tone={(data?.recoverable_count ?? recoverableRows.length) > 0 ? "danger" : undefined} />
+        </Panel>
+      </ProbeSection>
+
+      <ProbeSection id="threads" title="线程" icon={<MessageSquare size={18} />}>
+        <Panel title="运行中" icon={<Play size={18} />}>
+          <ProbeThreadList rows={runningRows} empty="暂无运行中线程" />
+        </Panel>
+        <Panel title="待回复" icon={<MessageSquare size={18} />}>
+          <ProbeThreadList rows={replyRows} empty="暂无待回复线程" />
+        </Panel>
+        <Panel title="可恢复异常" icon={<TriangleAlert size={18} />} className="wide-panel">
+          <ProbeThreadList rows={recoverableRows} empty="暂无可恢复异常" />
+        </Panel>
+      </ProbeSection>
+
+      <ProbeSection id="events" title="事件" icon={<ClipboardCheck size={18} />}>
+        <Panel title="最近事件" icon={<ClipboardCheck size={18} />} className="wide-panel">
+          <ProbeEventList events={events} />
+        </Panel>
+      </ProbeSection>
+
+      <ProbeSection id="diagnostics" title="诊断" icon={<Database size={18} />}>
+        <Panel title="诊断状态" icon={<Database size={18} />}>
+          <Metric label="生命周期" value={probeStateLabel(data?.lifecycle_status)} tone={data?.lifecycle_status === "managed" || data?.lifecycle_status === "ok" ? "success" : undefined} />
+          <Metric label="诊断" value={probeStateLabel(data?.doctor_status)} tone={data?.doctor_status === "ready" || data?.doctor_status === "ok" ? "success" : undefined} />
+          <Metric label="Hook 细节" value={hookStatusText(hookStatus.data?.data)} />
+          <Metric label="配置文件" value={pathText(data?.config_path ?? platform.data?.config_file)} />
+          <Metric label="数据目录" value={pathText(platform.data?.data_dir)} />
+          <Metric label="日志目录" value={pathText(platform.data?.log_dir)} />
+        </Panel>
+        <Panel title="诊断输出" icon={<TerminalSquare size={18} />}>
+          <pre className="config-preview">{formatPayload(dashboard.data?.data?.diagnostics ?? {})}</pre>
+        </Panel>
+      </ProbeSection>
+
+      <ProbeSection id="settings" title="设置与迁移" icon={<KeyRound size={18} />}>
+        <Panel title="探针设置" icon={<KeyRound size={18} />} className="wide-panel">
+          {draft ? (
+            <ProbeSettingsForm
+              draft={draft}
+              setDraft={setDraft}
+              configuredDeviceKey={Boolean(currentSettings?.notifications.device_key_configured || draft.notifications.device_key_configured)}
+              errors={settingsErrors}
+              feedback={saveFeedback}
+              saving={saveMutation.isPending}
+              onSave={() => saveMutation.mutate()}
+            />
+          ) : (
+            <div className="muted-row">{settings.isLoading ? "正在读取探针设置" : "探针设置不可用"}</div>
+          )}
+        </Panel>
+        <ProbeActionCard
+          title="Hook 迁移"
+          icon={<ClipboardCheck size={18} />}
+          state={actionStates["hooks-install"]}
+          planLabel="生成 Hook 计划"
+          onPlan={() => planAction("hooks-install")}
+          onExecute={() => executeAction("hooks-install")}
+        />
+        <ProbeActionCard
+          title="Logs DB 维护"
+          icon={<Database size={18} />}
+          state={actionStates["logs-db-maintain"]}
+          planLabel="生成 Logs DB 计划"
+          onPlan={() => planAction("logs-db-maintain")}
+          onExecute={() => executeAction("logs-db-maintain")}
+        />
+        <ProbeActionCard
+          title="旧 Sentinel 清理"
+          icon={<Trash2 size={18} />}
+          state={actionStates["legacy-cleanup"]}
+          planLabel="生成清理预案"
+          onPlan={() => planAction("legacy-cleanup")}
+          onExecute={() => executeAction("legacy-cleanup")}
+        />
+        <Panel title="Bark 测试" icon={<Cloud size={18} />}>
+          <Metric label="配置" value={currentSettings?.notifications.device_key_configured ? "已配置" : "未配置"} tone={currentSettings?.notifications.device_key_configured ? "success" : "warning"} />
+          <Metric label="服务 URL" value={currentSettings?.notifications.server_url ?? "未知"} />
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => barkMutation.mutate()} disabled={barkMutation.isPending}><Cloud size={17} />发送测试</button>
+          </div>
+        </Panel>
+        <Panel title="探针 Job 历史" icon={<TerminalSquare size={18} />} className="wide-panel">
+          <JobList jobs={probeJobs} />
+        </Panel>
+      </ProbeSection>
+
       {!available && (
-        <Panel title="Endpoint" icon={<TriangleAlert size={18} />} className="wide-panel">
-          <div className="muted-row">Probe endpoint unavailable</div>
+        <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
+          <div className="muted-row">探针端点不可用</div>
         </Panel>
       )}
     </div>
@@ -2991,6 +3140,171 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
   return <div className="metric"><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
 }
 
+type ProbePlannedAction = Extract<ProbeJobAction, "hooks-install" | "logs-db-maintain" | "legacy-cleanup">;
+
+function ProbeSection({ id, title, icon, children }: { id: string; title: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <section id={`probe-${id}`} className="probe-section">
+      <header className="probe-section-title">{icon}<strong>{title}</strong></header>
+      <div className="probe-section-grid">{children}</div>
+    </section>
+  );
+}
+
+function ProbeSettingsForm({
+  draft,
+  setDraft,
+  configuredDeviceKey,
+  errors,
+  feedback,
+  saving,
+  onSave
+}: {
+  draft: ProbeSettingsDraft;
+  setDraft: (draft: ProbeSettingsDraft) => void;
+  configuredDeviceKey: boolean;
+  errors: string[];
+  feedback: string | null;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
+  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) => setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
+  const setHooks = (patch: Partial<ProbeSettingsDraft["hooks"]>) => setDraft({ ...draft, hooks: { ...draft.hooks, ...patch } });
+  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
+  const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
+  const setLogsDb = (patch: Partial<ProbeSettingsDraft["logs_db"]>) => setDraft({ ...draft, logs_db: { ...draft.logs_db, ...patch } });
+
+  return (
+    <div className="probe-settings-form">
+      <div className="settings-subsection">
+        <strong>Codex 共享字段</strong>
+      </div>
+      <div className="form-grid three">
+        <label className="field-label">Codex Home<input value={draft.codex.home} onChange={(event) => setCodex({ home: event.target.value })} /></label>
+        <label className="field-label">Workspace<input value={draft.codex.workspace} onChange={(event) => setCodex({ workspace: event.target.value })} /></label>
+        <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
+        <label className="field-label">app-server 服务<input value={draft.codex.app_server_service} onChange={(event) => setCodex({ app_server_service: event.target.value })} /></label>
+        <label className="field-label">app-server Socket<input value={draft.codex.app_server_socket} onChange={(event) => setCodex({ app_server_socket: event.target.value })} /></label>
+        <label className="field-label">Bridge 传输<input value={draft.codex.bridge_transport} onChange={(event) => setCodex({ bridge_transport: event.target.value })} /></label>
+        <label className="field-label">Bridge 超时秒<input type="number" min={1} value={draft.codex.bridge_timeout_seconds} onChange={(event) => setCodex({ bridge_timeout_seconds: Number(event.target.value) })} /></label>
+      </div>
+
+      <div className="settings-subsection">
+        <strong>探针基础与 Hook</strong>
+      </div>
+      <div className="form-grid three">
+        <label className="field-label">轮询间隔 秒<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: Number(event.target.value) })} /></label>
+        <label className="field-label">最近事件数量<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: Number(event.target.value) })} /></label>
+      </div>
+      <div className="probe-toggle-grid">
+        <label className="toggle-row"><span>启用探针</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>启用 Bridge</span><input type="checkbox" checked={draft.codex.bridge_enabled} onChange={(event) => setCodex({ bridge_enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>管理 Stop Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
+        <label className="toggle-row"><span>安装后重载 app-server</span><input type="checkbox" checked={draft.hooks.reload_app_server_after_install} onChange={(event) => setHooks({ reload_app_server_after_install: event.target.checked })} /></label>
+      </div>
+
+      <div className="settings-subsection">
+        <strong>Bark 通知</strong>
+      </div>
+      <div className="form-grid three">
+        <label className="field-label">Bark 服务 URL<input value={draft.notifications.server_url} onChange={(event) => setNotifications({ server_url: event.target.value })} /></label>
+        <label className="field-label">Bark Sound<input value={draft.notifications.sound} onChange={(event) => setNotifications({ sound: event.target.value })} /></label>
+        <label className="field-label">Bark Group<input value={draft.notifications.group} onChange={(event) => setNotifications({ group: event.target.value })} /></label>
+        <label className="field-label">Bark 打开 URL<input value={draft.notifications.url} onChange={(event) => setNotifications({ url: event.target.value })} /></label>
+        <label className="field-label">
+          Bark device_key
+          <input
+            type="password"
+            value={draft.notifications.device_key}
+            placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "未配置"}
+            onChange={(event) => setNotifications({ device_key: event.target.value })}
+          />
+        </label>
+      </div>
+      <div className="probe-toggle-grid">
+        <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>通知任务完成</span><input type="checkbox" checked={draft.notifications.notify_completion} onChange={(event) => setNotifications({ notify_completion: event.target.checked })} /></label>
+        <label className="toggle-row"><span>通知待回复</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
+        <label className="toggle-row"><span>通知可恢复异常</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
+      </div>
+
+      <div className="settings-subsection">
+        <strong>观测与日志读取</strong>
+      </div>
+      <div className="form-grid three">
+        <label className="field-label">Hook 事件最大行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: Number(event.target.value) })} /></label>
+        <label className="field-label">Hook 静默期最大行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: Number(event.target.value) })} /></label>
+        <label className="field-label">日志读取上限 bytes<input type="number" min={1024} max={10485760} value={draft.observability.log_max_bytes} onChange={(event) => setObservability({ log_max_bytes: Number(event.target.value) })} /></label>
+      </div>
+
+      <div className="settings-subsection">
+        <strong>Logs DB 维护</strong>
+      </div>
+      <div className="form-grid three">
+        <label className="field-label">Logs DB 保留天数<input type="number" min={1} max={3650} value={draft.logs_db.retention_days} onChange={(event) => setLogsDb({ retention_days: Number(event.target.value) })} /></label>
+        <label className="field-label">维护间隔 小时<input type="number" min={1} max={8760} value={draft.logs_db.maintenance_interval_hours} onChange={(event) => setLogsDb({ maintenance_interval_hours: Number(event.target.value) })} /></label>
+        <label className="field-label">Codex 退出宽限 秒<input type="number" min={0} max={3600} value={draft.logs_db.codex_exit_grace_seconds} onChange={(event) => setLogsDb({ codex_exit_grace_seconds: Number(event.target.value) })} /></label>
+        <label className="field-label">Codex 退出最长等待 秒<input type="number" min={1} max={7200} value={draft.logs_db.codex_exit_max_wait_seconds} onChange={(event) => setLogsDb({ codex_exit_max_wait_seconds: Number(event.target.value) })} /></label>
+        <label className="field-label">删除分块行数<input type="number" min={1} max={100000} value={draft.logs_db.delete_chunk_rows} onChange={(event) => setLogsDb({ delete_chunk_rows: Number(event.target.value) })} /></label>
+        <label className="field-label">单次最大删除行数<input type="number" min={1} max={1000000} value={draft.logs_db.max_delete_rows_per_run} onChange={(event) => setLogsDb({ max_delete_rows_per_run: Number(event.target.value) })} /></label>
+        <label className="field-label">SQLite busy timeout ms<input type="number" min={100} max={60000} value={draft.logs_db.busy_timeout_ms} onChange={(event) => setLogsDb({ busy_timeout_ms: Number(event.target.value) })} /></label>
+        <label className="field-label">Compact 间隔 小时<input type="number" min={1} max={8760} value={draft.logs_db.compact_interval_hours} onChange={(event) => setLogsDb({ compact_interval_hours: Number(event.target.value) })} /></label>
+        <label className="field-label">Freelist 最小 MB<input type="number" min={0} value={draft.logs_db.compact_min_freelist_mb} onChange={(event) => setLogsDb({ compact_min_freelist_mb: Number(event.target.value) })} /></label>
+        <label className="field-label">Freelist 最小比例 %<input type="number" min={0} max={100} value={draft.logs_db.compact_min_freelist_ratio_percent} onChange={(event) => setLogsDb({ compact_min_freelist_ratio_percent: Number(event.target.value) })} /></label>
+        <label className="field-label">最小剩余空间 MB<input type="number" min={0} value={draft.logs_db.minimum_free_space_mb} onChange={(event) => setLogsDb({ minimum_free_space_mb: Number(event.target.value) })} /></label>
+      </div>
+      <div className="probe-toggle-grid">
+        <label className="toggle-row"><span>启用 Logs DB</span><input type="checkbox" checked={draft.logs_db.enabled} onChange={(event) => setLogsDb({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>Codex 退出后维护</span><input type="checkbox" checked={draft.logs_db.maintain_on_codex_exit} onChange={(event) => setLogsDb({ maintain_on_codex_exit: event.target.checked })} /></label>
+        <label className="toggle-row"><span>Codex 关闭时自动 compact</span><input type="checkbox" checked={draft.logs_db.auto_compact_when_codex_closed} onChange={(event) => setLogsDb({ auto_compact_when_codex_closed: event.target.checked })} /></label>
+      </div>
+      {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
+      {feedback && <div className={feedback === "设置已保存" ? "form-success" : "form-error"}>{feedback}</div>}
+      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存探针设置</button>
+    </div>
+  );
+}
+
+function ProbeActionCard({
+  title,
+  icon,
+  state,
+  planLabel,
+  onPlan,
+  onExecute
+}: {
+  title: string;
+  icon: ReactNode;
+  state: ProbeActionUiState;
+  planLabel: string;
+  onPlan: () => void;
+  onExecute: () => void;
+}) {
+  const plan = state.plan;
+  return (
+    <Panel title={title} icon={icon}>
+      <Metric label="状态" value={probeActionPhaseLabel(state.phase)} tone={state.phase === "error" ? "danger" : state.phase === "executed" ? "success" : state.phase === "awaiting-confirmation" ? "warning" : undefined} />
+      {plan && (
+        <div className="probe-plan">
+          <strong>{plan.title}</strong>
+          {plan.summary && <p>{plan.summary}</p>}
+          <ol>
+            {plan.steps.map((step) => <li key={step}>{step}</li>)}
+          </ol>
+          {plan.command && <pre>{plan.command}</pre>}
+        </div>
+      )}
+      {state.error && <div className="form-error">{state.error}</div>}
+      {state.jobId && <div className="form-success">Job 已启动：{state.jobId}</div>}
+      <div className="button-row">
+        <button className="secondary-button" onClick={onPlan} disabled={state.phase === "planning" || state.phase === "executing"}><ClipboardCheck size={17} />{planLabel}</button>
+        <button className="primary-button" onClick={onExecute} disabled={!state.canExecute || state.phase === "executing"}><Play size={17} />{state.confirmLabel}</button>
+      </div>
+    </Panel>
+  );
+}
+
 function ProbeThreadList({ rows, empty }: { rows: ProbeThread[]; empty: string }) {
   return (
     <div className="preview-list compact">
@@ -3000,7 +3314,7 @@ function ProbeThreadList({ rows, empty }: { rows: ProbeThread[]; empty: string }
             <strong>{thread.title?.trim() || thread.id}</strong>
             <span>{thread.cwd ?? thread.id}</span>
           </div>
-          <small>{thread.status ?? "unknown"}</small>
+          <small>{threadStatusLabel(thread.status)}</small>
         </article>
       ))}
       {rows.length === 0 && <div className="muted-row">{empty}</div>}
@@ -3014,10 +3328,10 @@ function ProbeEventList({ events }: { events: ProbeEvent[] }) {
       {events.slice(0, 10).map((event, index) => (
         <article className="preview-item" key={event.id ?? `${event.thread_id ?? "event"}-${index}`}>
           <div>
-            <strong>{event.title || event.kind || "Probe event"}</strong>
-            <span>{event.message || event.thread_id || "no detail"}</span>
+            <strong>{event.title || event.kind || "探针事件"}</strong>
+            <span>{event.message || event.thread_id || "无详情"}</span>
           </div>
-          <small>{event.created_at ? String(event.created_at) : "unknown"}</small>
+          <small>{event.created_at ? String(event.created_at) : "未知"}</small>
         </article>
       ))}
       {events.length === 0 && <div className="muted-row">暂无 Probe 事件</div>}
@@ -3035,7 +3349,7 @@ function capabilityText(provider?: Pick<AgentProviderInfo, "capabilities"> | nul
 }
 
 function pathText(value?: string | null): string {
-  return value && value.trim() ? value : "unknown";
+  return value && value.trim() ? value : "未知";
 }
 
 function totalClaudeSessions(overview?: ClaudeOverview): number {
@@ -3061,10 +3375,51 @@ function probeRows(primary?: ProbeThread[], fallback?: ProbeThread[]): ProbeThre
   return primary ?? fallback ?? [];
 }
 
+function probeFlavorLabel(flavor?: string | null): string {
+  if (flavor === "builtin") return "内置";
+  if (flavor === "server") return "服务";
+  return flavor ?? "未知";
+}
+
+function probeStateLabel(value?: string | null): string {
+  if (!value) return "未知";
+  const labels: Record<string, string> = {
+    managed: "已管理",
+    disabled: "已停用",
+    configured: "已配置",
+    not_configured: "未配置",
+    maintenance_ready: "可维护",
+    ready: "就绪",
+    ok: "正常",
+    builtin: "内置"
+  };
+  return labels[value] ?? value;
+}
+
+function probeActionPhaseLabel(phase: ProbeActionUiState["phase"]): string {
+  if (phase === "planning") return "生成计划中";
+  if (phase === "awaiting-confirmation") return "等待确认";
+  if (phase === "executing") return "执行中";
+  if (phase === "executed") return "已启动";
+  if (phase === "error") return "失败";
+  return "未计划";
+}
+
+function probeJobRecords(jobs: JobRecord[]): JobRecord[] {
+  return jobs.filter((job) => {
+    const text = `${job.kind} ${job.title}`.toLowerCase();
+    return text.includes("probe") || text.includes("hook") || text.includes("bark") || text.includes("logs-db") || text.includes("logs_db");
+  });
+}
+
+function isProbeSettings(value: unknown): value is ProbeSettings {
+  return Boolean(value && typeof value === "object" && "codex" in value && "probe" in value && "notifications" in value && "logs_db" in value);
+}
+
 function hookStatusText(status?: Record<string, unknown>): string {
-  if (!status) return "unknown";
+  if (!status) return "未知";
   const value = status.hook_status ?? status.status;
-  return typeof value === "string" && value.trim() ? value : "available";
+  return typeof value === "string" && value.trim() ? probeStateLabel(value) : "可用";
 }
 
 function recentClaudeSessions(overview?: ClaudeOverview): Array<{
@@ -3187,7 +3542,7 @@ export function runConfigWithSupportedServiceTier(config: RunConfig, models: Cod
 }
 
 function sourceCountsText(counts?: Record<string, number> | null): string {
-  if (!counts || Object.keys(counts).length === 0) return "unknown";
+  if (!counts || Object.keys(counts).length === 0) return "暂无";
   return Object.entries(counts)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}:${value}`)
@@ -3200,12 +3555,12 @@ function permissionLabel(preset: PermissionPresetId): string {
 
 export function codexUpdateState(version?: Pick<SystemVersion, "codex_update_available">): { label: string; tone: "success" | "warning" | "danger" } {
   if (version?.codex_update_available === true) {
-    return { label: "available", tone: "warning" };
+    return { label: "可更新", tone: "warning" };
   }
   if (version?.codex_update_available === false) {
-    return { label: "current", tone: "success" };
+    return { label: "已是最新", tone: "success" };
   }
-  return { label: "unknown", tone: "warning" };
+  return { label: "未知", tone: "warning" };
 }
 
 function actionMessage(result: BridgeActionResult): string {

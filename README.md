@@ -16,7 +16,7 @@ Current scope:
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
 - Provider preview framework for Codex, Claude Code, future Cursor CLI, and future Gemini CLI. Codex is the only full-control provider in this release.
 - Claude Code preview is read-only: it discovers `~/.claude/projects`, session JSONL files, and redacted settings. It does not launch, resume, send, stop, or write Claude configuration.
-- Sentinel preview exposes conservative status/config surfaces for hooks, Bark, log maintenance, reply-needed, and recoverable counts. It does not add hidden desktop control.
+- Built-in Probe replaces the old `codex-sentinel-server` runtime path for cloud use: status, thread classification, Hook events, Bark testing, logs-db maintenance, settings, migration, and legacy cleanup are handled inside NexusHub. It does not add hidden desktop control, automatic replies, or direct destructive deletion endpoints.
 - Desktop navigation can be hidden to give the conversation workspace more horizontal room.
 - System status, job history, and responsive sky-blue dark WebUI.
 
@@ -49,6 +49,14 @@ bridge_timeout_seconds = 20
 ```
 
 The public site must expose only `nexushub` through Nginx. Do not publish the root app-server socket, `/v1`, `/responses`, or metrics endpoints. If a response has `fallback=true`, check Job History for the `codex exec` fallback job.
+
+## Probe
+
+`[probe]` config controls the built-in Probe runtime. Probe settings are split between `config.toml` for non-sensitive values and encrypted `PanelDb.settings` entries for sensitive values such as the Bark `device_key`.
+
+Probe routes are canonical under `/api/probe/*`. Read-only `/api/sentinel/*` aliases are kept for compatibility, but responses still use the Probe schema and labels. Maintenance actions use dry-run/plan plus confirmation where they can modify service files, hooks, or stored data.
+
+The old `codex-sentinel-server` runtime can be cleaned only after the NexusHub Probe health gate passes. Cleanup backs up legacy service/config/state/Hook files to `/opt/nexushub/backups/probe-legacy/<timestamp>/` before removing cloud runtime artifacts. The local source repository `codex-sentinel-lite` is not part of this cleanup.
 
 ## Local Build
 

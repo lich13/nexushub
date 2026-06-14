@@ -4,7 +4,7 @@ use nexushub_core::{
     },
     config::Config,
     platform::{PlatformKind, PlatformPaths},
-    probe::{ProbeCommandKind, ProbeCommandProfile, ProbeFlavor, ProbeStatusAvailability},
+    probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
 };
 use serde_json::json;
@@ -84,126 +84,218 @@ fn provider_registry_exposes_codex_and_claude_preview() {
         .any(|provider| provider.id == AgentProviderId::Gemini));
 }
 
-#[test]
-fn probe_status_is_canonical_and_unavailable_without_cli() {
-    let status = nexushub_core::probe::probe_status(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        ProbeCommandProfile::unavailable(),
-    );
+#[tokio::test]
+async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
+    let config = Config::default();
+    let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        .status()
+        .await
+        .unwrap();
 
     assert_eq!(status.label, "Probe");
-    assert_eq!(status.availability, ProbeStatusAvailability::Unavailable);
-    assert_eq!(status.hook_status, "unknown");
-    assert_eq!(status.logs_db_status, "unknown");
-    assert_eq!(status.flavor, ProbeFlavor::Unavailable);
-}
-
-#[test]
-fn probe_server_profile_builds_only_fixed_server_commands() {
-    let profile = ProbeCommandProfile::server("/usr/local/bin/codex-sentinel-server");
-
-    assert_eq!(profile.flavor, ProbeFlavor::Server);
+    assert!(status.enabled);
+    assert!(status.available);
+    assert_eq!(status.flavor, "builtin");
+    assert_eq!(status.service_name, "nexushub");
+    assert!(status.binary_path.is_none());
+    assert_eq!(status.lifecycle_status, "managed");
+    assert_eq!(status.doctor_status, "ready");
     assert_eq!(
-        profile
-            .command(ProbeCommandKind::InstallHooksRootRestartAppServer)
-            .unwrap()
-            .args,
-        vec!["install-hooks-root", "--restart-app-server"]
+        status.config_path,
+        PathBuf::from("/opt/nexushub/config.toml")
     );
-    assert_eq!(
-        profile.command(ProbeCommandKind::TestBark).unwrap().args,
-        vec!["test-bark"]
-    );
-    assert_eq!(
-        profile
-            .command(ProbeCommandKind::LogsDbMaintainDryRun)
-            .unwrap()
-            .args,
-        vec!["logs-db-maintain", "--dry-run"]
-    );
-}
-
-#[test]
-fn probe_local_profile_builds_fixed_observation_commands_with_limits() {
-    let profile = ProbeCommandProfile::local(
-        "/Applications/Codex Sentinel Lite.app/Contents/MacOS/codex-sentinel-lite",
-    );
-
-    assert_eq!(profile.flavor, ProbeFlavor::Local);
-    assert_eq!(
-        profile
-            .command(ProbeCommandKind::Running { limit: 7 })
-            .unwrap()
-            .args,
-        vec!["running", "7"]
-    );
-    assert_eq!(
-        profile
-            .command(ProbeCommandKind::ReplyNeeded { limit: 8 })
-            .unwrap()
-            .args,
-        vec!["reply-needed", "8"]
-    );
-    assert_eq!(
-        profile
-            .command(ProbeCommandKind::Recoverable { limit: 9 })
-            .unwrap()
-            .args,
-        vec!["recoverable", "9"]
-    );
-    assert_eq!(
-        profile
-            .command(ProbeCommandKind::DebugAppServerThread {
-                thread_id: "thread-abc".to_string(),
-            })
-            .unwrap()
-            .args,
-        vec!["debug-app-server-thread", "thread-abc"]
-    );
+    assert_eq!(status.recent_event_count, 0);
 }
 
 #[test]
 fn probe_rejects_unsafe_thread_probe_ids() {
-    let profile = ProbeCommandProfile::local("/tmp/codex-sentinel-lite");
-
-    assert!(profile
-        .command(ProbeCommandKind::DebugAppServerThread {
-            thread_id: "thread one".to_string(),
-        })
-        .is_none());
-    assert!(profile
-        .command(ProbeCommandKind::DebugAppServerThread {
-            thread_id: "../thread".to_string(),
-        })
-        .is_none());
+    assert!(nexushub_core::probe::safe_thread_probe_id("thread-abc"));
+    assert!(!nexushub_core::probe::safe_thread_probe_id("thread one"));
+    assert!(!nexushub_core::probe::safe_thread_probe_id("../thread"));
 }
 
-#[tokio::test]
-async fn probe_command_runner_parses_json_and_redacts_output() {
-    let root = temp_dir("nexushub-probe-runner");
-    fs::create_dir_all(&root).unwrap();
-    let binary = root.join("codex-sentinel-server");
-    fs::write(
-        &binary,
-        "#!/bin/sh\nprintf '{\"ok\":true,\"items\":[1,2]}'\nprintf 'TOKEN=secret\\n' >&2\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-    }
+#[test]
+fn probe_action_plans_use_nexushub_commands_and_confirmation_ids() {
+    let config = Config::default();
+    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
 
-    let profile = ProbeCommandProfile::server(&binary);
-    let output = nexushub_core::probe::run_probe_command(&profile, ProbeCommandKind::Status).await;
+    let hook_plan = runtime
+        .plan_action(ProbeActionPlanKind::InstallHooks)
+        .unwrap();
+    assert!(hook_plan.plan_id.starts_with("probe-hooks-"));
+    let hook_command_step = hook_plan
+        .steps
+        .iter()
+        .find(|step| step.contains("probe hook-stop"))
+        .expect("hook command step");
+    assert!(
+        hook_command_step.contains("nexushubd --config /opt/nexushub/config.toml probe hook-stop")
+    );
+    assert!(!hook_plan
+        .steps
+        .iter()
+        .any(|step| step.contains("codex-sentinel")));
 
-    assert!(output.success);
-    assert_eq!(output.json.unwrap()["ok"], true);
-    assert_eq!(output.stderr, "[redacted sensitive line]");
+    let logs_plan = runtime
+        .plan_action(ProbeActionPlanKind::LogsDbMaintain)
+        .unwrap();
+    assert!(logs_plan.plan_id.starts_with("probe-logs-db-"));
+    assert!(logs_plan.payload["retention_days"].as_u64().unwrap() >= 1);
+}
 
-    fs::remove_dir_all(root).unwrap();
+#[test]
+fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries() {
+    let mut config = Config::default();
+    config.probe.notifications.enabled = true;
+    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+    let lifecycle = runtime.lifecycle_status();
+    assert_eq!(lifecycle.status, "managed");
+    assert_eq!(lifecycle.service_name, "nexushub");
+    assert_eq!(lifecycle.service_kind, "systemd");
+    assert!(lifecycle.hooks_enabled);
+    assert!(lifecycle.notifications_enabled);
+    assert!(lifecycle.logs_db_enabled);
+    assert_eq!(
+        lifecycle.next_actions,
+        vec![
+            "probe-hook-ready".to_string(),
+            "logs-db-maintenance-ready".to_string()
+        ]
+    );
+
+    let hook = runtime.hook_status();
+    assert_eq!(hook.status, "managed");
+    assert!(hook.hook_command.contains("/opt/nexushub/bin/nexushubd"));
+    assert!(hook.supported_events.contains(&"hook-stop".to_string()));
+    assert!(hook
+        .supported_events
+        .contains(&"notify-completion".to_string()));
+    assert_eq!(hook.dedupe_namespace, "probe_event");
+
+    let diagnostics = runtime.diagnostics();
+    assert_eq!(diagnostics.doctor_status, "ready");
+    assert_eq!(diagnostics.lifecycle_status, "managed");
+    assert!(diagnostics
+        .managed_boundaries
+        .iter()
+        .any(|boundary| boundary.contains("不执行自动回复")));
+    assert_eq!(
+        diagnostics.effective_constants["legacy_sentinel_cli_runtime"],
+        false
+    );
+    assert_eq!(
+        diagnostics.effective_constants["hidden_desktop_control"],
+        false
+    );
+}
+
+#[test]
+fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() {
+    let runtime = ProbeRuntime::new(
+        Config::default(),
+        PlatformPaths::for_kind(PlatformKind::Linux),
+    );
+
+    let hook = runtime.build_event(ProbeEventInput::hook_stop(
+        Some("thread-a"),
+        Some("turn-1"),
+        "hook-stop",
+    ));
+    assert_eq!(hook.kind, "hook-stop");
+    assert_eq!(hook.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(hook.dedupe_namespace, "probe_event");
+    assert_eq!(hook.dedupe_key, "hook-stop:thread-a:turn-1");
+    assert_eq!(hook.ttl_seconds, 300);
+    assert_eq!(hook.payload["notify_completion"], false);
+    assert_eq!(hook.payload["auto_reply"], false);
+    assert_eq!(hook.payload["hidden_desktop_control"], false);
+
+    let duplicate_hook = runtime.build_event(ProbeEventInput::hook_stop(
+        Some("thread-a"),
+        Some("turn-1"),
+        "hook-stop",
+    ));
+    assert_eq!(hook.dedupe_key, duplicate_hook.dedupe_key);
+
+    let completion = runtime.build_event(ProbeEventInput::notify_completion(
+        Some("thread-a"),
+        Some("turn-1"),
+    ));
+    assert_eq!(completion.kind, "completion");
+    assert_eq!(completion.dedupe_key, "completion:thread-a:turn-1");
+    assert_eq!(completion.payload["notify_completion"], true);
+    assert_eq!(completion.payload["auto_reply"], false);
+
+    let recorded = ProbeEventOutcome::from_claim(&completion, true);
+    assert!(recorded.recorded);
+    assert_eq!(recorded.dedupe_key, completion.dedupe_key);
+    let duplicate = ProbeEventOutcome::from_claim(&completion, false);
+    assert!(!duplicate.recorded);
+}
+
+#[test]
+fn probe_logs_db_plan_includes_deletion_vacuum_and_skip_reason() {
+    let mut disabled = Config::default();
+    disabled.probe.logs_db.enabled = false;
+    let disabled_plan = ProbeRuntime::new(disabled, PlatformPaths::for_kind(PlatformKind::Linux))
+        .plan_action(ProbeActionPlanKind::LogsDbMaintain)
+        .unwrap();
+
+    assert_eq!(disabled_plan.payload["deletion"]["enabled"], false);
+    assert_eq!(disabled_plan.payload["vacuum"]["enabled"], false);
+    assert_eq!(disabled_plan.payload["skip_reason"], "logs_db_disabled");
+    assert_eq!(
+        disabled_plan.payload["would_call_legacy_sentinel_cli"],
+        false
+    );
+    assert!(disabled_plan
+        .steps
+        .iter()
+        .any(|step| step.contains("跳过删除")));
+
+    let mut enabled = Config::default();
+    enabled.probe.logs_db.auto_compact_when_codex_closed = true;
+    enabled.probe.logs_db.retention_days = 21;
+    enabled.probe.logs_db.delete_chunk_rows = 500;
+    let enabled_plan = ProbeRuntime::new(enabled, PlatformPaths::for_kind(PlatformKind::Linux))
+        .plan_action(ProbeActionPlanKind::LogsDbMaintain)
+        .unwrap();
+
+    assert_eq!(enabled_plan.payload["deletion"]["enabled"], true);
+    assert_eq!(enabled_plan.payload["deletion"]["retention_days"], 21);
+    assert_eq!(enabled_plan.payload["deletion"]["chunk_rows"], 500);
+    assert_eq!(enabled_plan.payload["vacuum"]["enabled"], true);
+    assert_eq!(enabled_plan.payload["skip_reason"], serde_json::Value::Null);
+}
+
+#[test]
+fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
+    let mut config = Config::default();
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.group = "NexusHub Ops".to_string();
+    config.probe.notifications.sound = Some("alarm".to_string());
+    config.probe.notifications.url = Some("https://example.com/click".to_string());
+    let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+    let plan = runtime.bark_test_plan(true);
+    let rendered = serde_json::to_string(&plan).unwrap();
+
+    assert_eq!(plan.kind, "bark-test");
+    assert_eq!(plan.payload["configured"], true);
+    assert_eq!(plan.payload["device_key"], "[configured]");
+    assert_eq!(plan.payload["bark_payload"]["title"], "NexusHub Probe test");
+    assert_eq!(
+        plan.payload["bark_payload"]["body"],
+        "Probe notification route is configured."
+    );
+    assert!(plan.payload["bark_payload"].get("device_key").is_none());
+    assert!(plan.payload["bark_payload"].get("sound").is_none());
+    assert!(plan.payload["bark_payload"].get("group").is_none());
+    assert!(plan.payload["bark_payload"].get("url").is_none());
+    assert!(!rendered.contains("secret"));
+    assert!(!rendered.contains("alarm"));
+    assert!(!rendered.contains("example.com"));
 }
 
 #[test]

@@ -16,9 +16,11 @@ import type {
   PlatformOverview,
   PluginInfo,
   ProbeDashboard,
+  ProbeActionPlan,
   ProbeHookStatus,
   ProbeJobAction,
   ProbeLogsDbStatus,
+  ProbeSettings,
   ProbeThread,
   ProbeStatus,
   PublicSettings,
@@ -461,6 +463,25 @@ export async function getProbeDashboard(): Promise<OptionalResult<ProbeDashboard
   return optionalApiFetch<ProbeDashboard>("/api/probe/dashboard");
 }
 
+export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
+  if (USE_DEMO) {
+    return {
+      available: true,
+      data: demoProbeSettings()
+    };
+  }
+  return optionalApiFetch<ProbeSettings>("/api/probe/settings");
+}
+
+export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
+  if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
+  return apiFetch<ProbeSettings>("/api/probe/settings", {
+    method: "PATCH",
+    csrfToken,
+    body: JSON.stringify(settings)
+  });
+}
+
 export async function getProbeRunning(): Promise<OptionalResult<ThreadSummary[]>> {
   if (USE_DEMO) return { available: true, data: demoThreads("running", "") };
   return optionalProbeThreads("/api/probe/running");
@@ -484,6 +505,30 @@ export async function getProbeHookStatus(): Promise<OptionalResult<ProbeHookStat
 export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
   if (USE_DEMO) return { available: true, data: { status: "maintenance_ready", logs_db_status: "maintenance_ready", path: "/opt/nexushub/logs/probe.sqlite" } };
   return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
+}
+
+export async function planProbeAction(action: ProbeJobAction, csrfToken?: string | null): Promise<ProbeActionPlan> {
+  if (USE_DEMO) {
+    return {
+      plan_id: action === "logs-db-maintain" ? "probe-logs-db-demo" : `probe-${action}-demo`,
+      kind: action,
+      title: action,
+      summary: "demo",
+      steps: ["demo"],
+      requires_confirmation: true
+    };
+  }
+  return apiFetch<ProbeActionPlan>(probePlanRoutes[action], { method: "POST", csrfToken });
+}
+
+export async function executeProbePlan(action: ProbeJobAction, planId: string, csrfToken?: string | null): Promise<{ job_id: string }> {
+  if (USE_DEMO) return { job_id: `probe-${action}-demo` };
+  const result = await apiFetch<{ job_id: string }>(probeExecuteRoutes[action], {
+    method: "POST",
+    csrfToken,
+    body: JSON.stringify({ plan_id: planId, confirmed: true })
+  });
+  return { job_id: result.job_id };
 }
 
 async function optionalProbeThreads(path: string): Promise<OptionalResult<ThreadSummary[]>> {
@@ -599,7 +644,22 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
 const probeJobRoutes: Record<ProbeJobAction, string> = {
   "hooks-install": "/api/probe/hooks/install",
   "bark-test": "/api/probe/bark/test",
-  "logs-db-maintain": "/api/probe/logs-db/maintain"
+  "logs-db-maintain": "/api/probe/logs-db/maintain",
+  "legacy-cleanup": "/api/probe/legacy-cleanup/dry-run"
+};
+
+const probePlanRoutes: Record<ProbeJobAction, string> = {
+  "hooks-install": "/api/probe/hooks/install",
+  "bark-test": "/api/probe/bark/test",
+  "logs-db-maintain": "/api/probe/logs-db/plan",
+  "legacy-cleanup": "/api/probe/legacy-cleanup/dry-run"
+};
+
+const probeExecuteRoutes: Record<ProbeJobAction, string> = {
+  "hooks-install": "/api/probe/hooks/install",
+  "bark-test": "/api/probe/bark/test",
+  "logs-db-maintain": "/api/probe/logs-db/execute",
+  "legacy-cleanup": "/api/probe/legacy-cleanup/execute"
 };
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
@@ -1029,17 +1089,53 @@ function demoProbeStatus(): ProbeStatus {
   return {
     label: "Probe",
     enabled: true,
+    available: true,
     platform: "linux",
     service_kind: "systemd",
-    service_name: "codex-sentinel-server",
-    flavor: "server",
+    service_name: "nexushub",
+    flavor: "builtin",
     hook_status: "managed",
     bark_status: "not_configured",
     logs_db_status: "maintenance_ready",
     recent_event_count: 1,
     reply_needed_count: 1,
     recoverable_count: 0,
-    config_path: "/opt/nexushub/config.toml"
+    lifecycle_status: "ok",
+    doctor_status: "ok",
+    runtime_version: "demo",
+    config_path: "/opt/nexushub/config.toml",
+    codex_home: "/root/.codex",
+    host_label: "43.155.235.227"
+  };
+}
+
+function demoProbeSettings(): ProbeSettings {
+  return {
+    codex: {
+      home: "/root/.codex",
+      workspace: "/home/ubuntu/codex-workspace",
+      app_server_service: "codex-app-server-root.service",
+      app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
+      bridge_enabled: true,
+      bridge_transport: "websocket",
+      bridge_timeout_seconds: 20,
+      host_label: "43.155.235.227"
+    },
+    probe: {
+      enabled: true,
+      poll_seconds: 15,
+      recent_limit: 50
+    },
+    notifications: {
+      enabled: false,
+      device_key_configured: false,
+      server_url: "https://api.day.app",
+      group: "NexusHub"
+    },
+    logs_db: {
+      enabled: true,
+      retention_days: 14
+    }
   };
 }
 

@@ -76,6 +76,31 @@ pub struct ThreadFollowUp {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProbeEvent {
+    pub id: String,
+    pub kind: String,
+    pub thread_id: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub dedupe_key: Option<String>,
+    pub source: String,
+    pub payload: Value,
+    pub created_at: i64,
+    pub handled_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewProbeEvent<'a> {
+    pub kind: &'a str,
+    pub thread_id: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub message: Option<&'a str>,
+    pub dedupe_key: Option<&'a str>,
+    pub source: &'a str,
+    pub payload: Value,
+}
+
 impl PanelDb {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_secret_box(path, SecretBox::deterministic_dev())
@@ -190,10 +215,37 @@ impl PanelDb {
 
             CREATE INDEX IF NOT EXISTS idx_thread_followups_thread_status_created
               ON thread_followups(thread_id, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS probe_events (
+              id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              thread_id TEXT,
+              title TEXT,
+              message TEXT,
+              dedupe_key TEXT,
+              source TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              handled_at INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_probe_events_created_at
+              ON probe_events(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_probe_events_thread_created_at
+              ON probe_events(thread_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS probe_dedupe (
+              namespace TEXT NOT NULL,
+              dedupe_key TEXT NOT NULL,
+              expires_at INTEGER NOT NULL,
+              created_at INTEGER NOT NULL,
+              PRIMARY KEY(namespace, dedupe_key)
+            );
             "#,
         )?;
         add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
         add_column_if_missing(&conn, "jobs", "turn_id", "TEXT")?;
+        add_column_if_missing(&conn, "probe_events", "handled_at", "INTEGER")?;
         let legacy = LEGACY_SESSION_TTL_SECONDS.to_string();
         let current: Option<String> = conn
             .query_row(
@@ -745,6 +797,127 @@ impl PanelDb {
         )?;
         Ok(())
     }
+
+    pub fn record_probe_event(&self, event: NewProbeEvent<'_>) -> Result<ProbeEvent> {
+        let id = Uuid::new_v4().to_string();
+        let now = Self::now();
+        let payload_json = event.payload.to_string();
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            r#"
+            INSERT INTO probe_events(
+              id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
+            )
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                id,
+                event.kind,
+                event.thread_id,
+                event.title,
+                event.message,
+                event.dedupe_key,
+                event.source,
+                payload_json,
+                now,
+            ],
+        )?;
+        Ok(ProbeEvent {
+            id,
+            kind: event.kind.to_string(),
+            thread_id: event.thread_id.map(str::to_string),
+            title: event.title.map(str::to_string),
+            message: event.message.map(str::to_string),
+            dedupe_key: event.dedupe_key.map(str::to_string),
+            source: event.source.to_string(),
+            payload: event.payload,
+            created_at: now,
+            handled_at: None,
+        })
+    }
+
+    pub fn list_probe_events(&self, limit: u32) -> Result<Vec<ProbeEvent>> {
+        let conn = self.conn.lock().expect("db mutex");
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at, handled_at
+            FROM probe_events
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit.clamp(1, 500)], probe_event_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn mark_probe_event_handled(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("db mutex");
+        let changed = conn.execute(
+            "UPDATE probe_events SET handled_at=?2 WHERE id=?1 AND handled_at IS NULL",
+            params![id, Self::now()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn claim_probe_dedupe(
+        &self,
+        namespace: &str,
+        dedupe_key: &str,
+        ttl_seconds: i64,
+    ) -> Result<bool> {
+        let now = Self::now();
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            "DELETE FROM probe_dedupe WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        let changed = conn.execute(
+            r#"
+            INSERT OR IGNORE INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+            VALUES(?1, ?2, ?3, ?4)
+            "#,
+            params![namespace, dedupe_key, now + ttl_seconds.max(1), now],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn maintain_probe_events(
+        &self,
+        retention_days: u32,
+        max_delete_rows: u32,
+        dry_run: bool,
+    ) -> Result<(usize, usize)> {
+        let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
+        let limit = i64::from(max_delete_rows.max(1));
+        let conn = self.conn.lock().expect("db mutex");
+        let event_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM probe_events WHERE created_at < ?1 LIMIT ?2",
+            params![cutoff, limit],
+            |row| row.get(0),
+        )?;
+        let dedupe_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM probe_dedupe WHERE expires_at <= ?1 LIMIT ?2",
+            params![Self::now(), limit],
+            |row| row.get(0),
+        )?;
+        if dry_run {
+            return Ok((event_count as usize, dedupe_count as usize));
+        }
+        let events_deleted = conn.execute(
+            "DELETE FROM probe_events WHERE rowid IN (
+                SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
+            )",
+            params![cutoff, limit],
+        )?;
+        let dedupe_deleted = conn.execute(
+            "DELETE FROM probe_dedupe WHERE rowid IN (
+                SELECT rowid FROM probe_dedupe WHERE expires_at <= ?1 ORDER BY expires_at ASC LIMIT ?2
+            )",
+            params![Self::now(), limit],
+        )?;
+        Ok((events_deleted, dedupe_deleted))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -800,6 +973,23 @@ fn followup_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadFollowUp
         cancelled_at: row.get(8)?,
         result_json: row.get(9)?,
         error: row.get(10)?,
+    })
+}
+
+fn probe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeEvent> {
+    let payload_json: String = row.get(7)?;
+    let payload = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
+    Ok(ProbeEvent {
+        id: row.get(0)?,
+        kind: row.get(1)?,
+        thread_id: row.get(2)?,
+        title: row.get(3)?,
+        message: row.get(4)?,
+        dedupe_key: row.get(5)?,
+        source: row.get(6)?,
+        payload,
+        created_at: row.get(8)?,
+        handled_at: row.get(9)?,
     })
 }
 
@@ -1044,5 +1234,43 @@ mod tests {
         let errored = listed.iter().find(|item| item.id == followup.id).unwrap();
         assert_eq!(errored.status, "error");
         assert_eq!(errored.error.as_deref(), Some("bridge unavailable"));
+    }
+
+    #[test]
+    fn probe_events_and_dedupe_persist_recent_runtime_state() {
+        let db = PanelDb::open(":memory:").unwrap();
+
+        let first_claim = db
+            .claim_probe_dedupe("reply_needed", "thread-a:turn-1", 60)
+            .unwrap();
+        let duplicate_claim = db
+            .claim_probe_dedupe("reply_needed", "thread-a:turn-1", 60)
+            .unwrap();
+        assert!(first_claim);
+        assert!(!duplicate_claim);
+
+        let event = db
+            .record_probe_event(super::NewProbeEvent {
+                kind: "reply-needed",
+                thread_id: Some("thread-a"),
+                title: Some("等待确认"),
+                message: Some("等待用户选择"),
+                dedupe_key: Some("thread-a:turn-1"),
+                source: "hook-stop",
+                payload: json!({"turn_id":"turn-1"}),
+            })
+            .unwrap();
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, event.id);
+        assert_eq!(events[0].kind, "reply-needed");
+        assert_eq!(events[0].thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(events[0].payload["turn_id"], "turn-1");
+        assert!(events[0].handled_at.is_none());
+
+        assert!(db.mark_probe_event_handled(&event.id).unwrap());
+        let handled = db.list_probe_events(10).unwrap();
+        assert!(handled[0].handled_at.is_some());
     }
 }

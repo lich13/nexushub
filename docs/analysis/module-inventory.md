@@ -10,7 +10,7 @@
 | `uploads` | Upload validation, storage, extraction, prompt context | CSV, ZIP, PDF, DOCX libs | 1 | 779 | Medium | Syellow Ugreen Pyellow Eyellow Rgreen |
 | `update` / `jobs` / `system` | Fixed command jobs, failure analysis, system status | shell commands, systemd, GitHub releases | 3 | 1172 | High | Syellow Uyellow Pyellow Eyellow Ryellow |
 | `config` / `platform` | Defaults, normalization, three-platform paths | TOML, env, OS cfg | 2 | 516 | Medium | Sgreen Ugreen Pyellow Eyellow Rgreen |
-| `providers` / `claude_code` / `sentinel` | Multi-provider registry, Claude read-only discovery, Sentinel preview | filesystem, serde | 3 | 369 | Medium | Sgreen Ugreen Pyellow Eyellow Rgreen |
+| `providers` / `claude_code` / `probe` | Multi-provider registry, Claude read-only discovery, built-in Probe replacement | filesystem, serde | 3 | 369 | Medium | Sgreen Ugreen Pyellow Eyellow Rgreen |
 | `security` / `crypto` / `auth` / `turnstile` | Token hashing, encrypted settings, sessions, Turnstile verification | argon2, AES-GCM, reqwest | 4 | 349 | Medium | Sgreen Ugreen Pyellow Eyellow Ryellow |
 | WebUI `App.tsx` | Main UI state, navigation, chat, ops/security/provider pages | React, API client | 1 | 3583 | Critical | Sred Uyellow Pyellow Egreen Ryellow |
 | WebUI `api.ts` / types / stores | API contracts, demo fallbacks, message cache | fetch, Vitest | 5 | 3342 | High | Syellow Ugreen Pyellow Egreen Ryellow |
@@ -39,7 +39,7 @@
 
 ### WebUI
 - **Path**: `webui/src/App.tsx`, `webui/src/lib/`, `webui/src/types.ts`
-- **Responsibility**: Dense operations UI, chat/thread workspace, provider preview pages, Sentinel page, plugins and ops views.
+- **Responsibility**: Dense operations UI, chat/thread workspace, provider preview pages, Probe page, plugins and ops views.
 - **Transformation Notes**: Keep current design language. Improve structure by moving page-specific state/components out of `App.tsx` after API contracts stabilize.
 - **S.U.P.E.R Assessment**: `App.tsx` is the largest UI hotspot; API/types are more replaceable but still need stronger provider-specific contracts.
 
@@ -48,4 +48,3 @@
 - **Responsibility**: Linux package/install/update, Nginx snippet, systemd unit, CI/release assets.
 - **Transformation Notes**: Linux is real. macOS and Windows are preview/planned until service installers and packaging are verified.
 - **S.U.P.E.R Assessment**: Environment assumptions are explicit but platform-specific. Keep path migration tests for old codex-cloud-panel installs.
-

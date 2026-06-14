@@ -10,7 +10,7 @@
   - Effort: S
   - Test Expectation: Docs-only; verify files exist and final commands are listed.
   - Memory Impact: Instruction surfaces updated.
-  - Acceptance: Shared and Claude-specific rules document bridge, safety, Claude read-only, Sentinel preview, and verification commands.
+  - Acceptance: Shared and Claude-specific rules document bridge, safety, Claude read-only, built-in Probe, and verification commands.
   - Notes: Completed 2026-06-13.
 
 - [x] **Task 1.2**: Create analysis, plan, and progress docs

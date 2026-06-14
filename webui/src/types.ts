@@ -380,6 +380,7 @@ export type PluginInfo = {
 export type ProbeStatus = {
   label?: string | null;
   enabled: boolean;
+  available?: boolean | null;
   platform: "linux" | "macos" | "windows" | string;
   service_kind: string;
   service_name: string;
@@ -391,6 +392,11 @@ export type ProbeStatus = {
   reply_needed_count: number;
   recoverable_count: number;
   config_path: string;
+  lifecycle_status?: string | null;
+  doctor_status?: string | null;
+  runtime_version?: string | null;
+  codex_home?: string | null;
+  host_label?: string | null;
 };
 
 export type ProbeThread = Partial<ThreadSummary> & {
@@ -418,6 +424,98 @@ export type ProbeDashboard = {
   diagnostics?: Record<string, unknown> | null;
 };
 
+export type ProbeSettings = {
+  codex: {
+    home: string;
+    workspace?: string | null;
+    app_server_service: string;
+    app_server_socket?: string | null;
+    bridge_enabled?: boolean | null;
+    bridge_transport?: string | null;
+    bridge_timeout_seconds?: number | null;
+    host_label: string;
+  };
+  probe: Record<string, unknown> & {
+    enabled?: boolean;
+    poll_seconds?: number;
+    recent_limit?: number;
+    hooks?: Record<string, unknown> & {
+      manage_stop_hook?: boolean;
+      reload_app_server_after_install?: boolean;
+    };
+    notifications?: Record<string, unknown> & {
+      enabled?: boolean;
+      server_url?: string;
+      sound?: string | null;
+      group?: string;
+      url?: string | null;
+      notify_completion?: boolean;
+      notify_reply_needed?: boolean;
+      notify_recoverable?: boolean;
+    };
+    observability?: Record<string, unknown> & {
+      hook_event_max_lines?: number;
+      hook_cooldown_max_lines?: number;
+      log_max_bytes?: number;
+    };
+    logs_db?: Record<string, unknown> & {
+      enabled?: boolean;
+      retention_days?: number;
+      maintenance_interval_hours?: number;
+      maintain_on_codex_exit?: boolean;
+      codex_exit_grace_seconds?: number;
+      codex_exit_max_wait_seconds?: number;
+      delete_chunk_rows?: number;
+      max_delete_rows_per_run?: number;
+      busy_timeout_ms?: number;
+      auto_compact_when_codex_closed?: boolean;
+      compact_interval_hours?: number;
+      compact_min_freelist_mb?: number;
+      compact_min_freelist_ratio_percent?: number;
+      minimum_free_space_mb?: number;
+    };
+  };
+  notifications: Record<string, unknown> & {
+    enabled?: boolean;
+    device_key?: string;
+    device_key_configured?: boolean;
+    server_url?: string;
+    sound?: string | null;
+    group?: string;
+    url?: string | null;
+    notify_completion?: boolean;
+    notify_reply_needed?: boolean;
+    notify_recoverable?: boolean;
+  };
+  logs_db: Record<string, unknown> & {
+    enabled?: boolean;
+    retention_days?: number;
+    maintenance_interval_hours?: number;
+    maintain_on_codex_exit?: boolean;
+    codex_exit_grace_seconds?: number;
+    codex_exit_max_wait_seconds?: number;
+    delete_chunk_rows?: number;
+    max_delete_rows_per_run?: number;
+    busy_timeout_ms?: number;
+    auto_compact_when_codex_closed?: boolean;
+    compact_interval_hours?: number;
+    compact_min_freelist_mb?: number;
+    compact_min_freelist_ratio_percent?: number;
+    minimum_free_space_mb?: number;
+  };
+};
+
+export type ProbeActionPlan = {
+  plan_id: string;
+  kind: string;
+  title: string;
+  summary?: string | null;
+  steps: string[];
+  payload?: unknown;
+  requires_confirmation: boolean;
+  command?: string | null;
+};
+
 export type ProbeHookStatus = {
   status?: string | null;
   hook_status?: string | null;
@@ -436,7 +534,7 @@ export type ProbeLogsDbStatus = {
 
 export type SentinelStatus = ProbeStatus;
 
-export type ProbeJobAction = "hooks-install" | "bark-test" | "logs-db-maintain";
+export type ProbeJobAction = "hooks-install" | "bark-test" | "logs-db-maintain" | "legacy-cleanup";
 
 export type ClaudeCodeJobAction = "version-check" | "update-precheck" | "update-start" | "smoke" | "cache-status";
 

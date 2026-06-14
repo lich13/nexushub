@@ -5,7 +5,7 @@
 
 ## Tasks
 
-- [x] **Task 4.1**: Extend navigation for Claude, Sentinel, plugins, ops previews
+- [x] **Task 4.1**: Extend navigation for Claude, Probe, plugins, ops previews
   - Priority: P0
   - Effort: M
   - Test Expectation: WebUI tests, typecheck/build.
@@ -38,4 +38,3 @@ No router was introduced; the current `View`-based shell was extended.
 - [x] All tasks above are checked off
 - [x] MASTER.md phase count updated
 - [x] MASTER.md "Current Status" updated to next phase
-

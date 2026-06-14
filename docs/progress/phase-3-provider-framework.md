@@ -1,6 +1,6 @@
 # Phase 3: Provider Framework
 
-**Goal**: Make Codex, Claude Code, Sentinel, and future CLI providers visible through typed preview surfaces.  
+**Goal**: Make Codex, Claude Code, built-in Probe, and future CLI providers visible through typed surfaces.
 **Status**: Complete
 
 ## Tasks
@@ -21,7 +21,7 @@
   - Acceptance: `~/.claude/projects` and redacted settings are visible without writes.
   - Notes: Completed in prior pass.
 
-- [x] **Task 3.3**: Add Sentinel preview status
+- [x] **Task 3.3**: Add built-in Probe status
   - Priority: P1
   - Effort: S
   - Test Expectation: Rust provider tests and WebUI API tests.
@@ -38,4 +38,3 @@ Cursor and Gemini are registry placeholders only.
 - [x] All tasks above are checked off
 - [x] MASTER.md phase count updated
 - [x] MASTER.md "Current Status" updated to next phase
-

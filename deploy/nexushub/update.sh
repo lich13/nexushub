@@ -5,6 +5,7 @@ IFS=$'\n\t'
 
 APP_NAME="nexushub"
 ASSET_NAME="nexushub-linux-x86_64.tar.gz"
+PROBE_LEGACY_CLEANUP_NAME="nexushub-probe-legacy-cleanup"
 REPO="lich13/nexushub"
 VERSION="latest"
 ARCHIVE_PATH=""
@@ -21,6 +22,7 @@ UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
 CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-update"
 CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-prune"
+PROBE_LEGACY_CLEANUP_BIN="/usr/local/bin/${APP_NAME}-probe-legacy-cleanup"
 HEALTH_URL="http://127.0.0.1:15742/healthz"
 GITHUB_TOKEN="${NEXUSHUB_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 CURL="${NEXUSHUB_CURL:-curl}"
@@ -402,6 +404,60 @@ ensure_section(
     },
 )
 
+ensure_section(
+    "probe",
+    {
+        "enabled": "true",
+        "poll_seconds": "15",
+        "recent_limit": "50",
+    },
+)
+ensure_section(
+    "probe.hooks",
+    {
+        "manage_stop_hook": "true",
+        "reload_app_server_after_install": "true",
+    },
+)
+ensure_section(
+    "probe.notifications",
+    {
+        "enabled": "false",
+        "server_url": '"https://api.day.app"',
+        "group": '"NexusHub"',
+        "notify_completion": "true",
+        "notify_reply_needed": "true",
+        "notify_recoverable": "true",
+    },
+)
+ensure_section(
+    "probe.observability",
+    {
+        "hook_event_max_lines": "120",
+        "hook_cooldown_max_lines": "80",
+        "log_max_bytes": "262144",
+    },
+)
+ensure_section(
+    "probe.logs_db",
+    {
+        "enabled": "true",
+        "retention_days": "14",
+        "maintenance_interval_hours": "24",
+        "maintain_on_codex_exit": "true",
+        "codex_exit_grace_seconds": "10",
+        "codex_exit_max_wait_seconds": "120",
+        "delete_chunk_rows": "2000",
+        "max_delete_rows_per_run": "50000",
+        "busy_timeout_ms": "5000",
+        "auto_compact_when_codex_closed": "true",
+        "compact_interval_hours": "168",
+        "compact_min_freelist_mb": "64",
+        "compact_min_freelist_ratio_percent": "20",
+        "minimum_free_space_mb": "256",
+    },
+)
+
 if changed:
     path.write_text("\n".join(lines) + "\n")
 PY
@@ -463,6 +519,7 @@ main() {
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-precheck" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-update" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-prune" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
+    [[ -f "${ROOT}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${PROBE_LEGACY_CLEANUP_NAME}" "${PROBE_LEGACY_CLEANUP_BIN}"
   fi
   migrate_codex_update_config
 

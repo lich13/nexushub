@@ -2,7 +2,7 @@
 
 ## Preliminary Direction
 
-Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep the Codex chain intact, migrate conservative Sentinel surfaces, and add a read-only Claude Code provider framework inspired by multi-provider IDE consoles without copying AGPL source.
+Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep the Codex chain intact, replace the cloud Sentinel runtime with a built-in Probe surface, and add a read-only Claude Code provider framework inspired by multi-provider IDE consoles without copying AGPL source.
 
 ## Current Architecture
 
@@ -39,7 +39,7 @@ The daemon listens on `127.0.0.1:15742` and is intended to be exposed only throu
 - Core library exports: `crates/nexushub-core/src/lib.rs`
 - Provider registry: `crates/nexushub-core/src/providers.rs`
 - Claude Code preview: `crates/nexushub-core/src/claude_code.rs`
-- Sentinel preview: `crates/nexushub-core/src/sentinel.rs`
+- Built-in Probe runtime: `crates/nexushub-core/src/probe.rs`
 - Platform path model: `crates/nexushub-core/src/platform.rs`
 - WebUI shell: `webui/src/App.tsx`
 - WebUI API client/tests: `webui/src/lib/api.ts`, `webui/src/lib/api.test.ts`

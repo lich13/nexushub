@@ -19,7 +19,7 @@ graph TD
     subgraph P3 [Phase 3: Provider Framework]
         T31[3.1 Provider registry]
         T32[3.2 Claude Code read-only]
-        T33[3.3 Sentinel preview]
+        T33[3.3 Built-in Probe]
         T31 --> T32
         T31 --> T33
     end
@@ -53,4 +53,3 @@ graph TD
     P4 --> P6
     P5 --> P6
 ```
-

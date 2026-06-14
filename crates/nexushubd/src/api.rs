@@ -7,6 +7,7 @@ use crate::{
     turnstile::verify_turnstile,
 };
 use axum::{
+    body::Bytes,
     extract::connect_info::ConnectInfo,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -22,10 +23,14 @@ use nexushub_core::{
     archive,
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
+    config::{
+        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeNotificationsConfigPatch,
+        ProbeSettingsPatch,
+    },
     db::{JobRecord, NewSession, ThreadFollowUp},
     platform::PlatformPaths,
+    probe::{ProbeActionPlanKind, ProbeRuntime},
     providers::ProviderRegistry,
-    sentinel::{self, SentinelConfig},
     update,
     uploads::{
         self, cleanup_upload_ids, prepare_uploads, prompt_with_attachment_context,
@@ -80,6 +85,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plugins", get(list_plugins))
         .route("/api/probe/status", get(get_probe_status))
         .route("/api/probe/dashboard", get(get_probe_dashboard))
+        .route(
+            "/api/probe/settings",
+            get(get_probe_settings).patch(patch_probe_settings),
+        )
+        .route("/api/probe/lifecycle", get(get_probe_lifecycle))
+        .route("/api/probe/diagnostics", get(get_probe_diagnostics))
+        .route("/api/probe/events", get(get_probe_events))
         .route("/api/probe/running", get(get_probe_running))
         .route("/api/probe/reply-needed", get(get_probe_reply_needed))
         .route("/api/probe/recoverable", get(get_probe_recoverable))
@@ -88,8 +100,34 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
         .route("/api/probe/hooks/install", post(probe_hooks_install))
         .route("/api/probe/bark/test", post(probe_bark_test))
-        .route("/api/probe/logs-db/maintain", post(probe_logs_db_maintain))
+        .route("/api/probe/logs-db/plan", post(probe_logs_db_plan))
+        .route("/api/probe/logs-db/execute", post(probe_logs_db_execute))
+        .route("/api/probe/logs-db/maintain", post(probe_logs_db_plan))
+        .route("/api/probe/lifecycle/repair", post(probe_lifecycle_repair))
+        .route("/api/probe/service/restart", post(probe_service_restart))
+        .route("/api/probe/legacy/import", post(probe_legacy_import))
+        .route(
+            "/api/probe/legacy-cleanup/dry-run",
+            post(probe_legacy_cleanup_dry_run),
+        )
+        .route(
+            "/api/probe/legacy-cleanup/execute",
+            post(probe_legacy_cleanup_execute),
+        )
         .route("/api/sentinel/status", get(get_probe_status))
+        .route("/api/sentinel/dashboard", get(get_probe_dashboard))
+        .route("/api/sentinel/running", get(get_probe_running))
+        .route("/api/sentinel/reply-needed", get(get_probe_reply_needed))
+        .route("/api/sentinel/recoverable", get(get_probe_recoverable))
+        .route(
+            "/api/sentinel/thread-probe/:id",
+            get(get_probe_thread_probe),
+        )
+        .route("/api/sentinel/hook-status", get(get_probe_hook_status))
+        .route(
+            "/api/sentinel/logs-db/status",
+            get(get_probe_logs_db_status),
+        )
         .route(
             "/api/providers/claude-code/jobs/version-check",
             post(claude_code_version_check),
@@ -229,7 +267,7 @@ async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!([
         {"id": "codex", "label": "Codex", "status": "ready", "kind": "builtin"},
-        {"id": "probe", "label": "Probe", "status": "preview", "kind": "builtin"},
+        {"id": "probe", "label": "探针", "status": "ready", "kind": "builtin"},
         {"id": "claude_code", "label": "Claude Code", "status": "preview", "kind": "builtin"},
         {"id": "system_ops", "label": "System / Ops", "status": "ready", "kind": "builtin"}
     ]))
@@ -237,7 +275,7 @@ async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiR
 
 async fn get_probe_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_status_value().await)
+    ok(probe_status_value(state).await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,28 +285,120 @@ struct ProbeListQuery {
 
 async fn get_probe_dashboard(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let status = probe_status_value().await;
-    let running = load_probe_threads(&state, "running", 50).await?;
-    let reply_needed = load_probe_threads(&state, "reply-needed", 50).await?;
-    let recoverable = load_probe_threads(&state, "recoverable", 50).await?;
-    let doctor_args = [probe_doctor_command()];
-    let (hook_status, logs_db_status, doctor) = tokio::join!(
-        probe_json_command(&["hook-status"]),
-        probe_json_command(&["logs-db-status"]),
-        probe_json_command(&doctor_args)
-    );
+    let runtime = probe_runtime(&state);
+    let status = probe_status_value(state.clone()).await;
+    let running = load_probe_threads(&state, "running", state.config.probe.recent_limit).await?;
+    let reply_needed =
+        load_probe_threads(&state, "reply-needed", state.config.probe.recent_limit).await?;
+    let recoverable =
+        load_probe_threads(&state, "recoverable", state.config.probe.recent_limit).await?;
+    let diagnostics = runtime.diagnostics();
     ok(json!({
         "status": status,
         "running": running,
         "reply_needed": reply_needed,
         "recoverable": recoverable,
-        "recent_events": [],
-        "diagnostics": {
-            "doctor": doctor,
-            "hook_status": hook_status,
-            "logs_db_status": logs_db_status,
-        }
+        "recent_events": state.db.list_probe_events(state.config.probe.recent_limit as u32)?,
+        "diagnostics": diagnostics,
     }))
+}
+
+async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(probe_settings_value(&state)?)
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeSettingsRequest {
+    codex: Option<nexushub_core::config::CodexProbeConfigPatch>,
+    probe: Option<ProbeSettingsPatch>,
+    notifications: Option<ProbeNotificationsRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeNotificationsRequest {
+    device_key: Option<String>,
+    #[serde(flatten)]
+    patch: ProbeNotificationsConfigPatch,
+}
+
+async fn patch_probe_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ProbeSettingsRequest>,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    if let Some(notifications) = request.notifications.as_ref() {
+        if let Some(device_key) = notifications.device_key.as_ref() {
+            if !device_key.trim().is_empty() {
+                state.db.set_secret_setting_bytes(
+                    "probe_bark_device_key",
+                    device_key.trim().as_bytes(),
+                )?;
+            }
+        }
+    }
+    let mut probe_patch = request.probe.unwrap_or_default();
+    if let Some(notifications) = request.notifications {
+        let mut nested = probe_patch.notifications.unwrap_or_default();
+        merge_probe_notification_patch(&mut nested, notifications.patch);
+        probe_patch.notifications = Some(nested);
+    }
+    let patch = ProbeConfigFilePatch {
+        codex: request.codex,
+        probe: Some(probe_patch),
+    };
+    let config_path = std::env::var_os("NEXUSHUB_CONFIG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| PlatformPaths::current().config_file);
+    let mut response_config = state.config.clone();
+    if config_path.exists() {
+        let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
+        let updated = patch_probe_config_toml(&text, &patch)?;
+        fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
+        response_config = Config::load(&config_path)?;
+    }
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        "probe_settings.updated",
+        Some("probe"),
+        Some("settings"),
+        None,
+        json!({"config_path": config_path}),
+    )?;
+    ok(probe_settings_value_for_config(&state, &response_config)?)
+}
+
+async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let mut value = serde_json::to_value(probe_runtime(&state).lifecycle_status())
+        .map_err(anyhow::Error::from)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "app_server_service".to_string(),
+            json!(state.config.codex.app_server_service),
+        );
+    }
+    ok(value)
+}
+
+async fn get_probe_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(probe_runtime(&state).diagnostics())
+}
+
+async fn get_probe_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProbeListQuery>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let limit = query
+        .limit
+        .unwrap_or(state.config.probe.recent_limit)
+        .clamp(1, 500);
+    ok(json!({"items": state.db.list_probe_events(limit as u32)?}))
 }
 
 async fn get_probe_running(
@@ -303,12 +433,10 @@ async fn probe_thread_list_response(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let limit = limit.unwrap_or(50).clamp(1, 200);
-    let cli = probe_json_command(&[status, &limit.to_string()]).await;
     let threads = load_probe_threads(&state, status, limit).await?;
     ok(json!({
         "source": "nexushub_read_model",
         "items": threads,
-        "probe_cli": cli,
     }))
 }
 
@@ -321,14 +449,13 @@ async fn get_probe_thread_probe(
     let detail = load_merged_thread_detail(&state, &id, "probe thread")
         .await
         .map_err(api_error_for_thread_detail_load)?;
-    let cli = probe_json_command(&["debug-app-server-thread", &id]).await;
     match detail {
         Some(detail) => ok(json!({
             "thread_id": id,
             "summary": detail.summary,
             "total_blocks": detail.total_blocks,
             "raw_event_count": detail.raw_event_count,
-            "probe_cli": cli,
+            "source": "nexushub_app_server_thread_read",
         })),
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
     }
@@ -336,7 +463,7 @@ async fn get_probe_thread_probe(
 
 async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_json_command(&["hook-status"]).await)
+    ok(json!(probe_runtime(&state).hook_status()))
 }
 
 async fn get_probe_logs_db_status(
@@ -344,19 +471,20 @@ async fn get_probe_logs_db_status(
     headers: HeaderMap,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_json_command(&["logs-db-status"]).await)
+    ok(json!(probe_runtime(&state).logs_db_status()))
 }
 
-async fn probe_hooks_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_hooks_install",
-        "Probe install hooks",
-        probe_hooks_install_args(),
-        "probe_hooks",
-    )
-    .await
+async fn probe_hooks_install(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResponse {
+    if body.is_empty() {
+        return probe_plan_response(state, headers, ProbeActionPlanKind::InstallHooks).await;
+    }
+    let request: ConfirmedPlanRequest = serde_json::from_slice(&body)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::InstallHooks).await
 }
 
 async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -364,23 +492,143 @@ async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> A
         state,
         headers,
         "probe_bark_test",
-        "Probe Bark test",
-        vec!["test-bark".to_string()],
+        "探针 Bark 测试",
+        vec!["probe".to_string(), "bark-test".to_string()],
         "probe_bark",
     )
     .await
 }
 
-async fn probe_logs_db_maintain(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+async fn probe_logs_db_plan(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    probe_plan_response(state, headers, ProbeActionPlanKind::LogsDbMaintain).await
+}
+
+async fn probe_logs_db_execute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ConfirmedPlanRequest>,
+) -> ApiResponse {
+    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::LogsDbMaintain).await
+}
+
+async fn probe_lifecycle_repair(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     start_probe_fixed_job(
         state,
         headers,
-        "probe_logs_db_maintain",
-        "Probe logs DB maintain",
-        vec!["logs-db-maintain".to_string(), "--dry-run".to_string()],
-        "probe_logs_db",
+        "probe_lifecycle_repair",
+        "修复探针生命周期",
+        vec!["probe".to_string(), "lifecycle-repair".to_string()],
+        "probe_lifecycle",
     )
     .await
+}
+
+async fn probe_service_restart(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_service_restart",
+        "重启 NexusHub 服务",
+        vec!["probe".to_string(), "service-restart".to_string()],
+        "probe_service",
+    )
+    .await
+}
+
+async fn probe_legacy_import(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_legacy_import",
+        "导入旧 Sentinel 配置",
+        vec!["probe".to_string(), "legacy-import".to_string()],
+        "probe_legacy_import",
+    )
+    .await
+}
+
+async fn probe_legacy_cleanup_dry_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    probe_plan_response(state, headers, ProbeActionPlanKind::LegacyCleanup).await
+}
+
+async fn probe_legacy_cleanup_execute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ConfirmedPlanRequest>,
+) -> ApiResponse {
+    probe_execute_confirmed(state, headers, request, ProbeActionPlanKind::LegacyCleanup).await
+}
+
+async fn probe_plan_response(
+    state: AppState,
+    headers: HeaderMap,
+    kind: ProbeActionPlanKind,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let plan = probe_runtime(&state).plan_action(kind)?;
+    ok(plan)
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfirmedPlanRequest {
+    plan_id: Option<String>,
+    confirmed: Option<bool>,
+}
+
+async fn probe_execute_confirmed(
+    state: AppState,
+    headers: HeaderMap,
+    request: ConfirmedPlanRequest,
+    kind: ProbeActionPlanKind,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let plan_id = request.plan_id.as_deref().unwrap_or("").trim();
+    if plan_id.is_empty() || request.confirmed != Some(true) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "plan_id and confirmed=true are required",
+        ));
+    }
+    let plan = probe_runtime(&state).plan_action(kind)?;
+    let (job_kind, title, group, args) = match kind {
+        ProbeActionPlanKind::InstallHooks => (
+            "probe_hooks_install",
+            "安装探针 Hook",
+            "probe_hooks",
+            vec!["probe".to_string(), "hooks-install".to_string()],
+        ),
+        ProbeActionPlanKind::LogsDbMaintain => (
+            "probe_logs_db_execute",
+            "探针日志库维护",
+            "probe_logs_db",
+            vec!["probe".to_string(), "logs-db-maintain".to_string()],
+        ),
+        ProbeActionPlanKind::LegacyCleanup => (
+            "probe_legacy_cleanup_execute",
+            "旧 Sentinel 清理",
+            "probe_legacy_cleanup",
+            vec!["probe".to_string(), "legacy-cleanup".to_string()],
+        ),
+    };
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        &format!("{job_kind}.confirmed"),
+        Some("probe"),
+        Some(plan_id),
+        None,
+        json!({"plan": plan, "requested_plan_id": plan_id, "args": args}),
+    )?;
+    let command = fixed_probe_shell_command(&state, &args);
+    let id = state
+        .jobs
+        .start_exclusive_shell_job(job_kind, title, command, group)
+        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
+    ok(json!({"job_id": id}))
 }
 
 async fn start_probe_fixed_job(
@@ -401,7 +649,7 @@ async fn start_probe_fixed_job(
         None,
         json!({"args": args}),
     )?;
-    let command = fixed_probe_shell_command(&args);
+    let command = fixed_probe_shell_command(&state, &args);
     let id = state
         .jobs
         .start_exclusive_shell_job(kind, title, command, group)
@@ -506,187 +754,139 @@ async fn start_claude_code_fixed_job(
     ok(json!({"job_id": id}))
 }
 
-#[derive(Debug, Clone)]
-struct ProbeCommandProfile {
-    flavor: &'static str,
-    binary: Option<std::path::PathBuf>,
-    service_kind: &'static str,
-    service_name: &'static str,
-    config_path: std::path::PathBuf,
+fn probe_runtime(state: &AppState) -> ProbeRuntime {
+    ProbeRuntime::new(state.config.clone(), PlatformPaths::current())
 }
 
-impl ProbeCommandProfile {
-    fn available(&self) -> bool {
-        self.binary.as_ref().is_some_and(|path| path.exists())
-    }
-}
-
-fn probe_command_profile() -> ProbeCommandProfile {
-    let server_bin =
-        std::path::PathBuf::from("/opt/codex-sentinel-server/bin/codex-sentinel-server");
-    if server_bin.exists() {
-        return ProbeCommandProfile {
-            flavor: "server",
-            binary: Some(server_bin),
-            service_kind: "systemd",
-            service_name: "codex-sentinel-server",
-            config_path: std::path::PathBuf::from("/etc/codex-sentinel-server/config.toml"),
-        };
-    }
-    let lite_bin = std::path::PathBuf::from(
-        "/Applications/Codex Sentinel Lite.app/Contents/MacOS/codex-sentinel-lite",
-    );
-    if lite_bin.exists() {
-        return ProbeCommandProfile {
-            flavor: "lite",
-            binary: Some(lite_bin),
-            service_kind: "launchd",
-            service_name: "local.codex-sentinel-lite",
-            config_path: std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".codex-sentinel-lite/config.toml"),
-        };
-    }
-    ProbeCommandProfile {
-        flavor: "unavailable",
-        binary: None,
-        service_kind: "unknown",
-        service_name: "probe",
-        config_path: PlatformPaths::current().config_file,
-    }
-}
-
-async fn probe_status_value() -> Value {
-    let profile = probe_command_profile();
-    let paths = PlatformPaths::current();
-    let fallback = sentinel::sentinel_status(&paths, &SentinelConfig::default());
-    json!({
-        "label": "Probe",
-        "enabled": fallback.enabled,
-        "available": profile.available(),
-        "platform": paths.kind,
-        "service_kind": profile.service_kind,
-        "service_name": profile.service_name,
-        "flavor": profile.flavor,
-        "binary_path": profile.binary.as_ref().map(|path| path.display().to_string()),
-        "hook_status": if profile.available() { "managed" } else { fallback.hook_status.as_str() },
-        "bark_status": fallback.bark_status,
-        "logs_db_status": if profile.available() { "maintenance_ready" } else { fallback.logs_db_status.as_str() },
-        "recent_event_count": fallback.recent_event_count,
-        "reply_needed_count": fallback.reply_needed_count,
-        "recoverable_count": fallback.recoverable_count,
-        "config_path": profile.config_path,
-    })
-}
-
-fn probe_doctor_command() -> &'static str {
-    if probe_command_profile().flavor == "lite" {
-        "lifecycle-status"
-    } else {
-        "doctor"
-    }
-}
-
-fn probe_hooks_install_args() -> Vec<String> {
-    if probe_command_profile().flavor == "server" {
-        vec![
-            "install-hooks-root".to_string(),
-            "--restart-app-server".to_string(),
-        ]
-    } else {
-        vec!["install-hooks".to_string()]
-    }
-}
-
-async fn probe_json_command(args: &[&str]) -> Value {
-    let profile = probe_command_profile();
-    let Some(binary) = profile.binary.as_ref().filter(|path| path.exists()) else {
-        return json!({
+async fn probe_status_value(state: AppState) -> Value {
+    match probe_runtime(&state).status().await {
+        Ok(mut status) => {
+            if let Ok(events) = state
+                .db
+                .list_probe_events(state.config.probe.recent_limit as u32)
+            {
+                status.recent_event_count = events.len();
+            }
+            if let Ok(threads) =
+                load_probe_threads(&state, "running", state.config.probe.recent_limit).await
+            {
+                status.running_count = threads.len();
+            }
+            if let Ok(threads) =
+                load_probe_threads(&state, "reply-needed", state.config.probe.recent_limit).await
+            {
+                status.reply_needed_count = threads.len();
+            }
+            if let Ok(threads) =
+                load_probe_threads(&state, "recoverable", state.config.probe.recent_limit).await
+            {
+                status.recoverable_count = threads.len();
+            }
+            json!(status)
+        }
+        Err(err) => json!({
+            "label": "Probe",
+            "enabled": state.config.probe.enabled,
             "available": false,
-            "flavor": profile.flavor,
-            "error": "Probe binary not found"
-        });
-    };
-    let Some(command_args) = probe_args_for_profile(&profile, args) else {
-        return json!({
-            "available": false,
-            "flavor": profile.flavor,
-            "error": format!("Probe command is not available for {} profile", profile.flavor),
-            "requested": args,
-        });
-    };
-    let output = tokio::time::timeout(
-        Duration::from_secs(12),
-        tokio::process::Command::new(binary)
-            .args(&command_args)
-            .output(),
+            "flavor": "builtin",
+            "error": err.to_string(),
+        }),
+    }
+}
+
+fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
+    probe_settings_value_for_config(state, &state.config)
+}
+
+fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
+    Ok(json!({
+        "codex": {
+            "home": config.codex.home,
+            "workspace": config.codex.workspace,
+            "app_server_service": config.codex.app_server_service,
+            "app_server_socket": config.codex.app_server_socket,
+            "bridge_enabled": config.codex.bridge_enabled,
+            "bridge_transport": config.codex.bridge_transport,
+            "bridge_timeout_seconds": config.codex.bridge_timeout_seconds,
+            "host_label": config.codex.host_label,
+        },
+        "probe": config.probe,
+        "notifications": {
+            "device_key_configured": state
+                .db
+                .get_secret_setting_bytes("probe_bark_device_key")?
+                .is_some_and(|value| !value.is_empty()),
+            "server_url": config.probe.notifications.server_url,
+            "enabled": config.probe.notifications.enabled,
+            "sound": config.probe.notifications.sound,
+            "group": config.probe.notifications.group,
+            "url": config.probe.notifications.url,
+            "notify_completion": config.probe.notifications.notify_completion,
+            "notify_reply_needed": config.probe.notifications.notify_reply_needed,
+            "notify_recoverable": config.probe.notifications.notify_recoverable,
+        },
+        "logs_db": config.probe.logs_db,
+    }))
+}
+
+fn merge_probe_notification_patch(
+    target: &mut ProbeNotificationsConfigPatch,
+    source: ProbeNotificationsConfigPatch,
+) {
+    if source.enabled.is_some() {
+        target.enabled = source.enabled;
+    }
+    if source.server_url.is_some() {
+        target.server_url = source.server_url;
+    }
+    if source.sound.is_some() {
+        target.sound = source.sound;
+    }
+    if source.group.is_some() {
+        target.group = source.group;
+    }
+    if source.url.is_some() {
+        target.url = source.url;
+    }
+    if source.notify_completion.is_some() {
+        target.notify_completion = source.notify_completion;
+    }
+    if source.notify_reply_needed.is_some() {
+        target.notify_reply_needed = source.notify_reply_needed;
+    }
+    if source.notify_recoverable.is_some() {
+        target.notify_recoverable = source.notify_recoverable;
+    }
+}
+
+fn fixed_probe_shell_command(state: &AppState, args: &[String]) -> String {
+    let mut parts = vec![
+        "/opt/nexushub/bin/nexushubd".to_string(),
+        "--config".to_string(),
+        PlatformPaths::current().config_file.display().to_string(),
+    ];
+    parts.extend(args.iter().cloned());
+    if args.first().is_some_and(|arg| arg == "nexushubd") {
+        return args
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    if args.first().is_some_and(|arg| arg == "probe") {
+        return parts
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    format!(
+        "printf '%s\\n' {}; exit 2",
+        shell_quote(&format!(
+            "Unsupported Probe job for {}",
+            state.config.codex.host_label
+        ))
     )
-    .await;
-    let output = match output {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => {
-            return json!({
-                "available": false,
-                "flavor": profile.flavor,
-                "error": err.to_string(),
-            });
-        }
-        Err(_) => {
-            return json!({
-                "available": false,
-                "flavor": profile.flavor,
-                "error": "Probe command timed out",
-            });
-        }
-    };
-    let stdout = nexushub_core::security::redact_output(&String::from_utf8_lossy(&output.stdout));
-    let stderr = nexushub_core::security::redact_output(&String::from_utf8_lossy(&output.stderr));
-    let parsed = serde_json::from_str::<Value>(&stdout).ok();
-    json!({
-        "available": output.status.success(),
-        "flavor": profile.flavor,
-        "exit_code": output.status.code(),
-        "args": command_args,
-        "data": parsed.unwrap_or(Value::Null),
-        "stdout": if stdout.trim().is_empty() { Value::Null } else { Value::String(stdout) },
-        "stderr": if stderr.trim().is_empty() { Value::Null } else { Value::String(stderr) },
-    })
-}
-
-fn probe_args_for_profile(profile: &ProbeCommandProfile, args: &[&str]) -> Option<Vec<String>> {
-    let Some(command) = args.first().copied() else {
-        return Some(Vec::new());
-    };
-    if profile.flavor == "server" {
-        match command {
-            "hook-status" => return Some(vec!["doctor".to_string()]),
-            "debug-app-server-thread" => return None,
-            _ => {}
-        }
-    }
-    if profile.flavor == "lite" && command == "test-bark" {
-        return None;
-    }
-    Some(args.iter().map(|arg| (*arg).to_string()).collect())
-}
-
-fn fixed_probe_shell_command(args: &[String]) -> String {
-    let profile = probe_command_profile();
-    let Some(binary) = profile.binary.as_ref().filter(|path| path.exists()) else {
-        return "printf 'Probe binary not found\\n'; exit 127".to_string();
-    };
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let Some(command_args) = probe_args_for_profile(&profile, &arg_refs) else {
-        return format!(
-            "printf 'Probe command is not available for {} profile\\n'; exit 2",
-            profile.flavor
-        );
-    };
-    std::iter::once(shell_quote(&binary.display().to_string()))
-        .chain(command_args.iter().map(|arg| shell_quote(arg)))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -4141,7 +4341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_fixed_job_routes_require_csrf_and_start_known_jobs() {
+    async fn probe_execute_routes_require_plan_id_and_confirmation() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
@@ -4159,25 +4359,44 @@ mod tests {
             .unwrap();
         assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
 
-        for (uri, kind, title) in [
+        let unconfirmed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/probe/logs-db/execute")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"plan_id":"probe-logs-db-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unconfirmed.status(), StatusCode::BAD_REQUEST);
+
+        for (plan_uri, execute_uri, expected_prefix, kind, title) in [
+            (
+                "/api/probe/logs-db/plan",
+                "/api/probe/logs-db/execute",
+                "probe-logs-db-",
+                "probe_logs_db_execute",
+                "探针日志库维护",
+            ),
             (
                 "/api/probe/hooks/install",
+                "/api/probe/hooks/install",
+                "probe-hooks-",
                 "probe_hooks_install",
-                "Probe install hooks",
-            ),
-            ("/api/probe/bark/test", "probe_bark_test", "Probe Bark test"),
-            (
-                "/api/probe/logs-db/maintain",
-                "probe_logs_db_maintain",
-                "Probe logs DB maintain",
+                "安装探针 Hook",
             ),
         ] {
-            let response = app
+            let plan_response = app
                 .clone()
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(uri)
+                        .uri(plan_uri)
                         .header("cookie", format!("nexushub_session={session_token}"))
                         .header("x-csrf-token", csrf_token.as_str())
                         .body(Body::empty())
@@ -4185,14 +4404,101 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(plan_response.status(), StatusCode::OK, "{plan_uri}");
+            let body = to_bytes(plan_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let plan_id = plan["plan_id"].as_str().unwrap();
+            assert!(plan_id.starts_with(expected_prefix));
+
+            let execute_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(execute_uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"plan_id":"{plan_id}","confirmed":true}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(execute_response.status(), StatusCode::OK, "{execute_uri}");
+            let body = to_bytes(execute_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let job_id = payload["job_id"].as_str().unwrap();
             let job = state.db.job(job_id).unwrap().unwrap();
             assert_eq!(job.kind, kind);
             assert_eq!(job.title, title);
         }
+    }
+
+    #[tokio::test]
+    async fn probe_settings_events_and_sentinel_aliases_are_available() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        state
+            .db
+            .record_probe_event(nexushub_core::db::NewProbeEvent {
+                kind: "hook-stop",
+                thread_id: Some("thread-a"),
+                title: Some("Hook event"),
+                message: Some("stop hook received"),
+                dedupe_key: Some("hook-stop:thread-a"),
+                source: "test",
+                payload: json!({"ok": true}),
+            })
+            .unwrap();
+        let app = router(state);
+
+        for uri in [
+            "/api/probe/settings",
+            "/api/probe/diagnostics",
+            "/api/probe/events",
+            "/api/sentinel/dashboard",
+            "/api/sentinel/running",
+            "/api/sentinel/reply-needed",
+            "/api/sentinel/recoverable",
+            "/api/sentinel/hook-status",
+            "/api/sentinel/logs-db/status",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        }
+
+        let patch = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"probe":{"poll_seconds":20},"notifications":{"device_key":"secret-bark-key"}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(patch.status(), StatusCode::OK);
     }
 
     #[tokio::test]

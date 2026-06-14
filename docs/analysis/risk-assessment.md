@@ -30,7 +30,7 @@
 | Config/path migration drift | Broken cloud install/update | Medium | High | Keep install script tests and legacy path fixtures |
 | macOS/Windows overclaim | Unsupported packages appear production-ready | Medium | Medium | Mark as preview/planned until service installers and artifacts are verified |
 | Claude Code writes too early | User config/tool permission risk | Medium | High | V1 read-only only; explicit future task required for writes |
-| Sentinel hidden control drift | User loses visible Codex control | Medium | High | Observation/notification first; no hidden desktop recovery in V1 |
+| Probe hidden control drift | User loses visible Codex control | Medium | High | Observation/notification first; no hidden desktop recovery in V1 |
 
 ## High-Severity Risks
 
