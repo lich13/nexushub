@@ -7,11 +7,16 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     app_server::AppServerBridge,
-    config::Config,
+    config::{
+        patch_probe_config_toml, CodexProbeConfigPatch, Config, ProbeConfigFilePatch,
+        ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
+        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+    },
     db::{NewProbeEvent, PanelDb},
     platform::PlatformPaths,
     probe::{ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use state::AppState;
 use std::{
@@ -291,10 +296,8 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             );
         }
         ProbeCommand::LegacyImport => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({"ok": true, "action": "legacy_import"}))?
-            );
+            let result = import_legacy_sentinel_config(&db)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         ProbeCommand::LegacyCleanup { dry_run } => {
             let result = run_legacy_cleanup(dry_run)?;
@@ -479,6 +482,190 @@ fn run_legacy_cleanup(dry_run: bool) -> Result<Value> {
     Ok(payload)
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelConfig {
+    server: LegacySentinelServerSection,
+    bark: LegacySentinelBarkSection,
+    logs_db: LegacySentinelLogsDbSection,
+    observability: LegacySentinelObservabilitySection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelServerSection {
+    host_label: String,
+    codex_home: Option<PathBuf>,
+    app_server_service: String,
+    poll_seconds: Option<u64>,
+    recent_limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelBarkSection {
+    enabled: Option<bool>,
+    server_url: String,
+    device_key: String,
+    sound: String,
+    group: String,
+    url: String,
+    notify_completion: Option<bool>,
+    notify_abnormal: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelLogsDbSection {
+    enabled: Option<bool>,
+    retention_days: Option<u32>,
+    maintenance_interval_hours: Option<u32>,
+    maintain_on_codex_exit: Option<bool>,
+    codex_exit_grace_seconds: Option<u64>,
+    codex_exit_max_wait_seconds: Option<u64>,
+    delete_chunk_rows: Option<u32>,
+    max_delete_rows_per_run: Option<u32>,
+    busy_timeout_ms: Option<u64>,
+    auto_compact_when_codex_closed: Option<bool>,
+    compact_interval_hours: Option<u32>,
+    compact_min_freelist_mb: Option<u64>,
+    compact_min_freelist_ratio_percent: Option<u32>,
+    minimum_free_space_mb: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelObservabilitySection {
+    hook_event_max_lines: Option<usize>,
+    hook_cooldown_max_lines: Option<usize>,
+    log_max_bytes: Option<usize>,
+}
+
+fn import_legacy_sentinel_config(db: &PanelDb) -> Result<Value> {
+    let legacy_path = PathBuf::from("/etc/codex-sentinel-server/config.toml");
+    let config_path = std::env::var_os("NEXUSHUB_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PlatformPaths::current().config_file);
+    import_legacy_sentinel_config_from_path(db, &legacy_path, &config_path)
+}
+
+fn import_legacy_sentinel_config_from_path(
+    db: &PanelDb,
+    legacy_path: &Path,
+    config_path: &Path,
+) -> Result<Value> {
+    if !legacy_path.exists() {
+        return Ok(json!({
+            "ok": true,
+            "action": "legacy_import",
+            "imported": false,
+            "legacy_config": legacy_path,
+            "skip_reason": "legacy_config_missing",
+        }));
+    }
+
+    let text = fs::read_to_string(legacy_path)
+        .with_context(|| format!("read {}", legacy_path.display()))?;
+    let legacy: LegacySentinelConfig =
+        toml::from_str(&text).with_context(|| format!("parse {}", legacy_path.display()))?;
+    let patch = legacy_sentinel_config_patch(&legacy);
+    let current = fs::read_to_string(config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+    let updated = patch_probe_config_toml(&current, &patch)?;
+    fs::write(config_path, updated).with_context(|| format!("write {}", config_path.display()))?;
+
+    let mut imported_secret = false;
+    let device_key = legacy.bark.device_key.trim();
+    if !device_key.is_empty() {
+        db.set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+        imported_secret = true;
+    }
+    db.set_setting(
+        "probe_legacy_import",
+        &json!({
+            "legacy_config": legacy_path,
+            "config_path": config_path,
+            "imported_bark_device_key": imported_secret,
+            "imported_at": chrono::Utc::now().to_rfc3339(),
+        })
+        .to_string(),
+    )?;
+
+    Ok(json!({
+        "ok": true,
+        "action": "legacy_import",
+        "imported": true,
+        "legacy_config": legacy_path,
+        "config_path": config_path,
+        "imported_bark_device_key": imported_secret,
+        "mapped": {
+            "codex": ["home", "app_server_service", "host_label"],
+            "probe": ["enabled", "poll_seconds", "recent_limit", "notifications", "observability", "logs_db"],
+        }
+    }))
+}
+
+fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFilePatch {
+    let nonempty = |value: &str| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    ProbeConfigFilePatch {
+        codex: Some(CodexProbeConfigPatch {
+            home: legacy
+                .server
+                .codex_home
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            app_server_service: nonempty(&legacy.server.app_server_service),
+            host_label: nonempty(&legacy.server.host_label),
+            ..Default::default()
+        }),
+        probe: Some(ProbeSettingsPatch {
+            enabled: Some(true),
+            poll_seconds: legacy.server.poll_seconds,
+            recent_limit: legacy.server.recent_limit,
+            hooks: Some(ProbeHooksConfigPatch {
+                manage_stop_hook: Some(true),
+                reload_app_server_after_install: Some(true),
+            }),
+            notifications: Some(ProbeNotificationsConfigPatch {
+                enabled: legacy.bark.enabled,
+                server_url: nonempty(&legacy.bark.server_url),
+                sound: Some(nonempty(&legacy.bark.sound)),
+                group: nonempty(&legacy.bark.group),
+                url: Some(nonempty(&legacy.bark.url)),
+                notify_completion: legacy.bark.notify_completion,
+                notify_reply_needed: legacy.bark.notify_completion,
+                notify_recoverable: legacy.bark.notify_abnormal,
+            }),
+            observability: Some(ProbeObservabilityConfigPatch {
+                hook_event_max_lines: legacy.observability.hook_event_max_lines,
+                hook_cooldown_max_lines: legacy.observability.hook_cooldown_max_lines,
+                log_max_bytes: legacy.observability.log_max_bytes,
+            }),
+            logs_db: Some(ProbeLogsDbConfigPatch {
+                enabled: legacy.logs_db.enabled,
+                retention_days: legacy.logs_db.retention_days,
+                maintenance_interval_hours: legacy.logs_db.maintenance_interval_hours,
+                maintain_on_codex_exit: legacy.logs_db.maintain_on_codex_exit,
+                codex_exit_grace_seconds: legacy.logs_db.codex_exit_grace_seconds,
+                codex_exit_max_wait_seconds: legacy.logs_db.codex_exit_max_wait_seconds,
+                delete_chunk_rows: legacy.logs_db.delete_chunk_rows,
+                max_delete_rows_per_run: legacy.logs_db.max_delete_rows_per_run,
+                busy_timeout_ms: legacy.logs_db.busy_timeout_ms,
+                auto_compact_when_codex_closed: legacy.logs_db.auto_compact_when_codex_closed,
+                compact_interval_hours: legacy.logs_db.compact_interval_hours,
+                compact_min_freelist_mb: legacy.logs_db.compact_min_freelist_mb,
+                compact_min_freelist_ratio_percent: legacy
+                    .logs_db
+                    .compact_min_freelist_ratio_percent,
+                minimum_free_space_mb: legacy.logs_db.minimum_free_space_mb,
+            }),
+        }),
+    }
+}
+
 fn init_admin(db: PanelDb, username: &str, password: &str, allow_existing: bool) -> Result<()> {
     if password.len() < 12 {
         anyhow::bail!("password must be at least 12 characters");
@@ -515,4 +702,123 @@ async fn serve(config_path: PathBuf) -> Result<()> {
 
 fn open_panel_db(config: &Config) -> Result<PanelDb> {
     PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    #[test]
+    fn legacy_import_maps_server_bark_observability_and_logs_db_without_plaintext_secret() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        let legacy_path = dir.join("legacy.toml");
+        let mut config = Config::default();
+        config.security.secret_key = "7q9DCmCPyxnTrH3FhrV1sUJol1yqPgscQsBnR-mXA2E".to_string();
+        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        fs::write(
+            &legacy_path,
+            r#"
+[server]
+host_label = "tencent-wanka"
+codex_home = "/root/.codex"
+app_server_service = "codex-app-server-root.service"
+poll_seconds = 60
+recent_limit = 50
+
+[bark]
+enabled = true
+server_url = "https://api.day.app"
+device_key = "legacy-bark-secret"
+sound = "bell"
+group = "Codex"
+url = "https://661313.xyz/nexushub/"
+notify_completion = true
+notify_abnormal = false
+
+[logs_db]
+enabled = true
+retention_days = 2
+maintenance_interval_hours = 6
+maintain_on_codex_exit = true
+codex_exit_grace_seconds = 0
+codex_exit_max_wait_seconds = 1800
+delete_chunk_rows = 5000
+max_delete_rows_per_run = 100000
+busy_timeout_ms = 500
+auto_compact_when_codex_closed = true
+compact_interval_hours = 24
+compact_min_freelist_mb = 256
+compact_min_freelist_ratio_percent = 20
+minimum_free_space_mb = 1024
+
+[observability]
+hook_event_max_lines = 500
+hook_cooldown_max_lines = 1000
+log_max_bytes = 5242880
+"#,
+        )
+        .unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("nexushub.sqlite"),
+            config.secret_box().unwrap(),
+        )
+        .unwrap();
+
+        let result =
+            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
+
+        assert_eq!(result["imported"], true);
+        assert_eq!(result["imported_bark_device_key"], true);
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert!(updated.contains("home = \"/root/.codex\""));
+        assert!(updated.contains("host_label = \"tencent-wanka\""));
+        assert!(updated.contains("poll_seconds = 60"));
+        assert!(updated.contains("enabled = true"));
+        assert!(updated.contains("sound = \"bell\""));
+        assert!(updated.contains("notify_recoverable = false"));
+        assert!(updated.contains("retention_days = 2"));
+        assert!(updated.contains("busy_timeout_ms = 500"));
+        assert!(updated.contains("hook_event_max_lines = 500"));
+        assert!(updated.contains("log_max_bytes = 5242880"));
+        assert!(!updated.contains("legacy-bark-secret"));
+        assert_eq!(
+            db.get_secret_setting_bytes("probe_bark_device_key")
+                .unwrap()
+                .as_deref(),
+            Some("legacy-bark-secret".as_bytes())
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_import_reports_missing_config_without_touching_current_config() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-missing-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        let legacy_path = dir.join("missing.toml");
+        fs::write(&config_path, "sentinel = \"keep\"\n").unwrap();
+        let db = PanelDb::open(dir.join("nexushub.sqlite")).unwrap();
+
+        let result =
+            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
+
+        assert_eq!(result["imported"], false);
+        assert_eq!(result["skip_reason"], "legacy_config_missing");
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            "sentinel = \"keep\"\n"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

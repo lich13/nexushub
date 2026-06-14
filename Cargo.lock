@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-core"
-version = "0.1.46"
+version = "0.1.47"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "nexushubd"
-version = "0.1.46"
+version = "0.1.47"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1377,6 +1377,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
  "tower",
  "tower-http",
  "tracing",

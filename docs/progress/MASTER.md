@@ -37,7 +37,7 @@
 ## Current Status
 
 **Active Phase**: Probe replacement release/deploy<br>
-**Active Task**: Publish `v0.1.46`, deploy to `43.155.235.227`, then clean old `codex-sentinel-server` runtime after Probe health gate
+**Active Task**: Publish `v0.1.47`, deploy to `43.155.235.227`, import legacy Sentinel config, then clean old `codex-sentinel-server` runtime after Probe health gate
 **Blockers**: None for local release readiness. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status
@@ -99,6 +99,7 @@ adaptive:
 | 2026-06-13 | 3.1-3.3 | M | S/P/R pass | 0 | Provider, Claude, and initial Sentinel-compatible endpoints added in prior pass |
 | 2026-06-14 | Probe replacement | XL | S/P/E/R pass locally | 0 | Built-in Probe config/API/events/UI/deploy cleanup path replaces `codex-sentinel-server` runtime while preserving safety boundaries |
 | 2026-06-14 | Probe replacement QA | M | P/R pass | 0 | Full local verification passed for `v0.1.46`; rendered Probe page verified with Playwright fallback on desktop and mobile, including Hook plan -> confirm flow |
+| 2026-06-14 | Probe legacy import patch | S | P/R pass | 0 | Added real `probe legacy-import` for old `/etc/codex-sentinel-server/config.toml`, storing Bark device key only in encrypted settings; full local verification passed for `v0.1.47` |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |

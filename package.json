@@ -1,7 +1,7 @@
 {
   "name": "nexushub",
   "private": true,
-  "version": "0.1.46",
+  "version": "0.1.47",
   "scripts": {
     "build:ui": "pnpm --dir webui build",
     "test:install": "bash scripts/test-install-script.sh",
