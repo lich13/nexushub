@@ -116,6 +116,44 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
 }
 
 #[tokio::test]
+async fn probe_status_exposes_hook_and_bark_config_without_device_key() {
+    let root = temp_dir("nexushub-probe-status-bark-config");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    seed_codex_logs_db(&codex_home.join("logs_2.sqlite"), &[]);
+    let mut config = Config::default();
+    config.codex.home = codex_home;
+    config.probe.hooks.manage_stop_hook = true;
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.notify_completion = true;
+    config.probe.notifications.notify_reply_needed = false;
+    config.probe.notifications.notify_recoverable = true;
+    config.probe.notifications.server_url = "https://api.day.app/custom".to_string();
+    let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+        .status()
+        .await
+        .unwrap();
+    let status_json = serde_json::to_value(&status).unwrap();
+
+    assert_eq!(status_json["hook_stop_enabled"], true);
+    assert_eq!(status_json["hooks_enabled"], true);
+    assert_eq!(status_json["bark_status"], "configured");
+    assert_eq!(status_json["bark_enabled"], true);
+    assert_eq!(status_json["bark_server_url"], "https://api.day.app/custom");
+    assert_eq!(status_json["bark_notify_completion"], true);
+    assert_eq!(status_json["bark_notify_reply_needed"], false);
+    assert_eq!(status_json["bark_notify_recoverable"], true);
+    assert!(status_json.get("device_key").is_none());
+    assert!(serde_json::to_string(&status_json)
+        .unwrap()
+        .contains("api.day.app"));
+    assert!(!serde_json::to_string(&status_json)
+        .unwrap()
+        .contains("secret"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn probe_status_surfaces_missing_codex_logs_db() {
     let root = temp_dir("nexushub-probe-status-missing-logs");
     let codex_home = root.join(".codex");

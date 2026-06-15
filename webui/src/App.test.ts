@@ -21,6 +21,7 @@ type AppExports = typeof import("./App") & {
   renderPluginMentionMenuHtml?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean, selected?: number) => string;
   activeComposerMenuKind?: (draft: string, cursor: number, plugins?: PluginInfo[] | null) => "slash" | "plugin" | null;
   exactSlashCommandFromDraft?: (draft: string) => string | null;
+  slashCommandForComposerSubmit?: (draft: string) => string | null;
   composerMenuKeyAction?: (input: {
     key: string;
     shiftKey?: boolean;
@@ -30,6 +31,7 @@ type AppExports = typeof import("./App") & {
   }) => { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" };
   slashCommandAction?: (command: string, hasThread?: boolean) => { kind: string; message?: string; command?: string };
   planModeButtonState?: (nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan?: boolean, hasPendingQuestion?: boolean) => { pressed: boolean; label: string; statusText: string };
+  mergeRunConfigFromDefaults?: <T extends { collaborationMode: string }>(current: T, defaults: T) => T;
   runConfigAfterSuccessfulSend?: <T extends { collaborationMode: string }>(config: T) => T;
   latestAssistantCopyText?: (blocks: MessageBlock[]) => string | null;
   nextRenameDraftValue?: (input: {
@@ -195,6 +197,20 @@ describe("conversation helpers", () => {
     expect(app.exactSlashCommandFromDraft?.("/goal r")).toBeNull();
   });
 
+  test("composer submit only executes complete controlled slash commands", async () => {
+    const app = await loadApp();
+
+    expect(app.slashCommandForComposerSubmit?.("/plugins")).toBe("/plugins");
+    expect(app.slashCommandForComposerSubmit?.(" /apps ")).toBe("/apps");
+    expect(app.slashCommandForComposerSubmit?.("/plan")).toBe("/plan");
+    expect(app.slashCommandForComposerSubmit?.("/p")).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.("/plugins 请说明")).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.("/unknown")).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.("/Users/gosu/Documents")).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.("/go")).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.("/plan 请先分析")).toBeNull();
+  });
+
   test("slash command action classifier only exposes controlled web actions and Chinese unavailable reasons", async () => {
     const app = await loadApp();
 
@@ -236,6 +252,38 @@ describe("conversation helpers", () => {
       collaborationMode: "",
       other: "kept"
     });
+  });
+
+  test("config refresh merges persistent defaults without clearing next-send Plan Mode", async () => {
+    const app = await loadApp();
+    const current = {
+      model: "gpt-5.5",
+      serviceTier: "priority",
+      reasoning: "xhigh",
+      cwd: "/old",
+      permissionPreset: "full",
+      permissionProfile: "",
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      networkAccess: true,
+      collaborationMode: "plan"
+    };
+    const defaults = {
+      ...current,
+      model: "gpt-5.4",
+      serviceTier: "",
+      reasoning: "high",
+      cwd: "/new",
+      approvalPolicy: "on-request",
+      sandboxMode: "workspace-write",
+      collaborationMode: ""
+    };
+
+    expect(app.mergeRunConfigFromDefaults?.(current, defaults)).toEqual({
+      ...defaults,
+      collaborationMode: "plan"
+    });
+    expect(app.runConfigAfterSuccessfulSend?.(app.mergeRunConfigFromDefaults?.(current, defaults) ?? current).collaborationMode).toBe("");
   });
 
   test("latest assistant copy text skips tools, plans, and internal context", async () => {

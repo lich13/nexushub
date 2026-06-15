@@ -789,6 +789,10 @@ describe("archive delete API compatibility", () => {
       message: "",
       attachments: ["upload-1", "upload-2"]
     });
+    expect(app.buildPayload("go", { ...app.defaultRunConfig(), collaborationMode: "plan" })).toMatchObject({
+      message: "go",
+      collaboration_mode: "plan"
+    });
     expect(app.buildPayload("go", app.defaultRunConfig()).attachments).toBeUndefined();
   });
 

@@ -1219,6 +1219,10 @@ export function exactSlashCommandFromDraft(draft: string): string | null {
   return slashCommands.some((item) => item.command === command) ? command : null;
 }
 
+export function slashCommandForComposerSubmit(draft: string): string | null {
+  return exactSlashCommandFromDraft(draft);
+}
+
 export function activeComposerMenuKind(draft: string, cursor: number, plugins?: PluginInfo[] | null): "slash" | "plugin" | null {
   void plugins;
   const query = nearestActiveComposerQuery(draft, cursor);
@@ -1412,6 +1416,13 @@ export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: str
 export function runConfigAfterSuccessfulSend<T extends { collaborationMode: string }>(config: T): T {
   if (config.collaborationMode !== "plan") return config;
   return { ...config, collaborationMode: "" };
+}
+
+export function mergeRunConfigFromDefaults<T extends { collaborationMode: string }>(current: T, defaults: T): T {
+  return {
+    ...defaults,
+    collaborationMode: current.collaborationMode
+  };
 }
 
 export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
@@ -2098,7 +2109,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const hiddenActionKey = slot.hiddenActionKey;
 
   useEffect(() => {
-    setRunConfig(makeRunConfig(runOptions.config, detail.summary));
+    const defaults = makeRunConfig(runOptions.config, detail.summary);
+    setRunConfig((current) => mergeRunConfigFromDefaults(current, defaults));
   }, [detail.summary, runOptions.config]);
 
   useEffect(() => {
@@ -2512,8 +2524,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 
   const submitComposer = useCallback(() => {
     if (attachments.uploadInProgress) return;
-    const exactSlash = draft.trim().replace(/\s+/g, " ");
-    if (exactSlash.startsWith("/")) {
+    const exactSlash = slashCommandForComposerSubmit(draft);
+    if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
     }
@@ -2979,7 +2991,8 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
   const attachments = useComposerAttachments(csrfToken, setFeedback);
   useEffect(() => {
     if (runOptions.config) {
-      setRunConfig(makeRunConfig(runOptions.config));
+      const defaults = makeRunConfig(runOptions.config);
+      setRunConfig((current) => mergeRunConfigFromDefaults(current, defaults));
     }
   }, [runOptions.config]);
   const payloadRunConfig = useMemo(
@@ -3017,8 +3030,8 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     setFeedback(action.message ?? "该命令需要已有线程");
   };
   const submitComposer = () => {
-    const exactSlash = draft.trim().replace(/\s+/g, " ");
-    if (exactSlash.startsWith("/")) {
+    const exactSlash = slashCommandForComposerSubmit(draft);
+    if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
     }

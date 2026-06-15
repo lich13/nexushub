@@ -20,7 +20,7 @@ use nexushub_core::{
         DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use state::AppState;
 use std::{
@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "nexushubd=info,tower_http=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     let cli = Cli::parse();
@@ -191,33 +191,30 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             thread_id,
             turn_id,
             kind,
-        } => {
-            let event = probe_runtime(config).build_event(ProbeEventInput::hook_stop(
-                thread_id.as_deref(),
-                turn_id.as_deref(),
-                &kind,
-            ));
-            let claimed = db.claim_probe_dedupe(
-                &event.dedupe_namespace,
-                &event.dedupe_key,
-                event.ttl_seconds,
-            )?;
-            if claimed {
-                db.record_probe_event(NewProbeEvent {
-                    kind: &event.kind,
-                    thread_id: event.thread_id.as_deref(),
-                    title: Some(&event.title),
-                    message: Some(&event.message),
-                    dedupe_key: Some(&event.dedupe_key),
-                    source: &event.source,
-                    payload: event.payload.clone(),
-                })?;
+        } => match handle_hook_stop(config, &db, thread_id, turn_id, kind).await {
+            Ok(result) => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "probe_event": result.outcome,
+                        "bark": result.bark,
+                    }))?
+                );
+                println!("{}", serde_json::to_string(&result.stdout)?);
             }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&ProbeEventOutcome::from_claim(&event, claimed))?
-            );
-        }
+            Err(err) => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "ok": false,
+                        "error": "probe_hook_stop_failed",
+                    }))?
+                );
+                tracing::warn!("probe hook-stop failed before event recording");
+                tracing::debug!("probe hook-stop diagnostic: {err:#}");
+                println!("{}", serde_json::to_string(&codex_stop_continue_output())?);
+            }
+        },
         ProbeCommand::HooksInstall { dry_run } => {
             println!(
                 "{}",
@@ -253,18 +250,39 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
         ProbeCommand::BarkTest => {
             let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
             let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
-            let sent = if config.probe.notifications.enabled && configured {
-                send_bark_test(config, device_key.as_deref().unwrap_or_default()).await?
+            let bark = if config.probe.notifications.enabled && configured {
+                send_bark_notification(
+                    config,
+                    device_key.as_deref().unwrap_or_default(),
+                    &ProbeBarkRequest {
+                        title: "NexusHub Probe test".to_string(),
+                        body: "Probe notification route is configured.".to_string(),
+                        dedupe_key: "probe-bark-test".to_string(),
+                    },
+                    std::time::Duration::from_secs(8),
+                )
+                .await?
             } else {
-                false
+                ProbeBarkOutcome::skipped(
+                    if config.probe.notifications.enabled {
+                        "device_key_missing"
+                    } else {
+                        "notifications_disabled"
+                    },
+                    config.probe.notifications.enabled,
+                    true,
+                    configured,
+                )
             };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
-                    "ok": sent || !config.probe.notifications.enabled,
+                    "ok": bark.sent || (!config.probe.notifications.enabled && bark.skipped),
                     "configured": configured,
-                    "skipped": !config.probe.notifications.enabled,
-                    "sent": sent,
+                    "skipped": bark.skipped,
+                    "sent": bark.sent,
+                    "reason": bark.reason,
+                    "http_status": bark.http_status,
                 }))?
             );
         }
@@ -421,8 +439,236 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
     true
 }
 
-async fn send_bark_test(config: &Config, device_key: &[u8]) -> Result<bool> {
-    let device_key = std::str::from_utf8(device_key).context("Bark device_key is not utf-8")?;
+#[derive(Debug, Clone, Serialize)]
+struct HookStopResult {
+    stdout: Value,
+    outcome: ProbeEventOutcome,
+    bark: ProbeBarkOutcome,
+}
+
+#[derive(Debug, Clone)]
+struct ProbeBarkRequest {
+    title: String,
+    body: String,
+    dedupe_key: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProbeBarkOutcome {
+    sent: bool,
+    skipped: bool,
+    reason: Option<String>,
+    http_status: Option<u16>,
+    notifications_enabled: bool,
+    relevant_switch_enabled: bool,
+    device_key_configured: bool,
+    dedupe_key: Option<String>,
+}
+
+impl ProbeBarkOutcome {
+    fn sent(
+        status: u16,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: true,
+            skipped: false,
+            reason: None,
+            http_status: Some(status),
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_key,
+        }
+    }
+
+    fn skipped(
+        reason: &str,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: true,
+            reason: Some(reason.to_string()),
+            http_status: None,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_key: None,
+        }
+    }
+
+    fn failed_status(
+        status: u16,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: false,
+            reason: Some("http_status".to_string()),
+            http_status: Some(status),
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_key,
+        }
+    }
+
+    fn failed_request(
+        reason: &str,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: false,
+            reason: Some(reason.to_string()),
+            http_status: None,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_key,
+        }
+    }
+}
+
+async fn handle_hook_stop(
+    config: &Config,
+    db: &PanelDb,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    kind: String,
+) -> Result<HookStopResult> {
+    let event = probe_runtime(config).build_event(ProbeEventInput::hook_stop(
+        thread_id.as_deref(),
+        turn_id.as_deref(),
+        &kind,
+    ));
+    let claimed = db.claim_probe_dedupe(
+        &event.dedupe_namespace,
+        &event.dedupe_key,
+        event.ttl_seconds,
+    )?;
+    let mut outcome = ProbeEventOutcome::from_claim(&event, claimed);
+    let bark = handle_probe_event_bark(config, db, &event, claimed).await?;
+    if claimed {
+        let mut payload = event.payload.clone();
+        payload["bark"] = serde_json::to_value(&bark)?;
+        db.record_probe_event(NewProbeEvent {
+            kind: &event.kind,
+            thread_id: event.thread_id.as_deref(),
+            title: Some(&event.title),
+            message: Some(&event.message),
+            dedupe_key: Some(&event.dedupe_key),
+            source: &event.source,
+            payload,
+        })?;
+    } else {
+        outcome.recorded = false;
+        outcome.duplicate = true;
+    }
+
+    Ok(HookStopResult {
+        stdout: codex_stop_continue_output(),
+        outcome,
+        bark,
+    })
+}
+
+async fn handle_probe_event_bark(
+    config: &Config,
+    db: &PanelDb,
+    event: &nexushub_core::probe::ProbeBuiltEvent,
+    claimed: bool,
+) -> Result<ProbeBarkOutcome> {
+    let relevant_switch_enabled = probe_event_bark_switch_enabled(config, &event.kind);
+    if !config.probe.notifications.enabled {
+        return Ok(ProbeBarkOutcome::skipped(
+            "notifications_disabled",
+            false,
+            relevant_switch_enabled,
+            false,
+        ));
+    }
+    if !relevant_switch_enabled {
+        return Ok(ProbeBarkOutcome::skipped(
+            "event_switch_disabled",
+            true,
+            false,
+            false,
+        ));
+    }
+    let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
+    let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+    if !configured {
+        return Ok(ProbeBarkOutcome::skipped(
+            "device_key_missing",
+            true,
+            true,
+            false,
+        ));
+    }
+    if !claimed {
+        return Ok(ProbeBarkOutcome::skipped("dedupe", true, true, true));
+    }
+    send_bark_notification(
+        config,
+        device_key.as_deref().unwrap_or_default(),
+        &ProbeBarkRequest {
+            title: event.title.clone(),
+            body: event.message.clone(),
+            dedupe_key: event.dedupe_key.clone(),
+        },
+        std::time::Duration::from_secs(8),
+    )
+    .await
+}
+
+fn probe_event_bark_switch_enabled(config: &Config, kind: &str) -> bool {
+    match kind {
+        "completion" => config.probe.notifications.notify_completion,
+        "reply-needed" => config.probe.notifications.notify_reply_needed,
+        "recoverable" => config.probe.notifications.notify_recoverable,
+        _ => config.probe.notifications.notify_completion,
+    }
+}
+
+fn codex_stop_continue_output() -> Value {
+    json!({
+        "continue": true,
+        "suppressOutput": false,
+    })
+}
+
+async fn send_bark_notification(
+    config: &Config,
+    device_key: &[u8],
+    request: &ProbeBarkRequest,
+    timeout: std::time::Duration,
+) -> Result<ProbeBarkOutcome> {
+    let device_key = match std::str::from_utf8(device_key) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("Bark device_key is not utf-8: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "invalid_device_key_encoding",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
     let base = config
         .probe
         .notifications
@@ -433,10 +679,10 @@ async fn send_bark_test(config: &Config, device_key: &[u8]) -> Result<bool> {
         "{}/{}/{}",
         base,
         url_path_encode(device_key),
-        "NexusHub%20Probe"
+        url_path_encode(&request.title)
     );
     let mut body = json!({
-        "body": "Probe notification route is configured.",
+        "body": request.body,
         "group": config.probe.notifications.group,
     });
     if let Some(sound) = config.probe.notifications.sound.as_deref() {
@@ -445,15 +691,55 @@ async fn send_bark_test(config: &Config, device_key: &[u8]) -> Result<bool> {
     if let Some(open_url) = config.probe.notifications.url.as_deref() {
         body["url"] = json!(open_url);
     }
-    let response = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()?
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .context("send Bark test")?;
-    Ok(response.status().is_success())
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!("Bark notification client build failed: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "client_build_error",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
+    let response = client.post(url).json(&body).send().await;
+    let response = match response {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::warn!("Bark notification request failed: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                if err.is_timeout() {
+                    "timeout"
+                } else {
+                    "request_error"
+                },
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
+    let status = response.status().as_u16();
+    if response.status().is_success() {
+        Ok(ProbeBarkOutcome::sent(
+            status,
+            config.probe.notifications.enabled,
+            true,
+            true,
+            Some(request.dedupe_key.clone()),
+        ))
+    } else {
+        Ok(ProbeBarkOutcome::failed_status(
+            status,
+            config.probe.notifications.enabled,
+            true,
+            true,
+            Some(request.dedupe_key.clone()),
+        ))
+    }
 }
 
 fn url_path_encode(value: &str) -> String {
@@ -816,6 +1102,7 @@ async fn codex_app_server_is_inactive(service_name: &str) -> bool {
 mod tests {
     use super::*;
     use rusqlite::{params, Connection};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::time::SystemTime;
 
     #[test]
@@ -929,6 +1216,186 @@ log_max_bytes = 5242880
             "sentinel = \"keep\"\n"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_records_probe_event_but_returns_codex_stop_json_and_redacted_bark_state() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+
+        let result = handle_hook_stop(
+            &config,
+            &db,
+            Some("thread-a".to_string()),
+            Some("turn-1".to_string()),
+            "hook-stop".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(result.outcome.recorded);
+        assert!(!result.bark.sent);
+        assert!(result.bark.skipped);
+        assert_eq!(result.bark.reason.as_deref(), Some("device_key_missing"));
+        assert!(!result.bark.device_key_configured);
+        let output = serde_json::to_string(&result).unwrap();
+        assert!(!output.contains("device-key"));
+        assert!(!output.contains("secret"));
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "hook-stop");
+        assert_eq!(events[0].payload["bark"]["reason"], "device_key_missing");
+        assert!(events[0].payload["bark"].get("device_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn hook_stop_dedupe_skips_duplicate_bark_without_leaking_device_key() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let first = handle_hook_stop(
+            &config,
+            &db,
+            Some("thread-a".to_string()),
+            Some("turn-1".to_string()),
+            "hook-stop".to_string(),
+        )
+        .await
+        .unwrap();
+        let duplicate = handle_hook_stop(
+            &config,
+            &db,
+            Some("thread-a".to_string()),
+            Some("turn-1".to_string()),
+            "hook-stop".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.bark.reason.as_deref(), Some("request_error"));
+        assert_eq!(
+            duplicate.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(!duplicate.outcome.recorded);
+        assert!(!duplicate.bark.sent);
+        assert!(duplicate.bark.skipped);
+        assert_eq!(duplicate.bark.reason.as_deref(), Some("dedupe"));
+        assert!(duplicate.bark.device_key_configured);
+        assert!(!serde_json::to_string(&duplicate)
+            .unwrap()
+            .contains("super-secret-device"));
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["bark"]["device_key_configured"], true);
+        assert!(events[0].payload["bark"].get("device_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn send_bark_builds_redacted_request_and_reports_non_success() {
+        let server =
+            TestHttpServer::start("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+        let mut config = Config::default();
+        config.probe.notifications.server_url = server.url();
+        config.probe.notifications.group = "Probe Group".to_string();
+        config.probe.notifications.sound = Some("bell".to_string());
+        config.probe.notifications.url = Some("https://661313.xyz/nexushub/".to_string());
+
+        let request = ProbeBarkRequest {
+            title: "NexusHub Probe test".to_string(),
+            body: "Probe notification route is configured.".to_string(),
+            dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
+        };
+        let result = send_bark_notification(
+            &config,
+            b"device key/with spaces",
+            &request,
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.sent);
+        assert!(!result.skipped);
+        assert_eq!(result.reason.as_deref(), Some("http_status"));
+        assert_eq!(result.http_status, Some(503));
+        assert!(result.device_key_configured);
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("device key"));
+        let raw = server.request();
+        assert!(raw.starts_with("POST /device%20key%2Fwith%20spaces/NexusHub%20Probe%20test "));
+        assert!(raw.contains(r#""body":"Probe notification route is configured.""#));
+        assert!(raw.contains(r#""group":"Probe Group""#));
+        assert!(raw.contains(r#""sound":"bell""#));
+        assert!(raw.contains(r#""url":"https://661313.xyz/nexushub/""#));
+    }
+
+    struct TestHttpServer {
+        address: std::net::SocketAddr,
+        request: std::sync::mpsc::Receiver<String>,
+    }
+
+    impl TestHttpServer {
+        fn start(response: &'static str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    request.push_str(&line);
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                let content_length = request
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0_u8; content_length];
+                reader.read_exact(&mut body).unwrap();
+                request.push_str(&String::from_utf8_lossy(&body));
+                tx.send(request).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            Self {
+                address,
+                request: rx,
+            }
+        }
+
+        fn url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        fn request(self) -> String {
+            self.request
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        }
     }
 
     #[tokio::test]
