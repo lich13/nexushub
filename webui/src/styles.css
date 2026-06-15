@@ -825,19 +825,61 @@ button { cursor: pointer; }
 }
 .permission-summary strong { display: block; font-size: 12px; }
 .permission-summary span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-.command-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.command-chip {
-  border: 1px solid var(--hairline);
+.slash-composer { position: relative; }
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 6;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--chat-border);
   border-radius: 8px;
-  background: rgba(8,21,36,0.72);
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  padding: 7px 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgba(24, 33, 47, 0.18);
+}
+.slash-option {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.34fr) 1fr;
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--chat-text);
+  text-align: left;
+}
+.slash-option strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.slash-option span { color: var(--chat-muted); font-size: 12px; }
+.slash-option.selected {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+}
+.internal-reference {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  margin: 0 2px;
+  padding: 1px 5px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 5px;
+  background: rgba(56, 189, 248, 0.1);
+  color: #075985;
+  font: inherit;
+  overflow-wrap: anywhere;
+  text-align: left;
+  vertical-align: baseline;
+}
+.internal-reference small {
+  color: #0f766e;
+  font-size: 11px;
 }
 .config-note {
   color: var(--muted);
@@ -1140,7 +1182,7 @@ button { cursor: pointer; }
   font-size: 11px;
 }
 .version-grid, .settings-meta-grid { display: grid; gap: 0; margin-bottom: 12px; }
-.copy-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.copy-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .form-grid { display: grid; gap: 10px; }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-success, .form-error {
@@ -1267,8 +1309,7 @@ button { cursor: pointer; }
 .conversation-shell .metric,
 .conversation-shell .config-note,
 .conversation-shell .permission-summary,
-.conversation-shell .follow-up-item,
-.conversation-shell .command-chip {
+.conversation-shell .follow-up-item {
   background: rgba(255,255,255,0.82);
   border-color: rgba(217,225,234,0.92);
   color: var(--chat-text);

@@ -34,6 +34,7 @@ pub enum UploadKind {
     Document,
     Pdf,
     Image,
+    File,
 }
 
 impl UploadKind {
@@ -45,6 +46,7 @@ impl UploadKind {
             Self::Document => "document",
             Self::Pdf => "pdf",
             Self::Image => "image",
+            Self::File => "file",
         }
     }
 }
@@ -74,6 +76,8 @@ pub struct PreparedAttachment {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_image_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_file_path: Option<PathBuf>,
     #[serde(default)]
     pub truncated: bool,
 }
@@ -123,13 +127,10 @@ pub fn classify_upload(name: &str, mime: &str) -> Result<UploadKind> {
     if ext == "pdf" || mime == "application/pdf" {
         return Ok(UploadKind::Pdf);
     }
-    if ext == "doc" {
-        bail!("旧版 .doc 暂不支持，请转换为 .docx 后上传");
-    }
     if is_text_extension(&ext) || mime.starts_with("text/") {
         return Ok(UploadKind::Text);
     }
-    bail!("不支持的文件类型: {}", name);
+    Ok(UploadKind::File)
 }
 
 pub fn store_upload(
@@ -292,6 +293,9 @@ pub fn attachment_context(attachments: &[PreparedAttachment]) -> String {
         if let Some(path) = &attachment.local_image_path {
             out.push_str(&format!("- 本地图片路径: {}\n", path.display()));
         }
+        if let Some(path) = &attachment.local_file_path {
+            out.push_str(&format!("- 本地文件路径: {}\n", path.display()));
+        }
         if attachment.truncated {
             out.push_str("- 注意: 内容已截断，仅包含前部可读片段。\n");
         }
@@ -318,27 +322,33 @@ fn prepare_upload(root: &Path, id: &str) -> Result<PreparedAttachment> {
     .context("parse upload metadata")?;
     let path = dir.join(&meta.content_file);
     let bytes = fs::read(&path).with_context(|| format!("read upload {}", path.display()))?;
-    let (text, truncated, local_image_path) = match meta.record.kind {
-        UploadKind::Image => (None, false, Some(path)),
+    let (text, truncated, local_image_path, local_file_path) = match meta.record.kind {
+        UploadKind::Image => (None, false, Some(path), None),
+        UploadKind::File => (None, false, None, Some(path)),
         UploadKind::Markdown => {
             let (text, truncated) = decode_text(&bytes)?;
-            (Some(text), truncated, None)
+            (Some(text), truncated, None, None)
         }
         UploadKind::Text => {
             let (text, truncated) = decode_text(&bytes)?;
-            (Some(format!("```text\n{}\n```", text)), truncated, None)
+            (
+                Some(format!("```text\n{}\n```", text)),
+                truncated,
+                None,
+                None,
+            )
         }
         UploadKind::Spreadsheet => {
             let (text, truncated) = extract_spreadsheet_text(&path, &meta.record.name, &bytes)?;
-            (Some(text), truncated, None)
+            (Some(text), truncated, None, None)
         }
         UploadKind::Document => {
             let (text, truncated) = extract_docx_text(&bytes)?;
-            (Some(text), truncated, None)
+            (Some(text), truncated, None, None)
         }
         UploadKind::Pdf => {
             let (text, truncated) = extract_pdf_text(&path)?;
-            (Some(text), truncated, None)
+            (Some(text), truncated, None, None)
         }
     };
     Ok(PreparedAttachment {
@@ -350,6 +360,7 @@ fn prepare_upload(root: &Path, id: &str) -> Result<PreparedAttachment> {
         kind: meta.record.kind,
         text,
         local_image_path,
+        local_file_path,
         truncated,
     })
 }
@@ -774,14 +785,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_binary_and_legacy_doc() {
+    fn generic_binary_upload_prepares_local_file_reference_without_decoding() {
         let root = temp_root();
 
-        let binary = store_upload(&root, "archive.zip", Some("application/zip"), b"zip");
-        let doc = store_upload(&root, "old.doc", Some("application/msword"), b"doc");
+        let binary = store_upload(&root, "archive.zip", Some("application/zip"), b"\0zip").unwrap();
+        let octet =
+            store_upload(&root, "payload", Some("application/octet-stream"), b"\0raw").unwrap();
+        let doc = store_upload(&root, "old.doc", Some("application/msword"), b"doc").unwrap();
 
-        assert!(binary.unwrap_err().to_string().contains("不支持"));
-        assert!(doc.unwrap_err().to_string().contains(".doc"));
+        assert_eq!(binary.kind, UploadKind::File);
+        assert_eq!(octet.kind, UploadKind::File);
+        assert_eq!(doc.kind, UploadKind::File);
+
+        let prepared = prepare_uploads(&root, std::slice::from_ref(&binary.id)).unwrap();
+        assert_eq!(prepared[0].kind, UploadKind::File);
+        assert!(prepared[0].text.is_none());
+        assert!(prepared[0].local_image_path.is_none());
+        assert!(prepared[0]
+            .local_file_path
+            .as_ref()
+            .unwrap()
+            .ends_with("payload.zip"));
+
+        let context = attachment_context(&prepared);
+        assert!(context.contains("### 附件: archive.zip"));
+        assert!(context.contains("- 类型: file"));
+        assert!(context.contains("- 本地文件路径:"));
+        assert!(context.contains(&binary.sha256));
         let _ = fs::remove_dir_all(root);
     }
 }

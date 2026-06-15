@@ -169,6 +169,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/codex/config", get(codex_config))
         .route("/api/codex/goal", get(codex_goal_get).post(codex_goal_set))
         .route("/api/codex/goal/clear", post(codex_goal_clear))
+        .route("/api/codex/goal/resume", post(codex_goal_resume))
         .route("/api/archives/delete/dry-run", post(archive_delete_dry_run))
         .route("/api/archives/delete/execute", post(archive_delete_execute))
         .route(
@@ -2619,6 +2620,41 @@ async fn codex_goal_clear(
     codex_goal_clear_inner(&state, thread_id).await
 }
 
+async fn codex_goal_resume(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GoalUpdateRequest>,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
+        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
+    };
+    if !state.bridge().enabled() {
+        return Err(api_error(
+            StatusCode::BAD_GATEWAY,
+            "thread/goal/resume requires app-server bridge",
+        ));
+    }
+    match state.bridge().goal_resume(thread_id.to_string()).await {
+        Ok(value) => {
+            state.db.record_audit(
+                Some(&auth.admin_id),
+                "thread.goal.resumed",
+                Some("thread"),
+                Some(thread_id),
+                None,
+                json!({}),
+            )?;
+            ok(normalize_goal_response(&value))
+        }
+        Err(err) => Err(api_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("thread/goal/resume failed: {err}"),
+        )),
+    }
+}
+
 async fn codex_goal_clear_inner(state: &AppState, thread_id: &str) -> ApiResponse {
     match state.bridge().goal_clear(thread_id.to_string()).await {
         Ok(_) => ok(goal_empty("cleared")),
@@ -3893,13 +3929,49 @@ fn normalize_goal_response(value: &Value) -> Value {
     if goal.is_null() {
         return goal_empty("idle");
     }
+    let status = goal_status(goal).unwrap_or_else(|| "active".to_string());
     json!({
-        "enabled": true,
+        "enabled": goal_enabled(goal, &status),
         "objective": goal.get("objective").and_then(Value::as_str),
         "token_budget": goal.get("tokenBudget").or_else(|| goal.get("token_budget")).and_then(Value::as_u64),
-        "status": goal.get("status").and_then(Value::as_str).unwrap_or("active"),
+        "status": status,
         "raw": value,
     })
+}
+
+fn goal_status(goal: &Value) -> Option<String> {
+    goal.get("status")
+        .and_then(|value| {
+            value.as_str().or_else(|| {
+                value
+                    .get("type")
+                    .or_else(|| value.get("status"))
+                    .or_else(|| value.get("state"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn goal_enabled(goal: &Value, status: &str) -> bool {
+    if matches!(status, "idle" | "missing_thread" | "cleared") {
+        return false;
+    }
+    let objective = goal
+        .get("objective")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    objective
+        || goal
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(matches!(
+                status,
+                "active" | "running" | "complete" | "completed" | "blocked" | "paused"
+            ))
 }
 
 fn goal_empty(status: &str) -> Value {
@@ -3965,9 +4037,10 @@ mod tests {
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, filter_thread_summaries,
         fixed_probe_shell_command, followup_request, merge_thread_summaries,
-        prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
-        thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
-        turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
+        normalize_goal_response, prune_hidden_thread_summaries, requested_thread_limit, router,
+        seed_thread_event_blocks, thread_block_page, thread_event_block_key,
+        thread_list_fetch_limit, thread_title, turnstile_login_action, SendMessageRequest,
+        TurnstileLoginAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4141,6 +4214,7 @@ mod tests {
                 kind: UploadKind::Markdown,
                 text: Some("# Notes\n\n- keep context".to_string()),
                 local_image_path: None,
+                local_file_path: None,
                 truncated: false,
             },
             PreparedAttachment {
@@ -4152,6 +4226,7 @@ mod tests {
                 kind: UploadKind::Image,
                 text: None,
                 local_image_path: Some(PathBuf::from("/tmp/nexushub/uploads/screen.png")),
+                local_file_path: None,
                 truncated: false,
             },
         ];
@@ -4200,6 +4275,95 @@ mod tests {
         assert_eq!(restored.service_tier.as_deref(), Some("priority"));
         assert_eq!(restored.reasoning_effort.as_deref(), Some("xhigh"));
         assert_eq!(restored.network_access, Some(true));
+    }
+
+    #[test]
+    fn normalize_goal_response_maps_goal_statuses() {
+        for (status, enabled) in [
+            ("active", true),
+            ("running", true),
+            ("complete", true),
+            ("completed", true),
+            ("blocked", true),
+            ("paused", true),
+            ("idle", false),
+            ("missing_thread", false),
+            ("cleared", false),
+        ] {
+            let normalized = if enabled {
+                normalize_goal_response(&json!({
+                    "goal": {
+                        "objective": "ship",
+                        "tokenBudget": 100,
+                        "status": status
+                    }
+                }))
+            } else {
+                normalize_goal_response(&json!({
+                    "goal": {
+                        "objective": null,
+                        "tokenBudget": null,
+                        "status": status
+                    }
+                }))
+            };
+            assert_eq!(normalized["status"], status, "{status}");
+            assert_eq!(normalized["enabled"], enabled, "{status}");
+        }
+        let object_status = normalize_goal_response(&json!({
+            "goal": {
+                "objective": "ship",
+                "tokenBudget": 100,
+                "status": { "type": "Completed" }
+            }
+        }));
+        assert_eq!(object_status["status"], "completed");
+        assert_eq!(object_status["enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn goal_resume_route_requires_csrf_and_uses_bridge_only_failure() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let missing_csrf = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/codex/goal/resume")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"thread_id":"thread-a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+        let app = router(state);
+        let disabled_bridge = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/codex/goal/resume")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"thread_id":"thread-a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled_bridge.status(), StatusCode::BAD_GATEWAY);
+        let body = to_bytes(disabled_bridge.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("thread/goal/resume"));
     }
 
     #[tokio::test]

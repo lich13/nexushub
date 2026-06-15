@@ -131,6 +131,29 @@ describe("archive delete API compatibility", () => {
     expect(deleteOptions.headers.get("x-csrf-token")).toBe("csrf-token");
   });
 
+  test("goal resume posts a controlled csrf-protected API request", async () => {
+    const { resumeGoalMode } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      enabled: true,
+      objective: "ship the fix",
+      token_budget: 123,
+      status: "active"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await resumeGoalMode("thread-a", "csrf-token");
+
+    expect(result).toMatchObject({ available: true, data: { status: "active" } });
+    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
+    expect(path).toBe("/api/codex/goal/resume");
+    expect(options.method).toBe("POST");
+    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(JSON.parse(options.body)).toEqual({ thread_id: "thread-a" });
+  });
+
   test("stop thread posts stop payload with csrf", async () => {
     const { stopThread } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {
@@ -770,36 +793,13 @@ describe("archive delete API compatibility", () => {
     ).serviceTier).toBe("");
   });
 
-  test("codex command chips cover the compact official command entry points", async () => {
+  test("slash commands expose compact Codex composer entry points", async () => {
     const app = await import("../App");
 
-    expect(app.codexCommands).toEqual([
-      "codex",
-      "exec",
-      "review",
-      "resume",
-      "fork",
-      "archive",
-      "unarchive",
-      "login",
-      "logout",
-      "mcp",
-      "plugin",
-      "mcp-server",
-      "app-server",
-      "remote-control",
-      "app",
-      "completion",
-      "doctor",
-      "sandbox",
-      "apply",
-      "cloud",
-      "exec-server",
-      "debug models",
-      "debug app-server",
-      "features",
-      "update"
+    expect(app.slashCommandSuggestions("/goal r", 7)).toEqual([
+      expect.objectContaining({ command: "/goal resume", description: "恢复当前线程 Goal" })
     ]);
+    expect(app.slashCommandSuggestions("/goal r", 7, false)).toEqual([]);
   });
 
   test("does not surface stale pending blocks without reply-needed state or active turn", async () => {

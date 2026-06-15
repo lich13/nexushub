@@ -132,7 +132,7 @@ export type BridgeActionResult = {
   message?: string | null;
 };
 
-export type UploadKind = "text" | "markdown" | "spreadsheet" | "document" | "pdf" | "image";
+export type UploadKind = "text" | "markdown" | "spreadsheet" | "document" | "pdf" | "image" | "file";
 
 export type UploadRecord = {
   id: string;

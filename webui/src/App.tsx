@@ -68,6 +68,7 @@ import {
   logout,
   renameThread,
   revisePlan,
+  resumeGoalMode,
   restoreThread,
   saveProbeSettings,
   saveSecurity,
@@ -208,32 +209,17 @@ const permissionPresets: Array<{ id: PermissionPresetId; label: string; descript
 const defaultCwd = "/home/ubuntu/codex-workspace";
 const defaultSessionTtlDays = 365;
 const secondsPerDay = 86400;
-export const codexCommands = [
-  "codex",
-  "exec",
-  "review",
-  "resume",
-  "fork",
-  "archive",
-  "unarchive",
-  "login",
-  "logout",
-  "mcp",
-  "plugin",
-  "mcp-server",
-  "app-server",
-  "remote-control",
-  "app",
-  "completion",
-  "doctor",
-  "sandbox",
-  "apply",
-  "cloud",
-  "exec-server",
-  "debug models",
-  "debug app-server",
-  "features",
-  "update"
+
+type SlashCommand = {
+  command: string;
+  description: string;
+  requiresThread?: boolean;
+};
+
+export const slashCommands: SlashCommand[] = [
+  { command: "/goal resume", description: "恢复当前线程 Goal", requiresThread: true },
+  { command: "/clear", description: "清空当前输入" },
+  { command: "/help", description: "插入可用命令提示" }
 ];
 
 type TurnstileWidgetId = string;
@@ -996,6 +982,7 @@ export function uploadKindLabel(kind?: string | null): string {
   if (kind === "document") return "文档";
   if (kind === "pdf") return "PDF";
   if (kind === "image") return "图片";
+  if (kind === "file") return "文件";
   return "文本";
 }
 
@@ -1005,12 +992,118 @@ export function uploadStatusText(upload: Pick<ComposerUpload, "status" | "local_
   return "已就绪";
 }
 
-const uploadAccept = [
-  ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log",
-  ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".kt", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
-  ".sh", ".zsh", ".bash", ".sql", ".html", ".css", ".scss", ".xml",
-  ".xlsx", ".xls", ".docx", ".pdf", ".png", ".jpg", ".jpeg", ".webp"
-].join(",");
+export function composerFileInputAcceptValue(): string | undefined {
+  return undefined;
+}
+
+export type InternalReferenceSegment = {
+  type: "text" | "internal_reference";
+  text: string;
+  copyText?: string;
+  kind?: "path" | "thread" | "turn" | "job" | "goal";
+};
+
+const internalReferencePattern = /((?:\/(?:Users|Volumes|home|root|tmp|var|opt|srv|etc|run|private)\/[^\s,，。；;）)]+)|\b(?:thread|turn|job|goal)[\s:=#-]+[A-Za-z0-9._:-]{3,})/gi;
+
+export function segmentInternalReferences(text: string): InternalReferenceSegment[] {
+  const segments: InternalReferenceSegment[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(internalReferencePattern)) {
+    const value = match[0];
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      segments.push({ type: "text", text: text.slice(lastIndex, index) });
+    }
+    segments.push({
+      type: "internal_reference",
+      text: value,
+      copyText: value,
+      kind: internalReferenceKind(value)
+    });
+    lastIndex = index + value.length;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return segments.length ? segments : [{ type: "text", text }];
+}
+
+function internalReferenceKind(value: string): InternalReferenceSegment["kind"] {
+  const lower = value.toLowerCase();
+  if (lower.startsWith("/")) return "path";
+  if (lower.startsWith("thread")) return "thread";
+  if (lower.startsWith("turn")) return "turn";
+  if (lower.startsWith("job")) return "job";
+  return "goal";
+}
+
+type SlashQuery = {
+  start: number;
+  end: number;
+  value: string;
+};
+
+function activeSlashQuery(draft: string, cursor: number): SlashQuery | null {
+  const safeCursor = Math.max(0, Math.min(cursor, draft.length));
+  const before = draft.slice(0, safeCursor);
+  const start = before.lastIndexOf("/");
+  if (start < 0) return null;
+  if (start > 0 && !/\s/.test(before[start - 1])) return null;
+  const value = before.slice(start);
+  if (!value.startsWith("/") || value.includes("\n")) return null;
+  return { start, end: safeCursor, value };
+}
+
+export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true): SlashCommand[] {
+  const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
+  if (!query) return [];
+  return slashCommands
+    .filter((item) => hasThread || !item.requiresThread)
+    .filter((item) => item.command.toLowerCase().startsWith(query))
+    .slice(0, 8);
+}
+
+export function applySlashCommandSelection(draft: string, cursor: number, command: string): { value: string; cursor: number } {
+  const query = activeSlashQuery(draft, cursor);
+  const insertion = `${command} `;
+  if (!query) {
+    const value = `${draft.slice(0, cursor)}${insertion}${draft.slice(cursor)}`;
+    return { value, cursor: cursor + insertion.length };
+  }
+  const value = `${draft.slice(0, query.start)}${insertion}${draft.slice(query.end)}`;
+  return { value, cursor: query.start + insertion.length };
+}
+
+export function nextRenameDraftValue(input: {
+  previousThreadId: string;
+  threadId: string;
+  currentDraft: string;
+  incomingTitle: string;
+  dirty: boolean;
+}): string {
+  if (input.previousThreadId !== input.threadId) return input.incomingTitle;
+  if (input.dirty) return input.currentDraft;
+  const merged = mergeIncomingThreadSummary(
+    { id: input.threadId, title: input.currentDraft },
+    { id: input.threadId, title: input.incomingTitle }
+  );
+  return merged.title ?? input.currentDraft;
+}
+
+export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string, title: string): ThreadSummary[] {
+  return threads.map((thread) => thread.id === threadId ? { ...thread, title } : thread);
+}
+
+function updateSavedThreadTitleCaches(qc: QueryClient, threadId: string, title: string) {
+  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
+    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
+      rows ? mergeSavedThreadTitle(rows, threadId, title) : rows
+    );
+  }
+  qc.setQueryData<ThreadDetail>(["thread", threadId], (current) =>
+    current ? { ...current, summary: { ...current.summary, title } } : current
+  );
+}
 
 function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -1128,6 +1221,107 @@ function ComposerAttachmentList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function SlashCommandTextarea({
+  value,
+  onChange,
+  placeholder,
+  hasThread,
+  disabled = false
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  hasThread: boolean;
+  disabled?: boolean;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [cursor, setCursor] = useState(0);
+  const [selected, setSelected] = useState(0);
+  const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
+  const signature = `${value}:${cursor}`;
+  const suggestions = dismissedSignature === signature ? [] : slashCommandSuggestions(value, cursor, hasThread);
+  const open = suggestions.length > 0;
+  const updateCursor = (target: HTMLTextAreaElement) => setCursor(target.selectionStart ?? target.value.length);
+  const insertCommand = (command: string) => {
+    const next = applySlashCommandSelection(value, cursor, command);
+    onChange(next.value);
+    setCursor(next.cursor);
+    setSelected(0);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
+
+  useEffect(() => {
+    if (selected >= suggestions.length) setSelected(0);
+  }, [selected, suggestions.length]);
+
+  return (
+    <div className="slash-composer">
+      {open && (
+        <div className="slash-menu" role="listbox" aria-label="Slash 命令">
+          {suggestions.map((item, index) => (
+            <button
+              key={item.command}
+              type="button"
+              className={index === selected ? "slash-option selected" : "slash-option"}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                insertCommand(item.command);
+              }}
+              role="option"
+              aria-selected={index === selected}
+            >
+              <strong>{item.command}</strong>
+              <span>{item.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea
+        ref={textareaRef}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setDismissedSignature(null);
+          updateCursor(event.target);
+        }}
+        onClick={(event) => {
+          setDismissedSignature(null);
+          updateCursor(event.currentTarget);
+        }}
+        onKeyUp={(event) => {
+          if (event.key !== "Escape") setDismissedSignature(null);
+          updateCursor(event.currentTarget);
+        }}
+        onKeyDown={(event) => {
+          if (!open) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setSelected((current) => moveActionSelection(current, suggestions.length, event.key === "ArrowDown" ? 1 : -1));
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setSelected(0);
+            setDismissedSignature(signature);
+            return;
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            insertCommand(suggestions[selected]?.command ?? suggestions[0].command);
+          }
+        }}
+        placeholder={placeholder}
+      />
     </div>
   );
 }
@@ -1443,6 +1637,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const runOptions = useCodexRunOptions();
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
   const [renameValue, setRenameValue] = useState(detail.summary.title);
+  const [renameDirty, setRenameDirty] = useState(false);
   const updateMessageFollowState = useCallback(() => {
     shouldFollowMessagesRef.current = messageStreamRef.current
       ? shouldAutoFollowMessageStream(messageStreamRef.current)
@@ -1478,17 +1673,22 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     const sameThread = previousThreadIdRef.current === threadId;
     if (!sameThread) shouldFollowMessagesRef.current = true;
     setRenameValue((current) => {
-      if (!sameThread) return detail.summary.title;
-      const merged = mergeIncomingThreadSummary({ id: threadId, title: current }, detail.summary);
-      return merged.title ?? current;
+      return nextRenameDraftValue({
+        previousThreadId: previousThreadIdRef.current,
+        threadId,
+        currentDraft: current,
+        incomingTitle: detail.summary.title,
+        dirty: renameDirty
+      });
     });
     if (!sameThread) {
+      setRenameDirty(false);
       setDraft("");
       attachments.clearUploads();
       messageStore.setFeedback(threadId, null);
     }
     previousThreadIdRef.current = threadId;
-  }, [detail.summary, messageStore, threadId]);
+  }, [detail.summary.title, messageStore, renameDirty, threadId]);
 
   useEffect(() => {
     const unsubscribe = subscribeThreadEvents(threadId, {
@@ -1676,7 +1876,12 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     },
     onSuccess: ({ threadId: renamedThreadId, title }) => {
       messageStore.setFeedback(renamedThreadId, "线程名称已更新");
-      if (title) messageStore.patchSummary(renamedThreadId, { title });
+      if (title) {
+        setRenameValue(title);
+        setRenameDirty(false);
+        messageStore.patchSummary(renamedThreadId, { title });
+        updateSavedThreadTitleCaches(qc, renamedThreadId, title);
+      }
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["thread", renamedThreadId] });
     },
@@ -1908,13 +2113,13 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             className="visually-hidden"
             type="file"
             multiple
-            accept={uploadAccept}
             onChange={attachments.onFileInputChange}
           />
-          <textarea
+          <SlashCommandTextarea
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={setDraft}
             placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送到 root Codex app-server"}
+            hasThread
           />
           <ComposerAttachmentList
             uploads={attachments.uploads}
@@ -1953,15 +2158,30 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           <Metric label="Active turn" value={summary.active_turn_id ?? lastResult?.turn_id ?? "none"} tone={summary.active_turn_id ? "success" : undefined} />
           <Metric label="Active job" value={summary.active_job_id ?? lastResult?.job_id ?? "none"} tone={summary.active_job_id ? "success" : undefined} />
           <Metric label="Last event" value={lastEventKindText(summary)} />
+          <Metric label="Rollout path" value={summary.rollout_path ?? "none"} tone={summary.rollout_path ? "success" : undefined} />
           <Metric label="Blocks" value={`${blocks.length}/${messageBlockState.totalBlocks}`} />
           <div className="copy-row">
             <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(summary.id)}><Copy size={17} />复制 ID</button>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                if (!summary.rollout_path) return;
+                navigator.clipboard?.writeText(summary.rollout_path);
+                setActiveFeedback("已复制线程文件绝对路径");
+              }}
+              disabled={!summary.rollout_path}
+            >
+              <Copy size={17} />复制路径
+            </button>
             <button className="secondary-button" onClick={() => forkMutation.mutate({ threadId: summary.id })} disabled={forkPending}><GitFork size={17} />Fork</button>
           </div>
         </Panel>
 
         <Panel title="名称与归档" icon={<Edit3 size={18} />}>
-          <label className="field-label">线程标题<input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></label>
+          <label className="field-label">线程标题<input value={renameValue} onChange={(event) => {
+            setRenameDirty(true);
+            setRenameValue(event.target.value);
+          }} /></label>
           <div className="button-row">
             <button className="secondary-button" onClick={() => renameMutation.mutate({ threadId: summary.id, title: renameValue })} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
             <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })} disabled={archivePending}>
@@ -1972,14 +2192,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         </Panel>
 
         <GoalCard threadId={summary.id} csrfToken={csrfToken} />
-
-        <Panel title="Codex 命令" icon={<TerminalSquare size={18} />}>
-          <div className="command-grid">
-            {codexCommands.map((command) => (
-              <span key={command} className="command-chip">{command}</span>
-            ))}
-          </div>
-        </Panel>
 
         <Panel title="运行路径" icon={<HardDrive size={18} />}>
           <Metric label="Workspace" value={runConfig.cwd || defaultCwd} />
@@ -2124,6 +2336,14 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
     },
     onError: (err: Error) => setFeedback(err.message)
   });
+  const resumeGoal = useMutation({
+    mutationFn: () => resumeGoalMode(threadId, csrfToken),
+    onSuccess: (result) => {
+      setFeedback(result.available ? "Goal 已恢复" : "Goal API 不可用");
+      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
+    },
+    onError: (err: Error) => setFeedback(err.message)
+  });
 
   return (
     <Panel title="Goal" icon={<Goal size={18} />}>
@@ -2138,6 +2358,7 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
           <div className="button-row">
             <button className="secondary-button" onClick={() => saveGoal.mutate()} disabled={saveGoal.isPending || (!objective.trim() && !tokenBudget.trim())}><CheckCircle2 size={17} />保存</button>
             <button className="danger-button soft" onClick={() => clearGoal.mutate()} disabled={clearGoal.isPending}><Trash2 size={17} />清除</button>
+            <button className="secondary-button" onClick={() => resumeGoal.mutate()} disabled={resumeGoal.isPending || !threadId}><Play size={17} />恢复</button>
           </div>
         </>
       )}
@@ -2229,10 +2450,9 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           className="visually-hidden"
           type="file"
           multiple
-          accept={uploadAccept}
           onChange={attachments.onFileInputChange}
         />
-        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="输入第一条消息" />
+        <SlashCommandTextarea value={draft} onChange={setDraft} placeholder="输入第一条消息" hasThread={false} />
         <ComposerAttachmentList
           uploads={attachments.uploads}
           removingUploadId={attachments.removingUploadId}
@@ -2305,7 +2525,9 @@ function MessageBlockView({
         <span>{roleLabel(block.role)}</span>
         <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
       </div>
-      <div className={presentation.bodyClassName}>{messageBlockText(block)}</div>
+      <div className={presentation.bodyClassName}>
+        <MessageContent text={messageBlockText(block)} />
+      </div>
     </article>
   );
 }
@@ -2326,6 +2548,37 @@ function ToolBlockView({ block }: { block: MessageBlock }) {
       {summary && <div className="tool-summary">{summary}</div>}
       {open && <pre>{toolBlockDetailText(block)}</pre>}
     </details>
+  );
+}
+
+function MessageContent({ text }: { text: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const segments = useMemo(() => segmentInternalReferences(text), [text]);
+  return (
+    <>
+      {segments.map((segment, index) => {
+        if (segment.type === "text") {
+          return <span key={`text-${index}`}>{segment.text}</span>;
+        }
+        return (
+          <button
+            key={`ref-${index}-${segment.text}`}
+            type="button"
+            className="internal-reference"
+            title="复制内部引用"
+            onClick={async () => {
+              const copyText = segment.copyText ?? segment.text;
+              await navigator.clipboard?.writeText(copyText);
+              setCopied(copyText);
+              window.setTimeout(() => setCopied((current) => current === copyText ? null : current), 1600);
+            }}
+          >
+            {segment.text}
+            {copied === (segment.copyText ?? segment.text) && <small>已复制</small>}
+          </button>
+        );
+      })}
+    </>
   );
 }
 
@@ -3804,9 +4057,20 @@ function firstDisplayLine(value?: string | null): string | null {
   return line || null;
 }
 
-function formatGoalStatus(goal: { enabled?: boolean; status?: string | null } | null | undefined): string {
-  if (!goal?.enabled) return goal?.status ?? "idle";
-  return goal.status ?? "active";
+export function formatGoalStatus(goal: { enabled?: boolean; status?: string | null } | null | undefined): string {
+  const status = goal?.status?.trim().toLowerCase() || (goal?.enabled ? "active" : "idle");
+  const labels: Record<string, string> = {
+    active: "运行中",
+    running: "运行中",
+    complete: "已完成",
+    completed: "已完成",
+    blocked: "已阻塞",
+    paused: "已暂停",
+    idle: "未启用",
+    missing_thread: "未选择线程",
+    cleared: "已清除"
+  };
+  return labels[status] ?? status;
 }
 
 function cleanHostValue(value?: string | null): string | null {

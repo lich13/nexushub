@@ -841,6 +841,17 @@ export async function clearGoalMode(threadId?: string | null, csrfToken?: string
   });
 }
 
+export async function resumeGoalMode(threadId?: string | null, csrfToken?: string | null): Promise<OptionalResult<GoalModeState>> {
+  if (USE_DEMO) {
+    return { available: true, data: { enabled: true, objective: null, token_budget: null, status: "active" } };
+  }
+  return optionalApiFetch<GoalModeState>("/api/codex/goal/resume", {
+    method: "POST",
+    csrfToken,
+    body: JSON.stringify({ thread_id: threadId ?? undefined })
+  });
+}
+
 export async function listModels(): Promise<OptionalResult<CodexModel[]>> {
   if (USE_DEMO) {
     return {

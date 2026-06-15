@@ -284,6 +284,11 @@ impl AppServerBridge {
             .await
     }
 
+    pub async fn goal_resume(&self, thread_id: String) -> Result<Value> {
+        self.thread_value_request("thread/goal/resume", thread_id, json!({}))
+            .await
+    }
+
     pub async fn model_list(&self) -> Result<Value> {
         self.value_request("model/list", json!({"includeHidden": false}))
             .await
@@ -1175,6 +1180,7 @@ mod tests {
                 kind: UploadKind::Markdown,
                 text: Some("# Plan\n\n- ship it".to_string()),
                 local_image_path: None,
+                local_file_path: None,
                 truncated: false,
             },
             PreparedAttachment {
@@ -1186,6 +1192,7 @@ mod tests {
                 kind: UploadKind::Image,
                 text: None,
                 local_image_path: Some(PathBuf::from("/tmp/screen.png")),
+                local_file_path: None,
                 truncated: false,
             },
         ];
