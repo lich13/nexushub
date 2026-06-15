@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 import type { GoalModeState, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
+  buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
   composerFileInputAcceptValue?: () => string | undefined;
+  composerActionMode?: (running: boolean, draft: string, canStop: boolean, attachmentCount?: number) => string;
+  defaultRunConfig?: () => Record<string, unknown>;
   formatGoalStatus?: (goal: Pick<GoalModeState, "enabled" | "status"> | null | undefined) => string;
   segmentInternalReferences?: (text: string) => Array<{ type: "text" | "internal_reference"; text: string; copyText?: string; kind?: string }>;
   slashCommands?: Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
@@ -26,6 +29,7 @@ type AppExports = typeof import("./App") & {
     key: string;
     shiftKey?: boolean;
     composing?: boolean;
+    menuSelectionArmed?: boolean;
     selected: number;
     suggestions: Array<{ command?: string; id?: string }>;
   }) => { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" };
@@ -185,8 +189,58 @@ describe("conversation helpers", () => {
     expect(app.activeComposerMenuKind?.("/goal @p", "/goal @p".length, plugins)).toBe("plugin");
     expect(app.activeComposerMenuKind?.("@probe /go", "@probe /go".length, plugins)).toBe("slash");
     expect(app.composerMenuKeyAction?.({ key: "Enter", composing: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
-    expect(app.composerMenuKeyAction?.({ key: "Enter", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
+    expect(app.composerMenuKeyAction?.({ key: "Enter", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
+    expect(app.composerMenuKeyAction?.({ key: "Enter", menuSelectionArmed: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
+    expect(app.composerMenuKeyAction?.({ key: "Tab", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
     expect(app.composerMenuKeyAction?.({ key: "Enter", shiftKey: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
+  });
+
+  test("composer submit sends partial slash text literally instead of accepting visible suggestions", async () => {
+    const app = await loadApp();
+    const config = app.defaultRunConfig?.() ?? {};
+    const cases = ["/go", "/plugins 文本", "/plan 文本"];
+
+    for (const draft of cases) {
+      expect(app.activeComposerMenuKind?.(draft, draft.length, [])).toBe("slash");
+      expect(app.composerMenuKeyAction?.({
+        key: "Enter",
+        selected: 0,
+        suggestions: app.slashCommandSuggestions?.(draft, draft.length) ?? []
+      })).toEqual({ action: "none" });
+      expect(app.slashCommandForComposerSubmit?.(draft)).toBeNull();
+      expect(app.buildPayload?.(draft, config).message).toBe(draft);
+    }
+  });
+
+  test("exact /plugins stays an explicit control command while /plugins text remains a message", async () => {
+    const app = await loadApp();
+
+    expect(app.slashCommandForComposerSubmit?.("/plugins")).toBe("/plugins");
+    expect(app.slashCommandAction?.("/plugins")).toEqual({ kind: "open_plugins", command: "/plugins" });
+    expect(app.slashCommandForComposerSubmit?.("/plugins 文本")).toBeNull();
+    expect(app.slashCommandAction?.("/plugins 文本")).toEqual({
+      kind: "unknown",
+      command: "/plugins 文本",
+      message: expect.stringContaining("未知")
+    });
+  });
+
+  test("IME composition never submits or inserts slash/plugin menu candidates", async () => {
+    const app = await loadApp();
+
+    expect(app.composerMenuKeyAction?.({
+      key: "Enter",
+      composing: true,
+      selected: 0,
+      suggestions: [{ command: "/goal" }]
+    })).toEqual({ action: "none" });
+    expect(app.composerMenuKeyAction?.({
+      key: "Enter",
+      composing: true,
+      menuSelectionArmed: true,
+      selected: 0,
+      suggestions: [{ id: "probe" }]
+    })).toEqual({ action: "none" });
   });
 
   test("exact slash command detection separates execution from partial candidate insertion", async () => {
@@ -237,6 +291,10 @@ describe("conversation helpers", () => {
 
   test("plan mode button is a next-send state and successful sends reset it", async () => {
     const app = await loadApp();
+    const config = {
+      ...(app.defaultRunConfig?.() ?? {}),
+      collaborationMode: "plan"
+    };
 
     expect(app.planModeButtonState?.(true, "Recent", false, false)).toEqual({
       pressed: true,
@@ -249,10 +307,16 @@ describe("conversation helpers", () => {
       statusText: "当前线程正在等待计划确认"
     });
     expect(app.planModeButtonState?.(false, "ReplyNeeded", false, true)?.statusText).toBe("当前线程正在等待问题回复");
+    expect(app.buildPayload?.("请先制定计划", config).collaboration_mode).toBe("plan");
     expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "plan", other: "kept" })).toEqual({
       collaborationMode: "",
       other: "kept"
     });
+    expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "", other: "kept" })).toEqual({
+      collaborationMode: "",
+      other: "kept"
+    });
+    expect(app.composerActionMode?.(false, "失败后保留的输入", false)).toBe("send");
   });
 
   test("config refresh merges persistent defaults without clearing next-send Plan Mode", async () => {

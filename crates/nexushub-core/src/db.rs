@@ -937,12 +937,16 @@ impl PanelDb {
         let limit = i64::from(max_delete_rows.max(1));
         let conn = self.conn.lock().expect("db mutex");
         let event_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM probe_events WHERE created_at < ?1 LIMIT ?2",
+            "SELECT COUNT(*) FROM (
+                SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
+            )",
             params![cutoff, limit],
             |row| row.get(0),
         )?;
         let dedupe_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM probe_dedupe WHERE expires_at <= ?1 LIMIT ?2",
+            "SELECT COUNT(*) FROM (
+                SELECT rowid FROM probe_dedupe WHERE expires_at <= ?1 ORDER BY expires_at ASC LIMIT ?2
+            )",
             params![Self::now(), limit],
             |row| row.get(0),
         )?;
@@ -1317,5 +1321,72 @@ mod tests {
         assert!(db.mark_probe_event_handled(&event.id).unwrap());
         let handled = db.list_probe_events(10).unwrap();
         assert!(handled[0].handled_at.is_some());
+    }
+
+    #[test]
+    fn maintain_probe_events_deletes_old_events_and_expired_dedupe_with_limit() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let now = PanelDb::now();
+        {
+            let conn = db.conn.lock().expect("db mutex");
+            for index in 0..3 {
+                conn.execute(
+                    r#"
+                    INSERT INTO probe_events(
+                      id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
+                    )
+                    VALUES(?1, 'hook-stop', 'thread-a', 'old', 'old', ?1, 'test', '{}', ?2)
+                    "#,
+                    rusqlite::params![format!("old-event-{index}"), now - 172_900],
+                )
+                .unwrap();
+                conn.execute(
+                    r#"
+                    INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+                    VALUES('probe_event', ?1, ?2, ?3)
+                    "#,
+                    rusqlite::params![format!("old-dedupe-{index}"), now - 1, now - 172_900],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                r#"
+                INSERT INTO probe_events(
+                  id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
+                )
+                VALUES('fresh-event', 'hook-stop', 'thread-a', 'fresh', 'fresh', 'fresh-event', 'test', '{}', ?1)
+                "#,
+                rusqlite::params![now],
+            )
+            .unwrap();
+            conn.execute(
+                r#"
+                INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+                VALUES('probe_event', 'fresh-dedupe', ?1, ?2)
+                "#,
+                rusqlite::params![now + 300, now],
+            )
+            .unwrap();
+        }
+
+        let dry_run = db.maintain_probe_events(1, 2, true).unwrap();
+        assert_eq!(dry_run, (2, 2));
+
+        let deleted = db.maintain_probe_events(1, 2, false).unwrap();
+        assert_eq!(deleted, (2, 2));
+
+        let counts = db.probe_logs_db_counts(1).unwrap();
+        assert_eq!(counts.event_count, 2);
+        assert_eq!(counts.dedupe_count, 2);
+        assert_eq!(counts.pending_event_count, 1);
+        assert_eq!(counts.pending_dedupe_count, 1);
+
+        let deleted = db.maintain_probe_events(1, 10, false).unwrap();
+        assert_eq!(deleted, (1, 1));
+        let counts = db.probe_logs_db_counts(1).unwrap();
+        assert_eq!(counts.event_count, 1);
+        assert_eq!(counts.dedupe_count, 1);
+        assert_eq!(counts.pending_event_count, 0);
+        assert_eq!(counts.pending_dedupe_count, 0);
     }
 }

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import type { ProbeSettings } from "../types";
+import type { ProbeEvent, ProbeSettings } from "../types";
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
   PROBE_NAV_LABEL,
+  probeEventDisplay,
   probeNumberInputDraftValue,
   probeSections,
   probeSettingsValidation,
@@ -94,10 +95,50 @@ describe("Probe UI helpers", () => {
     expect(PROBE_NAV_LABEL).toBe("探针");
     expect(probeSections.map((section) => section.label)).toEqual([
       "总览",
+      "需回复",
+      "异常/可恢复",
+      "运行中",
+      "Hook",
       "Bark",
-      "运行设置",
-      "Codex 日志库维护"
+      "日志库",
+      "最近事件",
+      "设置"
     ]);
+  });
+
+  test("builds readable event display details without exposing secret payload values", () => {
+    const event: ProbeEvent = {
+      id: "event-a",
+      kind: "reply-needed",
+      thread_id: "thread-a",
+      title: "Codex Reply Needed",
+      message: "Need operator input",
+      dedupe_key: "reply-needed:thread-a:turn-a",
+      source: "nexushubd probe passive-scan",
+      payload: {
+        bark: {
+          sent: false,
+          skipped: true,
+          reason: "dedupe",
+          device_key_configured: true,
+          dedupe_key: "reply-needed:thread-a:turn-a"
+        },
+        duplicate: true,
+        session_id: "session-a",
+        device_key: "secret-device-key"
+      },
+      created_at: "2026-06-15T00:00:00Z"
+    };
+
+    const display = probeEventDisplay(event);
+
+    expect(display.title).toBe("需回复");
+    expect(display.summary).toContain("Need operator input");
+    expect(display.bark).toBe("Bark 跳过: dedupe");
+    expect(display.dedupe).toBe("重复事件");
+    expect(display.source).toBe("nexushubd probe passive-scan");
+    expect(display.time).toContain("2026-06-15");
+    expect(JSON.stringify(display)).not.toContain("secret-device-key");
   });
 
   test("builds a form draft and leaves configured Bark device_key unchanged when blank", () => {

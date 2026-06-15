@@ -1,12 +1,17 @@
-import type { ProbeSettings } from "../types";
+import type { ProbeEvent, ProbeSettings } from "../types";
 
 export const PROBE_NAV_LABEL = "探针";
 
 export const probeSections = [
   { id: "overview", label: "总览" },
+  { id: "needs-reply", label: "需回复" },
+  { id: "recoverable", label: "异常/可恢复" },
+  { id: "running", label: "运行中" },
+  { id: "hook", label: "Hook" },
   { id: "bark", label: "Bark" },
-  { id: "runtime", label: "运行设置" },
-  { id: "logs-db", label: "Codex 日志库维护" }
+  { id: "logs-db", label: "日志库" },
+  { id: "events", label: "最近事件" },
+  { id: "settings", label: "设置" }
 ] as const;
 
 export type ProbeSectionId = typeof probeSections[number]["id"];
@@ -279,6 +284,77 @@ export function probeNumberInputDraftValue(value: string): ProbeNumericDraftValu
   return Number.isFinite(numeric) ? Math.trunc(numeric) : "";
 }
 
+export type ProbeEventDisplay = {
+  title: string;
+  summary: string;
+  bark: string;
+  dedupe: string;
+  source: string;
+  time: string;
+};
+
+export function probeEventDisplay(event: ProbeEvent): ProbeEventDisplay {
+  return {
+    title: probeEventKindLabel(event.kind),
+    summary: probeEventReadableSummary(event),
+    bark: probeEventBarkStatus(event),
+    dedupe: probeEventDedupeStatus(event),
+    source: event.source?.trim() || "未知来源",
+    time: probeEventTimeLabel(event.created_at)
+  };
+}
+
+export function probeEventReadableSummary(event: ProbeEvent): string {
+  const message = cleanProbeEventText(event.message);
+  if (message) return message;
+  const payload = probeEventPayload(event);
+  const candidates = [
+    event.title,
+    stringFromRecord(payload, "summary"),
+    stringFromRecord(payload, "status"),
+    stringFromRecord(payload, "reason"),
+    stringFromRecord(payload, "kind")
+  ];
+  const summary = candidates.map(cleanProbeEventText).find(Boolean);
+  if (summary) return summary;
+  if (event.thread_id) return `线程 ${event.thread_id}`;
+  return "Probe 事件已记录";
+}
+
+export function probeEventBarkStatus(event: ProbeEvent): string {
+  const bark = recordFromRecord(probeEventPayload(event), "bark");
+  if (!bark) return "Bark 未记录";
+  if (bark.sent === true) {
+    const status = typeof bark.http_status === "number" ? ` HTTP ${bark.http_status}` : "";
+    return `Bark 已发送${status}`;
+  }
+  const reason = cleanProbeEventText(stringFromRecord(bark, "reason"));
+  if (bark.skipped === true) return `Bark 跳过${reason ? `: ${reason}` : ""}`;
+  return `Bark 未发送${reason ? `: ${reason}` : ""}`;
+}
+
+export function probeEventDedupeStatus(event: ProbeEvent): string {
+  const payload = probeEventPayload(event);
+  if (payload.duplicate === true) return "重复事件";
+  const outcome = recordFromRecord(payload, "probe_event") ?? recordFromRecord(payload, "outcome");
+  if (outcome?.duplicate === true) return "重复事件";
+  if (outcome?.recorded === true) return "已记录";
+  return event.dedupe_key?.trim() ? "去重键已记录" : "无去重键";
+}
+
+export function probeEventKindLabel(kind?: string | null): string {
+  const normalized = kind?.trim();
+  const labels: Record<string, string> = {
+    "hook-stop": "Stop Hook",
+    completion: "完成",
+    "reply-needed": "需回复",
+    recoverable: "异常/可恢复",
+    running: "运行中",
+    "bark-test": "Bark 测试"
+  };
+  return normalized ? labels[normalized] ?? normalized : "Probe 事件";
+}
+
 function isIntegerInRange(value: ProbeNumericDraftValue, min: number, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
 }
@@ -318,4 +394,32 @@ function codexHomePatchValue(value: string): string | null {
 function optionalString(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function probeEventPayload(event: ProbeEvent): Record<string, unknown> {
+  return event.payload && typeof event.payload === "object" ? event.payload : {};
+}
+
+function recordFromRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = record[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function stringFromRecord(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function cleanProbeEventText(value?: string | null): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function probeEventTimeLabel(value: string | number): string {
+  if (typeof value === "number") {
+    const millis = value > 10_000_000_000 ? value : value * 1000;
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }

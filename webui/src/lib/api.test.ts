@@ -410,7 +410,7 @@ describe("archive delete API compatibility", () => {
     expect(result.data?.recent_sessions?.[0]).toMatchObject({ id: "session-a", project_display_name: "/Users/gosu/demo" });
   });
 
-  test("Probe slim API surface keeps logs DB maintenance read-only", async () => {
+  test("Probe fixed jobs use canonical API routes", async () => {
     const api = await loadRealApi() as Record<string, unknown>;
     const { getProbeLogsDbStatus, saveProbeSettings, startProbeJob } = api as typeof import("./api");
     expect(api.getProbeRunning).toBeUndefined();
@@ -454,6 +454,9 @@ describe("archive delete API compatibility", () => {
 
     await expect(getProbeLogsDbStatus()).resolves.toMatchObject({ available: true, data: { path: "/root/.codex/logs_2.sqlite", retained_rows: 34 } });
     await expect(startProbeJob("bark-test", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(startProbeJob("hooks-install", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(startProbeJob("logs-db-dry-run", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(startProbeJob("logs-db-execute", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
     await saveProbeSettings({
       codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
       probe: {
@@ -472,6 +475,9 @@ describe("archive delete API compatibility", () => {
     expect(calls).toEqual([
       ["/api/probe/logs-db/status", undefined, null, null],
       ["/api/probe/bark/test", "POST", "csrf-token", null],
+      ["/api/probe/hooks/install", "POST", "csrf-token", null],
+      ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: true }],
+      ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: false, compact: false }],
       ["/api/probe/settings", "PATCH", "csrf-token", {
         codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
         probe: {

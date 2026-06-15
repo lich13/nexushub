@@ -626,7 +626,7 @@ impl ProbeConfig {
     pub fn normalize(&mut self) {
         self.poll_seconds = self.poll_seconds.clamp(5, 3_600);
         self.recent_limit = self.recent_limit.clamp(1, 500);
-        if self.notifications.server_url.trim().is_empty() {
+        if !valid_probe_notification_server_url(&self.notifications.server_url) {
             self.notifications.server_url = default_bark_server_url();
         }
         if self.notifications.group.trim().is_empty() {
@@ -684,6 +684,24 @@ fn env_file_value(text: &str, key: &str) -> Option<String> {
                 .to_string(),
         )
     })
+}
+
+pub fn valid_probe_notification_server_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value.trim()) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => true,
+        "http" => url.host_str().is_some_and(is_loopback_host),
+        _ => false,
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host.starts_with("127.")
 }
 
 fn deserialize_optional_string_field<'de, D>(
@@ -1054,6 +1072,29 @@ mod tests {
         assert_eq!(config.probe.logs_db.compact_min_freelist_mb, 256);
         assert_eq!(config.probe.logs_db.compact_min_freelist_ratio_percent, 20);
         assert_eq!(config.probe.logs_db.minimum_free_space_mb, 1_024);
+    }
+
+    #[test]
+    fn probe_notification_server_url_requires_https_except_loopback_http() {
+        let mut config = Config::default();
+        config.probe.notifications.server_url = "http://example.com".to_string();
+        config.normalize();
+
+        assert_eq!(config.probe.notifications.server_url, "https://api.day.app");
+
+        config.probe.notifications.server_url = "http://127.0.0.1:8080".to_string();
+        config.normalize();
+        assert_eq!(
+            config.probe.notifications.server_url,
+            "http://127.0.0.1:8080"
+        );
+
+        config.probe.notifications.server_url = "https://bark.example.com".to_string();
+        config.normalize();
+        assert_eq!(
+            config.probe.notifications.server_url,
+            "https://bark.example.com"
+        );
     }
 
     #[test]

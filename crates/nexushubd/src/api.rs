@@ -23,9 +23,9 @@ use nexushub_core::{
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{
-        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeHooksConfigPatch,
-        ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
-        ProbeSettingsPatch,
+        patch_probe_config_toml, valid_probe_notification_server_url, Config, ProbeConfigFilePatch,
+        ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
+        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     db::{JobRecord, NewSession, ThreadFollowUp},
     platform::PlatformPaths,
@@ -88,10 +88,16 @@ pub fn router(state: AppState) -> Router {
             "/api/probe/settings",
             get(get_probe_settings).patch(patch_probe_settings),
         )
+        .route("/api/probe/diagnostics", get(get_probe_diagnostics))
+        .route("/api/probe/running", get(get_probe_running))
+        .route("/api/probe/reply-needed", get(get_probe_reply_needed))
+        .route("/api/probe/recoverable", get(get_probe_recoverable))
         .route("/api/probe/lifecycle", get(get_probe_lifecycle))
         .route("/api/probe/hook-status", get(get_probe_hook_status))
+        .route("/api/probe/hooks/install", post(probe_hooks_install))
         .route("/api/probe/events", get(get_probe_events))
         .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
+        .route("/api/probe/logs-db/maintain", post(probe_logs_db_maintain))
         .route("/api/probe/bark/test", post(probe_bark_test))
         .route(
             "/api/providers/claude-code/jobs/version-check",
@@ -278,6 +284,11 @@ async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -
     ok(probe_settings_value(&state)?)
 }
 
+async fn get_probe_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    ok(json!(probe_runtime(&state).diagnostics()))
+}
+
 #[derive(Debug, Deserialize)]
 struct ProbeSettingsRequest {
     codex: Option<nexushub_core::config::CodexProbeConfigPatch>,
@@ -358,6 +369,16 @@ async fn patch_probe_settings(
             .db
             .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
     }
+    if let Some(notifications) = probe_patch.notifications.as_ref() {
+        if let Some(server_url) = notifications.server_url.as_deref() {
+            if !valid_probe_notification_server_url(server_url) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "probe notifications server_url must use HTTPS except localhost HTTP",
+                ));
+            }
+        }
+    }
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
@@ -394,6 +415,55 @@ async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) 
 async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!(probe_runtime(&state).hook_status()))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeThreadsQuery {
+    limit: Option<usize>,
+}
+
+async fn get_probe_running(
+    State(state): State<AppState>,
+    Query(query): Query<ProbeThreadsQuery>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    get_probe_threads_for_status(state, query, headers, "running").await
+}
+
+async fn get_probe_reply_needed(
+    State(state): State<AppState>,
+    Query(query): Query<ProbeThreadsQuery>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    get_probe_threads_for_status(state, query, headers, "reply-needed").await
+}
+
+async fn get_probe_recoverable(
+    State(state): State<AppState>,
+    Query(query): Query<ProbeThreadsQuery>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    get_probe_threads_for_status(state, query, headers, "recoverable").await
+}
+
+async fn get_probe_threads_for_status(
+    state: AppState,
+    query: ProbeThreadsQuery,
+    headers: HeaderMap,
+    status: &'static str,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let limit = query
+        .limit
+        .unwrap_or(state.config().probe.recent_limit)
+        .clamp(1, 200);
+    let threads = load_probe_threads(&state, status, limit).await?;
+    ok(json!({
+        "status": status,
+        "limit": limit,
+        "count": threads.len(),
+        "threads": threads,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -468,6 +538,63 @@ async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> A
         "探针 Bark 测试",
         vec!["probe".to_string(), "bark-test".to_string()],
         "probe_bark",
+    )
+    .await
+}
+
+async fn probe_hooks_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_probe_fixed_job(
+        state,
+        headers,
+        "probe_hooks_install",
+        "探针 Hook 安装",
+        vec!["probe".to_string(), "hooks-install".to_string()],
+        "probe_hooks",
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeLogsDbMaintainRequest {
+    dry_run: Option<bool>,
+    compact: Option<bool>,
+}
+
+async fn probe_logs_db_maintain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<ProbeLogsDbMaintainRequest>>,
+) -> ApiResponse {
+    let request = body
+        .map(|Json(body)| body)
+        .unwrap_or(ProbeLogsDbMaintainRequest {
+            dry_run: Some(true),
+            compact: Some(false),
+        });
+    let dry_run = request.dry_run.unwrap_or(true);
+    let compact = request.compact.unwrap_or(false);
+    let mut args = vec!["probe".to_string(), "logs-db-maintain".to_string()];
+    if dry_run {
+        args.push("--dry-run".to_string());
+    }
+    if compact {
+        args.push("--compact".to_string());
+    }
+    start_probe_fixed_job(
+        state,
+        headers,
+        if dry_run {
+            "probe_logs_db_maintain_dry_run"
+        } else {
+            "probe_logs_db_maintain"
+        },
+        if dry_run {
+            "Codex logs DB 维护 dry-run"
+        } else {
+            "Codex logs DB 维护"
+        },
+        args,
+        "probe_logs_db",
     )
     .await
 }
@@ -4622,22 +4749,152 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_manual_maintenance_routes_are_not_exposed() {
+    async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
+        for uri in [
+            "/api/probe/diagnostics",
+            "/api/probe/running",
+            "/api/probe/reply-needed",
+            "/api/probe/recoverable",
+        ] {
+            let unauthorized = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED, "{uri}");
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if uri == "/api/probe/diagnostics" {
+                assert_eq!(
+                    payload["effective_constants"]["legacy_sentinel_cli_runtime"],
+                    false
+                );
+                assert_eq!(payload["effective_constants"]["auto_reply"], false);
+                assert_eq!(
+                    payload["effective_constants"]["hidden_desktop_control"],
+                    false
+                );
+            } else {
+                assert!(payload["threads"].as_array().is_some());
+                assert!(payload["count"].as_u64().is_some());
+            }
+        }
+
+        for (uri, body, kind, title, forbidden_arg) in [
+            (
+                "/api/probe/hooks/install",
+                None,
+                "probe_hooks_install",
+                "探针 Hook 安装",
+                "codex-sentinel",
+            ),
+            (
+                "/api/probe/logs-db/maintain",
+                None,
+                "probe_logs_db_maintain_dry_run",
+                "Codex logs DB 维护 dry-run",
+                "rm -rf",
+            ),
+        ]
+            as [(&str, Option<&str>, &str, &str, &str); 2]
+        {
+            let missing_csrf = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN, "{uri}");
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(body.map_or_else(Body::empty, Body::from))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let job_id = payload["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind);
+            assert_eq!(job.title, title);
+            assert!(!job.output.contains(forbidden_arg));
+        }
+
+        let (execute_state, execute_session_token, execute_csrf_token) = authenticated_test_state();
+        let execute_app = router(execute_state.clone());
+        let execute_response = execute_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/probe/logs-db/maintain")
+                    .header(
+                        "cookie",
+                        format!("nexushub_session={execute_session_token}"),
+                    )
+                    .header("x-csrf-token", execute_csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"dry_run":false,"compact":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(execute_response.status(), StatusCode::OK);
+        let execute_body = to_bytes(execute_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let execute_payload: serde_json::Value = serde_json::from_slice(&execute_body).unwrap();
+        let execute_job_id = execute_payload["job_id"].as_str().unwrap();
+        let execute_job = execute_state.db.job(execute_job_id).unwrap().unwrap();
+        assert_eq!(execute_job.kind, "probe_logs_db_maintain");
+        assert_eq!(execute_job.title, "Codex logs DB 维护");
+        assert!(!execute_job.output.contains("--dry-run"));
+
         for (method, uri) in [
-            ("GET", "/api/probe/diagnostics"),
-            ("POST", "/api/probe/hooks/install"),
             ("POST", "/api/probe/logs-db/plan"),
             ("POST", "/api/probe/logs-db/execute"),
-            ("POST", "/api/probe/logs-db/maintain"),
             ("POST", "/api/probe/legacy-cleanup/dry-run"),
             ("POST", "/api/probe/legacy-cleanup/execute"),
             ("GET", "/api/probe/dashboard"),
-            ("GET", "/api/probe/running"),
-            ("GET", "/api/probe/reply-needed"),
-            ("GET", "/api/probe/recoverable"),
             ("GET", "/api/probe/thread-probe/thread-a"),
             ("POST", "/api/probe/lifecycle/repair"),
             ("POST", "/api/probe/service/restart"),

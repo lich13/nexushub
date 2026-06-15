@@ -357,9 +357,21 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 compact && !dry_run,
                 std::time::Duration::from_secs(quick_check_timeout_seconds),
             )?;
+            let (probe_events_deleted, probe_dedupe_deleted) = db.maintain_probe_events(
+                config.probe.logs_db.retention_days,
+                config.probe.logs_db.max_delete_rows_per_run,
+                dry_run,
+            )?;
+            let mut stored = serde_json::to_value(&result)?;
+            add_probe_events_maintenance_fields(
+                &mut stored,
+                probe_events_deleted,
+                probe_dedupe_deleted,
+                dry_run,
+            );
             db.set_setting(
                 PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
-                &serde_json::to_string(&result)?,
+                &serde_json::to_string(&stored)?,
             )?;
             if result.vacuumed {
                 db.set_setting(
@@ -367,7 +379,7 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                     &serde_json::to_string(&result)?,
                 )?;
             }
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{}", serde_json::to_string_pretty(&stored)?);
         }
         ProbeCommand::LifecycleRepair => {
             println!(
@@ -1373,14 +1385,27 @@ async fn run_probe_logs_db_maintenance_if_due(
     }
 
     let compact = probe_logs_db_compaction_due(&state.db, &config).await?;
+    let worker_config = config.clone();
     let result = tokio::task::spawn_blocking(move || {
-        probe_runtime(&config).maintain_logs_db_with_compaction(false, compact)
+        probe_runtime(&worker_config).maintain_logs_db_with_compaction(false, compact)
     })
     .await
     .context("join probe logs DB maintenance worker")??;
+    let (probe_events_deleted, probe_dedupe_deleted) = state.db.maintain_probe_events(
+        config.probe.logs_db.retention_days,
+        config.probe.logs_db.max_delete_rows_per_run,
+        false,
+    )?;
+    let mut stored = serde_json::to_value(&result)?;
+    add_probe_events_maintenance_fields(
+        &mut stored,
+        probe_events_deleted,
+        probe_dedupe_deleted,
+        false,
+    );
     state.db.set_setting(
         PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
-        &serde_json::to_string(&result)?,
+        &serde_json::to_string(&stored)?,
     )?;
     if result.vacuumed {
         state.db.set_setting(
@@ -1439,6 +1464,23 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
         }
     }
     Ok(recorded)
+}
+
+fn add_probe_events_maintenance_fields(
+    value: &mut Value,
+    events: usize,
+    dedupe: usize,
+    dry_run: bool,
+) {
+    if let Value::Object(object) = value {
+        object.insert(
+            "probe_events_target".to_string(),
+            Value::String("panel_probe_events".to_string()),
+        );
+        object.insert("probe_events_dry_run".to_string(), Value::Bool(dry_run));
+        object.insert("probe_events_deleted".to_string(), json!(events));
+        object.insert("probe_dedupe_deleted".to_string(), json!(dedupe));
+    }
 }
 
 async fn probe_logs_db_compaction_due(db: &PanelDb, config: &Config) -> Result<bool> {
@@ -2005,6 +2047,65 @@ hooks = false
         );
         assert_eq!(stored["codex_home_source"], "socket");
         assert_eq!(stored["logs_db_source"], "socket");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_logs_db_scheduler_also_prunes_panel_probe_events_separately() {
+        let dir = temp_test_dir("nexushub-scheduler-panel-probe-events");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let now = chrono::Utc::now().timestamp();
+        seed_codex_logs_db(&logs_path, &[now - 100]);
+
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.logs_db.retention_days = 2;
+        config.probe.logs_db.delete_chunk_rows = 10;
+        config.probe.logs_db.max_delete_rows_per_run = 10;
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        {
+            let conn = Connection::open(db.path()).unwrap();
+            conn.execute(
+                r#"
+                INSERT INTO probe_events(
+                  id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
+                )
+                VALUES('old-event', 'hook-stop', 'thread-a', 'old', 'old', 'old-event', 'test', '{}', ?1)
+                "#,
+                params![now - 300_000],
+            )
+            .unwrap();
+            conn.execute(
+                r#"
+                INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+                VALUES('probe_event', 'expired', ?1, ?2)
+                "#,
+                params![now - 1, now - 300_000],
+            )
+            .unwrap();
+        }
+        let state = AppState::new(config, db.clone());
+
+        let outcome = run_probe_logs_db_maintenance_if_due(state).await.unwrap();
+
+        assert!(outcome.ran);
+        assert_eq!(outcome.result.as_ref().unwrap().target, "codex_logs_2");
+        assert_eq!(outcome.result.as_ref().unwrap().deleted_rows, 0);
+        let counts = db.probe_logs_db_counts(2).unwrap();
+        assert_eq!(counts.event_count, 0);
+        assert_eq!(counts.dedupe_count, 0);
+        let stored = db
+            .get_setting(PROBE_LOGS_DB_LAST_MAINTAIN_SETTING)
+            .unwrap()
+            .unwrap();
+        let stored: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored["target"], "codex_logs_2");
+        assert_eq!(stored["probe_events_target"], "panel_probe_events");
+        assert_eq!(stored["probe_events_deleted"], 1);
+        assert_eq!(stored["probe_dedupe_deleted"], 1);
 
         fs::remove_dir_all(&dir).unwrap();
     }

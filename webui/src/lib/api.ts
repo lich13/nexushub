@@ -17,6 +17,7 @@ import type {
   PluginInfo,
   ProbeLogsDbStatus,
   ProbeEventsResponse,
+  ProbeJobAction,
   ProbeSettings,
   ProbeStatus,
   PublicSettings,
@@ -650,15 +651,21 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
   );
 }
 
-type ProbeJobAction = "bark-test";
-
-const probeJobRoutes: Record<ProbeJobAction, string> = {
-  "bark-test": "/api/probe/bark/test"
+const probeJobRoutes: Record<ProbeJobAction, { path: string; body?: Record<string, unknown> }> = {
+  "bark-test": { path: "/api/probe/bark/test" },
+  "hooks-install": { path: "/api/probe/hooks/install" },
+  "logs-db-dry-run": { path: "/api/probe/logs-db/maintain", body: { dry_run: true } },
+  "logs-db-execute": { path: "/api/probe/logs-db/maintain", body: { dry_run: false, compact: false } }
 };
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  return apiFetch<{ job_id: string }>(probeJobRoutes[action], { method: "POST", csrfToken });
+  const route = probeJobRoutes[action];
+  return apiFetch<{ job_id: string }>(route.path, {
+    method: "POST",
+    csrfToken,
+    body: route.body ? JSON.stringify(route.body) : undefined
+  });
 }
 
 const claudeCodeJobRoutes = {

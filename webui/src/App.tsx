@@ -93,6 +93,7 @@ import {
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
+  probeEventDisplay,
   probeNumberInputDraftValue,
   probeSettingsValidation,
   PROBE_NAV_LABEL,
@@ -130,6 +131,7 @@ import type {
   PermissionProfile,
   PlatformOverview,
   ProbeEvent,
+  ProbeJobAction,
   PluginInfo,
   ProbeLogsDbStatus,
   ProbeStatus,
@@ -1243,12 +1245,14 @@ export function composerMenuKeyAction({
   key,
   shiftKey = false,
   composing = false,
+  menuSelectionArmed = false,
   selected,
   suggestions
 }: {
   key: string;
   shiftKey?: boolean;
   composing?: boolean;
+  menuSelectionArmed?: boolean;
   selected: number;
   suggestions: Array<{ command?: string; id?: string }>;
 }): { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" } {
@@ -1257,7 +1261,10 @@ export function composerMenuKeyAction({
     return { action: "move", selected: nextSlashCommandSelection(selected, suggestions.length, key) };
   }
   if (key === "Escape") return { action: "dismiss" };
-  if (key === "Enter" && !shiftKey && suggestions.length > 0) {
+  if (key === "Tab" && suggestions.length > 0) {
+    return { action: "insert", index: Math.min(Math.max(selected, 0), suggestions.length - 1) };
+  }
+  if (key === "Enter" && !shiftKey && menuSelectionArmed && suggestions.length > 0) {
     return { action: "insert", index: Math.min(Math.max(selected, 0), suggestions.length - 1) };
   }
   return { action: "none" };
@@ -1472,6 +1479,40 @@ export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" 
   ];
 }
 
+export function probeThreadsByStatus(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): {
+  running: ThreadSummary[];
+  replyNeeded: ThreadSummary[];
+  recoverable: ThreadSummary[];
+} {
+  return {
+    running: status?.running_threads ?? [],
+    replyNeeded: status?.reply_needed_threads ?? [],
+    recoverable: status?.recoverable_threads ?? []
+  };
+}
+
+function isProbeJob(job: JobRecord): boolean {
+  return job.kind.startsWith("probe_")
+    || job.kind.startsWith("probe-")
+    || job.title.includes("探针")
+    || job.title.includes("Probe");
+}
+
+function probeJobActionLabel(action: ProbeJobAction | undefined): string {
+  switch (action) {
+    case "bark-test":
+      return "Bark 测试";
+    case "hooks-install":
+      return "Hook 安装";
+    case "logs-db-dry-run":
+      return "日志库 dry-run";
+    case "logs-db-execute":
+      return "日志库维护";
+    default:
+      return "Probe job";
+  }
+}
+
 function updateSavedThreadTitleCaches(qc: QueryClient, threadId: string, title: string) {
   for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
     qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
@@ -1627,6 +1668,7 @@ function SlashCommandTextarea({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState(0);
+  const [menuSelectionArmed, setMenuSelectionArmed] = useState(false);
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
   const signature = `${value}:${cursor}`;
   const menuKind = activeComposerMenuKind(value, cursor, plugins);
@@ -1641,6 +1683,7 @@ function SlashCommandTextarea({
     onChange(next.value);
     setCursor(next.cursor);
     setSelected(0);
+    setMenuSelectionArmed(false);
     requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -1655,6 +1698,7 @@ function SlashCommandTextarea({
     onChange(next.value);
     setCursor(next.cursor);
     setSelected(0);
+    setMenuSelectionArmed(false);
     requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -1672,7 +1716,10 @@ function SlashCommandTextarea({
   const selectedSlashMatchesExactDraft = (command: string) => exactSlashCommandFromDraft(value) === command;
 
   useEffect(() => {
-    if (selected >= suggestions.length) setSelected(0);
+    if (selected >= suggestions.length) {
+      setSelected(0);
+      setMenuSelectionArmed(false);
+    }
   }, [selected, suggestions.length]);
 
   return (
@@ -1713,10 +1760,12 @@ function SlashCommandTextarea({
         onChange={(event) => {
           onChange(event.target.value);
           setDismissedSignature(null);
+          setMenuSelectionArmed(false);
           updateCursor(event.target);
         }}
         onClick={(event) => {
           setDismissedSignature(null);
+          setMenuSelectionArmed(false);
           updateCursor(event.currentTarget);
         }}
         onKeyUp={(event) => {
@@ -1738,15 +1787,18 @@ function SlashCommandTextarea({
             key: event.key,
             shiftKey: event.shiftKey,
             composing: event.nativeEvent.isComposing,
+            menuSelectionArmed,
             selected,
             suggestions
           });
           if (action.action === "move") {
             event.preventDefault();
             setSelected(action.selected);
+            setMenuSelectionArmed(true);
           } else if (action.action === "dismiss") {
             event.preventDefault();
             setSelected(0);
+            setMenuSelectionArmed(false);
             setDismissedSignature(signature);
           } else if (action.action === "insert") {
             event.preventDefault();
@@ -1760,6 +1812,11 @@ function SlashCommandTextarea({
                 return;
               }
               insertCommand(command);
+            }
+          } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            if (!maybeRunExactSlashCommand()) {
+              onSubmitShortcut?.();
             }
           }
         }}
@@ -3563,8 +3620,11 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000 });
   const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000 });
   const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000 });
+  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [actionStatus, setActionStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
   const data = status.data?.data;
   const available = status.data?.available ?? false;
   const currentSettings = settings.data?.data;
@@ -3574,14 +3634,27 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const logsDbStatusText = logsDb?.logs_db_status ?? logsDb?.status ?? data?.logs_db_status;
   const logsDbTone = probeLogsDbTone(logsDbStatusText);
   const barkConfigured = Boolean(currentSettings?.notifications.device_key_configured || draft?.notifications.device_key_configured);
-  const probeThreads = probeStatusThreads(data);
+  const probeThreads = probeThreadsByStatus(data);
   const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
   const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
   const statusTone = available && probeEnabled ? "success" : available ? "warning" : "danger";
-  const barkMutation = useMutation({
-    mutationFn: () => startProbeJob("bark-test", csrfToken),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] })
+  const probeJobs = (jobs.data ?? []).filter(isProbeJob).slice(0, 6);
+  const probeJobMutation = useMutation({
+    mutationFn: (action: ProbeJobAction) => startProbeJob(action, csrfToken),
+    onSuccess: (_result, action) => {
+      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
+      if (action === "logs-db-dry-run") setLogsDbExecuteArmed(true);
+      if (action === "logs-db-execute") setLogsDbExecuteArmed(false);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["probe-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-events"] });
+    },
+    onError: (err: Error, action) => {
+      setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
+    }
   });
+  const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!draft) throw new Error("探针设置尚未载入");
@@ -3599,6 +3672,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       qc.invalidateQueries({ queryKey: ["probe-settings"] });
       qc.invalidateQueries({ queryKey: ["probe-status"] });
       qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+      qc.invalidateQueries({ queryKey: ["probe-events"] });
     },
     onError: (err: Error) => {
       setSaveStatus({ tone: "error", message: err.message });
@@ -3624,7 +3698,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
             qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
             qc.invalidateQueries({ queryKey: ["probe-events"] });
           }}><RefreshCw size={17} />刷新</button>
-          <button className="secondary-button" onClick={() => barkMutation.mutate()} disabled={!barkConfigured || barkMutation.isPending}><Cloud size={17} />测试 Bark</button>
+          <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
         </div>
       </div>
 
@@ -3647,27 +3721,21 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
       </section>
 
-      {probeThreads.length > 0 && (
-        <Panel title="线程状态" icon={<MessageSquare size={18} />} className="wide-panel">
-          <div className="preview-list compact">
-            {probeThreads.map((thread) => (
-              <article className="preview-item" key={`${thread.status}-${thread.id}`}>
-                <div>
-                  <strong>{threadListItemText(thread)}</strong>
-                  <small>{threadListItemPreviewText(thread) || thread.id}</small>
-                </div>
-                <span className={`thread-item-status ${thread.status}`}>{threadListItemStatusText(thread)}</span>
-              </article>
-            ))}
-          </div>
-        </Panel>
-      )}
-
-      <Panel title="最近 Hook 事件" icon={<TerminalSquare size={18} />} className="wide-panel">
-        <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
-      </Panel>
+      <section className="probe-control-grid" aria-label="探针线程状态">
+        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
+        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />
+        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />
+      </section>
 
       <section className="probe-control-grid">
+        <Panel title="Hook" icon={<GitFork size={18} />}>
+          <ProbeHookCard
+            status={data}
+            draft={draft}
+            busy={probeJobMutation.isPending}
+            onInstall={() => probeJobMutation.mutate("hooks-install")}
+          />
+        </Panel>
         <Panel title="Bark" icon={<Cloud size={18} />}>
           {draft ? (
             <ProbeBarkCard
@@ -3676,32 +3744,54 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
               configuredDeviceKey={barkConfigured}
               saveStatus={saveStatus}
               saving={saveMutation.isPending}
-              testing={barkMutation.isPending}
+              testing={pendingProbeAction === "bark-test"}
               onSave={() => saveMutation.mutate()}
-              onTest={() => barkMutation.mutate()}
+              onTest={() => probeJobMutation.mutate("bark-test")}
             />
           ) : (
             <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
           )}
         </Panel>
-        <Panel title="运行设置" icon={<SlidersHorizontal size={18} />}>
-          {draft ? (
-            <ProbeRuntimeSettingsCard
-              draft={draft}
-              setDraft={setDraft}
-              errors={settingsErrors}
-              saveStatus={saveStatus}
-              saving={saveMutation.isPending}
-              onSave={() => saveMutation.mutate()}
-            />
-          ) : (
-            <div className="muted-row">{settings.isLoading ? "正在读取运行设置" : "运行设置不可用"}</div>
-          )}
-        </Panel>
         <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
-          <ProbeLogsDbCard logsDb={logsDb} />
+          <ProbeLogsDbCard
+            logsDb={logsDb}
+            busy={probeJobMutation.isPending}
+            executeArmed={logsDbExecuteArmed}
+            onDryRun={() => probeJobMutation.mutate("logs-db-dry-run")}
+            onArmExecute={() => setLogsDbExecuteArmed(true)}
+            onCancelExecute={() => setLogsDbExecuteArmed(false)}
+            onExecute={() => probeJobMutation.mutate("logs-db-execute")}
+          />
         </Panel>
       </section>
+
+      <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+        <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
+      </Panel>
+
+      <Panel title="设置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
+        {actionStatus && <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
+        {draft ? (
+          <ProbeRuntimeSettingsCard
+            draft={draft}
+            setDraft={setDraft}
+            errors={settingsErrors}
+            saveStatus={saveStatus}
+            saving={saveMutation.isPending}
+            status={data}
+            settings={currentSettings}
+            logsDb={logsDb}
+            configuredDeviceKey={barkConfigured}
+            onSave={() => saveMutation.mutate()}
+          />
+        ) : (
+          <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
+        )}
+      </Panel>
+
+      <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
+        <JobList jobs={probeJobs} />
+      </Panel>
 
       {!available && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
@@ -3940,6 +4030,35 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
 
 type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
 
+function ProbeThreadBucket({
+  title,
+  icon,
+  threads,
+  emptyText
+}: {
+  title: string;
+  icon: ReactNode;
+  threads: ThreadSummary[];
+  emptyText: string;
+}) {
+  return (
+    <Panel title={title} icon={icon}>
+      <div className="preview-list compact">
+        {threads.map((thread) => (
+          <article className="preview-item" key={`${thread.status}-${thread.id}`}>
+            <div>
+              <strong>{threadListItemText(thread)}</strong>
+              <span>{threadListItemPreviewText(thread) || thread.id}</span>
+            </div>
+            <small>{threadListItemStatusText(thread)} · {thread.updated_at ?? thread.id}</small>
+          </article>
+        ))}
+        {threads.length === 0 && <div className="muted-row">{emptyText}</div>}
+      </div>
+    </Panel>
+  );
+}
+
 function ProbeBarkCard({
   draft,
   setDraft,
@@ -3987,6 +4106,10 @@ function ProbeRuntimeSettingsCard({
   errors,
   saveStatus,
   saving,
+  status,
+  settings,
+  logsDb,
+  configuredDeviceKey,
   onSave
 }: {
   draft: ProbeSettingsDraft;
@@ -3994,26 +4117,77 @@ function ProbeRuntimeSettingsCard({
   errors: string[];
   saveStatus: ProbeSaveStatus;
   saving: boolean;
+  status?: ProbeStatus;
+  settings?: ProbeSettings;
+  logsDb?: ProbeLogsDbStatus;
+  configuredDeviceKey: boolean;
   onSave: () => void;
 }) {
   const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
+  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) => setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
+  const setHooks = (patch: Partial<ProbeSettingsDraft["hooks"]>) => setDraft({ ...draft, hooks: { ...draft.hooks, ...patch } });
+  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
   const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
+  const setLogsDb = (patch: Partial<ProbeSettingsDraft["logs_db"]>) => setDraft({ ...draft, logs_db: { ...draft.logs_db, ...patch } });
   return (
     <div className="probe-card-stack">
+      <div className="settings-meta-grid">
+        <Metric label="通知" value={draft.notifications.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled ? "success" : "warning"} />
+        <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
+        <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
+        <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
+        <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} />
+        <Metric label="Socket" value={appServerSocketStatusValue(status ?? settings?.codex)} />
+        <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} />
+        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} />
+      </div>
       <div className="form-grid compact-three">
         <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>
+        <label className="field-label">App Socket<input value={draft.codex.app_server_socket} placeholder="auto" onChange={(event) => setCodex({ app_server_socket: event.target.value })} /></label>
+        <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
+        <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
+        <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">Hook 事件行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">冷却行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">日志上限 MB<input type="number" min={1} max={10} value={logBytesDraftToMb(draft.observability.log_max_bytes)} onChange={(event) => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })} /></label>
+        <label className="field-label">Logs 保留天数<input type="number" min={1} max={3650} value={draft.logs_db.retention_days} onChange={(event) => setLogsDb({ retention_days: probeNumberInputDraftValue(event.target.value) })} /></label>
+        <label className="field-label">维护间隔小时<input type="number" min={1} max={8760} value={draft.logs_db.maintenance_interval_hours} onChange={(event) => setLogsDb({ maintenance_interval_hours: probeNumberInputDraftValue(event.target.value) })} /></label>
+        <label className="field-label">最大删除行数<input type="number" min={1} max={1000000} value={draft.logs_db.max_delete_rows_per_run} onChange={(event) => setLogsDb({ max_delete_rows_per_run: probeNumberInputDraftValue(event.target.value) })} /></label>
+      </div>
+      <div className="probe-toggle-grid">
+        <label className="toggle-row"><span>启用 Probe</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
+        <label className="toggle-row"><span>异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
+        <label className="toggle-row"><span>管理 Stop Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
+        <label className="toggle-row"><span>安装后重载</span><input type="checkbox" checked={draft.hooks.reload_app_server_after_install} onChange={(event) => setHooks({ reload_app_server_after_install: event.target.checked })} /></label>
+        <label className="toggle-row"><span>启用 Logs DB</span><input type="checkbox" checked={draft.logs_db.enabled} onChange={(event) => setLogsDb({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>退出后维护</span><input type="checkbox" checked={draft.logs_db.maintain_on_codex_exit} onChange={(event) => setLogsDb({ maintain_on_codex_exit: event.target.checked })} /></label>
       </div>
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存运行设置</button>
+      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存设置</button>
     </div>
   );
 }
 
-function ProbeLogsDbCard({ logsDb }: { logsDb?: ProbeLogsDbStatus }) {
+function ProbeLogsDbCard({
+  logsDb,
+  busy,
+  onDryRun,
+  executeArmed,
+  onArmExecute,
+  onCancelExecute,
+  onExecute
+}: {
+  logsDb?: ProbeLogsDbStatus;
+  busy?: boolean;
+  onDryRun?: () => void;
+  executeArmed?: boolean;
+  onArmExecute?: () => void;
+  onCancelExecute?: () => void;
+  onExecute?: () => void;
+}) {
   const status = logsDb?.logs_db_status ?? logsDb?.status;
   return (
     <div className="probe-card-stack">
@@ -4027,6 +4201,37 @@ function ProbeLogsDbCard({ logsDb }: { logsDb?: ProbeLogsDbStatus }) {
       <Metric label="上次维护" value={probeLogDbString(logsDb, ["last_run_at", "last_maintain_at", "last_maintenance_at", "last_maintain"])} />
       <Metric label="下次维护" value={probeLogDbString(logsDb, ["next_run_at", "next_maintain_at", "next_maintenance_at"])} />
       <Metric label="最近结果" value={probeLogDbString(logsDb, ["recent_result", "last_result", "last_maintain_result", "skip_reason"])} />
+      {(onDryRun || onExecute) && (
+        <div className="button-row">
+          {onDryRun && <button className="secondary-button" disabled={busy} onClick={onDryRun}><Database size={17} />Dry-run</button>}
+          {onExecute && !executeArmed && <button className="secondary-button" disabled={busy} onClick={onArmExecute}><Play size={17} />准备执行</button>}
+          {onExecute && executeArmed && <button className="primary-button" disabled={busy} onClick={onExecute}><Play size={17} />确认执行</button>}
+          {executeArmed && onCancelExecute && <button className="secondary-button" disabled={busy} onClick={onCancelExecute}>取消</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProbeHookCard({
+  status,
+  draft,
+  busy,
+  onInstall
+}: {
+  status?: ProbeStatus | null;
+  draft?: ProbeSettingsDraft | null;
+  busy?: boolean;
+  onInstall: () => void;
+}) {
+  const managed = status?.hook_status === "managed";
+  const configured = managed || draft?.hooks.manage_stop_hook === true;
+  return (
+    <div className="probe-card-stack">
+      <Metric label="Stop Hook" value={probeStateLabel(status?.hook_status)} tone={managed ? "success" : "warning"} />
+      <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
+      <Metric label="动作" value="固定 Hook 安装 job" />
+      <button className="secondary-button" disabled={busy} onClick={onInstall}><TerminalSquare size={17} />安装 Hook</button>
     </div>
   );
 }
@@ -4049,15 +4254,22 @@ function ProbeEventsCard({
   return (
     <div className="preview-list compact">
       {events.map((event) => (
-        <article className="preview-item" key={event.id}>
-          <div>
-            <strong>{event.kind}</strong>
-            <span>{event.title ?? event.source}</span>
-          </div>
-          <small>{probeEventSummary(event)}</small>
-        </article>
+        <ProbeEventRow event={event} key={event.id} />
       ))}
     </div>
+  );
+}
+
+function ProbeEventRow({ event }: { event: ProbeEvent }) {
+  const display = probeEventDisplay(event);
+  return (
+    <article className="preview-item">
+      <div>
+        <strong>{display.title}</strong>
+        <span>{display.summary}</span>
+      </div>
+      <small>{display.bark} · {display.dedupe} · {display.source} · {display.time}</small>
+    </article>
   );
 }
 
@@ -4088,6 +4300,13 @@ type CodexHomePathFields = {
   codex_home_source?: string | null;
 };
 
+type AppServerSocketPathFields = {
+  app_server_socket?: string | null;
+  configured_app_server_socket?: string | null;
+  resolved_app_server_socket?: string | null;
+  app_server_socket_source?: string | null;
+};
+
 export function codexHomeStatusValue(status?: CodexHomePathFields | null): string {
   return pathWithSource(
     firstStringValue(status, ["resolved_codex_home", "codex_home", "home", "configured_codex_home"]),
@@ -4095,11 +4314,22 @@ export function codexHomeStatusValue(status?: CodexHomePathFields | null): strin
   );
 }
 
-export function logsDbPathStatusValue(logsDb?: ProbeLogsDbStatus | null): string {
+export function appServerSocketStatusValue(status?: AppServerSocketPathFields | null): string {
+  return pathWithSource(
+    firstStringValue(status, ["resolved_app_server_socket", "app_server_socket", "configured_app_server_socket"]),
+    firstStringValue(status, ["app_server_socket_source"])
+  );
+}
+
+export function logsDbPathStatusValue(logsDb?: ProbeLogsDbStatus | ProbeSettings["logs_db"] | null): string {
   return pathWithSource(
     firstStringValue(logsDb, ["resolved_logs_db_path", "resolved_path", "path", "logs_db_path"]),
     firstStringValue(logsDb, ["logs_db_source", "source"])
   );
+}
+
+export function probeDiscoveryWarningsText(warnings?: string[] | null): string {
+  return warnings?.length ? warnings.join(", ") : "无";
 }
 
 function pathText(value?: string | null): string {

@@ -2,6 +2,7 @@ use crate::{
     codex::{resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
     config::{Config, ProbeLogsDbConfig},
     platform::{PlatformKind, PlatformPaths},
+    security::redact_output,
 };
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
@@ -19,6 +20,7 @@ use uuid::Uuid;
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
+const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct ProbeRuntime {
@@ -330,20 +332,17 @@ impl ProbeRuntime {
             dedupe_component(turn_component)
         );
         let notify_completion = matches!(input.kind, ProbeEventInputKind::NotifyCompletion);
+        let (title, message) = probe_event_text(event_kind, notify_completion);
+        let last_assistant_message = input
+            .last_assistant_message
+            .as_deref()
+            .map(sanitize_probe_event_assistant_message);
         ProbeBuiltEvent {
             kind: event_kind.to_string(),
             thread_id: event_thread_id,
             turn_id: input.turn_id.clone(),
-            title: if notify_completion {
-                "任务完成".to_string()
-            } else {
-                "Codex Stop Hook".to_string()
-            },
-            message: if notify_completion {
-                "Codex completion event recorded by NexusHub Probe".to_string()
-            } else {
-                "Stop Hook event recorded by NexusHub Probe".to_string()
-            },
+            title,
+            message,
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_key,
             ttl_seconds: PROBE_EVENT_TTL_SECONDS,
@@ -356,7 +355,7 @@ impl ProbeRuntime {
                 "turn_id": input.turn_id,
                 "session_id": input.session_id,
                 "transcript_path": input.transcript_path,
-                "last_assistant_message": input.last_assistant_message,
+                "last_assistant_message": last_assistant_message,
                 "host_label": self.config.codex.host_label,
                 "platform": self.paths.kind,
                 "notify_completion": notify_completion,
@@ -1331,6 +1330,51 @@ fn now_ts() -> i64 {
         .unwrap_or_default()
 }
 
+fn probe_event_text(event_kind: &str, notify_completion: bool) -> (String, String) {
+    if notify_completion || event_kind == "completion" {
+        return (
+            "任务完成".to_string(),
+            "Codex completion event recorded by NexusHub Probe".to_string(),
+        );
+    }
+    match event_kind {
+        "reply-needed" | "reply_needed" => (
+            "需要回复".to_string(),
+            "Codex reply-needed event recorded by NexusHub Probe".to_string(),
+        ),
+        "recoverable" => (
+            "可恢复任务".to_string(),
+            "Codex recoverable event recorded by NexusHub Probe".to_string(),
+        ),
+        _ => (
+            "Codex Stop Hook".to_string(),
+            "Stop Hook event recorded by NexusHub Probe".to_string(),
+        ),
+    }
+}
+
+fn sanitize_probe_event_assistant_message(value: &str) -> String {
+    truncate_utf8_with_marker(
+        &redact_output(value),
+        PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES,
+    )
+}
+
+fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let marker = "\n[truncated]";
+    let limit = max_bytes.saturating_sub(marker.len());
+    let mut end = limit.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = value[..end].to_string();
+    truncated.push_str(marker);
+    truncated
+}
+
 fn ts_to_rfc3339(ts: i64) -> String {
     Utc.timestamp_opt(ts, 0)
         .single()
@@ -1427,6 +1471,46 @@ mod tests {
         assert_eq!(result.quick_check_timeout_seconds, Some(600));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn build_event_redacts_and_truncates_last_assistant_message_and_names_status_events() {
+        let mut config = Config::default();
+        config.codex.host_label = "probe-test".to_string();
+        let runtime = ProbeRuntime::new(config, PlatformPaths::current());
+        let message = format!("first line\nTOKEN=secret-token\n{}", "完成".repeat(3000));
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-a"),
+            Some("turn-a"),
+            Some("session-a"),
+            Some("/tmp/transcript.jsonl"),
+            Some(&message),
+            "reply-needed",
+        ));
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.title, "需要回复");
+        assert_eq!(
+            event.message,
+            "Codex reply-needed event recorded by NexusHub Probe"
+        );
+        let stored = event.payload["last_assistant_message"].as_str().unwrap();
+        assert!(stored.contains("[redacted sensitive line]"));
+        assert!(!stored.contains("secret-token"));
+        assert!(stored.contains("[truncated]"));
+        assert!(stored.len() <= PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
+
+        let recoverable = runtime.build_event(ProbeEventInput::hook_stop(
+            Some("thread-a"),
+            Some("turn-b"),
+            "recoverable",
+        ));
+        assert_eq!(recoverable.title, "可恢复任务");
+        assert_eq!(
+            recoverable.message,
+            "Codex recoverable event recorded by NexusHub Probe"
+        );
     }
 
     fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {

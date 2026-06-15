@@ -440,6 +440,8 @@ export type ProbeEventsResponse = {
   limit?: number | null;
 };
 
+export type ProbeJobAction = "bark-test" | "hooks-install" | "logs-db-dry-run" | "logs-db-execute";
+
 export type ProbeSettings = {
   codex: {
     home?: string | null;
