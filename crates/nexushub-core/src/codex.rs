@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
@@ -129,6 +129,241 @@ impl CodexPaths {
     pub fn sessions_dir(&self) -> PathBuf {
         self.home.join("sessions")
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedCodexPaths {
+    pub configured_codex_home: Option<String>,
+    pub home: PathBuf,
+    pub logs_db: PathBuf,
+    pub state_db: PathBuf,
+    pub session_index: PathBuf,
+    pub sessions_dir: PathBuf,
+    pub configured_app_server_socket: Option<PathBuf>,
+    pub app_server_socket: Option<PathBuf>,
+    pub codex_home_source: String,
+    pub logs_db_source: String,
+    pub app_server_socket_source: Option<String>,
+    pub discovery_warnings: Vec<String>,
+}
+
+impl ResolvedCodexPaths {
+    pub fn codex_paths(&self) -> CodexPaths {
+        CodexPaths::new(&self.home)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexPathDiscoveryOptions {
+    pub env_codex_home: Option<PathBuf>,
+    pub current_user_home: Option<PathBuf>,
+    pub root_codex_home: PathBuf,
+    pub ubuntu_codex_home: PathBuf,
+    pub home_scan_root: PathBuf,
+}
+
+impl Default for CodexPathDiscoveryOptions {
+    fn default() -> Self {
+        Self {
+            env_codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
+            current_user_home: dirs::home_dir(),
+            root_codex_home: PathBuf::from("/root/.codex"),
+            ubuntu_codex_home: PathBuf::from("/home/ubuntu/.codex"),
+            home_scan_root: PathBuf::from("/home"),
+        }
+    }
+}
+
+pub fn resolve_codex_paths(
+    configured_home: &Path,
+    configured_app_server_socket: Option<&Path>,
+) -> ResolvedCodexPaths {
+    resolve_codex_paths_with_options(
+        configured_home,
+        configured_app_server_socket,
+        &CodexPathDiscoveryOptions::default(),
+    )
+}
+
+pub fn resolve_codex_paths_with_options(
+    configured_home: &Path,
+    configured_app_server_socket: Option<&Path>,
+    options: &CodexPathDiscoveryOptions,
+) -> ResolvedCodexPaths {
+    let configured_codex_home = configured_path_value(configured_home);
+    let mut warnings = Vec::new();
+    let configured_candidate = (!is_auto_path(configured_home)).then(|| {
+        (
+            configured_home.to_path_buf(),
+            "configured",
+            "configured Codex home is not valid",
+        )
+    });
+    let socket_home = configured_app_server_socket.and_then(codex_home_from_app_server_socket_path);
+
+    let mut candidates: Vec<(PathBuf, &'static str, &'static str)> = Vec::new();
+    if let Some(candidate) = configured_candidate {
+        candidates.push(candidate);
+    }
+    if let Some(path) = options
+        .env_codex_home
+        .as_deref()
+        .filter(|path| !is_auto_path(path))
+    {
+        candidates.push((
+            path.to_path_buf(),
+            "env:CODEX_HOME",
+            "CODEX_HOME is not a valid Codex home",
+        ));
+    }
+    if let Some(path) = socket_home {
+        candidates.push((
+            path,
+            "socket",
+            "app-server socket did not resolve to a valid Codex home",
+        ));
+    }
+    if let Some(path) = options.current_user_home.as_ref() {
+        candidates.push((
+            path.join(".codex"),
+            "current_user",
+            "current user ~/.codex is not a valid Codex home",
+        ));
+    }
+    candidates.push((
+        options.root_codex_home.clone(),
+        "root",
+        "/root/.codex is not a valid Codex home",
+    ));
+    candidates.push((
+        options.ubuntu_codex_home.clone(),
+        "home_ubuntu",
+        "/home/ubuntu/.codex is not a valid Codex home",
+    ));
+    candidates.extend(
+        scanned_home_codex_dirs(&options.home_scan_root)
+            .into_iter()
+            .map(|path| {
+                (
+                    path,
+                    "home_scan",
+                    "/home/*/.codex is not a valid Codex home",
+                )
+            }),
+    );
+
+    let mut selected: Option<(PathBuf, &'static str)> = None;
+    for (path, source, invalid_message) in &candidates {
+        if is_valid_codex_home(path) {
+            selected = Some((path.clone(), *source));
+            break;
+        }
+        if matches!(*source, "configured" | "env:CODEX_HOME" | "socket") {
+            warnings.push(format!("{invalid_message}: {}", path.display()));
+        }
+    }
+
+    let (home, codex_home_source) = selected.unwrap_or_else(|| {
+        if !is_auto_path(configured_home) {
+            warnings.push(format!(
+                "no valid Codex home discovered; using configured path {}",
+                configured_home.display()
+            ));
+            (configured_home.to_path_buf(), "fallback_configured")
+        } else {
+            warnings.push(format!(
+                "no valid Codex home discovered; using {}",
+                options.root_codex_home.display()
+            ));
+            (options.root_codex_home.clone(), "fallback_root")
+        }
+    });
+    let codex_home_source = codex_home_source.to_string();
+    let configured_app_server_socket = configured_app_server_socket
+        .filter(|path| !is_auto_path(path))
+        .map(Path::to_path_buf);
+    let (app_server_socket, app_server_socket_source) =
+        resolve_app_server_socket(&home, configured_app_server_socket.as_deref());
+
+    ResolvedCodexPaths {
+        configured_codex_home,
+        logs_db: home.join("logs_2.sqlite"),
+        state_db: home.join("state_5.sqlite"),
+        session_index: home.join("session_index.jsonl"),
+        sessions_dir: home.join("sessions"),
+        configured_app_server_socket,
+        app_server_socket,
+        codex_home_source: codex_home_source.clone(),
+        logs_db_source: codex_home_source,
+        app_server_socket_source,
+        discovery_warnings: warnings,
+        home,
+    }
+}
+
+fn resolve_app_server_socket(
+    home: &Path,
+    configured_app_server_socket: Option<&Path>,
+) -> (Option<PathBuf>, Option<String>) {
+    if let Some(socket) = configured_app_server_socket {
+        return (Some(socket.to_path_buf()), Some("configured".to_string()));
+    }
+    (
+        Some(
+            home.join("app-server-control")
+                .join("app-server-control.sock"),
+        ),
+        Some("resolved_codex_home".to_string()),
+    )
+}
+
+fn is_auto_path(path: &Path) -> bool {
+    let value = path.to_string_lossy();
+    let trimmed = value.trim();
+    trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto")
+}
+
+fn configured_path_value(path: &Path) -> Option<String> {
+    let value = path.to_string_lossy();
+    let trimmed = value.trim();
+    (!trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("auto")).then(|| trimmed.to_string())
+}
+
+fn is_valid_codex_home(path: &Path) -> bool {
+    path.is_dir()
+        && [
+            path.join("logs_2.sqlite"),
+            path.join("state_5.sqlite"),
+            path.join("session_index.jsonl"),
+            path.join("sessions"),
+            path.join("hooks.json"),
+            path.join("app-server-control"),
+        ]
+        .iter()
+        .any(|artifact| artifact.exists())
+}
+
+fn codex_home_from_app_server_socket_path(socket: &Path) -> Option<PathBuf> {
+    let parent = socket.parent()?;
+    if parent.file_name().and_then(|value| value.to_str()) == Some("app-server-control") {
+        return parent.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+fn scanned_home_codex_dirs(home_root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(home_root) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            file_type.is_dir().then(|| entry.path().join(".codex"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
 }
 
 pub fn list_threads(
@@ -2910,8 +3145,9 @@ pub fn db_integrity(paths: &CodexPaths) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        hidden_thread_ids, is_request_user_input, list_threads, parse_message_event, scan_rollout,
-        set_thread_title, thread_detail, thread_source_counts, window_thread_detail, CodexPaths,
+        hidden_thread_ids, is_request_user_input, list_threads, parse_message_event,
+        resolve_codex_paths_with_options, scan_rollout, set_thread_title, thread_detail,
+        thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
         ThreadStatus,
     };
     use rusqlite::Connection;
@@ -2923,6 +3159,192 @@ mod tests {
     };
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn resolved_codex_paths_prefers_valid_configured_home_before_auto_candidates() {
+        let root = unique_temp_dir("resolved-codex-configured");
+        let configured = root.join("configured/.codex");
+        let env_home = root.join("env/.codex");
+        let socket_home = root.join("socket/.codex");
+        mark_codex_home(&configured);
+        mark_codex_home(&env_home);
+        mark_codex_home(&socket_home);
+        let socket = socket_home
+            .join("app-server-control")
+            .join("app-server-control.sock");
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: Some(env_home.clone()),
+            current_user_home: None,
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+        };
+
+        let resolved = resolve_codex_paths_with_options(&configured, Some(&socket), &options);
+
+        assert_eq!(resolved.home, configured);
+        assert_eq!(resolved.codex_home_source, "configured");
+        assert_eq!(resolved.logs_db, resolved.home.join("logs_2.sqlite"));
+        assert_eq!(resolved.state_db, resolved.home.join("state_5.sqlite"));
+        assert_eq!(
+            resolved.session_index,
+            resolved.home.join("session_index.jsonl")
+        );
+        assert_eq!(resolved.sessions_dir, resolved.home.join("sessions"));
+        assert_eq!(resolved.logs_db_source, "configured");
+        assert!(resolved.discovery_warnings.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_treats_auto_and_empty_config_as_discovery() {
+        let root = unique_temp_dir("resolved-codex-auto");
+        let env_home = root.join("env/.codex");
+        mark_codex_home(&env_home);
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: Some(env_home.clone()),
+            current_user_home: None,
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+        };
+
+        let auto = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
+        let empty = resolve_codex_paths_with_options(Path::new(""), None, &options);
+
+        assert_eq!(auto.home, env_home);
+        assert_eq!(auto.configured_codex_home, None);
+        assert_eq!(auto.codex_home_source, "env:CODEX_HOME");
+        assert_eq!(empty.home, env_home);
+        assert_eq!(empty.configured_codex_home, None);
+        assert_eq!(empty.codex_home_source, "env:CODEX_HOME");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_uses_socket_then_current_root_ubuntu_and_home_scan() {
+        let root = unique_temp_dir("resolved-codex-order");
+        let invalid_config = root.join("missing/.codex");
+        let socket_home = root.join("socket-owner/.codex");
+        let current_home = root.join("current-user");
+        let root_home = root.join("root/.codex");
+        let ubuntu_home = root.join("ubuntu/.codex");
+        let scanned_home = root.join("home/alice/.codex");
+        mark_codex_home(&socket_home);
+        mark_codex_home(&current_home.join(".codex"));
+        mark_codex_home(&root_home);
+        mark_codex_home(&ubuntu_home);
+        mark_codex_home(&scanned_home);
+        let socket = socket_home
+            .join("app-server-control")
+            .join("app-server-control.sock");
+
+        let socket_resolved = resolve_codex_paths_with_options(
+            &invalid_config,
+            Some(&socket),
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: Some(current_home.clone()),
+                root_codex_home: root_home.clone(),
+                ubuntu_codex_home: ubuntu_home.clone(),
+                home_scan_root: root.join("home"),
+            },
+        );
+        assert_eq!(socket_resolved.home, socket_home);
+        assert_eq!(socket_resolved.codex_home_source, "socket");
+        assert_eq!(socket_resolved.app_server_socket, Some(socket));
+        assert_eq!(
+            socket_resolved.app_server_socket_source.as_deref(),
+            Some("configured")
+        );
+        assert!(socket_resolved
+            .discovery_warnings
+            .iter()
+            .any(|warning| warning.contains("configured Codex home is not valid")));
+
+        let current_resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
+            None,
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: Some(current_home.clone()),
+                root_codex_home: root_home.clone(),
+                ubuntu_codex_home: ubuntu_home.clone(),
+                home_scan_root: root.join("home"),
+            },
+        );
+        assert_eq!(current_resolved.home, current_home.join(".codex"));
+        assert_eq!(current_resolved.codex_home_source, "current_user");
+
+        let root_resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
+            None,
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: None,
+                root_codex_home: root_home.clone(),
+                ubuntu_codex_home: ubuntu_home.clone(),
+                home_scan_root: root.join("home"),
+            },
+        );
+        assert_eq!(root_resolved.home, root_home);
+        assert_eq!(root_resolved.codex_home_source, "root");
+
+        let ubuntu_resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
+            None,
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: None,
+                root_codex_home: root.join("missing-root/.codex"),
+                ubuntu_codex_home: ubuntu_home,
+                home_scan_root: root.join("home"),
+            },
+        );
+        assert_eq!(ubuntu_resolved.codex_home_source, "home_ubuntu");
+
+        let scan_resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
+            None,
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: None,
+                root_codex_home: root.join("missing-root/.codex"),
+                ubuntu_codex_home: root.join("missing-ubuntu/.codex"),
+                home_scan_root: root.join("home"),
+            },
+        );
+        assert_eq!(scan_resolved.home, scanned_home);
+        assert_eq!(scan_resolved.codex_home_source, "home_scan");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_preserves_configured_socket_outside_resolved_home() {
+        let root = unique_temp_dir("resolved-codex-custom-socket");
+        let env_home = root.join("env/.codex");
+        let custom_socket = root.join("run/codex.sock");
+        mark_codex_home(&env_home);
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: Some(env_home.clone()),
+            current_user_home: None,
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+        };
+
+        let resolved =
+            resolve_codex_paths_with_options(Path::new("auto"), Some(&custom_socket), &options);
+
+        assert_eq!(resolved.home, env_home);
+        assert_eq!(resolved.app_server_socket, Some(custom_socket.clone()));
+        assert_eq!(resolved.configured_app_server_socket, Some(custom_socket));
+        assert_eq!(
+            resolved.app_server_socket_source.as_deref(),
+            Some("configured")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn detects_request_user_input_function_call() {
@@ -4115,5 +4537,12 @@ mod tests {
             counter,
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ))
+    }
+
+    fn mark_codex_home(home: &Path) {
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        fs::write(home.join("state_5.sqlite"), b"").unwrap();
+        fs::write(home.join("session_index.jsonl"), b"").unwrap();
+        fs::create_dir_all(home.join("app-server-control")).unwrap();
     }
 }

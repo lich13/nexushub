@@ -7,6 +7,7 @@ UPDATE_SH="${ROOT}/deploy/nexushub/update.sh"
 DEPLOY_CLOUD_SH="${ROOT}/scripts/deploy-cloud.sh"
 CONFIG_EXAMPLE="${ROOT}/deploy/nexushub/config.example.toml"
 NGINX_LOCATION="${ROOT}/deploy/nexushub/nginx-location.conf"
+SYSTEMD_SERVICE="${ROOT}/deploy/nexushub/systemd.service"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
@@ -45,6 +46,37 @@ for name, text in {
         raise SystemExit(f"{name} must not point NexusHub at legacy codex-cloud-panel port 15732")
 
 print("NexusHub deploy port isolation: ok")
+PY
+
+python3 - "${CONFIG_EXAMPLE}" "${SYSTEMD_SERVICE}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config, systemd = [Path(arg).read_text() for arg in sys.argv[1:]]
+
+codex_match = re.search(r"(?ms)^\[codex\]\n(?P<body>.*?)(?=^\[|\Z)", config)
+if not codex_match:
+    raise SystemExit("config.example must include a [codex] section")
+codex_body = codex_match.group("body")
+if re.search(r"(?m)^\s*home\s*=", codex_body):
+    raise SystemExit("config.example must omit codex.home so runtime auto-discovery applies")
+if 'app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"' not in codex_body:
+    raise SystemExit("config.example should keep the default root app-server socket")
+
+rw_match = re.search(r"(?m)^ReadWritePaths=(?P<paths>.+)$", systemd)
+if not rw_match:
+    raise SystemExit("systemd unit must define ReadWritePaths")
+paths = rw_match.group("paths").split()
+required = {"/root/.codex", "/home/ubuntu/.codex", "/opt/nexushub", "/opt/nexushub/logs"}
+missing = sorted(required - set(paths))
+if missing:
+    raise SystemExit("systemd ReadWritePaths missing resolved Codex/NexusHub paths: " + ", ".join(missing))
+codex_paths = [path for path in paths if path.endswith("/.codex")]
+if codex_paths != ["/root/.codex", "/home/ubuntu/.codex"]:
+    raise SystemExit("systemd ReadWritePaths should only grant known root/ubuntu Codex homes, got: " + " ".join(codex_paths))
+
+print("Codex home auto-discovery deploy templates: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -298,6 +330,8 @@ if 'prune_command = "/usr/local/bin/nexushub-codex-prune"' not in migrated:
     raise SystemExit("legacy prune_command was not migrated to panel codex wrapper")
 if 'panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"' not in migrated:
     raise SystemExit("panel_precheck_command was not inserted with the isolated NexusHub port")
+if re.search(r"(?m)^\s*home\s*=", migrated):
+    raise SystemExit("install migration should not insert codex.home; runtime auto-discovery should apply")
 for needle in [
     "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50",
     "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true",
@@ -352,6 +386,16 @@ if 'update_command = "/opt/custom/update --flag"' not in migrated_custom:
     raise SystemExit("custom update_command should not be overwritten")
 if 'prune_command = "/opt/custom/prune"' not in migrated_custom:
     raise SystemExit("custom prune_command should not be overwritten")
+custom_codex_config = """
+[codex]
+home = "/srv/codex/custom-home"
+app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"
+"""
+migrated_custom_codex = run_config_migration(custom_codex_config)
+if 'home = "/srv/codex/custom-home"' not in migrated_custom_codex:
+    raise SystemExit("custom codex.home should be preserved by install migration")
+if 'app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"' not in migrated_custom_codex:
+    raise SystemExit("custom codex app-server socket should be preserved by install migration")
 for needle in [
     'enabled = false',
     'poll_seconds = 45',
@@ -508,6 +552,7 @@ PY
 
 python3 - "${UPDATE_SH}" <<'PY'
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -542,6 +587,8 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update.sh did not insert NexusHub DB path")
     if 'panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"' not in migrated:
         raise SystemExit("update.sh did not insert panel precheck with isolated NexusHub port")
+    if re.search(r"(?m)^\s*home\s*=", migrated):
+        raise SystemExit("update.sh should not insert codex.home; runtime auto-discovery should apply")
     for needle in [
         "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50",
         "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true",
@@ -670,6 +717,23 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update.sh overwrote custom codex prune command")
     if 'db_path = "/srv/custom/nexushub/custom.sqlite"' not in preserved:
         raise SystemExit("update.sh overwrote custom path config")
+
+with tempfile.TemporaryDirectory() as tmp:
+    config = Path(tmp) / "config.toml"
+    config.write_text(textwrap.dedent("""
+        [codex]
+        home = "/srv/codex/custom-home"
+        app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"
+    """).lstrip())
+    subprocess.run(
+        ["bash", "-c", f"source {update_sh}; migrate_codex_update_config {config}"],
+        check=True,
+    )
+    preserved_codex = config.read_text()
+    if 'home = "/srv/codex/custom-home"' not in preserved_codex:
+        raise SystemExit("update.sh should preserve custom codex.home")
+    if 'app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"' not in preserved_codex:
+        raise SystemExit("update.sh should preserve custom codex app-server socket")
 
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"

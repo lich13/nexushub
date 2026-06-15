@@ -1,4 +1,7 @@
-use crate::{codex::CodexPaths, config::Config};
+use crate::{
+    codex::{resolve_codex_paths, CodexPaths},
+    config::Config,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
@@ -10,9 +13,16 @@ pub struct SystemStatus {
     pub hostname: Option<String>,
     pub public_endpoint: Option<String>,
     pub codex_home: String,
+    pub configured_codex_home: Option<String>,
+    pub resolved_codex_home: String,
+    pub codex_home_source: String,
+    pub discovery_warnings: Vec<String>,
     pub state_db: String,
     pub panel_db: String,
     pub app_server_socket: Option<String>,
+    pub configured_app_server_socket: Option<String>,
+    pub resolved_app_server_socket: Option<String>,
+    pub app_server_socket_source: Option<String>,
     pub app_server_service: ServiceStatus,
     pub state_db_integrity: Option<String>,
     pub hidden_thread_count: usize,
@@ -49,7 +59,11 @@ pub async fn system_status(config: &Config) -> Result<SystemStatus> {
             active_state: None,
             sub_state: None,
         });
-    let paths = CodexPaths::new(&config.codex.home);
+    let resolved = resolve_codex_paths(
+        &config.codex.home,
+        config.codex.app_server_socket.as_deref(),
+    );
+    let paths = CodexPaths::new(&resolved.home);
     let state_db_integrity = crate::codex::db_integrity(&paths).ok();
     let hidden_thread_count = crate::codex::hidden_thread_ids(&paths)
         .map(|ids| ids.len())
@@ -59,14 +73,26 @@ pub async fn system_status(config: &Config) -> Result<SystemStatus> {
         host_label: config.codex.host_label.clone(),
         hostname: command_stdout("hostname", &[]).await.ok(),
         public_endpoint: config.server.public_base_url.clone(),
-        codex_home: config.codex.home.display().to_string(),
+        codex_home: resolved.home.display().to_string(),
+        configured_codex_home: resolved.configured_codex_home.clone(),
+        resolved_codex_home: resolved.home.display().to_string(),
+        codex_home_source: resolved.codex_home_source,
+        discovery_warnings: resolved.discovery_warnings,
         state_db: paths.state_db().display().to_string(),
         panel_db: config.paths.db_path.display().to_string(),
-        app_server_socket: config
-            .codex
+        app_server_socket: resolved
             .app_server_socket
             .as_ref()
             .map(|path| path.display().to_string()),
+        configured_app_server_socket: resolved
+            .configured_app_server_socket
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        resolved_app_server_socket: resolved
+            .app_server_socket
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        app_server_socket_source: resolved.app_server_socket_source,
         app_server_service: service,
         state_db_integrity,
         hidden_thread_count,

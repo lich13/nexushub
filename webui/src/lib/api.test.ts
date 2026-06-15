@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { MessageBlock, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, ProbeLogsDbStatus, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
 
 async function loadRealApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
@@ -416,6 +416,101 @@ describe("archive delete API compatibility", () => {
         }
       }]
     ]);
+  });
+
+  test("Probe API accepts resolved Codex path discovery fields", async () => {
+    const { getProbeLogsDbStatus, getProbeStatus } = await loadRealApi();
+    const probeStatus: ProbeStatus = {
+      label: "Probe",
+      enabled: true,
+      available: true,
+      platform: "linux",
+      service_kind: "systemd",
+      service_name: "nexushub",
+      flavor: "builtin",
+      hook_status: "managed",
+      bark_status: "configured",
+      logs_db_status: "maintenance_ready",
+      recent_event_count: 0,
+      reply_needed_count: 0,
+      recoverable_count: 0,
+      config_path: "/opt/nexushub/config.toml",
+      codex_home: "/root/.codex",
+      configured_codex_home: null,
+      resolved_codex_home: "/home/codex/.codex",
+      codex_home_source: "auto",
+      configured_app_server_socket: "/run/codex/custom.sock",
+      resolved_app_server_socket: "/run/codex/custom.sock",
+      app_server_socket_source: "configured",
+      logs_db_source: "resolved_codex_home",
+      discovery_warnings: ["configured Codex home missing"]
+    };
+    const logsDbStatus: ProbeLogsDbStatus = {
+      status: "maintenance_ready",
+      logs_db_status: "maintenance_ready",
+      target: "codex_logs_2",
+      path: "/home/codex/.codex/logs_2.sqlite",
+      configured_codex_home: null,
+      resolved_codex_home: "/home/codex/.codex",
+      codex_home_source: "auto",
+      logs_db_source: "resolved_codex_home",
+      discovery_warnings: ["configured Codex home missing"],
+      retained_rows: 34
+    };
+    const responses: Record<string, unknown> = {
+      "/api/probe/status": probeStatus,
+      "/api/probe/logs-db/status": logsDbStatus
+    };
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        configured_codex_home: null,
+        resolved_codex_home: "/home/codex/.codex",
+        codex_home_source: "auto",
+        configured_app_server_socket: "/run/codex/custom.sock",
+        resolved_app_server_socket: "/run/codex/custom.sock",
+        app_server_socket_source: "configured",
+        logs_db_source: "resolved_codex_home",
+        discovery_warnings: ["configured Codex home missing"]
+      }
+    });
+    await expect(getProbeLogsDbStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        configured_codex_home: null,
+        resolved_codex_home: "/home/codex/.codex",
+        codex_home_source: "auto",
+        path: "/home/codex/.codex/logs_2.sqlite",
+        logs_db_source: "resolved_codex_home",
+        discovery_warnings: ["configured Codex home missing"]
+      }
+    });
+  });
+
+  test("status path display helpers prefer resolved backend paths and source labels", async () => {
+    const app = await import("../App");
+    const status: SystemStatus = {
+      host_label: "cloud",
+      codex_home: "/root/.codex",
+      configured_codex_home: null,
+      resolved_codex_home: "/home/codex/.codex",
+      codex_home_source: "auto",
+      panel_db: "/opt/nexushub/nexushub.sqlite",
+      app_server_service: { active: true }
+    };
+    const logsDb: ProbeLogsDbStatus = {
+      path: "/home/codex/.codex/logs_2.sqlite",
+      logs_db_source: "resolved_codex_home"
+    };
+
+    expect(app.codexHomeStatusValue(status)).toBe("/home/codex/.codex · auto");
+    expect(app.logsDbPathStatusValue(logsDb)).toBe("/home/codex/.codex/logs_2.sqlite · resolved_codex_home");
+    expect(app.codexHomeStatusValue({ codex_home: "" })).toBe("未知");
   });
 
   test("saveProbeSettings sends only canonical codex and probe keys", async () => {

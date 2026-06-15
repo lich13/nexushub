@@ -7,7 +7,7 @@ Current scope:
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
 - Encrypted Turnstile secret storage compatible with legacy codex-cloud-panel and cc-switch-lite key import.
 - Desktop-style conversation workspace backed by the controlled app-server bridge.
-- Thread read model from `/root/.codex/state_5.sqlite`, `session_index.jsonl`, and rollout files.
+- Thread read model from the resolved Codex home, `session_index.jsonl`, and rollout files.
 - Running / reply-needed / recoverable / archived status cards.
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
 - Split Panel update and Codex update jobs. Panel updates use `/usr/local/bin/nexushub-update`; Codex updates keep the existing `/home/ubuntu/codex-admin/bin` wrappers.
@@ -48,13 +48,15 @@ bridge_transport = "websocket"
 bridge_timeout_seconds = 20
 ```
 
+`codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the app-server socket/state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
+
 The public site must expose only `nexushub` through Nginx. Do not publish the root app-server socket, `/v1`, `/responses`, or metrics endpoints. If a response has `fallback=true`, check Job History for the `codex exec` fallback job.
 
 ## Probe
 
 `[probe]` config controls the built-in Probe runtime. Probe settings are split between `config.toml` for non-sensitive values and encrypted `PanelDb.settings` entries for sensitive values such as the Bark `device_key`.
 
-Probe routes are canonical under `/api/probe/*`. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; the WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
+Probe routes are canonical under `/api/probe/*`. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
 
 The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushubd probe hook-stop`.
 
@@ -116,7 +118,9 @@ curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```
 
-Then log in and verify: thread list loads, system status shows the IP/public endpoint and `codex-app-server-root.service` active, bridge send returns `bridge=true`, renamed thread titles refresh from app-server `thread/read`, Goal and the compact permission menu work, old Plan Mode threads do not show stale pending prompts, Turnstile settings persist, both update cards work, and archive delete dry-run reports `integrity=ok`.
+Then log in and verify: thread list loads, system status shows the IP/public endpoint and `codex-app-server-root.service` active, bridge send returns `bridge=true`, renamed thread titles refresh from app-server `thread/read`, Goal and the compact permission menu work, old Plan Mode threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and `/codex-cloud-panel/` remains `404`.
+
+After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 
 ## Safety Boundaries
 

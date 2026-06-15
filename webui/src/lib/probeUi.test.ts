@@ -197,6 +197,70 @@ describe("Probe UI helpers", () => {
     });
   });
 
+  test("uses configured Codex Home for the draft instead of the resolved default", () => {
+    const autoResolvedSettings: ProbeSettings = {
+      ...settings,
+      codex: {
+        ...settings.codex,
+        home: "/root/.codex",
+        configured_codex_home: null,
+        resolved_codex_home: "/root/.codex",
+        codex_home_source: "auto"
+      }
+    };
+    expect(buildProbeSettingsDraft(autoResolvedSettings).codex.home).toBe("");
+
+    const configuredSettings: ProbeSettings = {
+      ...settings,
+      codex: {
+        ...settings.codex,
+        home: "/root/.codex",
+        configured_codex_home: "/srv/codex-home",
+        resolved_codex_home: "/root/.codex",
+        codex_home_source: "config"
+      }
+    };
+    expect(buildProbeSettingsDraft(configuredSettings).codex.home).toBe("/srv/codex-home");
+  });
+
+  test("uses configured app-server socket for the draft instead of the resolved socket", () => {
+    const autoResolvedSettings: ProbeSettings = {
+      ...settings,
+      codex: {
+        ...settings.codex,
+        app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
+        configured_app_server_socket: null,
+        resolved_app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
+        app_server_socket_source: "resolved_codex_home"
+      }
+    };
+    expect(buildProbeSettingsDraft(autoResolvedSettings).codex.app_server_socket).toBe("");
+
+    const configuredSettings: ProbeSettings = {
+      ...settings,
+      codex: {
+        ...settings.codex,
+        app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
+        configured_app_server_socket: "/run/codex/custom.sock",
+        resolved_app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
+        app_server_socket_source: "configured"
+      }
+    };
+    expect(buildProbeSettingsDraft(configuredSettings).codex.app_server_socket).toBe("/run/codex/custom.sock");
+  });
+
+  test("allows blank or auto Codex Home and serializes it as automatic discovery", () => {
+    const blankDraft = buildProbeSettingsDraft(settings);
+    blankDraft.codex.home = "   ";
+    expect(probeSettingsValidation(blankDraft)).not.toContain("Codex Home 不能为空");
+    expect(buildProbeSettingsPayload(blankDraft, settings).codex.home).toBeNull();
+
+    const autoDraft = buildProbeSettingsDraft(settings);
+    autoDraft.codex.home = "auto";
+    expect(probeSettingsValidation(autoDraft)).not.toContain("Codex Home 不能为空");
+    expect(buildProbeSettingsPayload(autoDraft, settings).codex.home).toBeNull();
+  });
+
   test("omits a blank Bark device_key whether or not a key is already configured", () => {
     const configuredDraft = buildProbeSettingsDraft(settings);
     configuredDraft.notifications.device_key = "   ";

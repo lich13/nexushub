@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     app_server::AppServerBridge,
+    codex::resolve_codex_paths,
     config::{
         patch_probe_config_toml, CodexProbeConfigPatch, Config, ProbeConfigFilePatch,
         ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
@@ -131,9 +132,18 @@ async fn main() -> Result<()> {
         Command::Doctor => {
             let config = Config::load(&cli.config)?;
             let db = open_panel_db(&config)?;
+            let resolved = resolve_codex_paths(
+                &config.codex.home,
+                config.codex.app_server_socket.as_deref(),
+            );
             println!("config={}", cli.config.display());
             println!("db={}", db.path().display());
-            println!("codex_home={}", config.codex.home.display());
+            println!("codex_home={}", resolved.home.display());
+            println!(
+                "configured_codex_home={}",
+                resolved.configured_codex_home.as_deref().unwrap_or("auto")
+            );
+            println!("codex_home_source={}", resolved.codex_home_source);
             println!("listen={}", config.server.listen);
             println!("admin_count={}", db.admin_count()?);
             let bridge = AppServerBridge::new(config.clone());
@@ -293,7 +303,11 @@ fn probe_runtime(config: &Config) -> ProbeRuntime {
 }
 
 async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
-    let hooks_path = config.codex.home.join("hooks.json");
+    let resolved = resolve_codex_paths(
+        &config.codex.home,
+        config.codex.app_server_socket.as_deref(),
+    );
+    let hooks_path = resolved.home.join("hooks.json");
     let hook_command = format!(
         "/opt/nexushub/bin/nexushubd --config {} probe hook-stop",
         PlatformPaths::current().config_file.display()
@@ -332,6 +346,10 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
         "dry_run": dry_run,
         "changed": changed,
         "hooks_json": hooks_path,
+        "configured_codex_home": resolved.configured_codex_home,
+        "resolved_codex_home": resolved.home,
+        "codex_home_source": resolved.codex_home_source,
+        "discovery_warnings": resolved.discovery_warnings,
         "backup_path": if hooks_path.exists() { Some(backup_path) } else { None },
         "hook_command": hook_command,
         "reload_app_server_after_install": config.probe.hooks.reload_app_server_after_install,
@@ -572,7 +590,7 @@ fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFil
                 .server
                 .codex_home
                 .as_ref()
-                .map(|path| path.to_string_lossy().to_string()),
+                .map(|path| Some(path.to_string_lossy().to_string())),
             app_server_service: nonempty(&legacy.server.app_server_service),
             host_label: nonempty(&legacy.server.host_label),
             ..Default::default()
@@ -906,12 +924,18 @@ log_max_bytes = 5242880
         let dir = temp_test_dir("nexushub-scheduler-due");
         let codex_home = dir.join(".codex");
         fs::create_dir_all(&codex_home).unwrap();
+        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
         let logs_path = codex_home.join("logs_2.sqlite");
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
 
         let mut config = Config::default();
-        config.codex.home = codex_home;
+        config.codex.home = PathBuf::from("auto");
+        config.codex.app_server_socket = Some(
+            codex_home
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        );
         config.probe.logs_db.retention_days = 2;
         config.probe.logs_db.delete_chunk_rows = 10;
         config.probe.logs_db.max_delete_rows_per_run = 10;
@@ -930,6 +954,14 @@ log_max_bytes = 5242880
         let stored: Value = serde_json::from_str(&stored).unwrap();
         assert_eq!(stored["target"], "codex_logs_2");
         assert_eq!(stored["deleted_rows"], 1);
+        assert_eq!(stored["path"], logs_path.to_string_lossy().as_ref());
+        assert!(stored["configured_codex_home"].is_null());
+        assert_eq!(
+            stored["resolved_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
+        assert_eq!(stored["codex_home_source"], "socket");
+        assert_eq!(stored["logs_db_source"], "socket");
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -977,6 +1009,7 @@ log_max_bytes = 5242880
         let dir = temp_test_dir("nexushub-scheduler-compact");
         let codex_home = dir.join(".codex");
         fs::create_dir_all(&codex_home).unwrap();
+        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
         let logs_path = codex_home.join("logs_2.sqlite");
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
@@ -993,7 +1026,12 @@ log_max_bytes = 5242880
         }
 
         let mut config = Config::default();
-        config.codex.home = codex_home;
+        config.codex.home = PathBuf::from("auto");
+        config.codex.app_server_socket = Some(
+            codex_home
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        );
         config.codex.app_server_service.clear();
         config.probe.logs_db.retention_days = 2;
         config.probe.logs_db.delete_chunk_rows = 10;
@@ -1011,6 +1049,18 @@ log_max_bytes = 5242880
         assert_eq!(result.target, "codex_logs_2");
         assert!(result.vacuumed);
         assert_eq!(result.quick_check_before_vacuum.as_deref(), Some("ok"));
+        assert_eq!(result.path, logs_path);
+        assert_eq!(result.configured_codex_home, None);
+        assert_eq!(result.resolved_codex_home, codex_home);
+        assert_eq!(result.codex_home_source, "socket");
+        assert_eq!(result.logs_db_source, "socket");
+        assert!(result
+            .checkpoint_result
+            .as_deref()
+            .is_some_and(|value| value.starts_with("mode=TRUNCATE")));
+        assert!(result.database_size_before >= result.database_size_after);
+        assert!(result.page_count_before >= result.page_count_after);
+        assert!(result.freelist_count_before >= result.freelist_count_after);
 
         fs::remove_dir_all(&dir).unwrap();
     }

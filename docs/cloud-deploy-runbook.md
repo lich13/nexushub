@@ -32,6 +32,8 @@ bridge_transport = "websocket"
 bridge_timeout_seconds = 20
 ```
 
+Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
+
 Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose root app-server, `/v1`, `/responses`, or metrics publicly.
 
 Initialize or rotate login password with a 12+ char secret:
@@ -47,6 +49,7 @@ ssh 43.155.235.227 "sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' /opt/ne
 ssh 43.155.235.227 'sudo -n systemctl is-active nexushub'
 ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
 curl -fsS https://661313.xyz/nexushub/
+curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/codex-cloud-panel/
 ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
 ```
 
@@ -66,6 +69,12 @@ Then log in and verify:
 - failed update jobs show structured explanation and suggested next actions;
 - panel prune removes old NexusHub release-update backups while keeping the latest three;
 - Codex update / prune buttons start only the configured fixed wrappers.
+
+Expected legacy path result: `/codex-cloud-panel/` returns `404`.
+
+## Cleanup
+
+Use the built-in gated compact path for Codex `logs_2.sqlite`; do not create a new manual backup for compaction. After `systemctl`, `healthz`, public `/nexushub/`, and `doctor` all pass, remove existing obsolete backups or run the panel prune action.
 
 ## Rollback
 

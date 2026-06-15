@@ -16,7 +16,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/root/.codex /opt/nexushub /opt/nexushub/logs
+ReadWritePaths=/root/.codex /home/ubuntu/.codex /opt/nexushub /opt/nexushub/logs
 
 [Install]
 WantedBy=multi-user.target

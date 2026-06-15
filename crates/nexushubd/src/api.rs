@@ -588,12 +588,24 @@ fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
 }
 
 fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
+    let resolved = nexushub_core::codex::resolve_codex_paths(
+        &config.codex.home,
+        config.codex.app_server_socket.as_deref(),
+    );
     Ok(json!({
         "codex": {
-            "home": config.codex.home,
+            "home": resolved.configured_codex_home.clone(),
+            "configured_codex_home": resolved.configured_codex_home,
+            "resolved_codex_home": resolved.home,
+            "codex_home_source": resolved.codex_home_source,
+            "logs_db_source": resolved.logs_db_source,
+            "configured_app_server_socket": resolved.configured_app_server_socket.clone(),
+            "resolved_app_server_socket": resolved.app_server_socket.clone(),
+            "app_server_socket_source": resolved.app_server_socket_source.clone(),
+            "discovery_warnings": resolved.discovery_warnings,
             "workspace": config.codex.workspace,
             "app_server_service": config.codex.app_server_service,
-            "app_server_socket": config.codex.app_server_socket,
+            "app_server_socket": resolved.app_server_socket,
             "bridge_enabled": config.codex.bridge_enabled,
             "bridge_transport": config.codex.bridge_transport,
             "bridge_timeout_seconds": config.codex.bridge_timeout_seconds,
@@ -695,7 +707,7 @@ async fn load_probe_threads(
     status: &'static str,
     limit: usize,
 ) -> anyhow::Result<Vec<ThreadSummary>> {
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
     let app_fetch_limit = app_server_thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
@@ -740,7 +752,8 @@ async fn upload_files(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let root = uploads::upload_root(&state.config().codex.home);
+    let resolved = state.resolved_codex_paths();
+    let root = uploads::upload_root(&resolved.home);
     let protected_upload_ids = state.db.active_followup_upload_ids().unwrap_or_else(|err| {
         tracing::warn!("active follow-up upload lookup failed: {err}");
         HashSet::new()
@@ -826,7 +839,8 @@ async fn delete_upload_file(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let root = uploads::upload_root(&state.config().codex.home);
+    let resolved = state.resolved_codex_paths();
+    let root = uploads::upload_root(&resolved.home);
     let deleted = uploads::delete_upload(&root, &id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     if deleted {
@@ -1130,7 +1144,7 @@ async fn list_threads(
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let response_limit = requested_thread_limit(query.limit);
     let local_fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
     let app_fetch_limit = app_server_thread_list_fetch_limit(query.status.as_deref(), query.limit);
@@ -1246,7 +1260,7 @@ async fn load_merged_thread_detail(
     id: &str,
     label: &str,
 ) -> anyhow::Result<Option<ThreadDetail>> {
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let mut detail = load_base_thread_detail_cached(state, &paths, id)?;
     if state.bridge().enabled() {
         match state.bridge().thread_read(id.to_string(), true).await {
@@ -1441,9 +1455,10 @@ async fn create_thread(
             ],
         );
     }
+    let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
         "Codex new thread",
-        &state.config().codex.home,
+        &resolved.home,
         &cwd,
         args,
         prompt_with_attachment_context(&effective_message, &prepared_attachments),
@@ -1538,7 +1553,8 @@ fn prepare_request_attachments(
             "一次最多发送 5 个附件",
         ));
     }
-    let root = uploads::upload_root(&state.config().codex.home);
+    let resolved = state.resolved_codex_paths();
+    let root = uploads::upload_root(&resolved.home);
     prepare_uploads(&root, attachment_ids)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
 }
@@ -1579,9 +1595,10 @@ async fn send_message(
         id.clone(),
         "-".to_string(),
     ];
+    let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
         "Codex resume thread",
-        &state.config().codex.home,
+        &resolved.home,
         &state.config().codex.workspace,
         args,
         prompt_with_attachment_context(
@@ -1609,7 +1626,7 @@ async fn send_message(
 }
 
 async fn resolve_active_turn_id(state: &AppState, id: &str) -> Option<String> {
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let mut detail = match load_base_thread_detail_cached(state, &paths, id) {
         Ok(Some(detail)) => Some(detail),
         Ok(None) | Err(_) => None,
@@ -1890,9 +1907,10 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
         thread_id.clone(),
         "-".to_string(),
     ];
+    let resolved = state.resolved_codex_paths();
     match state.jobs.start_codex_job(
         "Codex queued follow-up",
-        &state.config().codex.home,
+        &resolved.home,
         &state.config().codex.workspace,
         args,
         prompt_with_attachment_context(
@@ -2008,7 +2026,7 @@ async fn derive_active_turn_id(state: &AppState, thread_id: &str) -> Option<Stri
             }
         }
     }
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     codex::thread_detail(&paths, thread_id)
         .ok()
         .flatten()
@@ -2107,7 +2125,7 @@ async fn archive_thread(
             tracing::warn!("app-server bridge archive failed; falling back to state DB: {err}");
         }
     }
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     codex::set_thread_archived(&paths, &id, true)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2132,7 +2150,7 @@ async fn restore_thread(
             tracing::warn!("app-server bridge restore failed; falling back to state DB: {err}");
         }
     }
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     codex::set_thread_archived(&paths, &id, false)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2166,7 +2184,7 @@ async fn rename_thread(
     if bridge.enabled() {
         match bridge.rename_thread(id.clone(), name.to_string()).await {
             Ok(()) => {
-                let paths = CodexPaths::new(&state.config().codex.home);
+                let paths = state.codex_paths();
                 if let Err(err) = codex::set_thread_title(&paths, &id, name) {
                     tracing::warn!("state DB thread title fallback update failed: {err}");
                 }
@@ -2724,7 +2742,7 @@ async fn codex_update_prune(State(state): State<AppState>, headers: HeaderMap) -
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     ok(archive::plan_delete_archived(&paths)?)
 }
 
@@ -2746,7 +2764,7 @@ async fn archive_delete_execute(
             "archive deletion must be confirmed",
         ));
     }
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let result = archive::execute_delete_archived(&paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -2765,7 +2783,7 @@ async fn hidden_threads_delete_dry_run(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     ok(archive::plan_delete_hidden(&paths)?)
 }
 
@@ -2782,7 +2800,7 @@ async fn hidden_threads_delete_execute(
             "hidden thread deletion must be confirmed",
         ));
     }
-    let paths = CodexPaths::new(&state.config().codex.home);
+    let paths = state.codex_paths();
     let result = archive::execute_delete_hidden(&paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -4043,6 +4061,13 @@ mod tests {
         }
     }
 
+    fn mark_codex_home(home: &std::path::Path) {
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        fs::write(home.join("state_5.sqlite"), b"").unwrap();
+        fs::write(home.join("session_index.jsonl"), b"").unwrap();
+        fs::create_dir_all(home.join("app-server-control")).unwrap();
+    }
+
     fn authenticated_test_state() -> (crate::state::AppState, String, String) {
         let mut config = Config::default();
         config.security.cookie_secure = false;
@@ -4222,6 +4247,12 @@ mod tests {
     #[tokio::test]
     async fn probe_status_routes_use_canonical_probe_name_without_sentinel_alias() {
         let (state, session_token, _) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-probe-status-resolved");
+        let codex_home = dir.join(".codex");
+        mark_codex_home(&codex_home);
+        let mut config = state.config();
+        config.codex.home = codex_home.clone();
+        state.replace_config(config);
         let app = router(state.clone());
 
         let response = app
@@ -4244,6 +4275,18 @@ mod tests {
         assert!(status["flavor"].as_str().is_some());
         assert!(status["hook_status"].as_str().is_some());
         assert_eq!(status["logs_db_status"], "missing_db");
+        assert_eq!(status["codex_home"], codex_home.to_string_lossy().as_ref());
+        assert_eq!(
+            status["configured_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            status["resolved_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
+        assert_eq!(status["codex_home_source"], "configured");
+        assert_eq!(status["logs_db_source"], "configured");
+        assert!(status["discovery_warnings"].as_array().unwrap().is_empty());
 
         let alias = app
             .oneshot(
@@ -4257,6 +4300,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(alias.status(), StatusCode::NOT_FOUND);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -4341,7 +4385,13 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
         let mut config = state.config();
-        config.codex.home = codex_home.clone();
+        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
+        config.codex.home = PathBuf::from("auto");
+        config.codex.app_server_socket = Some(
+            codex_home
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        );
         config.probe.logs_db.retention_days = 2;
         state.replace_config(config);
 
@@ -4363,6 +4413,14 @@ mod tests {
 
         assert_eq!(logs_db["target"], "codex_logs_2");
         assert_eq!(logs_db["path"], logs_path.to_string_lossy().as_ref());
+        assert!(logs_db["configured_codex_home"].is_null());
+        assert_eq!(
+            logs_db["resolved_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
+        assert_eq!(logs_db["codex_home_source"], "socket");
+        assert_eq!(logs_db["logs_db_source"], "socket");
+        assert!(logs_db["discovery_warnings"].as_array().unwrap().is_empty());
         assert_eq!(logs_db["total_rows"], 2);
         assert_eq!(logs_db["old_rows"], 1);
         assert_eq!(logs_db["retained_rows"], 1);
@@ -4373,6 +4431,7 @@ mod tests {
         assert!(logs_db["last_run"].as_str().is_some());
         assert_eq!(logs_db["last_result"], "execute: deleted_rows=2");
         assert_eq!(logs_db["recent_result"], logs_db["last_result"]);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -4387,7 +4446,13 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
         let mut config = state.config();
-        config.codex.home = codex_home;
+        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
+        config.codex.home = PathBuf::from("auto");
+        config.codex.app_server_socket = Some(
+            codex_home
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        );
         config.probe.logs_db.retention_days = 2;
         state.replace_config(config.clone());
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
@@ -4455,6 +4520,13 @@ mod tests {
         assert!(logs_db.get("event_count").is_none());
         assert!(logs_db.get("dedupe_count").is_none());
         assert_eq!(logs_db["target"], "codex_logs_2");
+        assert!(logs_db["configured_codex_home"].is_null());
+        assert_eq!(
+            logs_db["resolved_codex_home"],
+            logs_path.parent().unwrap().to_string_lossy().as_ref()
+        );
+        assert_eq!(logs_db["codex_home_source"], "socket");
+        assert_eq!(logs_db["logs_db_source"], "socket");
         assert_eq!(logs_db["total_rows"], 2);
         assert_eq!(logs_db["old_rows"], 1);
         assert_eq!(logs_db["retained_rows"], 1);
@@ -4481,6 +4553,13 @@ mod tests {
         assert_eq!(patch.status(), StatusCode::OK);
         let body = to_bytes(patch.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["codex"]["home"].is_null());
+        assert_eq!(
+            payload["codex"]["resolved_codex_home"],
+            logs_path.parent().unwrap().to_string_lossy().as_ref()
+        );
+        assert_eq!(payload["codex"]["codex_home_source"], "socket");
+        assert_eq!(payload["codex"]["logs_db_source"], "socket");
         assert_eq!(payload["notifications"]["device_key_configured"], true);
         assert!(payload["notifications"].get("device_key").is_none());
         assert!(!body

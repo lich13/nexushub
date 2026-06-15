@@ -120,14 +120,17 @@ async fn probe_status_surfaces_missing_codex_logs_db() {
     let root = temp_dir("nexushub-probe-status-missing-logs");
     let codex_home = root.join(".codex");
     fs::create_dir_all(&codex_home).unwrap();
+    fs::write(codex_home.join("state_5.sqlite"), b"").unwrap();
     let mut config = Config::default();
-    config.codex.home = codex_home;
+    config.codex.home = codex_home.clone();
     let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
         .status()
         .await
         .unwrap();
 
     assert_eq!(status.logs_db_status, "missing_db");
+    assert_eq!(status.codex_home, codex_home);
+    assert_eq!(status.codex_home_source, "configured");
     fs::remove_dir_all(root).unwrap();
 }
 

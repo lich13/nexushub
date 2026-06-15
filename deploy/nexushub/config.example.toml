@@ -4,7 +4,6 @@ public_base_url = "https://661313.xyz/nexushub/"
 trust_forwarded_headers = true
 
 [codex]
-home = "/root/.codex"
 workspace = "/home/ubuntu/codex-workspace"
 app_server_service = "codex-app-server-root.service"
 app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"

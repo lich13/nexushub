@@ -92,10 +92,10 @@ export const PROBE_MAC_DEFAULTS = {
 export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsDraft {
   return {
     codex: {
-      home: settings.codex.home ?? "",
+      home: configuredCodexHomeDraftValue(settings),
       workspace: settings.codex.workspace ?? "",
       app_server_service: settings.codex.app_server_service ?? "",
-      app_server_socket: settings.codex.app_server_socket ?? "",
+      app_server_socket: configuredAppServerSocketDraftValue(settings),
       bridge_enabled: Boolean(settings.codex.bridge_enabled),
       bridge_transport: settings.codex.bridge_transport ?? "websocket",
       bridge_timeout_seconds: toBoundedInteger(settings.codex.bridge_timeout_seconds, 20)
@@ -174,7 +174,7 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
 
   return {
     codex: {
-      home: draft.codex.home.trim(),
+      home: codexHomePatchValue(draft.codex.home),
       workspace: draft.codex.workspace.trim() || null,
       app_server_service: draft.codex.app_server_service.trim(),
       app_server_socket: draft.codex.app_server_socket.trim() || null,
@@ -219,7 +219,6 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
 
 export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   const errors: string[] = [];
-  if (!draft.codex.home.trim()) errors.push("Codex Home 不能为空");
   if (!draft.codex.app_server_service.trim()) errors.push("app-server 服务不能为空");
   if (!draft.codex.host_label.trim()) errors.push("主机标签不能为空");
   if (!isIntegerInRange(draft.probe.poll_seconds, 5, 3600)) {
@@ -293,6 +292,27 @@ function requiredDraftNumber(value: ProbeNumericDraftValue): number {
 
 function stringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function configuredCodexHomeDraftValue(settings: ProbeSettings): string {
+  const codex = settings.codex as ProbeSettings["codex"] & Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(codex, "configured_codex_home")) {
+    return stringOrEmpty(codex.configured_codex_home);
+  }
+  return stringOrEmpty(codex.home);
+}
+
+function configuredAppServerSocketDraftValue(settings: ProbeSettings): string {
+  const codex = settings.codex as ProbeSettings["codex"] & Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(codex, "configured_app_server_socket")) {
+    return stringOrEmpty(codex.configured_app_server_socket);
+  }
+  return stringOrEmpty(codex.app_server_socket);
+}
+
+function codexHomePatchValue(value: string): string | null {
+  const trimmed = value.trim();
+  return !trimmed || trimmed.toLowerCase() === "auto" ? null : trimmed;
 }
 
 function optionalString(value: string): string | null {

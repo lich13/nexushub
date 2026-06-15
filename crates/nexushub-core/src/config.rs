@@ -38,6 +38,7 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexConfig {
+    #[serde(default = "default_codex_home")]
     pub home: PathBuf,
     pub workspace: PathBuf,
     pub app_server_service: String,
@@ -148,7 +149,8 @@ pub struct ProbeConfigFilePatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexProbeConfigPatch {
-    pub home: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_field")]
+    pub home: Option<Option<String>>,
     pub workspace: Option<String>,
     pub app_server_service: Option<String>,
     pub app_server_socket: Option<Option<String>>,
@@ -224,6 +226,10 @@ fn default_app_server_socket() -> Option<PathBuf> {
     Some(PathBuf::from(
         "/root/.codex/app-server-control/app-server-control.sock",
     ))
+}
+
+fn default_codex_home() -> PathBuf {
+    PathBuf::from("auto")
 }
 
 fn default_bridge_enabled() -> bool {
@@ -457,7 +463,7 @@ impl Default for Config {
                 trust_forwarded_headers: true,
             },
             codex: CodexConfig {
-                home: PathBuf::from("/root/.codex"),
+                home: default_codex_home(),
                 workspace: PathBuf::from("/home/ubuntu/codex-workspace"),
                 app_server_service: "codex-app-server-root.service".to_string(),
                 app_server_socket: default_app_server_socket(),
@@ -680,10 +686,31 @@ fn env_file_value(text: &str, key: &str) -> Option<String> {
     })
 }
 
+fn deserialize_optional_string_field<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+fn non_auto_string(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("auto")).then_some(value)
+    })
+}
+
 pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Result<String> {
     let mut editor = TomlPatchEditor::new(text);
     if let Some(codex) = patch.codex.as_ref() {
-        editor.set_string("codex", "home", codex.home.as_deref());
+        if let Some(home) = codex.home.as_ref() {
+            match non_auto_string(home.as_deref()) {
+                Some(value) => editor.set_string("codex", "home", Some(value)),
+                None => editor.remove_key("codex", "home"),
+            }
+        }
         editor.set_string("codex", "workspace", codex.workspace.as_deref());
         editor.set_string(
             "codex",
@@ -893,6 +920,23 @@ impl TomlPatchEditor {
         self.lines.insert(end, format!("{key} = {value}"));
     }
 
+    fn remove_key(&mut self, section: &str, key: &str) {
+        let Some((start, end)) = self.section_range(section) else {
+            return;
+        };
+        if let Some(index) = (start + 1..end).find(|index| {
+            let stripped = self.lines[*index].trim();
+            if stripped.starts_with('#') || !stripped.contains('=') {
+                return false;
+            }
+            stripped
+                .split_once('=')
+                .is_some_and(|(line_key, _)| line_key.trim() == key)
+        }) {
+            self.lines.remove(index);
+        }
+    }
+
     fn ensure_section(&mut self, section: &str) -> (usize, usize) {
         if let Some(range) = self.section_range(section) {
             return range;
@@ -954,7 +998,7 @@ mod tests {
             .update
             .panel_precheck_command
             .contains("http://127.0.0.1:15742/healthz"));
-        assert_eq!(config.codex.home.to_string_lossy(), "/root/.codex");
+        assert_eq!(config.codex.home.to_string_lossy(), "auto");
     }
 
     #[test]
@@ -1036,7 +1080,7 @@ group = "old"
 "#;
         let patch = ProbeConfigFilePatch {
             codex: Some(super::CodexProbeConfigPatch {
-                home: Some("/srv/codex".into()),
+                home: Some(Some("/srv/codex".into())),
                 app_server_service: Some("codex-app-server-root.service".into()),
                 host_label: Some("43.155.235.227".into()),
                 ..Default::default()
@@ -1074,6 +1118,58 @@ group = "old"
         assert!(output.contains("[probe.logs_db]"));
         assert!(output.contains("retention_days = 30"));
         assert!(output.contains("minimum_free_space_mb = 512"));
+    }
+
+    #[test]
+    fn config_accepts_missing_codex_home_as_auto() {
+        let input = r#"
+[server]
+listen = "127.0.0.1:15742"
+trust_forwarded_headers = true
+
+[codex]
+workspace = "/home/ubuntu/codex-workspace"
+app_server_service = "codex-app-server-root.service"
+host_label = "43.155.235.227"
+
+[security]
+secret_key = "test-secret"
+cookie_secure = true
+session_ttl_seconds = 31536000
+login_rate_limit_per_minute = 8
+
+[paths]
+data_dir = "/opt/nexushub"
+db_path = "/opt/nexushub/nexushub.sqlite"
+webui_dir = "/opt/nexushub/webui"
+log_dir = "/opt/nexushub/logs"
+
+[update]
+precheck_command = "/usr/local/bin/nexushub-codex-precheck"
+update_command = "/usr/local/bin/nexushub-codex-update"
+prune_command = "/usr/local/bin/nexushub-codex-prune"
+doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
+panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
+panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"
+"#;
+        let config: Config = toml::from_str(input).unwrap();
+
+        assert_eq!(config.codex.home.to_string_lossy(), "auto");
+    }
+
+    #[test]
+    fn probe_config_patch_removes_codex_home_for_auto_discovery() {
+        let input = r#"
+[codex]
+home = "/root/.codex"
+workspace = "/home/ubuntu/codex-workspace"
+"#;
+        let patch: ProbeConfigFilePatch =
+            serde_json::from_str(r#"{"codex":{"home":null}}"#).unwrap();
+        let output = super::patch_probe_config_toml(input, &patch).unwrap();
+
+        assert!(!output.contains("home = "));
+        assert!(output.contains("workspace = \"/home/ubuntu/codex-workspace\""));
     }
 
     #[test]

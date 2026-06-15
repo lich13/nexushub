@@ -37,7 +37,7 @@
 ## Current Status
 
 **Active Phase**: Probe replacement released/deployed<br>
-**Active Task**: `v0.1.52` release candidate fixes Probe logs-db maintenance to target Codex `logs_2.sqlite`, removes stale manual/legacy Probe endpoints, slims the Probe panel, removes the packaged legacy cleanup helper, and gates automatic compaction behind app-server inactivity plus quick_check/space checks.
+**Active Task**: `v0.1.53` adds Codex path auto-discovery across Probe, system status, app-server bridge, uploads, and settings, with logs-db compact metadata and deploy/docs support for root/ubuntu Codex homes.
 **Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status
@@ -105,6 +105,8 @@ adaptive:
 | 2026-06-15 | Probe default migration follow-up | S | P/R pass | 0 | Released and deployed `v0.1.49`; updater now migrates known old Probe defaults to Mac App defaults, asset sha256 `70a56e0d1d85caea32a248d60e64b2cb3a91bb00a17d682c95aa038e4ece235d`, and cloud config now shows `500/1000/5242880` plus logs-db `2d/6h` defaults |
 | 2026-06-15 | Probe one-time helper package cleanup | S | P/R pass | 0 | Install/update packaging and docs no longer ship the removed legacy Sentinel cleanup helper; Probe defaults and `nexushubd probe hook-stop` stay canonical |
 | 2026-06-15 | Probe logs-db retarget and panel slim | L | P/R pass | 0 | `v0.1.52` release candidate retargets maintenance to Codex `logs_2.sqlite`, adds scheduled automatic cleanup with gated compaction, removes stale manual Probe/Sentinel routes, and keeps Probe UI read-only for logs-db maintenance |
+| 2026-06-15 | Codex path auto-discovery | M | P/R pass | 0 | `v0.1.53` resolves Codex home/socket/logs paths from config, env, socket, root/ubuntu homes, and `/home/*/.codex`; UI supports auto home without writing `/root/.codex` back. |
+| 2026-06-15 | Task C deploy/docs auto-discovery | S | P/R pass | 0 | Deploy config omits fixed `codex.home`, systemd grants `/root/.codex` and `/home/ubuntu/.codex`, and docs cover no-new-backup compact plus post-health backup cleanup. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -144,3 +146,5 @@ bash scripts/test-install-script.sh
 | 2026-06-15 | probe-default-migration-follow-up | Published `v0.1.49`, verified release asset sha256 `70a56e0d1d85caea32a248d60e64b2cb3a91bb00a17d682c95aa038e4ece235d`, deployed with a second updater pass so the newly installed updater migrated `/opt/nexushub/config.toml`, confirmed `nexushubd 0.1.49`, health OK, `/nexushub/` HTTP 200, and `/codex-cloud-panel/` HTTP 404 |
 | 2026-06-15 | probe-one-time-helper-package-cleanup | Removed the packaged `nexushub-probe-legacy-cleanup` deploy helper from install/update tests and packaging docs; kept `/codex-cloud-panel/` retirement guidance and Probe defaults unchanged |
 | 2026-06-15 | probe-logs-db-retarget-panel-slim | Local verification passed for `v0.1.52`: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, WebUI tests/build, install script tests, diff check, rendered Probe QA via Playwright fallback, and compact regression tests covering quick_check/VACUUM plus scheduler app-server inactivity gating |
+| 2026-06-15 | codex-path-auto-discovery | Local verification passed for `v0.1.53`: fmt, Rust workspace tests, clippy, WebUI tests/build, install script tests, and diff check. |
+| 2026-06-15 | task-c-deploy-docs-auto-discovery | Updated deploy/script/docs surfaces for omitted Codex home auto-discovery, root/ubuntu systemd write paths, no-new-backup compact guidance, and cleanup only after health verification. |

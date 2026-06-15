@@ -1,5 +1,9 @@
 use nexushub_core::{
-    app_server::AppServerBridge, codex::ThreadDetail, config::Config, db::PanelDb, jobs::JobRunner,
+    app_server::AppServerBridge,
+    codex::{resolve_codex_paths, CodexPaths, ResolvedCodexPaths, ThreadDetail},
+    config::Config,
+    db::PanelDb,
+    jobs::JobRunner,
 };
 use reqwest::Client;
 use std::{
@@ -43,6 +47,18 @@ impl AppState {
 
     pub fn bridge(&self) -> AppServerBridge {
         AppServerBridge::new(self.config())
+    }
+
+    pub fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
+        let config = self.config();
+        resolve_codex_paths(
+            &config.codex.home,
+            config.codex.app_server_socket.as_deref(),
+        )
+    }
+
+    pub fn codex_paths(&self) -> CodexPaths {
+        self.resolved_codex_paths().codex_paths()
     }
 }
 

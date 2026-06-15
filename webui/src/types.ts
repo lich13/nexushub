@@ -172,9 +172,17 @@ export type SystemStatus = {
   hostname?: string | null;
   public_endpoint?: string | null;
   codex_home: string;
+  configured_codex_home?: string | null;
+  resolved_codex_home?: string | null;
+  codex_home_source?: string | null;
+  logs_db_source?: string | null;
+  discovery_warnings?: string[] | null;
   state_db?: string | null;
   panel_db: string;
   app_server_socket?: string | null;
+  configured_app_server_socket?: string | null;
+  resolved_app_server_socket?: string | null;
+  app_server_socket_source?: string | null;
   app_server_service: {
     active: boolean;
     active_state?: string | null;
@@ -396,15 +404,31 @@ export type ProbeStatus = {
   doctor_status?: string | null;
   runtime_version?: string | null;
   codex_home?: string | null;
+  configured_codex_home?: string | null;
+  resolved_codex_home?: string | null;
+  codex_home_source?: string | null;
+  logs_db_source?: string | null;
+  configured_app_server_socket?: string | null;
+  resolved_app_server_socket?: string | null;
+  app_server_socket_source?: string | null;
+  discovery_warnings?: string[] | null;
   host_label?: string | null;
 };
 
 export type ProbeSettings = {
   codex: {
-    home: string;
+    home?: string | null;
+    configured_codex_home?: string | null;
+    resolved_codex_home?: string | null;
+    codex_home_source?: string | null;
+    logs_db_source?: string | null;
+    discovery_warnings?: string[] | null;
     workspace?: string | null;
     app_server_service: string;
     app_server_socket?: string | null;
+    configured_app_server_socket?: string | null;
+    resolved_app_server_socket?: string | null;
+    app_server_socket_source?: string | null;
     bridge_enabled?: boolean | null;
     bridge_transport?: string | null;
     bridge_timeout_seconds?: number | null;
@@ -450,6 +474,7 @@ export type ProbeSettings = {
       minimum_free_space_mb?: number;
     };
   };
+  discovery_warnings?: string[] | null;
   notifications: Record<string, unknown> & {
     enabled?: boolean;
     device_key?: string;
@@ -463,6 +488,12 @@ export type ProbeSettings = {
     notify_recoverable?: boolean;
   };
   logs_db: Record<string, unknown> & {
+    path?: string | null;
+    resolved_path?: string | null;
+    resolved_logs_db_path?: string | null;
+    logs_db_path?: string | null;
+    source?: string | null;
+    logs_db_source?: string | null;
     enabled?: boolean;
     retention_days?: number;
     maintenance_interval_hours?: number;
@@ -485,6 +516,15 @@ export type ProbeLogsDbStatus = {
   logs_db_status?: string | null;
   target?: string | null;
   path?: string | null;
+  configured_codex_home?: string | null;
+  resolved_codex_home?: string | null;
+  codex_home_source?: string | null;
+  discovery_warnings?: string[] | null;
+  resolved_path?: string | null;
+  resolved_logs_db_path?: string | null;
+  logs_db_path?: string | null;
+  source?: string | null;
+  logs_db_source?: string | null;
   size_bytes?: number | null;
   db_size_bytes?: number | null;
   database_size_bytes?: number | null;

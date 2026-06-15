@@ -259,6 +259,9 @@ export async function getSystemStatus(): Promise<SystemStatus> {
       hostname: "codex-cloud-root",
       public_endpoint: "https://661313.xyz/nexushub/",
       codex_home: "/root/.codex",
+      configured_codex_home: "/root/.codex",
+      resolved_codex_home: "/root/.codex",
+      codex_home_source: "config",
       panel_db: "/opt/nexushub/panel.sqlite",
       app_server_service: { active: true, active_state: "active", sub_state: "running" },
       state_db_integrity: "ok"
@@ -463,6 +466,11 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
       logs_db_status: "maintenance_ready",
       target: "codex_logs_2",
       path: "/root/.codex/logs_2.sqlite",
+      configured_codex_home: "/root/.codex",
+      resolved_codex_home: "/root/.codex",
+      codex_home_source: "config",
+      logs_db_source: "resolved_codex_home",
+      discovery_warnings: [],
       total_rows: 128,
       old_rows: 6,
       retained_rows: 122,
@@ -1034,6 +1042,10 @@ function demoProbeStatus(): ProbeStatus {
     runtime_version: "demo",
     config_path: "/opt/nexushub/config.toml",
     codex_home: "/root/.codex",
+    configured_codex_home: "/root/.codex",
+    resolved_codex_home: "/root/.codex",
+    codex_home_source: "config",
+    logs_db_source: "resolved_codex_home",
     host_label: "43.155.235.227"
   };
 }
@@ -1042,6 +1054,11 @@ function demoProbeSettings(): ProbeSettings {
   return {
     codex: {
       home: "/root/.codex",
+      configured_codex_home: "/root/.codex",
+      resolved_codex_home: "/root/.codex",
+      codex_home_source: "config",
+      logs_db_source: "resolved_codex_home",
+      discovery_warnings: [],
       workspace: "/home/ubuntu/codex-workspace",
       app_server_service: "codex-app-server-root.service",
       app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",

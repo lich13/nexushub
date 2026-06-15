@@ -215,10 +215,12 @@ if section_start is None:
 
 required = {
     "host_label": '"43.155.235.227"',
-    "app_server_socket": '"\\/root\\/.codex\\/app-server-control\\/app-server-control.sock"'.replace("\\/", "/"),
     "bridge_enabled": "true",
     "bridge_transport": '"websocket"',
     "bridge_timeout_seconds": "20",
+}
+insert_if_missing = {
+    "app_server_socket": '"\\/root\\/.codex\\/app-server-control\\/app-server-control.sock"'.replace("\\/", "/"),
 }
 seen = set()
 for index in range(section_start + 1, section_end):
@@ -229,9 +231,11 @@ for index in range(section_start + 1, section_end):
     if key in required:
         lines[index] = f"{key} = {required[key]}"
         seen.add(key)
+    elif key in insert_if_missing:
+        seen.add(key)
 
 insert_at = section_end
-for key, value in required.items():
+for key, value in {**required, **insert_if_missing}.items():
     if key not in seen:
         lines.insert(insert_at, f"{key} = {value}")
         insert_at += 1

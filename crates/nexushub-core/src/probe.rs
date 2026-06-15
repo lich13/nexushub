@@ -1,4 +1,5 @@
 use crate::{
+    codex::{resolve_codex_paths, ResolvedCodexPaths},
     config::{Config, ProbeLogsDbConfig},
     platform::{PlatformKind, PlatformPaths},
 };
@@ -30,6 +31,7 @@ impl ProbeRuntime {
     }
 
     pub async fn status(&self) -> Result<ProbeStatus> {
+        let resolved = self.resolved_codex_paths();
         let logs_db_status = self.logs_db_status();
         Ok(ProbeStatus {
             label: "Probe".to_string(),
@@ -62,17 +64,33 @@ impl ProbeRuntime {
             reply_needed_count: 0,
             recoverable_count: 0,
             config_path: self.paths.config_file.clone(),
-            codex_home: self.config.codex.home.clone(),
+            codex_home: resolved.home.clone(),
+            configured_codex_home: resolved.configured_codex_home.clone(),
+            resolved_codex_home: resolved.home.clone(),
+            codex_home_source: resolved.codex_home_source.clone(),
+            logs_db_source: resolved.logs_db_source.clone(),
+            configured_app_server_socket: resolved.configured_app_server_socket.clone(),
+            resolved_app_server_socket: resolved.app_server_socket.clone(),
+            app_server_socket_source: resolved.app_server_socket_source.clone(),
+            discovery_warnings: resolved.discovery_warnings.clone(),
             host_label: self.config.codex.host_label.clone(),
         })
     }
 
     pub fn diagnostics(&self) -> ProbeDiagnostics {
+        let resolved = self.resolved_codex_paths();
         ProbeDiagnostics {
             doctor_status: self.doctor_status_text(),
             lifecycle_status: self.lifecycle_status_text(),
             app_server_service: self.config.codex.app_server_service.clone(),
-            app_server_socket: self.config.codex.app_server_socket.clone(),
+            app_server_socket: resolved.app_server_socket.clone(),
+            configured_app_server_socket: resolved.configured_app_server_socket,
+            resolved_app_server_socket: resolved.app_server_socket,
+            app_server_socket_source: resolved.app_server_socket_source,
+            configured_codex_home: resolved.configured_codex_home,
+            resolved_codex_home: resolved.home,
+            codex_home_source: resolved.codex_home_source,
+            discovery_warnings: resolved.discovery_warnings,
             host_label: self.config.codex.host_label.clone(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             managed_boundaries: vec![
@@ -137,7 +155,8 @@ impl ProbeRuntime {
     }
 
     pub fn logs_db_status(&self) -> ProbeLogsDbStatus {
-        ProbeLogsDbStatus::from_config(&self.config, &self.config.probe.logs_db, now_ts())
+        let resolved = self.resolved_codex_paths();
+        ProbeLogsDbStatus::from_resolved_paths(&resolved, &self.config.probe.logs_db, now_ts())
     }
 
     pub fn maintain_logs_db(&self, dry_run: bool) -> Result<ProbeLogsDbMaintenanceResult> {
@@ -149,7 +168,14 @@ impl ProbeRuntime {
         dry_run: bool,
         compact: bool,
     ) -> Result<ProbeLogsDbMaintenanceResult> {
-        maintain_codex_logs_db(&self.config, dry_run, compact, now_ts())
+        let resolved = self.resolved_codex_paths();
+        maintain_codex_logs_db(
+            &resolved,
+            &self.config.probe.logs_db,
+            dry_run,
+            compact,
+            now_ts(),
+        )
     }
 
     pub fn plan_action(&self, kind: ProbeActionPlanKind) -> Result<ProbeActionPlan> {
@@ -168,7 +194,10 @@ impl ProbeRuntime {
                 steps: vec![
                     format!(
                         "备份 {} 后写入 Stop Hook",
-                        self.config.codex.home.join("hooks.json").display()
+                        self.resolved_codex_paths()
+                            .home
+                            .join("hooks.json")
+                            .display()
                     ),
                     format!("Stop Hook 命令包含 `{}`", self.hook_command()),
                     if self.config.probe.hooks.reload_app_server_after_install {
@@ -178,7 +207,9 @@ impl ProbeRuntime {
                     },
                 ],
                 payload: json!({
-                    "codex_home": self.config.codex.home,
+                    "codex_home": self.resolved_codex_paths().home,
+                    "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
+                    "codex_home_source": self.resolved_codex_paths().codex_home_source,
                     "app_server_service": self.config.codex.app_server_service,
                     "hook_command": self.hook_command(),
                     "reload_app_server_after_install": self.config.probe.hooks.reload_app_server_after_install,
@@ -311,6 +342,13 @@ impl ProbeRuntime {
         format!(
             "/opt/nexushub/bin/nexushubd --config {} probe hook-stop",
             self.paths.config_file.display()
+        )
+    }
+
+    fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
+        resolve_codex_paths(
+            &self.config.codex.home,
+            self.config.codex.app_server_socket.as_deref(),
         )
     }
 
@@ -467,6 +505,14 @@ pub struct ProbeStatus {
     pub recoverable_count: usize,
     pub config_path: PathBuf,
     pub codex_home: PathBuf,
+    pub configured_codex_home: Option<String>,
+    pub resolved_codex_home: PathBuf,
+    pub codex_home_source: String,
+    pub logs_db_source: String,
+    pub configured_app_server_socket: Option<PathBuf>,
+    pub resolved_app_server_socket: Option<PathBuf>,
+    pub app_server_socket_source: Option<String>,
+    pub discovery_warnings: Vec<String>,
     pub host_label: String,
 }
 
@@ -476,6 +522,13 @@ pub struct ProbeDiagnostics {
     pub lifecycle_status: String,
     pub app_server_service: String,
     pub app_server_socket: Option<PathBuf>,
+    pub configured_app_server_socket: Option<PathBuf>,
+    pub resolved_app_server_socket: Option<PathBuf>,
+    pub app_server_socket_source: Option<String>,
+    pub configured_codex_home: Option<String>,
+    pub resolved_codex_home: PathBuf,
+    pub codex_home_source: String,
+    pub discovery_warnings: Vec<String>,
     pub host_label: String,
     pub runtime_version: String,
     pub managed_boundaries: Vec<String>,
@@ -502,6 +555,11 @@ pub struct ProbeLogsDbStatus {
     pub status: String,
     pub logs_db_status: String,
     pub path: PathBuf,
+    pub configured_codex_home: Option<String>,
+    pub resolved_codex_home: PathBuf,
+    pub codex_home_source: String,
+    pub logs_db_source: String,
+    pub discovery_warnings: Vec<String>,
     pub enabled: bool,
     pub retention_days: u32,
     pub maintenance_interval_hours: u32,
@@ -540,6 +598,11 @@ pub struct ProbeLogsDbMaintenanceResult {
     pub target: String,
     pub status: String,
     pub path: PathBuf,
+    pub configured_codex_home: Option<String>,
+    pub resolved_codex_home: PathBuf,
+    pub codex_home_source: String,
+    pub logs_db_source: String,
+    pub discovery_warnings: Vec<String>,
     pub dry_run: bool,
     pub retention_days: u32,
     pub cutoff_ts: i64,
@@ -549,6 +612,12 @@ pub struct ProbeLogsDbMaintenanceResult {
     pub remaining_old_rows: u64,
     pub total_rows_after: u64,
     pub chunks: u64,
+    pub database_size_before: u64,
+    pub database_size_after: u64,
+    pub page_count_before: u64,
+    pub page_count_after: u64,
+    pub freelist_count_before: u64,
+    pub freelist_count_after: u64,
     pub checkpoint_attempted: bool,
     pub checkpoint_result: Option<String>,
     pub vacuumed: bool,
@@ -665,10 +734,14 @@ impl ProbeEventOutcome {
 }
 
 impl ProbeLogsDbStatus {
-    fn from_config(config: &Config, logs_config: &ProbeLogsDbConfig, now: i64) -> Self {
-        let path = codex_logs_db_path(&config.codex.home);
+    fn from_resolved_paths(
+        resolved: &ResolvedCodexPaths,
+        logs_config: &ProbeLogsDbConfig,
+        now: i64,
+    ) -> Self {
+        let path = resolved.logs_db.clone();
         let cutoff = logs_cutoff(logs_config.retention_days, now);
-        let mut status = Self::base(path.clone(), logs_config, cutoff);
+        let mut status = Self::base(resolved, path.clone(), logs_config, cutoff);
         if !logs_config.enabled {
             return status.with_error("disabled", Some("logs_db_disabled".to_string()));
         }
@@ -708,12 +781,22 @@ impl ProbeLogsDbStatus {
         }
     }
 
-    fn base(path: PathBuf, config: &ProbeLogsDbConfig, cutoff: i64) -> Self {
+    fn base(
+        resolved: &ResolvedCodexPaths,
+        path: PathBuf,
+        config: &ProbeLogsDbConfig,
+        cutoff: i64,
+    ) -> Self {
         Self {
             target: "codex_logs_2".to_string(),
             status: "unknown".to_string(),
             logs_db_status: "unknown".to_string(),
             path,
+            configured_codex_home: resolved.configured_codex_home.clone(),
+            resolved_codex_home: resolved.home.clone(),
+            codex_home_source: resolved.codex_home_source.clone(),
+            logs_db_source: resolved.logs_db_source.clone(),
+            discovery_warnings: resolved.discovery_warnings.clone(),
             enabled: config.enabled,
             retention_days: config.retention_days,
             maintenance_interval_hours: config.maintenance_interval_hours,
@@ -805,13 +888,13 @@ struct CodexLogsSnapshot {
 }
 
 fn maintain_codex_logs_db(
-    config: &Config,
+    resolved: &ResolvedCodexPaths,
+    logs_config: &ProbeLogsDbConfig,
     dry_run: bool,
     compact: bool,
     now: i64,
 ) -> Result<ProbeLogsDbMaintenanceResult> {
-    let logs_config = &config.probe.logs_db;
-    let path = codex_logs_db_path(&config.codex.home);
+    let path = resolved.logs_db.clone();
     let cutoff = logs_cutoff(logs_config.retention_days, now);
     let ran_at = ts_to_rfc3339(now);
     let mut result = ProbeLogsDbMaintenanceResult {
@@ -819,6 +902,11 @@ fn maintain_codex_logs_db(
         target: "codex_logs_2".to_string(),
         status: "unknown".to_string(),
         path: path.clone(),
+        configured_codex_home: resolved.configured_codex_home.clone(),
+        resolved_codex_home: resolved.home.clone(),
+        codex_home_source: resolved.codex_home_source.clone(),
+        logs_db_source: resolved.logs_db_source.clone(),
+        discovery_warnings: resolved.discovery_warnings.clone(),
         dry_run,
         retention_days: logs_config.retention_days,
         cutoff_ts: cutoff,
@@ -828,6 +916,12 @@ fn maintain_codex_logs_db(
         remaining_old_rows: 0,
         total_rows_after: 0,
         chunks: 0,
+        database_size_before: 0,
+        database_size_after: 0,
+        page_count_before: 0,
+        page_count_after: 0,
+        freelist_count_before: 0,
+        freelist_count_after: 0,
         checkpoint_attempted: false,
         checkpoint_result: None,
         vacuumed: false,
@@ -860,6 +954,7 @@ fn maintain_codex_logs_db(
         result.error = Some(err.to_string());
         return Ok(result);
     }
+    set_result_before_metrics(&conn, &path, &mut result);
 
     let old_rows_before = match count_old_logs(&conn, cutoff) {
         Ok(value) => value,
@@ -884,6 +979,7 @@ fn maintain_codex_logs_db(
                 result.error = Some(format!("count Codex logs in {}: {err}", path.display()));
             }
         }
+        set_result_after_metrics(&conn, &path, &mut result);
         return Ok(result);
     }
 
@@ -939,20 +1035,14 @@ fn maintain_codex_logs_db(
         }
     }
 
-    result.checkpoint_attempted = true;
-    result.checkpoint_result = conn
-        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
-            let busy: i64 = row.get(0)?;
-            let log: i64 = row.get(1)?;
-            let checkpointed: i64 = row.get(2)?;
-            Ok(format!(
-                "mode=PASSIVE, busy={busy}, log={log}, checkpointed={checkpointed}"
-            ))
-        })
-        .ok();
     if compact {
         maybe_vacuum_codex_logs(&conn, &path, logs_config, &mut result);
     }
+    if result.ok {
+        result.checkpoint_attempted = true;
+        result.checkpoint_result = wal_checkpoint(&conn, "TRUNCATE").ok();
+    }
+    set_result_after_metrics(&conn, &path, &mut result);
     Ok(result)
 }
 
@@ -1000,7 +1090,7 @@ fn maybe_vacuum_codex_logs(
             }
         }
     }
-    match quick_check(conn, Duration::from_secs(5)) {
+    match quick_check(conn, Duration::from_secs(60)) {
         Ok(()) => result.quick_check_before_vacuum = Some("ok".to_string()),
         Err(reason) => {
             result.quick_check_before_vacuum = Some(reason.clone());
@@ -1019,6 +1109,44 @@ fn maybe_vacuum_codex_logs(
             result.error = Some(format!("vacuum Codex logs DB {}: {err}", path.display()));
         }
     }
+}
+
+fn set_result_before_metrics(
+    conn: &Connection,
+    path: &Path,
+    result: &mut ProbeLogsDbMaintenanceResult,
+) {
+    result.database_size_before = file_size(path);
+    result.page_count_before = pragma_u64(conn, "page_count").ok().flatten().unwrap_or(0);
+    result.freelist_count_before = pragma_u64(conn, "freelist_count")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+}
+
+fn set_result_after_metrics(
+    conn: &Connection,
+    path: &Path,
+    result: &mut ProbeLogsDbMaintenanceResult,
+) {
+    result.database_size_after = file_size(path);
+    result.page_count_after = pragma_u64(conn, "page_count").ok().flatten().unwrap_or(0);
+    result.freelist_count_after = pragma_u64(conn, "freelist_count")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+}
+
+fn wal_checkpoint(conn: &Connection, mode: &str) -> rusqlite::Result<String> {
+    let sql = format!("PRAGMA wal_checkpoint({mode})");
+    conn.query_row(&sql, [], |row| {
+        let busy: i64 = row.get(0)?;
+        let log: i64 = row.get(1)?;
+        let checkpointed: i64 = row.get(2)?;
+        Ok(format!(
+            "mode={mode}, busy={busy}, log={log}, checkpointed={checkpointed}"
+        ))
+    })
 }
 
 fn quick_check(conn: &Connection, timeout: Duration) -> std::result::Result<(), String> {
@@ -1118,10 +1246,6 @@ fn pragma_string(conn: &Connection, name: &str) -> rusqlite::Result<Option<Strin
 
 fn logs_cutoff(retention_days: u32, now: i64) -> i64 {
     now - i64::from(retention_days.max(1)) * 86_400
-}
-
-fn codex_logs_db_path(codex_home: &Path) -> PathBuf {
-    codex_home.join("logs_2.sqlite")
 }
 
 fn wal_path(path: &Path) -> PathBuf {

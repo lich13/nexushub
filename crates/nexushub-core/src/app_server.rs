@@ -1,4 +1,5 @@
 use crate::{
+    codex::resolve_codex_paths,
     config::{BridgeTransport, Config},
     uploads::{prompt_with_attachment_context, PreparedAttachment},
 };
@@ -615,15 +616,17 @@ impl BlockingClient {
     }
 
     fn exchange_proxy(&self, messages: &[Value], wait_for_id: Option<&str>) -> Result<Value> {
-        let socket = self
-            .config
-            .codex
+        let resolved = resolve_codex_paths(
+            &self.config.codex.home,
+            self.config.codex.app_server_socket.as_deref(),
+        );
+        let socket = resolved
             .app_server_socket
             .as_ref()
             .context("codex.app_server_socket is not configured")?;
         let mut child = Command::new("sudo")
             .args(["-n", "env"])
-            .arg(format!("CODEX_HOME={}", self.config.codex.home.display()))
+            .arg(format!("CODEX_HOME={}", resolved.home.display()))
             .arg("codex")
             .args(["app-server", "proxy", "--sock"])
             .arg(socket)
@@ -654,9 +657,11 @@ impl BlockingClient {
     }
 
     fn exchange_websocket(&self, messages: &[Value], wait_for_id: Option<&str>) -> Result<Value> {
-        let socket = self
-            .config
-            .codex
+        let resolved = resolve_codex_paths(
+            &self.config.codex.home,
+            self.config.codex.app_server_socket.as_deref(),
+        );
+        let socket = resolved
             .app_server_socket
             .as_ref()
             .context("codex.app_server_socket is not configured")?;

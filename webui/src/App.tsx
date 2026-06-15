@@ -2769,6 +2769,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
         <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
+        <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
       </section>
 
       <section className="probe-control-grid">
@@ -2853,7 +2854,7 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
         <Metric label="app-server" value={status.data?.app_server_service.active ? "active/running" : "inactive"} tone={status.data?.app_server_service.active ? "success" : "danger"} />
         <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
-        <Metric label="Codex Home" value={status.data?.codex_home ?? "/root/.codex"} />
+        <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} />
         <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
         <Metric label="Socket" value={status.data?.app_server_socket ?? "unknown"} />
         <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
@@ -3100,10 +3101,12 @@ function ProbeRuntimeSettingsCard({
   saving: boolean;
   onSave: () => void;
 }) {
+  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
   const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
   return (
     <div className="probe-card-stack">
       <div className="form-grid compact-three">
+        <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>
         <label className="field-label">Hook 事件行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">冷却行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">日志上限 MB<input type="number" min={1} max={10} value={logBytesDraftToMb(draft.observability.log_max_bytes)} onChange={(event) => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })} /></label>
@@ -3120,7 +3123,7 @@ function ProbeLogsDbCard({ logsDb }: { logsDb?: ProbeLogsDbStatus }) {
   return (
     <div className="probe-card-stack">
       <Metric label="状态" value={probeStateLabel(status)} tone={probeLogsDbTone(status)} />
-      <Metric label="数据库路径" value={pathText(logsDb?.path)} />
+      <Metric label="数据库路径" value={logsDbPathStatusValue(logsDb)} />
       <Metric label="旧行数" value={probeLogDbNumber(logsDb, ["old_rows", "pending_cleanup_rows", "stale_rows", "would_delete_probe_events"])} />
       <Metric label="保留行数" value={probeLogDbNumber(logsDb, ["retained_rows", "retained_row_count", "total_rows", "row_count", "event_count"])} />
       <Metric label="DB 大小" value={probeLogDbSize(logsDb, ["database_size", "db_size_bytes", "database_size_bytes", "size_bytes"])} />
@@ -3142,8 +3145,46 @@ function capabilityText(provider?: Pick<AgentProviderInfo, "capabilities"> | nul
   return capabilities.length ? capabilities.join(", ") : "none";
 }
 
+type CodexHomePathFields = {
+  home?: string | null;
+  codex_home?: string | null;
+  configured_codex_home?: string | null;
+  resolved_codex_home?: string | null;
+  codex_home_source?: string | null;
+};
+
+export function codexHomeStatusValue(status?: CodexHomePathFields | null): string {
+  return pathWithSource(
+    firstStringValue(status, ["resolved_codex_home", "codex_home", "home", "configured_codex_home"]),
+    firstStringValue(status, ["codex_home_source"])
+  );
+}
+
+export function logsDbPathStatusValue(logsDb?: ProbeLogsDbStatus | null): string {
+  return pathWithSource(
+    firstStringValue(logsDb, ["resolved_logs_db_path", "resolved_path", "path", "logs_db_path"]),
+    firstStringValue(logsDb, ["logs_db_source", "source"])
+  );
+}
+
 function pathText(value?: string | null): string {
   return value && value.trim() ? value : "未知";
+}
+
+function pathWithSource(value?: string | null, source?: string | null): string {
+  const path = pathText(value);
+  const cleanedSource = source?.trim();
+  return path !== "未知" && cleanedSource ? `${path} · ${cleanedSource}` : path;
+}
+
+function firstStringValue(source: unknown, keys: string[]): string | null {
+  if (!source || typeof source !== "object") return null;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function totalClaudeSessions(overview?: ClaudeOverview): number {
