@@ -16,6 +16,7 @@ import type {
   PlatformOverview,
   PluginInfo,
   ProbeLogsDbStatus,
+  ProbeEventsResponse,
   ProbeSettings,
   ProbeStatus,
   PublicSettings,
@@ -517,6 +518,33 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
     }
   };
   return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
+}
+
+export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEventsResponse>> {
+  if (USE_DEMO) {
+    return {
+      available: true,
+      data: {
+        limit,
+        events: [
+          {
+            id: "probe-event-demo",
+            kind: "hook-stop",
+            thread_id: "019e95a0-demo",
+            title: "Codex Stop Hook",
+            message: "Stop Hook event recorded by NexusHub Probe",
+            dedupe_key: "hook-stop:019e95a0-demo:turn-demo",
+            source: "nexushubd probe hook-stop",
+            payload: { session_id: "session-demo", transcript_path: "/tmp/transcript.jsonl" },
+            created_at: new Date().toISOString(),
+            handled_at: null
+          }
+        ]
+      }
+    };
+  }
+  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : "";
+  return optionalApiFetch<ProbeEventsResponse>(`/api/probe/events${query}`);
 }
 
 export async function saveSecurity(settings: Partial<SecuritySettings> & { turnstile_secret_key?: string }, csrfToken?: string | null) {

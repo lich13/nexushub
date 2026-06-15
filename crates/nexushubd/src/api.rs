@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/probe/lifecycle", get(get_probe_lifecycle))
         .route("/api/probe/hook-status", get(get_probe_hook_status))
+        .route("/api/probe/events", get(get_probe_events))
         .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
         .route("/api/probe/bark/test", post(probe_bark_test))
         .route(
@@ -393,6 +394,33 @@ async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) 
 async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!(probe_runtime(&state).hook_status()))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeEventsQuery {
+    limit: Option<u32>,
+}
+
+async fn get_probe_events(
+    State(state): State<AppState>,
+    Query(query): Query<ProbeEventsQuery>,
+    headers: HeaderMap,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let limit = query
+        .limit
+        .unwrap_or(state.config().probe.recent_limit as u32)
+        .clamp(1, 500);
+    let events = state
+        .db
+        .list_probe_events(limit)?
+        .into_iter()
+        .map(redact_probe_event)
+        .collect::<Vec<_>>();
+    ok(json!({
+        "events": events,
+        "limit": limit,
+    }))
 }
 
 async fn get_probe_logs_db_status(
@@ -735,7 +763,7 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-async fn load_probe_threads(
+pub(crate) async fn load_probe_threads(
     state: &AppState,
     status: &'static str,
     limit: usize,
@@ -776,6 +804,36 @@ async fn load_probe_threads(
         None,
         limit.clamp(1, 200),
     ))
+}
+
+fn redact_probe_event(mut event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
+    redact_sensitive_json(&mut event.payload);
+    event
+}
+
+fn redact_sensitive_json(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                let key = key.to_ascii_lowercase();
+                if key.contains("device_key")
+                    || key.contains("secret")
+                    || key.contains("token")
+                    || key.contains("password")
+                {
+                    *value = Value::String("[redacted]".to_string());
+                } else {
+                    redact_sensitive_json(value);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn upload_files(
@@ -4503,6 +4561,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn probe_events_route_lists_recent_events_with_auth_and_redacts_sensitive_payloads() {
+        let (state, session_token, _) = authenticated_test_state();
+        state
+            .db
+            .record_probe_event(nexushub_core::db::NewProbeEvent {
+                kind: "hook-stop",
+                thread_id: Some("thread-a"),
+                title: Some("Hook event"),
+                message: Some("stop hook received"),
+                dedupe_key: Some("hook-stop:thread-a"),
+                source: "test",
+                payload: json!({
+                    "session_id": "session-a",
+                    "transcript_path": "/tmp/turn.json",
+                    "last_assistant_message": "hello",
+                    "device_key": "secret-device",
+                    "nested": { "token": "abc", "ok": true }
+                }),
+            })
+            .unwrap();
+        let app = router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/events?limit=1")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["limit"], 1);
+        assert_eq!(payload["events"].as_array().unwrap().len(), 1);
+        let event = &payload["events"][0];
+        assert_eq!(event["kind"], "hook-stop");
+        assert_eq!(event["payload"]["device_key"], "[redacted]");
+        assert_eq!(event["payload"]["nested"]["token"], "[redacted]");
+        assert_eq!(event["payload"]["session_id"], "session-a");
+        assert_eq!(event["payload"]["transcript_path"], "/tmp/turn.json");
+        assert_eq!(event["payload"]["last_assistant_message"], "hello");
+    }
+
+    #[tokio::test]
     async fn probe_manual_maintenance_routes_are_not_exposed() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
@@ -4516,7 +4635,6 @@ mod tests {
             ("POST", "/api/probe/legacy-cleanup/dry-run"),
             ("POST", "/api/probe/legacy-cleanup/execute"),
             ("GET", "/api/probe/dashboard"),
-            ("GET", "/api/probe/events"),
             ("GET", "/api/probe/running"),
             ("GET", "/api/probe/reply-needed"),
             ("GET", "/api/probe/recoverable"),

@@ -86,6 +86,7 @@ import {
   uploadFiles,
   getClaudeCodeOverview,
   getPlatformOverview,
+  getProbeEvents,
   listProviders,
   type ThreadSendPayload
 } from "./lib/api";
@@ -128,6 +129,7 @@ import type {
   PendingElicitation,
   PermissionProfile,
   PlatformOverview,
+  ProbeEvent,
   PluginInfo,
   ProbeLogsDbStatus,
   ProbeStatus,
@@ -3560,6 +3562,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000 });
   const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000 });
   const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000 });
+  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000 });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const data = status.data?.data;
@@ -3567,6 +3570,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const currentSettings = settings.data?.data;
   const settingsErrors = draft ? probeSettingsValidation(draft) : [];
   const logsDb = logsDbStatus.data?.data;
+  const recentEvents = events.data?.data?.events ?? [];
   const logsDbStatusText = logsDb?.logs_db_status ?? logsDb?.status ?? data?.logs_db_status;
   const logsDbTone = probeLogsDbTone(logsDbStatusText);
   const barkConfigured = Boolean(currentSettings?.notifications.device_key_configured || draft?.notifications.device_key_configured);
@@ -3618,6 +3622,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
             qc.invalidateQueries({ queryKey: ["probe-status"] });
             qc.invalidateQueries({ queryKey: ["probe-settings"] });
             qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
+            qc.invalidateQueries({ queryKey: ["probe-events"] });
           }}><RefreshCw size={17} />刷新</button>
           <button className="secondary-button" onClick={() => barkMutation.mutate()} disabled={!barkConfigured || barkMutation.isPending}><Cloud size={17} />测试 Bark</button>
         </div>
@@ -3637,6 +3642,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
         <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
+        <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
         <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
       </section>
@@ -3656,6 +3662,10 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
           </div>
         </Panel>
       )}
+
+      <Panel title="最近 Hook 事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+        <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
+      </Panel>
 
       <section className="probe-control-grid">
         <Panel title="Bark" icon={<Cloud size={18} />}>
@@ -4019,6 +4029,46 @@ function ProbeLogsDbCard({ logsDb }: { logsDb?: ProbeLogsDbStatus }) {
       <Metric label="最近结果" value={probeLogDbString(logsDb, ["recent_result", "last_result", "last_maintain_result", "skip_reason"])} />
     </div>
   );
+}
+
+function ProbeEventsCard({
+  events,
+  available,
+  loading
+}: {
+  events: ProbeEvent[];
+  available: boolean;
+  loading: boolean;
+}) {
+  if (!available) {
+    return <div className="muted-row">{loading ? "正在读取事件" : "事件接口不可用"}</div>;
+  }
+  if (events.length === 0) {
+    return <div className="muted-row">暂无最近 Hook 事件</div>;
+  }
+  return (
+    <div className="preview-list compact">
+      {events.map((event) => (
+        <article className="preview-item" key={event.id}>
+          <div>
+            <strong>{event.kind}</strong>
+            <span>{event.title ?? event.source}</span>
+          </div>
+          <small>{probeEventSummary(event)}</small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+export function probeEventSummary(event: ProbeEvent): string {
+  const thread = event.thread_id ? `线程 ${event.thread_id}` : "无线程";
+  const fields = [
+    event.payload?.session_id ? "session" : "",
+    event.payload?.transcript_path ? "transcript" : "",
+    event.payload?.last_assistant_message ? "assistant" : ""
+  ].filter(Boolean);
+  return [thread, fields.length ? fields.join(" · ") : "payload 已脱敏"].join(" · ");
 }
 
 function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {

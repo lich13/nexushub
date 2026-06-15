@@ -214,6 +214,24 @@ describe("archive delete API compatibility", () => {
     expect(detail.before_cursor).toBe("b:120");
   });
 
+  test("probe events request uses the dedicated endpoint and limit parameter", async () => {
+    const { getProbeEvents } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      events: [{ id: "event-1", kind: "hook-stop", source: "test", payload: {}, created_at: "2026-06-15T00:00:00Z" }],
+      limit: 10
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getProbeEvents(10);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/probe/events?limit=10");
+    expect(result.available).toBe(true);
+    expect(result.data?.events[0].kind).toBe("hook-stop");
+  });
+
   test("thread block page request uses lightweight blocks endpoint", async () => {
     const { getThreadBlocks } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({

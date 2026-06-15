@@ -321,7 +321,8 @@ impl ProbeRuntime {
 
     pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
         let event_kind = input.event_kind();
-        let thread_component = input.thread_id.as_deref().unwrap_or("unknown-thread");
+        let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
+        let thread_component = event_thread_id.as_deref().unwrap_or("unknown-thread");
         let turn_component = input.turn_id.as_deref().unwrap_or("unknown-turn");
         let dedupe_key = format!(
             "{event_kind}:{}:{}",
@@ -331,7 +332,7 @@ impl ProbeRuntime {
         let notify_completion = matches!(input.kind, ProbeEventInputKind::NotifyCompletion);
         ProbeBuiltEvent {
             kind: event_kind.to_string(),
-            thread_id: input.thread_id.clone(),
+            thread_id: event_thread_id,
             turn_id: input.turn_id.clone(),
             title: if notify_completion {
                 "任务完成".to_string()
@@ -353,6 +354,9 @@ impl ProbeRuntime {
             },
             payload: json!({
                 "turn_id": input.turn_id,
+                "session_id": input.session_id,
+                "transcript_path": input.transcript_path,
+                "last_assistant_message": input.last_assistant_message,
                 "host_label": self.config.codex.host_label,
                 "platform": self.paths.kind,
                 "notify_completion": notify_completion,
@@ -689,15 +693,32 @@ pub struct ProbeEventInput {
     kind: ProbeEventInputKind,
     thread_id: Option<String>,
     turn_id: Option<String>,
+    session_id: Option<String>,
+    transcript_path: Option<String>,
+    last_assistant_message: Option<String>,
     hook_kind: String,
 }
 
 impl ProbeEventInput {
     pub fn hook_stop(thread_id: Option<&str>, turn_id: Option<&str>, kind: &str) -> Self {
+        Self::hook_stop_with_context(thread_id, turn_id, None, None, None, kind)
+    }
+
+    pub fn hook_stop_with_context(
+        thread_id: Option<&str>,
+        turn_id: Option<&str>,
+        session_id: Option<&str>,
+        transcript_path: Option<&str>,
+        last_assistant_message: Option<&str>,
+        kind: &str,
+    ) -> Self {
         Self {
             kind: ProbeEventInputKind::HookStop,
             thread_id: thread_id.map(ToString::to_string),
             turn_id: turn_id.map(ToString::to_string),
+            session_id: session_id.map(ToString::to_string),
+            transcript_path: transcript_path.map(ToString::to_string),
+            last_assistant_message: last_assistant_message.map(ToString::to_string),
             hook_kind: if kind.trim().is_empty() {
                 "hook-stop".to_string()
             } else {
@@ -711,6 +732,9 @@ impl ProbeEventInput {
             kind: ProbeEventInputKind::NotifyCompletion,
             thread_id: thread_id.map(ToString::to_string),
             turn_id: turn_id.map(ToString::to_string),
+            session_id: None,
+            transcript_path: None,
+            last_assistant_message: None,
             hook_kind: "completion".to_string(),
         }
     }

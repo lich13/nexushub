@@ -422,6 +422,24 @@ export type ProbeStatus = {
   host_label?: string | null;
 };
 
+export type ProbeEvent = {
+  id: string;
+  kind: string;
+  thread_id?: string | null;
+  title?: string | null;
+  message?: string | null;
+  dedupe_key?: string | null;
+  source: string;
+  payload: Record<string, unknown>;
+  created_at: string | number;
+  handled_at?: string | number | null;
+};
+
+export type ProbeEventsResponse = {
+  events: ProbeEvent[];
+  limit?: number | null;
+};
+
 export type ProbeSettings = {
   codex: {
     home?: string | null;

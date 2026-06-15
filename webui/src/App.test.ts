@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { GoalModeState, MessageBlock, PluginInfo, ThreadSummary } from "./types";
+import type { GoalModeState, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
   composerFileInputAcceptValue?: () => string | undefined;
@@ -45,6 +45,7 @@ type AppExports = typeof import("./App") & {
   threadSettingsMetricLabels?: () => string[];
   threadResumeCommand?: (threadId?: string | null) => string | null;
   probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
+  probeEventSummary?: (event: ProbeEvent) => string;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -368,6 +369,31 @@ describe("conversation helpers", () => {
 
     expect(rows.map((thread) => thread.status)).toEqual(["Running", "ReplyNeeded", "Recoverable"]);
     expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
+  });
+
+  test("probe event summary shows context without leaking payload secrets", async () => {
+    const app = await loadApp();
+    const summary = app.probeEventSummary?.({
+      id: "event-1",
+      kind: "hook-stop",
+      thread_id: "thread-a",
+      title: "Codex Stop Hook",
+      message: "done",
+      source: "nexushubd probe hook-stop",
+      payload: {
+        session_id: "session-a",
+        transcript_path: "/tmp/transcript.jsonl",
+        last_assistant_message: "assistant",
+        device_key: "[redacted]"
+      },
+      created_at: "2026-06-15T00:00:00Z"
+    });
+
+    expect(summary).toContain("线程 thread-a");
+    expect(summary).toContain("session");
+    expect(summary).toContain("transcript");
+    expect(summary).toContain("assistant");
+    expect(summary).not.toContain("device");
   });
 
   test("goal status labels normalize known app-server states in Chinese", async () => {
