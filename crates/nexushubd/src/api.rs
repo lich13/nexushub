@@ -561,16 +561,19 @@ async fn probe_status_value(state: AppState) -> Value {
                 load_probe_threads(&state, "running", state.config().probe.recent_limit).await
             {
                 status.running_count = threads.len();
+                status.running_threads = threads;
             }
             if let Ok(threads) =
                 load_probe_threads(&state, "reply-needed", state.config().probe.recent_limit).await
             {
                 status.reply_needed_count = threads.len();
+                status.reply_needed_threads = threads;
             }
             if let Ok(threads) =
                 load_probe_threads(&state, "recoverable", state.config().probe.recent_limit).await
             {
                 status.recoverable_count = threads.len();
+                status.recoverable_threads = threads;
             }
             json!(status)
         }
@@ -3314,6 +3317,9 @@ fn merge_app_thread_status(
     {
         return ThreadStatus::Archived;
     }
+    if fallback.is_some_and(|thread| matches!(thread.status, ThreadStatus::Recoverable)) {
+        return ThreadStatus::Recoverable;
+    }
     match app_thread_state(thread) {
         AppThreadState::Active => ThreadStatus::Running,
         AppThreadState::Recoverable => ThreadStatus::Recoverable,
@@ -3366,7 +3372,7 @@ fn fallback_stable_status(fallback: Option<&ThreadSummary>) -> ThreadStatus {
 fn fallback_has_clearable_stale_status(summary: &ThreadSummary) -> bool {
     matches!(
         summary.status,
-        ThreadStatus::Running | ThreadStatus::ReplyNeeded | ThreadStatus::Recoverable
+        ThreadStatus::Running | ThreadStatus::ReplyNeeded
     ) && summary.rollout_path.is_some()
         && summary.active_turn_id.is_none()
         && summary.active_job_id.is_none()
@@ -5223,6 +5229,45 @@ mod tests {
         );
 
         assert_eq!(rows[0].status, ThreadStatus::Running);
+    }
+
+    #[test]
+    fn app_server_recoverable_fallback_takes_priority_over_active_signal() {
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.status = ThreadStatus::Recoverable;
+        fallback.rollout_path = Some(PathBuf::from("/tmp/rollout-thread-a.jsonl"));
+        let rows = app_server_thread_summaries(
+            &json!({
+                "threads": [{
+                    "id": "thread-a",
+                    "status": { "type": "active" },
+                    "activeTurnId": "turn-live"
+                }]
+            }),
+            &[fallback],
+        );
+
+        assert_eq!(rows[0].status, ThreadStatus::Recoverable);
+        assert_eq!(rows[0].active_turn_id.as_deref(), Some("turn-live"));
+    }
+
+    #[test]
+    fn app_server_not_loaded_preserves_recoverable_fallback() {
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.status = ThreadStatus::Recoverable;
+        fallback.rollout_path = Some(PathBuf::from("/tmp/rollout-thread-a.jsonl"));
+        let rows = app_server_thread_summaries(
+            &json!({
+                "threads": [{
+                    "id": "thread-a",
+                    "status": { "type": "notLoaded" },
+                    "path": "/tmp/rollout-thread-a.jsonl"
+                }]
+            }),
+            &[fallback],
+        );
+
+        assert_eq!(rows[0].status, ThreadStatus::Recoverable);
     }
 
     #[test]

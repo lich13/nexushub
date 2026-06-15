@@ -292,8 +292,12 @@ describe("archive delete API compatibility", () => {
         bark_status: "not_configured",
         logs_db_status: "maintenance_ready",
         recent_event_count: 0,
+        running_count: 0,
         reply_needed_count: 0,
         recoverable_count: 0,
+        running_threads: [],
+        reply_needed_threads: [],
+        recoverable_threads: [],
         config_path: "/opt/nexushub/config.toml"
       },
       "/api/probe/settings": {
@@ -455,8 +459,12 @@ describe("archive delete API compatibility", () => {
       bark_status: "configured",
       logs_db_status: "maintenance_ready",
       recent_event_count: 0,
+      running_count: 0,
       reply_needed_count: 0,
       recoverable_count: 0,
+      running_threads: [],
+      reply_needed_threads: [],
+      recoverable_threads: [],
       config_path: "/opt/nexushub/config.toml",
       codex_home: "/root/.codex",
       configured_codex_home: null,
@@ -1202,7 +1210,8 @@ describe("archive delete API compatibility", () => {
 
     expect(app.isThreadRunning({ status: "Running" }, [], null)).toBe(true);
     expect(app.isThreadRunning({ status: "Recent", active_job_id: "job-1" }, [], null)).toBe(true);
-    expect(app.isThreadRunning({ status: "Recent" }, [runningTool], null)).toBe(true);
+    expect(app.isThreadRunning({ status: "Recent" }, [runningTool], null)).toBe(false);
+    expect(app.isThreadRunning({ status: "Running", active_turn_id: "turn-1" }, [runningTool], null)).toBe(true);
     expect(app.isThreadRunning({ status: "Recent" }, [completedTool], null)).toBe(false);
     expect(app.isThreadRunning({ status: "Recent" }, [], { bridge: false, fallback: true, job_id: "job-old" })).toBe(false);
     expect(app.isThreadRunning({ status: "Running" }, [], { bridge: false, fallback: true, job_id: "job-live" })).toBe(true);

@@ -1,5 +1,5 @@
 use crate::{
-    codex::{resolve_codex_paths, ResolvedCodexPaths},
+    codex::{resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
     config::{Config, ProbeLogsDbConfig},
     platform::{PlatformKind, PlatformPaths},
 };
@@ -64,6 +64,9 @@ impl ProbeRuntime {
             running_count: 0,
             reply_needed_count: 0,
             recoverable_count: 0,
+            running_threads: Vec::new(),
+            reply_needed_threads: Vec::new(),
+            recoverable_threads: Vec::new(),
             config_path: self.paths.config_file.clone(),
             codex_home: resolved.home.clone(),
             configured_codex_home: resolved.configured_codex_home.clone(),
@@ -497,7 +500,7 @@ pub struct ProbeLifecycleStatus {
     pub next_actions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeStatus {
     pub label: String,
     pub enabled: bool,
@@ -518,6 +521,9 @@ pub struct ProbeStatus {
     pub running_count: usize,
     pub reply_needed_count: usize,
     pub recoverable_count: usize,
+    pub running_threads: Vec<ThreadSummary>,
+    pub reply_needed_threads: Vec<ThreadSummary>,
+    pub recoverable_threads: Vec<ThreadSummary>,
     pub config_path: PathBuf,
     pub codex_home: PathBuf,
     pub configured_codex_home: Option<String>,

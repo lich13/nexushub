@@ -1046,8 +1046,16 @@ function demoProbeStatus(): ProbeStatus {
     bark_status: "not_configured",
     logs_db_status: "maintenance_ready",
     recent_event_count: 1,
+    running_count: 1,
     reply_needed_count: 1,
     recoverable_count: 0,
+    running_threads: [
+      { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。" }
+    ],
+    reply_needed_threads: [
+      { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "<proposed_plan>等待确认</proposed_plan>" }
+    ],
+    recoverable_threads: [],
     lifecycle_status: "ok",
     doctor_status: "ok",
     runtime_version: "demo",

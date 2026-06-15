@@ -24,6 +24,9 @@ type AppExports = typeof import("./App") & {
     dirty: boolean;
   }) => string;
   mergeSavedThreadTitle?: (threads: ThreadSummary[], threadId: string, title: string) => ThreadSummary[];
+  threadSettingsMetricLabels?: () => string[];
+  threadResumeCommand?: (threadId?: string | null) => string | null;
+  probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -83,6 +86,9 @@ describe("conversation helpers", () => {
 
     expect(app.slashCommandSuggestions?.("/", 1).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
     expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([
+      "/goal", "/goal pause", "/goal resume", "/goal clear"
+    ]);
+    expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([
       "/goal", "/goal pause", "/goal resume", "/goal clear"
     ]);
     expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([
@@ -166,6 +172,36 @@ describe("conversation helpers", () => {
     const app = await loadApp();
 
     expect(app.composerFileInputAcceptValue?.()).toBeUndefined();
+  });
+
+  test("thread settings hides internal metrics and copies a resume command from the ID button", async () => {
+    const app = await loadApp();
+
+    expect(app.threadSettingsMetricLabels?.()).not.toEqual(expect.arrayContaining([
+      "Thread ID",
+      "Active turn",
+      "Active job",
+      "Last event",
+      "Rollout path",
+      "Blocks"
+    ]));
+    expect(app.threadResumeCommand?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
+      "codex resume 019ec943-0b86-7e22-86e9-4dc0c919b09d"
+    );
+    expect(app.threadResumeCommand?.("  ")).toBeNull();
+    expect(app.threadResumeCommand?.(null)).toBeNull();
+  });
+
+  test("probe thread rows use canonical ThreadSummary status values", async () => {
+    const app = await loadApp();
+    const rows = app.probeStatusThreads?.({
+      running_threads: [{ id: "running", title: "run", status: "Running", message_count: 1 }],
+      reply_needed_threads: [{ id: "reply", title: "reply", status: "ReplyNeeded", message_count: 1 }],
+      recoverable_threads: [{ id: "recoverable", title: "recover", status: "Recoverable", message_count: 1 }]
+    }) ?? [];
+
+    expect(rows.map((thread) => thread.status)).toEqual(["Running", "ReplyNeeded", "Recoverable"]);
+    expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
   });
 
   test("goal status labels normalize known app-server states in Chinese", async () => {

@@ -128,6 +128,7 @@ import type {
   PermissionProfile,
   PlatformOverview,
   ProbeLogsDbStatus,
+  ProbeStatus,
   ProbeSettings,
   SecuritySettings,
   SessionUser,
@@ -962,9 +963,10 @@ function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
 export type ComposerActionMode = "send" | "stop" | "followup" | "disabled";
 
 export function isThreadRunning(summary: Partial<ThreadSummary>, blocks: MessageBlock[] = [], lastResult?: Partial<BridgeActionResult> | null): boolean {
-  if (summary.status === "Running" || Boolean(summary.active_turn_id || summary.active_job_id)) return true;
-  if (blocks.some(isRunningToolBlock)) return true;
-  if (summary.status !== "Recent" && Boolean(lastResult?.turn_id || lastResult?.job_id)) return true;
+  void blocks;
+  void lastResult;
+  if (summary.status === "Running") return true;
+  if (Boolean(summary.active_turn_id || summary.active_job_id)) return true;
   return false;
 }
 
@@ -1190,6 +1192,23 @@ export function nextRenameDraftValue(input: {
 
 export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string, title: string): ThreadSummary[] {
   return threads.map((thread) => thread.id === threadId ? { ...thread, title } : thread);
+}
+
+export function threadSettingsMetricLabels(): string[] {
+  return [];
+}
+
+export function threadResumeCommand(threadId?: string | null): string | null {
+  const id = threadId?.trim();
+  return id ? `codex resume ${id}` : null;
+}
+
+export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ThreadSummary[] {
+  return [
+    ...(status?.running_threads ?? []),
+    ...(status?.reply_needed_threads ?? []),
+    ...(status?.recoverable_threads ?? [])
+  ];
 }
 
 function updateSavedThreadTitleCaches(qc: QueryClient, threadId: string, title: string) {
@@ -2253,14 +2272,19 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 
       <aside className="conversation-inspector">
         <Panel title="线程设置" icon={<SlidersHorizontal size={18} />}>
-          <Metric label="Thread ID" value={summary.id} />
-          <Metric label="Active turn" value={summary.active_turn_id ?? lastResult?.turn_id ?? "none"} tone={summary.active_turn_id ? "success" : undefined} />
-          <Metric label="Active job" value={summary.active_job_id ?? lastResult?.job_id ?? "none"} tone={summary.active_job_id ? "success" : undefined} />
-          <Metric label="Last event" value={lastEventKindText(summary)} />
-          <Metric label="Rollout path" value={summary.rollout_path ?? "none"} tone={summary.rollout_path ? "success" : undefined} />
-          <Metric label="Blocks" value={`${blocks.length}/${messageBlockState.totalBlocks}`} />
           <div className="copy-row">
-            <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(summary.id)}><Copy size={17} />复制 ID</button>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                const command = threadResumeCommand(summary.id);
+                if (!command) return;
+                navigator.clipboard?.writeText(command);
+                setActiveFeedback("已复制恢复命令");
+              }}
+              disabled={!threadResumeCommand(summary.id)}
+            >
+              <Copy size={17} />复制 ID
+            </button>
             <button
               className="secondary-button"
               onClick={() => {
@@ -3055,6 +3079,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const logsDbStatusText = logsDb?.logs_db_status ?? logsDb?.status ?? data?.logs_db_status;
   const logsDbTone = probeLogsDbTone(logsDbStatusText);
   const barkConfigured = Boolean(currentSettings?.notifications.device_key_configured || draft?.notifications.device_key_configured);
+  const probeThreads = probeStatusThreads(data);
   const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
   const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
   const statusTone = available && probeEnabled ? "success" : available ? "warning" : "danger";
@@ -3117,12 +3142,29 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
       <section className="probe-core-metrics" aria-label="探针核心指标">
         <Metric label="Codex APP" value={probeEnabled ? "运行中" : available ? "停用" : "不可用"} tone={statusTone === "danger" ? "danger" : statusTone} />
+        <Metric label="运行中" value={String(data?.running_count ?? 0)} tone={(data?.running_count ?? 0) > 0 ? "success" : undefined} />
         <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
         <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
         <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
       </section>
+
+      {probeThreads.length > 0 && (
+        <Panel title="线程状态" icon={<MessageSquare size={18} />} className="wide-panel">
+          <div className="preview-list compact">
+            {probeThreads.map((thread) => (
+              <article className="preview-item" key={`${thread.status}-${thread.id}`}>
+                <div>
+                  <strong>{threadListItemText(thread)}</strong>
+                  <small>{threadListItemPreviewText(thread) || thread.id}</small>
+                </div>
+                <span className={`thread-item-status ${thread.status}`}>{threadListItemStatusText(thread)}</span>
+              </article>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <section className="probe-control-grid">
         <Panel title="Bark" icon={<Cloud size={18} />}>

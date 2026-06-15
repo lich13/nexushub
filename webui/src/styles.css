@@ -632,8 +632,7 @@ button { cursor: pointer; }
   background: rgba(7,17,31,0.95);
   flex: 0 0 auto;
   max-height: min(42vh, 360px);
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: visible;
 }
 .composer textarea {
   width: 100%;
@@ -834,6 +833,7 @@ button { cursor: pointer; }
   z-index: 30;
   display: grid;
   gap: 4px;
+  width: min(100%, calc(100vw - 24px));
   max-height: min(420px, 48vh);
   overflow: auto;
   padding: 6px;
@@ -1102,7 +1102,7 @@ button { cursor: pointer; }
 }
 .probe-core-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 .probe-core-metrics .metric {
@@ -1760,6 +1760,7 @@ button { cursor: pointer; }
   .composer-actions { align-items: stretch; flex-direction: column; }
   .composer-actions .primary-button { width: 100%; min-width: 96px; }
   .slash-menu {
+    width: min(100%, calc(100vw - 16px));
     max-height: min(300px, 44vh);
   }
   .slash-option {

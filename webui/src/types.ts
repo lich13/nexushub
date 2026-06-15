@@ -397,8 +397,12 @@ export type ProbeStatus = {
   bark_status: string;
   logs_db_status: string;
   recent_event_count: number;
+  running_count: number;
   reply_needed_count: number;
   recoverable_count: number;
+  running_threads?: ThreadSummary[];
+  reply_needed_threads?: ThreadSummary[];
+  recoverable_threads?: ThreadSummary[];
   config_path: string;
   lifecycle_status?: string | null;
   doctor_status?: string | null;
