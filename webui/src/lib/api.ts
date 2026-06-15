@@ -416,10 +416,39 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
 export async function listPlugins(): Promise<PluginInfo[]> {
   if (USE_DEMO) {
     return [
-      { id: "codex", label: "Codex", status: "ready", kind: "builtin" },
-      { id: "probe", label: "Probe", status: "preview", kind: "builtin" },
-      { id: "claude-code", label: "Claude Code", status: "preview", kind: "builtin" },
-      { id: "system-ops", label: "System/Ops", status: "ready", kind: "builtin" }
+      {
+        id: "codex",
+        label: "Codex",
+        status: "ready",
+        kind: "builtin",
+        description: "Codex app-server 会话、线程和受控操作",
+        invocation_template: "@Codex "
+      },
+      {
+        id: "probe",
+        label: "Probe",
+        status: "ready",
+        kind: "builtin",
+        description: "云机探针状态、Hook、Bark 和日志库维护",
+        invocation_template: "@Probe "
+      },
+      {
+        id: "claude_code",
+        label: "Claude Code",
+        status: "preview",
+        kind: "builtin",
+        description: "Claude Code 项目、会话和 MCP 只读预览",
+        unavailable_reason: "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code",
+        invocation_template: "@Claude Code "
+      },
+      {
+        id: "system_ops",
+        label: "System/Ops",
+        status: "ready",
+        kind: "builtin",
+        description: "固定系统运维动作和发布更新任务",
+        invocation_template: "@System/Ops "
+      }
     ];
   }
   return apiFetch<PluginInfo[]>("/api/plugins");

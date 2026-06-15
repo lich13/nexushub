@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { GoalModeState, ThreadSummary } from "./types";
+import type { GoalModeState, MessageBlock, PluginInfo, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
   composerFileInputAcceptValue?: () => string | undefined;
@@ -16,6 +16,22 @@ type AppExports = typeof import("./App") & {
     selected: number;
     suggestions: Array<{ command: string }>;
   }) => { action: "move"; selected: number } | { action: "insert"; command: string } | { action: "dismiss" } | { action: "none" };
+  pluginMentionSuggestions?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean) => Array<{ id: string; label: string; description: string; unavailableReason?: string | null }>;
+  applyPluginMentionSelection?: (draft: string, cursor: number, plugin: Pick<PluginInfo, "id" | "label" | "invocation_template">) => { value: string; cursor: number };
+  renderPluginMentionMenuHtml?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean, selected?: number) => string;
+  activeComposerMenuKind?: (draft: string, cursor: number, plugins?: PluginInfo[] | null) => "slash" | "plugin" | null;
+  exactSlashCommandFromDraft?: (draft: string) => string | null;
+  composerMenuKeyAction?: (input: {
+    key: string;
+    shiftKey?: boolean;
+    composing?: boolean;
+    selected: number;
+    suggestions: Array<{ command?: string; id?: string }>;
+  }) => { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" };
+  slashCommandAction?: (command: string, hasThread?: boolean) => { kind: string; message?: string; command?: string };
+  planModeButtonState?: (nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan?: boolean, hasPendingQuestion?: boolean) => { pressed: boolean; label: string; statusText: string };
+  runConfigAfterSuccessfulSend?: <T extends { collaborationMode: string }>(config: T) => T;
+  latestAssistantCopyText?: (blocks: MessageBlock[]) => string | null;
   nextRenameDraftValue?: (input: {
     previousThreadId: string;
     threadId: string;
@@ -133,6 +149,108 @@ describe("conversation helpers", () => {
       value: "继续 /goal resume ",
       cursor: "继续 /goal resume ".length
     });
+  });
+
+  test("@ plugin mention helpers filter, insert, render fallback, and ignore non-trigger contexts", async () => {
+    const app = await loadApp();
+    const plugins: PluginInfo[] = [
+      { id: "probe", label: "Probe", status: "ready", kind: "builtin", description: "探针状态和维护" },
+      { id: "plugins", label: "Plugins", status: "preview", kind: "builtin", description: "插件列表" },
+      { id: "claude-code", label: "Claude Code", status: "planned", kind: "builtin", unavailable_reason: "当前仅支持只读预览" }
+    ];
+
+    expect(app.pluginMentionSuggestions?.("@", 1, plugins).map((item) => item.id)).toEqual(["probe", "plugins", "claude-code"]);
+    expect(app.pluginMentionSuggestions?.("@p", 2, plugins).map((item) => item.id)).toEqual(["probe", "plugins"]);
+    expect(app.pluginMentionSuggestions?.("mail a@b.com", "mail a@b.com".length, plugins)).toEqual([]);
+    expect(app.pluginMentionSuggestions?.("const x='@p'", "const x='@p'".length, plugins)).toEqual([]);
+    expect(app.pluginMentionSuggestions?.("@p", 2, null, true)).toEqual([
+      expect.objectContaining({ id: "__plugins_unavailable__", description: expect.stringContaining("当前无法读取插件列表") })
+    ]);
+
+    expect(app.applyPluginMentionSelection?.("请调用 @p", "请调用 @p".length, plugins[0])).toEqual({
+      value: "请调用 @Probe ",
+      cursor: "请调用 @Probe ".length
+    });
+    expect(app.renderPluginMentionMenuHtml?.("@claude", 7, plugins)).toContain("当前仅支持只读预览");
+  });
+
+  test("composer menu kind gives the nearest valid trigger priority and shares TUI key semantics", async () => {
+    const app = await loadApp();
+    const plugins: PluginInfo[] = [{ id: "probe", label: "Probe", status: "ready", kind: "builtin" }];
+
+    expect(app.activeComposerMenuKind?.("/", 1, plugins)).toBe("slash");
+    expect(app.activeComposerMenuKind?.("/goal @p", "/goal @p".length, plugins)).toBe("plugin");
+    expect(app.activeComposerMenuKind?.("@probe /go", "@probe /go".length, plugins)).toBe("slash");
+    expect(app.composerMenuKeyAction?.({ key: "Enter", composing: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
+    expect(app.composerMenuKeyAction?.({ key: "Enter", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
+    expect(app.composerMenuKeyAction?.({ key: "Enter", shiftKey: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
+  });
+
+  test("exact slash command detection separates execution from partial candidate insertion", async () => {
+    const app = await loadApp();
+
+    expect(app.exactSlashCommandFromDraft?.("/plan")).toBe("/plan");
+    expect(app.exactSlashCommandFromDraft?.(" /goal   resume ")).toBe("/goal resume");
+    expect(app.exactSlashCommandFromDraft?.("/go")).toBeNull();
+    expect(app.exactSlashCommandFromDraft?.("/goal r")).toBeNull();
+  });
+
+  test("slash command action classifier only exposes controlled web actions and Chinese unavailable reasons", async () => {
+    const app = await loadApp();
+
+    expect(app.slashCommandAction?.("/plan")).toEqual({ kind: "toggle_plan_mode", command: "/plan" });
+    expect(app.slashCommandAction?.("/new")).toEqual({ kind: "open_new_thread", command: "/new" });
+    expect(app.slashCommandAction?.("/goal resume")).toEqual({ kind: "resume_goal", command: "/goal resume" });
+    expect(app.slashCommandAction?.("/goal resume", false)).toEqual({
+      kind: "requires_thread",
+      command: "/goal resume",
+      message: expect.stringContaining("需要已有线程")
+    });
+    expect(app.slashCommandAction?.("/theme")).toEqual({
+      kind: "unavailable",
+      command: "/theme",
+      message: expect.stringContaining("Web 端暂不支持")
+    });
+    expect(app.slashCommandAction?.("/unknown")).toEqual({
+      kind: "unknown",
+      command: "/unknown",
+      message: expect.stringContaining("未知")
+    });
+  });
+
+  test("plan mode button is a next-send state and successful sends reset it", async () => {
+    const app = await loadApp();
+
+    expect(app.planModeButtonState?.(true, "Recent", false, false)).toEqual({
+      pressed: true,
+      label: "Plan Mode",
+      statusText: "下一条消息将使用 Plan Mode"
+    });
+    expect(app.planModeButtonState?.(false, "ReplyNeeded", true, false)).toEqual({
+      pressed: false,
+      label: "Plan Mode",
+      statusText: "当前线程正在等待计划确认"
+    });
+    expect(app.planModeButtonState?.(false, "ReplyNeeded", false, true)?.statusText).toBe("当前线程正在等待问题回复");
+    expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "plan", other: "kept" })).toEqual({
+      collaborationMode: "",
+      other: "kept"
+    });
+  });
+
+  test("latest assistant copy text skips tools, plans, and internal context", async () => {
+    const app = await loadApp();
+    const blocks: MessageBlock[] = [
+      { id: "u1", role: "user", kind: "message", text: "hello", questions: [] },
+      { id: "a1", role: "assistant", kind: "message", text: "first reply", questions: [] },
+      { id: "t1", role: "tool", kind: "function_call_output", text: "tool output", questions: [] },
+      { id: "p1", role: "assistant", kind: "plan", text: "<proposed_plan>ship</proposed_plan>", questions: [] },
+      { id: "ctx", role: "assistant", kind: "message", text: "<environment_context>hidden</environment_context>", questions: [] },
+      { id: "a2", role: "assistant", kind: "agentMessage", text: "final reply", questions: [] }
+    ];
+
+    expect(app.latestAssistantCopyText?.(blocks)).toBe("final reply");
+    expect(app.latestAssistantCopyText?.(blocks.slice(0, -1))).toBe("first reply");
   });
 
   test("title refresh keeps a dirty local edit for the same thread but syncs on thread switch", async () => {

@@ -383,6 +383,9 @@ export type PluginInfo = {
   label: string;
   status: "ready" | "preview" | "planned" | string;
   kind: "builtin" | "external" | string;
+  description?: string | null;
+  unavailable_reason?: string | null;
+  invocation_template?: string | null;
 };
 
 export type ProbeStatus = {

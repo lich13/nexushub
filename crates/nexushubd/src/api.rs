@@ -231,10 +231,39 @@ async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) ->
 async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(json!([
-        {"id": "codex", "label": "Codex", "status": "ready", "kind": "builtin"},
-        {"id": "probe", "label": "探针", "status": "ready", "kind": "builtin"},
-        {"id": "claude_code", "label": "Claude Code", "status": "preview", "kind": "builtin"},
-        {"id": "system_ops", "label": "System / Ops", "status": "ready", "kind": "builtin"}
+        {
+            "id": "codex",
+            "label": "Codex",
+            "status": "ready",
+            "kind": "builtin",
+            "description": "Codex app-server 会话、线程和受控操作",
+            "invocation_template": "@Codex "
+        },
+        {
+            "id": "probe",
+            "label": "Probe",
+            "status": "ready",
+            "kind": "builtin",
+            "description": "云机探针状态、Hook、Bark 和日志库维护",
+            "invocation_template": "@Probe "
+        },
+        {
+            "id": "claude_code",
+            "label": "Claude Code",
+            "status": "preview",
+            "kind": "builtin",
+            "description": "Claude Code 项目、会话和 MCP 只读预览",
+            "unavailable_reason": "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code",
+            "invocation_template": "@Claude Code "
+        },
+        {
+            "id": "system_ops",
+            "label": "System/Ops",
+            "status": "ready",
+            "kind": "builtin",
+            "description": "固定系统运维动作和发布更新任务",
+            "invocation_template": "@System/Ops "
+        }
     ]))
 }
 
@@ -4901,6 +4930,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_list_exposes_descriptions_and_unavailable_reasons_for_composer_mentions() {
+        let (state, session_token, _csrf_token) = authenticated_test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/plugins")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let plugins: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = plugins.as_array().unwrap();
+
+        assert!(rows.iter().any(|plugin| {
+            plugin["id"] == "probe"
+                && plugin["description"]
+                    .as_str()
+                    .is_some_and(|value| value.contains("探针"))
+        }));
+        assert!(rows.iter().any(|plugin| {
+            plugin["id"] == "claude_code"
+                && plugin["unavailable_reason"]
+                    .as_str()
+                    .is_some_and(|value| value.contains("只读"))
+        }));
+    }
+
+    #[tokio::test]
     async fn claude_code_fixed_job_routes_require_csrf_and_start_known_jobs() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
@@ -6030,6 +6094,52 @@ mod tests {
         assert_eq!(detail.summary.status, ThreadStatus::Recent);
         assert!(detail.summary.pending_elicitation.is_none());
         assert!(detail.summary.active_turn_id.is_none());
+    }
+
+    #[test]
+    fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.status = ThreadStatus::ReplyNeeded;
+        fallback.active_turn_id = Some("turn-choice".to_string());
+        fallback.pending_elicitation = Some(nexushub_core::codex::PendingElicitation {
+            turn_id: Some("turn-choice".to_string()),
+            item_id: Some("item-choice".to_string()),
+            questions: Vec::new(),
+        });
+        let app_value = json!({
+            "threads": [{
+                "id": "thread-a",
+                "name": "wanka",
+                "status": { "type": "idle" }
+            }]
+        });
+        let rows = app_server_thread_summaries(&app_value, &[fallback.clone()]);
+        let mut detail = ThreadDetail {
+            summary: fallback,
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+        };
+        apply_app_server_thread_detail(
+            &mut detail,
+            &json!({
+                "thread": {
+                    "id": "thread-a",
+                    "name": "wanka",
+                    "status": { "type": "idle" }
+                }
+            }),
+        );
+        let reply_needed = filter_thread_summaries(rows.clone(), Some("reply-needed"), None, 50);
+        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+
+        assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
+        assert_eq!(detail.summary.status, ThreadStatus::ReplyNeeded);
+        assert_eq!(reply_needed.len(), 1);
+        assert!(running.is_empty());
     }
 
     #[test]

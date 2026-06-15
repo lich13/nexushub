@@ -171,6 +171,26 @@ describe("archive delete API compatibility", () => {
     expect(JSON.parse(options.body)).toEqual({ turn_id: "turn-live", job_id: "job-live" });
   });
 
+  test("demo plugin list mirrors composer mention metadata", async () => {
+    vi.resetModules();
+    const { listPlugins } = await import("./api");
+
+    const plugins = await listPlugins();
+
+    expect(plugins).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "codex",
+        description: expect.stringContaining("app-server"),
+        invocation_template: "@Codex "
+      }),
+      expect.objectContaining({
+        id: "claude_code",
+        unavailable_reason: expect.stringContaining("只读"),
+        invocation_template: "@Claude Code "
+      })
+    ]));
+  });
+
   test("thread detail request supports pagination query parameters", async () => {
     const { getThread } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
@@ -812,6 +832,18 @@ describe("archive delete API compatibility", () => {
     ]);
   });
 
+  test("plugin mention helpers expose @ as the web plugin trigger instead of dollar", async () => {
+    const app = await import("../App");
+    const plugins = [
+      { id: "probe", label: "Probe", status: "ready", kind: "builtin", description: "探针状态" },
+      { id: "system-ops", label: "System/Ops", status: "ready", kind: "builtin", description: "固定运维动作" }
+    ];
+
+    expect(app.pluginMentionSuggestions("@", 1, plugins).map((item) => item.id)).toEqual(["probe", "system-ops"]);
+    expect(app.pluginMentionSuggestions("$", 1, plugins)).toEqual([]);
+    expect(app.activeComposerMenuKind("$p", 2, plugins)).toBeNull();
+  });
+
   test("does not surface stale pending blocks without reply-needed state or active turn", async () => {
     const app = await import("../App");
     const oldChoice = {
@@ -1210,6 +1242,8 @@ describe("archive delete API compatibility", () => {
 
     expect(app.isThreadRunning({ status: "Running" }, [], null)).toBe(true);
     expect(app.isThreadRunning({ status: "Recent", active_job_id: "job-1" }, [], null)).toBe(true);
+    expect(app.isThreadRunning({ status: "ReplyNeeded", active_turn_id: "turn-1" }, [], null)).toBe(false);
+    expect(app.isThreadListItemRunning({ status: "Recoverable", active_turn_id: "turn-1" })).toBe(false);
     expect(app.isThreadRunning({ status: "Recent" }, [runningTool], null)).toBe(false);
     expect(app.isThreadRunning({ status: "Running", active_turn_id: "turn-1" }, [runningTool], null)).toBe(true);
     expect(app.isThreadRunning({ status: "Recent" }, [completedTool], null)).toBe(false);

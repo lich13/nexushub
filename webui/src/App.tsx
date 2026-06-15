@@ -60,6 +60,7 @@ import {
   getThread,
   getThreadBlocks,
   listFollowUps,
+  listPlugins,
   listModels,
   listJobs,
   listPermissionProfiles,
@@ -127,6 +128,7 @@ import type {
   PendingElicitation,
   PermissionProfile,
   PlatformOverview,
+  PluginInfo,
   ProbeLogsDbStatus,
   ProbeStatus,
   ProbeSettings,
@@ -217,6 +219,20 @@ type SlashCommand = {
   usageHint: string;
   requiresThread?: boolean;
 };
+
+type PluginMentionCandidate = {
+  id: string;
+  label: string;
+  description: string;
+  unavailableReason?: string | null;
+  plugin?: PluginInfo;
+};
+
+type SlashCommandAction =
+  | { kind: "archive_thread" | "clear_goal" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "resume_goal" | "stop_thread" | "toggle_fast" | "toggle_plan_mode"; command: string; message?: string }
+  | { kind: "focus_control" | "insert_template" | "requires_thread" | "unavailable" | "unknown"; command: string; message: string };
+
+type ControlledSlashActionKind = "archive_thread" | "clear_goal" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "resume_goal" | "stop_thread" | "toggle_fast" | "toggle_plan_mode";
 
 export const slashCommands: SlashCommand[] = [
   { command: "/permissions", description: "调整权限与审批模式", usageHint: "/permissions" },
@@ -326,6 +342,7 @@ export default function App() {
             csrfToken={session.csrf_token}
             mobileThreadsOpen={mobileThreadsOpen}
             setMobileThreadsOpen={setMobileThreadsOpen}
+            setView={setView}
           />
         )}
         {view === "claude" && <ClaudeWorkspace />}
@@ -528,10 +545,11 @@ function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => v
   );
 }
 
-function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen }: {
+function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, setView }: {
   csrfToken?: string | null;
   mobileThreadsOpen: boolean;
   setMobileThreadsOpen: (open: boolean) => void;
+  setView: (view: View) => void;
 }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState("all");
@@ -621,6 +639,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen }: {
             messageStore={messageStore}
             csrfToken={csrfToken}
             onSelect={(id) => selectThread(id)}
+            onPanelSelect={setView}
           />
         ) : (
           <EmptyConversation
@@ -966,7 +985,7 @@ export function isThreadRunning(summary: Partial<ThreadSummary>, blocks: Message
   void blocks;
   void lastResult;
   if (summary.status === "Running") return true;
-  if (Boolean(summary.active_turn_id || summary.active_job_id)) return true;
+  if (summary.status === "Recent" && Boolean(summary.active_job_id)) return true;
   return false;
 }
 
@@ -1090,15 +1109,43 @@ type SlashQuery = {
   value: string;
 };
 
-function activeSlashQuery(draft: string, cursor: number): SlashQuery | null {
+type TriggerQuery = SlashQuery & {
+  trigger: "/" | "@";
+};
+
+function isInsideSimpleCodeContext(before: string): boolean {
+  const backticks = (before.match(/`/g) ?? []).length;
+  if (backticks % 2 === 1) return true;
+  const singleQuotes = (before.match(/'/g) ?? []).length;
+  const doubleQuotes = (before.match(/"/g) ?? []).length;
+  return singleQuotes % 2 === 1 || doubleQuotes % 2 === 1;
+}
+
+function activeTriggerQuery(draft: string, cursor: number, trigger: "/" | "@"): TriggerQuery | null {
   const safeCursor = Math.max(0, Math.min(cursor, draft.length));
   const before = draft.slice(0, safeCursor);
-  const start = before.lastIndexOf("/");
+  const start = before.lastIndexOf(trigger);
   if (start < 0) return null;
   if (start > 0 && !/\s/.test(before[start - 1])) return null;
   const value = before.slice(start);
-  if (!value.startsWith("/") || value.includes("\n")) return null;
-  return { start, end: safeCursor, value };
+  if (!value.startsWith(trigger) || value.includes("\n")) return null;
+  if (trigger === "@" && isInsideSimpleCodeContext(before)) return null;
+  return { start, end: safeCursor, value, trigger };
+}
+
+function activeSlashQuery(draft: string, cursor: number): SlashQuery | null {
+  return activeTriggerQuery(draft, cursor, "/");
+}
+
+function activePluginMentionQuery(draft: string, cursor: number): SlashQuery | null {
+  return activeTriggerQuery(draft, cursor, "@");
+}
+
+function nearestActiveComposerQuery(draft: string, cursor: number): TriggerQuery | null {
+  const slash = activeTriggerQuery(draft, cursor, "/");
+  const plugin = activeTriggerQuery(draft, cursor, "@");
+  if (slash && plugin) return slash.start > plugin.start ? slash : plugin;
+  return slash ?? plugin;
 }
 
 export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true): SlashCommand[] {
@@ -1119,10 +1166,95 @@ export function applySlashCommandSelection(draft: string, cursor: number, comman
   return { value, cursor: query.start + insertion.length };
 }
 
+export function pluginMentionSuggestions(
+  draft: string,
+  cursor: number,
+  plugins: PluginInfo[] | null | undefined = [],
+  unavailable = false
+): PluginMentionCandidate[] {
+  const query = activePluginMentionQuery(draft, cursor);
+  if (!query) return [];
+  const needle = query.value.slice(1).trim().toLowerCase();
+  const rows = plugins ?? [];
+  if (unavailable || rows.length === 0) {
+    return [{
+      id: "__plugins_unavailable__",
+      label: "插件列表不可用",
+      description: "当前无法读取插件列表",
+      unavailableReason: "请稍后刷新，或在插件/Provider 页面查看可用能力。"
+    }];
+  }
+  return rows
+    .filter((plugin) => {
+      if (!needle) return true;
+      return plugin.id.toLowerCase().includes(needle) || plugin.label.toLowerCase().includes(needle);
+    })
+    .map((plugin) => ({
+      id: plugin.id,
+      label: plugin.label,
+      description: plugin.description || plugin.kind || "插件能力",
+      unavailableReason: plugin.unavailable_reason || (plugin.status === "planned" ? "当前能力尚未启用" : null),
+      plugin
+    }));
+}
+
+export function applyPluginMentionSelection(
+  draft: string,
+  cursor: number,
+  plugin: Pick<PluginInfo, "id" | "label" | "invocation_template">
+): { value: string; cursor: number } {
+  const query = activePluginMentionQuery(draft, cursor);
+  const label = (plugin.invocation_template || plugin.label || plugin.id).trim();
+  const insertion = label.startsWith("@") ? `${label} ` : `@${label} `;
+  if (!query) {
+    const value = `${draft.slice(0, cursor)}${insertion}${draft.slice(cursor)}`;
+    return { value, cursor: cursor + insertion.length };
+  }
+  const value = `${draft.slice(0, query.start)}${insertion}${draft.slice(query.end)}`;
+  return { value, cursor: query.start + insertion.length };
+}
+
+export function exactSlashCommandFromDraft(draft: string): string | null {
+  const command = draft.trim().replace(/\s+/g, " ");
+  return slashCommands.some((item) => item.command === command) ? command : null;
+}
+
+export function activeComposerMenuKind(draft: string, cursor: number, plugins?: PluginInfo[] | null): "slash" | "plugin" | null {
+  void plugins;
+  const query = nearestActiveComposerQuery(draft, cursor);
+  if (query?.trigger === "/") return "slash";
+  if (query?.trigger === "@") return "plugin";
+  return null;
+}
+
 export function nextSlashCommandSelection(current: number, total: number, key: string): number {
   if (key === "ArrowDown") return moveActionSelection(current, total, 1);
   if (key === "ArrowUp") return moveActionSelection(current, total, -1);
   return current;
+}
+
+export function composerMenuKeyAction({
+  key,
+  shiftKey = false,
+  composing = false,
+  selected,
+  suggestions
+}: {
+  key: string;
+  shiftKey?: boolean;
+  composing?: boolean;
+  selected: number;
+  suggestions: Array<{ command?: string; id?: string }>;
+}): { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" } {
+  if (composing) return { action: "none" };
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    return { action: "move", selected: nextSlashCommandSelection(selected, suggestions.length, key) };
+  }
+  if (key === "Escape") return { action: "dismiss" };
+  if (key === "Enter" && !shiftKey && suggestions.length > 0) {
+    return { action: "insert", index: Math.min(Math.max(selected, 0), suggestions.length - 1) };
+  }
+  return { action: "none" };
 }
 
 export function slashCommandKeyAction({
@@ -1144,6 +1276,70 @@ export function slashCommandKeyAction({
     return { action: "insert", command: suggestions[selected]?.command ?? suggestions[0].command };
   }
   return { action: "none" };
+}
+
+const controlledSlashActions: Record<string, ControlledSlashActionKind> = {
+  "/new": "open_new_thread",
+  "/resume": "open_resume",
+  "/archive": "archive_thread",
+  "/fork": "fork_thread",
+  "/stop": "stop_thread",
+  "/goal": "open_thread_settings",
+  "/goal resume": "resume_goal",
+  "/goal clear": "clear_goal",
+  "/fast": "toggle_fast",
+  "/plan": "toggle_plan_mode",
+  "/status": "open_status",
+  "/debug-config": "open_debug_config",
+  "/copy": "copy_latest",
+  "/plugins": "open_plugins",
+  "/apps": "open_plugins",
+  "/skills": "open_plugins"
+};
+
+const focusSlashCommands = new Set(["/model", "/permissions", "/title"]);
+const templateSlashCommands = new Set(["/compact", "/diff", "/mention", "/review", "/side", "/btw", "/raw", "/init", "/approve"]);
+const unavailableSlashCommands: Record<string, string> = {
+  "/ide": "Web 端暂不支持注入 IDE 上下文；可在本机 Codex TUI 中使用该命令。",
+  "/vim": "Web 端暂不支持 Vim 输入模式；请使用浏览器输入法或本机 TUI。",
+  "/keymap": "Web 端暂不支持 TUI 快捷键设置；浏览器快捷键由系统和浏览器管理。",
+  "/theme": "Web 端暂不支持 TUI 主题切换；NexusHub 使用固定设计系统。",
+  "/exit": "Web 端暂不需要退出 TUI；关闭页面或切换线程即可。",
+  "/quit": "Web 端暂不需要退出 TUI；关闭页面或切换线程即可。",
+  "/sandbox-add-read-dir": "Web 端暂不支持动态添加沙盒只读目录；请通过 Codex 配置或受控权限预设处理。",
+  "/agent": "Web 端暂不支持切换子代理控制台；可在线程列表查看主线程。",
+  "/hooks": "Web 端 Hook 维护在探针页面处理。",
+  "/clear": "Web 端不清空历史线程；可清空当前输入或新建线程。",
+  "/experimental": "Web 端暂不暴露实验开关。",
+  "/memories": "Web 端暂不管理本机记忆；请在 Codex TUI 或本地文件中查看。",
+  "/feedback": "Web 端暂不接入反馈通道。",
+  "/logout": "请使用左下角退出登录按钮。",
+  "/mcp": "Web 端暂不直接操作 MCP；可在插件/Provider 页面查看可用能力。",
+  "/personality": "Web 端暂不支持切换 Personality。请在 Codex 配置中调整。",
+  "/ps": "Web 端暂不显示后台终端列表；当前固定运维任务在 Job History 中查看。",
+  "/statusline": "Web 端暂不配置 TUI 状态栏。"
+};
+
+export function slashCommandAction(command: string, hasThread = true): SlashCommandAction {
+  const normalized = command.trim().replace(/\s+/g, " ");
+  const known = slashCommands.find((item) => item.command === normalized);
+  if (!known) return { kind: "unknown", command: normalized, message: "未知 Slash 命令" };
+  if (known.requiresThread && !hasThread) {
+    return { kind: "requires_thread", command: normalized, message: "该命令需要已有线程，请先选择或创建线程。" };
+  }
+  const controlled = controlledSlashActions[normalized];
+  if (controlled) return { kind: controlled, command: normalized };
+  if (focusSlashCommands.has(normalized)) {
+    return { kind: "focus_control", command: normalized, message: "请使用输入框下方的同名控制项调整。" };
+  }
+  if (templateSlashCommands.has(normalized)) {
+    return { kind: "insert_template", command: normalized, message: "已插入命令模板，请补充参数后发送。" };
+  }
+  return {
+    kind: "unavailable",
+    command: normalized,
+    message: unavailableSlashCommands[normalized] ?? "Web 端暂不支持该 TUI 命令；请使用现有面板或本机 Codex TUI。"
+  };
 }
 
 function escapeHtml(value: string): string {
@@ -1172,6 +1368,58 @@ export function renderSlashCommandMenuHtml(draft: string, cursor: number, hasThr
     ].join("");
   }).join("");
   return `<div class="slash-menu" role="listbox" aria-label="Slash 命令">${options}</div>`;
+}
+
+export function renderPluginMentionMenuHtml(
+  draft: string,
+  cursor: number,
+  plugins: PluginInfo[] | null | undefined = [],
+  unavailable = false,
+  selected = 0
+): string {
+  const suggestions = pluginMentionSuggestions(draft, cursor, plugins, unavailable);
+  if (suggestions.length === 0) return "";
+  const options = suggestions.map((item, index) => {
+    const className = index === selected ? "slash-option selected" : "slash-option";
+    const reason = item.unavailableReason ? `<em>${escapeHtml(item.unavailableReason)}</em>` : "";
+    return [
+      `<button type="button" class="${className}" role="option" aria-selected="${index === selected}">`,
+      `<strong>@${escapeHtml(item.label)}</strong>`,
+      '<span class="slash-option-copy">',
+      `<span>${escapeHtml(item.description)}</span>`,
+      reason,
+      "</span>",
+      "</button>"
+    ].join("");
+  }).join("");
+  return `<div class="slash-menu" role="listbox" aria-label="@ 插件">${options}</div>`;
+}
+
+export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan = false, hasPendingQuestion = false): { pressed: boolean; label: string; statusText: string } {
+  if (threadStatus === "ReplyNeeded" && hasPendingPlan) {
+    return { pressed: nextMessagePlan, label: "Plan Mode", statusText: "当前线程正在等待计划确认" };
+  }
+  if (threadStatus === "ReplyNeeded" && hasPendingQuestion) {
+    return { pressed: nextMessagePlan, label: "Plan Mode", statusText: "当前线程正在等待问题回复" };
+  }
+  return {
+    pressed: nextMessagePlan,
+    label: "Plan Mode",
+    statusText: nextMessagePlan ? "下一条消息将使用 Plan Mode" : "下一条消息将直接发送"
+  };
+}
+
+export function runConfigAfterSuccessfulSend<T extends { collaborationMode: string }>(config: T): T {
+  if (config.collaborationMode !== "plan") return config;
+  return { ...config, collaborationMode: "" };
+}
+
+export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
+  const latest = [...blocks].reverse().find((block) =>
+    block.role === "assistant" && shouldRenderConversationMessage(block)
+  );
+  const text = latest ? messageBlockText(latest).trim() : "";
+  return text || null;
 }
 
 export function nextRenameDraftValue(input: {
@@ -1347,12 +1595,20 @@ function SlashCommandTextarea({
   onChange,
   placeholder,
   hasThread,
+  plugins,
+  pluginsUnavailable = false,
+  onSlashCommand,
+  onSubmitShortcut,
   disabled = false
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
   hasThread: boolean;
+  plugins?: PluginInfo[] | null;
+  pluginsUnavailable?: boolean;
+  onSlashCommand?: (command: string) => void;
+  onSubmitShortcut?: () => void;
   disabled?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1360,8 +1616,12 @@ function SlashCommandTextarea({
   const [selected, setSelected] = useState(0);
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
   const signature = `${value}:${cursor}`;
-  const suggestions = dismissedSignature === signature ? [] : slashCommandSuggestions(value, cursor, hasThread);
+  const menuKind = activeComposerMenuKind(value, cursor, plugins);
+  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread) : [];
+  const pluginSuggestions = menuKind === "plugin" ? pluginMentionSuggestions(value, cursor, plugins, pluginsUnavailable) : [];
+  const suggestions = dismissedSignature === signature ? [] : menuKind === "plugin" ? pluginSuggestions : slashSuggestions;
   const open = suggestions.length > 0;
+  const ariaLabel = menuKind === "plugin" ? "@ 插件" : "Slash 命令";
   const updateCursor = (target: HTMLTextAreaElement) => setCursor(target.selectionStart ?? target.value.length);
   const insertCommand = (command: string) => {
     const next = applySlashCommandSelection(value, cursor, command);
@@ -1375,6 +1635,28 @@ function SlashCommandTextarea({
       textarea.setSelectionRange(next.cursor, next.cursor);
     });
   };
+  const insertPlugin = (candidate: PluginMentionCandidate) => {
+    if (candidate.id === "__plugins_unavailable__") return;
+    const plugin = candidate.plugin ?? { id: candidate.id, label: candidate.label, status: "ready", kind: "builtin" };
+    const next = applyPluginMentionSelection(value, cursor, plugin);
+    onChange(next.value);
+    setCursor(next.cursor);
+    setSelected(0);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(next.cursor, next.cursor);
+    });
+  };
+  const maybeRunExactSlashCommand = () => {
+    if (!onSlashCommand) return false;
+    const command = exactSlashCommandFromDraft(value);
+    if (!command) return false;
+    onSlashCommand(command);
+    return true;
+  };
+  const selectedSlashMatchesExactDraft = (command: string) => exactSlashCommandFromDraft(value) === command;
 
   useEffect(() => {
     if (selected >= suggestions.length) setSelected(0);
@@ -1383,24 +1665,29 @@ function SlashCommandTextarea({
   return (
     <div className="slash-composer">
       {open && (
-        <div className="slash-menu" role="listbox" aria-label="Slash 命令">
+        <div className="slash-menu" role="listbox" aria-label={ariaLabel}>
           {suggestions.map((item, index) => (
             <button
-              key={item.command}
+              key={menuKind === "plugin" ? (item as PluginMentionCandidate).id : (item as SlashCommand).command}
               type="button"
               className={index === selected ? "slash-option selected" : "slash-option"}
               onMouseDown={(event) => {
                 event.preventDefault();
-                insertCommand(item.command);
+                if (menuKind === "plugin") {
+                  insertPlugin(item as PluginMentionCandidate);
+                } else {
+                  insertCommand((item as SlashCommand).command);
+                }
               }}
               role="option"
               aria-selected={index === selected}
             >
-              <strong>{item.command}</strong>
+              <strong>{menuKind === "plugin" ? `@${(item as PluginMentionCandidate).label}` : (item as SlashCommand).command}</strong>
               <span className="slash-option-copy">
                 <span>{item.description}</span>
-                <small>用法 {item.usageHint}</small>
-                {item.requiresThread && !hasThread ? <em>需要已有线程</em> : null}
+                {menuKind === "plugin" ? null : <small>用法 {(item as SlashCommand).usageHint}</small>}
+                {menuKind === "plugin" && (item as PluginMentionCandidate).unavailableReason ? <em>{(item as PluginMentionCandidate).unavailableReason}</em> : null}
+                {menuKind !== "plugin" && (item as SlashCommand).requiresThread && !hasThread ? <em>需要已有线程</em> : null}
               </span>
             </button>
           ))}
@@ -1424,8 +1711,23 @@ function SlashCommandTextarea({
           updateCursor(event.currentTarget);
         }}
         onKeyDown={(event) => {
-          if (!open) return;
-          const action = slashCommandKeyAction({ key: event.key, shiftKey: event.shiftKey, selected, suggestions });
+          if (!open) {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              if (!maybeRunExactSlashCommand()) {
+                onSubmitShortcut?.();
+              }
+            }
+            return;
+          }
+          const action = composerMenuKeyAction({
+            key: event.key,
+            shiftKey: event.shiftKey,
+            composing: event.nativeEvent.isComposing,
+            selected,
+            suggestions
+          });
           if (action.action === "move") {
             event.preventDefault();
             setSelected(action.selected);
@@ -1435,7 +1737,17 @@ function SlashCommandTextarea({
             setDismissedSignature(signature);
           } else if (action.action === "insert") {
             event.preventDefault();
-            insertCommand(action.command);
+            const item = suggestions[action.index];
+            if (!item) return;
+            if (menuKind === "plugin") {
+              insertPlugin(item as PluginMentionCandidate);
+            } else {
+              const command = (item as SlashCommand).command;
+              if (selectedSlashMatchesExactDraft(command) && maybeRunExactSlashCommand()) {
+                return;
+              }
+              insertCommand(command);
+            }
           }
         }}
         placeholder={placeholder}
@@ -1738,13 +2050,14 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
   ]);
 }
 
-function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect }: {
+function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect }: {
   threadId: string;
   detail: ThreadDetail;
   slot: ThreadMessageSlot;
   messageStore: ThreadMessageStoreController;
   csrfToken?: string | null;
   onSelect: (id: SelectedThread) => void;
+  onPanelSelect: (view: View) => void;
 }) {
   const qc = useQueryClient();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
@@ -1753,6 +2066,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const previousThreadIdRef = useRef(threadId);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
+  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
   const [renameValue, setRenameValue] = useState(detail.summary.title);
   const [renameDirty, setRenameDirty] = useState(false);
@@ -1914,6 +2228,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       if (messageStore.isActive(resultThreadId)) {
         setDraft("");
         attachments.clearUploads();
+        setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       }
       messageStore.setFeedback(resultThreadId, actionMessage(result));
       qc.invalidateQueries({ queryKey: ["jobs"] });
@@ -1947,6 +2262,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       if (messageStore.isActive(resultThreadId)) {
         setDraft("");
         attachments.clearUploads();
+        setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       }
       messageStore.setFeedback(resultThreadId, result.fallback ? (result.message ?? "已加入跟进队列") : "已跟进当前 turn");
       qc.invalidateQueries({ queryKey: ["thread-followups", resultThreadId] });
@@ -2078,6 +2394,108 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     },
     onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });
+  const executeSlashCommand = useCallback((command: string) => {
+    const action = slashCommandAction(command, Boolean(threadId));
+    switch (action.kind) {
+      case "toggle_plan_mode":
+        setDraft("");
+        setRunConfig((current) => ({
+          ...current,
+          collaborationMode: current.collaborationMode === "plan" ? "" : "plan"
+        }));
+        messageStore.setFeedback(threadId, action.message ?? "Plan Mode 已切换");
+        break;
+      case "open_plugins":
+        setDraft("");
+        onPanelSelect("claude");
+        messageStore.setFeedback(threadId, action.message ?? "已打开插件/Provider 面板");
+        break;
+      case "open_status":
+        setDraft("");
+        onPanelSelect("codex");
+        messageStore.setFeedback(threadId, action.message ?? "已打开线程状态");
+        break;
+      case "open_new_thread":
+        setDraft("");
+        onSelect("__new");
+        break;
+      case "open_resume":
+        setDraft("");
+        onPanelSelect("codex");
+        messageStore.setFeedback(threadId, "请在线程列表选择要恢复的会话");
+        break;
+      case "open_thread_settings":
+        setDraft("");
+        messageStore.setFeedback(threadId, "线程设置已在右侧面板显示");
+        break;
+      case "archive_thread":
+        setDraft("");
+        archiveMutation.mutate({ threadId: summary.id, status: summary.status });
+        break;
+      case "fork_thread":
+        setDraft("");
+        forkMutation.mutate({ threadId: summary.id });
+        break;
+      case "stop_thread":
+        setDraft("");
+        stopMutation.mutate({
+          threadId: summary.id,
+          turnId: lastResult?.turn_id ?? summary.active_turn_id,
+          jobId: lastResult?.job_id ?? summary.active_job_id
+        });
+        break;
+      case "resume_goal":
+        setDraft("");
+        resumeGoalMode(summary.id, csrfToken).then((result) => {
+          messageStore.setFeedback(threadId, result.available ? "Goal 已恢复" : "Goal API 不可用");
+          qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
+        }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
+        break;
+      case "clear_goal":
+        setDraft("");
+        clearGoalMode(summary.id, csrfToken).then((result) => {
+          messageStore.setFeedback(threadId, result.available ? "Goal 已清除" : "Goal API 不可用");
+          qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
+        }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
+        break;
+      case "copy_latest":
+        setDraft("");
+        {
+          const text = latestAssistantCopyText(blocks);
+          if (text) {
+            navigator.clipboard?.writeText(text);
+            messageStore.setFeedback(threadId, "已复制最新回复");
+          } else {
+            messageStore.setFeedback(threadId, "没有可复制的最新回复");
+          }
+        }
+        break;
+      case "toggle_fast":
+        setDraft("");
+        if (!modelSupportsServiceTier(runOptions.models, runConfig.model, "priority")) {
+          messageStore.setFeedback(threadId, "当前模型不支持 Fast service tier");
+          break;
+        }
+        {
+          const next = runConfig.serviceTier === "priority" ? "" : "priority";
+          setRunConfig({ ...runConfig, serviceTier: next });
+          messageStore.setFeedback(threadId, next === "priority" ? "Fast 已开启" : "Fast 已关闭");
+        }
+        break;
+      case "insert_template":
+        setDraft(`${action.command} `);
+        messageStore.setFeedback(threadId, action.message);
+        break;
+      case "focus_control":
+      case "requires_thread":
+      case "unavailable":
+      case "unknown":
+      default:
+        setDraft("");
+        messageStore.setFeedback(threadId, action.message ?? "已执行");
+        break;
+    }
+  }, [archiveMutation, blocks, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
@@ -2092,9 +2510,13 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const planRevisePending = planReviseMutation.isPending && planReviseMutation.variables?.threadId === summary.id;
   const approvalPending = approvalMutation.isPending && approvalMutation.variables?.threadId === summary.id;
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const submitComposer = useCallback(() => {
     if (attachments.uploadInProgress) return;
+    const exactSlash = draft.trim().replace(/\s+/g, " ");
+    if (exactSlash.startsWith("/")) {
+      executeSlashCommand(exactSlash);
+      return;
+    }
     if (actionMode === "send" && !sendPending) {
       followNextMessageUpdate();
       sendMutation.mutate({
@@ -2118,6 +2540,11 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         jobId: lastResult?.job_id ?? summary.active_job_id
       });
     }
+  }, [actionMode, attachments, draft, executeSlashCommand, followNextMessageUpdate, lastResult?.job_id, lastResult?.turn_id, payloadRunConfig, sendMutation, sendPending, steerMutation, steerPending, stopMutation, stopPending, summary.active_job_id, summary.active_turn_id, summary.id]);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    submitComposer();
   };
   const conversationTitle = conversationTitleText(summary);
   const actionBusy = sendPending || stopPending || steerPending || attachments.uploadInProgress;
@@ -2238,6 +2665,10 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             onChange={setDraft}
             placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送到 root Codex app-server"}
             hasThread
+            plugins={pluginsQuery.data ?? []}
+            pluginsUnavailable={pluginsQuery.isError}
+            onSlashCommand={executeSlashCommand}
+            onSubmitShortcut={submitComposer}
           />
           <ComposerAttachmentList
             uploads={attachments.uploads}
@@ -2252,6 +2683,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             unavailable={runOptions.unavailable}
             onPickFiles={attachments.openPicker}
             uploadInProgress={attachments.uploadInProgress}
+            threadStatus={summary.status}
+            hasPendingPlan={Boolean(planBlock)}
+            hasPendingQuestion={Boolean(pending)}
           />
           {followUpItems.length > 0 && (
             <FollowUpQueue
@@ -2328,7 +2762,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   );
 }
 
-function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false }: {
+function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false, threadStatus, hasPendingPlan = false, hasPendingQuestion = false }: {
   config: RunConfig;
   setConfig: (config: RunConfig) => void;
   models: CodexModel[];
@@ -2336,6 +2770,9 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
   unavailable: { models?: boolean; profiles?: boolean; config?: boolean };
   onPickFiles?: () => void;
   uploadInProgress?: boolean;
+  threadStatus?: ThreadStatus | string;
+  hasPendingPlan?: boolean;
+  hasPendingQuestion?: boolean;
 }) {
   const modelList = models.some((item) => item.id === config.model)
     ? models
@@ -2345,6 +2782,7 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
   const activePreset = permissionPresets.find((item) => item.id === config.permissionPreset) ?? permissionPresets[2];
   const supportsFast = modelSupportsServiceTier(modelList, config.model, "priority");
   const serviceTier = supportsFast ? config.serviceTier : "";
+  const planButton = planModeButtonState(config.collaborationMode === "plan", threadStatus, hasPendingPlan, hasPendingQuestion);
   return (
     <div className="composer-config">
       <div className="composer-toolbar">
@@ -2369,11 +2807,14 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
         )}
         <button
           type="button"
-          className={config.collaborationMode === "plan" ? "composer-chip active" : "composer-chip"}
+          className={planButton.pressed ? "composer-chip active" : "composer-chip"}
+          aria-pressed={planButton.pressed}
+          title={planButton.statusText}
           onClick={() => setConfig({ ...config, collaborationMode: config.collaborationMode === "plan" ? "" : "plan" })}
         >
-          <ClipboardCheck size={15} />Plan Mode
+          <ClipboardCheck size={15} />{planButton.label}
         </button>
+        <span className="composer-chip muted">{planButton.statusText}</span>
         <span className="composer-chip muted"><Goal size={15} />Pursue Goal</span>
         <label className="permission-menu-trigger">
           <ShieldCheck size={15} />
@@ -2531,6 +2972,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
   const qc = useQueryClient();
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
+  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig());
   const [result, setResult] = useState<BridgeActionResult | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -2550,12 +2992,38 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
       setResult(next);
       setDraft("");
       attachments.clearUploads();
+      setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["jobs"] });
       if (next.thread_id) onCreated(next.thread_id);
     },
     onError: (err: Error) => setFeedback(err.message)
   });
+  const executeSlashCommand = (command: string) => {
+    const action = slashCommandAction(command, false);
+    setDraft("");
+    if (action.kind === "toggle_plan_mode") {
+      setRunConfig((current) => ({
+        ...current,
+        collaborationMode: current.collaborationMode === "plan" ? "" : "plan"
+      }));
+      setFeedback("Plan Mode 已切换");
+      return;
+    }
+    if (action.kind === "open_new_thread") {
+      setFeedback("已经在新线程输入框");
+      return;
+    }
+    setFeedback(action.message ?? "该命令需要已有线程");
+  };
+  const submitComposer = () => {
+    const exactSlash = draft.trim().replace(/\s+/g, " ");
+    if (exactSlash.startsWith("/")) {
+      executeSlashCommand(exactSlash);
+      return;
+    }
+    if (!attachments.uploadInProgress && (draft.trim() || attachments.readyUploads.length)) mutation.mutate();
+  };
   if (loading) {
     return <div className="empty-state"><Bot size={32} /><strong>正在读取线程</strong></div>;
   }
@@ -2566,7 +3034,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
       <span>通过受控 app-server bridge 启动，失败时自动降级为 codex exec job。</span>
       <form className="composer new-composer" onSubmit={(event) => {
         event.preventDefault();
-        if (!attachments.uploadInProgress && (draft.trim() || attachments.readyUploads.length)) mutation.mutate();
+        submitComposer();
       }}>
         <input
           ref={attachments.inputRef}
@@ -2575,7 +3043,16 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           multiple
           onChange={attachments.onFileInputChange}
         />
-        <SlashCommandTextarea value={draft} onChange={setDraft} placeholder="输入第一条消息" hasThread={false} />
+        <SlashCommandTextarea
+          value={draft}
+          onChange={setDraft}
+          placeholder="输入第一条消息"
+          hasThread={false}
+          plugins={pluginsQuery.data ?? []}
+          pluginsUnavailable={pluginsQuery.isError}
+          onSlashCommand={executeSlashCommand}
+          onSubmitShortcut={submitComposer}
+        />
         <ComposerAttachmentList
           uploads={attachments.uploads}
           removingUploadId={attachments.removingUploadId}
@@ -2589,6 +3066,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           unavailable={runOptions.unavailable}
           onPickFiles={attachments.openPicker}
           uploadInProgress={attachments.uploadInProgress}
+          threadStatus="Recent"
         />
         <div className="composer-actions">
           <span>{feedback ?? (result ? actionMessage(result) : "新线程会在列表中自动出现")}</span>
