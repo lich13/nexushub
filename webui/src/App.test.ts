@@ -51,6 +51,11 @@ type AppExports = typeof import("./App") & {
   threadResumeCommand?: (threadId?: string | null) => string | null;
   probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
   probeEventSummary?: (event: ProbeEvent) => string;
+  probeEventCard?: (event: ProbeEvent) => { headline: string; summary: string; details: Array<{ label: string; value: string }> };
+  shouldAutoScrollProbeFeed?: (
+    current: { scrollTop: number; clientHeight: number; scrollHeight: number },
+    previous?: { scrollTop: number; clientHeight: number; scrollHeight: number } | null
+  ) => boolean;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -469,6 +474,67 @@ describe("conversation helpers", () => {
     expect(summary).toContain("transcript");
     expect(summary).toContain("assistant");
     expect(summary).not.toContain("device");
+  });
+
+  test("probe event card renderer prefers structured payload fields and hides secrets", async () => {
+    const app = await loadApp();
+    const card = app.probeEventCard?.({
+      id: "event-structured",
+      kind: "legacy-kind",
+      thread_id: "fallback-thread",
+      title: "Raw event title",
+      message: "Raw event message",
+      dedupe_key: "reply-needed:thread-a:turn-a",
+      source: "raw event source",
+      payload: {
+        event_type: "reply-needed",
+        thread_title: "Plan Mode 修复",
+        thread_id: "thread-a",
+        turn_id: "turn-a",
+        beijing_time: "2026-06-16 09:30:00 CST",
+        reason_label: "等待用户确认",
+        body_summary: "Plan Mode 等待用户确认",
+        body_sha256: "abc123",
+        body_length: 324,
+        source: "nexushubd probe passive-scan",
+        bark: { sent: true, skipped: false, http_status: 200, dedupe_hit: false },
+        dedupe: { claimed: true, duplicate: false, status: "claimed" },
+        device_key: "secret-device-key"
+      },
+      created_at: "2026-06-16T01:30:00Z"
+    });
+
+    expect(card?.headline).toBe("Plan Mode 修复");
+    expect(card?.summary).toBe("Plan Mode 等待用户确认");
+    expect(card?.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "线程", value: "thread-a" }),
+      expect.objectContaining({ label: "Turn", value: "turn-a" })
+    ]));
+    expect(JSON.stringify(card)).not.toContain("secret-device-key");
+  });
+
+  test("probe event cards fall back to safe raw fields when structured payload is absent", async () => {
+    const app = await loadApp();
+    const card = app.probeEventCard?.({
+      id: "event-fallback",
+      kind: "hook-stop",
+      source: "nexushubd probe hook-stop",
+      payload: { session_id: "session-a" },
+      created_at: "2026-06-16T00:00:00Z"
+    });
+
+    expect(card?.headline).toBe("hook-stop");
+    expect(card?.summary).toContain("Probe 事件已记录");
+    expect(card?.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "来源", value: "nexushubd probe hook-stop" })
+    ]));
+  });
+
+  test("probe polling helper preserves the current scroll position unless the user is near the bottom", async () => {
+    const app = await loadApp();
+
+    expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 710, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(true);
+    expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 620, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(false);
   });
 
   test("goal status labels normalize known app-server states in Chinese", async () => {

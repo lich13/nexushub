@@ -232,6 +232,36 @@ describe("archive delete API compatibility", () => {
     expect(result.data?.events[0].kind).toBe("hook-stop");
   });
 
+  test("demo probe events expose structured payload fields for the UI cards", async () => {
+    vi.resetModules();
+    const { getProbeEvents } = await import("./api");
+
+    const result = await getProbeEvents(10);
+
+    expect(result.available).toBe(true);
+    expect(result.data?.events).toHaveLength(3);
+    expect(result.data?.events[0]).toMatchObject({
+      payload: expect.objectContaining({
+        event_type: "reply-needed",
+        thread_title: "Plan Mode 修复",
+        reason_label: "等待用户确认",
+        bark: expect.objectContaining({ sent: false, skipped: true, reason: "dedupe", http_status: 200, dedupe_hit: true }),
+        dedupe: expect.objectContaining({ claimed: true, duplicate: false, status: "claimed" })
+      })
+    });
+    expect(JSON.stringify(result.data)).not.toContain("secret");
+  });
+
+  test("demo jobs include probe job history entries", async () => {
+    vi.resetModules();
+    const { listJobs } = await import("./api");
+
+    const jobs = await listJobs();
+
+    expect(jobs.some((job) => job.kind.startsWith("probe_"))).toBe(true);
+    expect(jobs.some((job) => job.title.includes("Bark"))).toBe(true);
+  });
+
   test("thread block page request uses lightweight blocks endpoint", async () => {
     const { getThreadBlocks } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({

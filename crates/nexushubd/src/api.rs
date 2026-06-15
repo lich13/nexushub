@@ -364,11 +364,6 @@ async fn patch_probe_settings(
         merge_probe_notification_patch(&mut nested, notifications.patch);
         probe_patch.notifications = Some(nested);
     }
-    if let Some(device_key) = device_key {
-        state
-            .db
-            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
-    }
     if let Some(notifications) = probe_patch.notifications.as_ref() {
         if let Some(server_url) = notifications.server_url.as_deref() {
             if !valid_probe_notification_server_url(server_url) {
@@ -378,6 +373,11 @@ async fn patch_probe_settings(
                 ));
             }
         }
+    }
+    if let Some(device_key) = device_key {
+        state
+            .db
+            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
     }
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
@@ -943,10 +943,14 @@ fn redact_sensitive_json(value: &mut Value) {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
                 let key = key.to_ascii_lowercase();
-                if key.contains("device_key")
+                if key == "device_key_configured" {
+                    continue;
+                } else if key.contains("device_key")
                     || key.contains("secret")
                     || key.contains("token")
                     || key.contains("password")
+                    || key.contains("authorization")
+                    || key == "request_url"
                 {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -4257,10 +4261,10 @@ mod tests {
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, filter_thread_summaries,
         fixed_probe_shell_command, followup_request, merge_thread_summaries,
-        normalize_goal_response, prune_hidden_thread_summaries, requested_thread_limit, router,
-        seed_thread_event_blocks, thread_block_page, thread_event_block_key,
-        thread_list_fetch_limit, thread_title, turnstile_login_action, SendMessageRequest,
-        TurnstileLoginAction,
+        normalize_goal_response, probe_config_path, prune_hidden_thread_summaries,
+        requested_thread_limit, router, seed_thread_event_blocks, thread_block_page,
+        thread_event_block_key, thread_list_fetch_limit, thread_title, turnstile_login_action,
+        SendMessageRequest, TurnstileLoginAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4704,7 +4708,16 @@ mod tests {
                     "transcript_path": "/tmp/turn.json",
                     "last_assistant_message": "hello",
                     "device_key": "secret-device",
-                    "nested": { "token": "abc", "ok": true }
+                    "bark": {
+                        "request_url": "https://api.day.app/secret-device/title",
+                        "device_key_configured": true,
+                        "dedupe_key": "hook-stop:thread-a"
+                    },
+                    "nested": {
+                        "token": "abc",
+                        "ok": true,
+                        "headers": [{ "Authorization": "Bearer abc" }]
+                    }
                 }),
             })
             .unwrap();
@@ -4742,10 +4755,58 @@ mod tests {
         let event = &payload["events"][0];
         assert_eq!(event["kind"], "hook-stop");
         assert_eq!(event["payload"]["device_key"], "[redacted]");
+        assert_eq!(event["payload"]["bark"]["request_url"], "[redacted]");
+        assert_eq!(event["payload"]["bark"]["device_key_configured"], true);
+        assert_eq!(event["payload"]["bark"]["dedupe_key"], "hook-stop:thread-a");
         assert_eq!(event["payload"]["nested"]["token"], "[redacted]");
+        assert_eq!(
+            event["payload"]["nested"]["headers"][0]["Authorization"],
+            "[redacted]"
+        );
         assert_eq!(event["payload"]["session_id"], "session-a");
         assert_eq!(event["payload"]["transcript_path"], "/tmp/turn.json");
         assert_eq!(event["payload"]["last_assistant_message"], "hello");
+    }
+
+    #[tokio::test]
+    async fn probe_settings_rejects_invalid_server_url_before_storing_device_key() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-probe-settings-invalid-url");
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        let mut config = Config::default();
+        config.security.secret_key = state.config().security.secret_key.clone();
+        config.paths.db_path = state.config().paths.db_path.clone();
+        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        let _config_env = ConfigEnvGuard::set(&config_path);
+        let app = router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/probe/settings")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state
+            .db
+            .get_secret_setting_bytes("probe_bark_device_key")
+            .unwrap()
+            .is_none());
+        assert!(!fs::read_to_string(probe_config_path())
+            .unwrap()
+            .contains("http://example.com"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

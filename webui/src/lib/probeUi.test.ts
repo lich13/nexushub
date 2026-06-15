@@ -4,6 +4,7 @@ import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
   PROBE_NAV_LABEL,
+  probeEventCard,
   probeEventDisplay,
   probeNumberInputDraftValue,
   probeSections,
@@ -169,6 +170,88 @@ describe("Probe UI helpers", () => {
     };
 
     expect(probeEventDisplay(event).summary).toBe("Plan Mode 等待用户确认");
+  });
+
+  test("builds rich structured event cards from payload fields before raw message or title", () => {
+    const event: ProbeEvent = {
+      id: "event-structured",
+      kind: "legacy-kind",
+      thread_id: "fallback-thread",
+      title: "Raw event title",
+      message: "Raw event message",
+      dedupe_key: "reply-needed:thread-a:turn-a",
+      source: "raw event source",
+      payload: {
+        event_type: "reply-needed",
+        thread_title: "Plan Mode 修复",
+        thread_id: "thread-a",
+        turn_id: "turn-a",
+        beijing_time: "2026-06-16 09:30:00 CST",
+        reason_label: "等待用户确认",
+        body_summary: "Plan Mode 等待用户确认",
+        body_sha256: "abc123",
+        body_length: 324,
+        source: "nexushubd probe passive-scan",
+        bark: {
+          sent: true,
+          skipped: false,
+          http_status: 200,
+          dedupe_hit: false
+        },
+        dedupe: {
+          claimed: true,
+          duplicate: false,
+          status: "claimed"
+        },
+        device_key: "secret-device-key",
+        bark_device_key: "secret-bark-key",
+        token: "secret-token"
+      },
+      created_at: "2026-06-16T01:30:00Z"
+    };
+
+    const card = probeEventCard(event);
+
+    expect(card).toMatchObject({
+      title: "需回复",
+      headline: "Plan Mode 修复",
+      summary: "Plan Mode 等待用户确认",
+      reason: "等待用户确认",
+      source: "nexushubd probe passive-scan",
+      time: "2026-06-16 09:30:00 CST",
+      bark: { label: "Bark 已发送 HTTP 200", tone: "success" },
+      dedupe: { label: "已认领", tone: "success" }
+    });
+    expect(card.details).toEqual(expect.arrayContaining([
+      { label: "线程", value: "thread-a" },
+      { label: "Turn", value: "turn-a" },
+      { label: "Body", value: "324 bytes · sha256 abc123" }
+    ]));
+    expect(card.summary).not.toBe("Raw event message");
+    expect(JSON.stringify(card)).not.toContain("secret-device-key");
+    expect(JSON.stringify(card)).not.toContain("secret-bark-key");
+    expect(JSON.stringify(card)).not.toContain("secret-token");
+  });
+
+  test("marks skipped Bark and duplicate dedupe outcomes with warning labels", () => {
+    const event: ProbeEvent = {
+      id: "event-duplicate",
+      kind: "hook-stop",
+      source: "raw source",
+      payload: {
+        event_type: "completion",
+        body_summary: "任务已完成",
+        bark: { skipped: true, reason: "dedupe", dedupe_hit: true },
+        dedupe: { claimed: false, duplicate: true, status: "duplicate" }
+      },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    const card = probeEventCard(event);
+
+    expect(card.title).toBe("完成");
+    expect(card.bark).toEqual({ label: "Bark 跳过: dedupe · 去重命中", tone: "warning" });
+    expect(card.dedupe).toEqual({ label: "重复事件", tone: "warning" });
   });
 
   test("builds a form draft and leaves configured Bark device_key unchanged when blank", () => {

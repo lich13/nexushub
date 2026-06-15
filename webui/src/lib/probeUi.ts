@@ -293,21 +293,80 @@ export type ProbeEventDisplay = {
   time: string;
 };
 
+export type ProbeEventCardTone = "success" | "warning" | "danger" | "muted";
+
+export type ProbeEventCard = {
+  title: string;
+  headline: string;
+  summary: string;
+  reason: string;
+  source: string;
+  time: string;
+  bark: { label: string; tone: ProbeEventCardTone };
+  dedupe: { label: string; tone: ProbeEventCardTone };
+  details: Array<{ label: string; value: string }>;
+};
+
 export function probeEventDisplay(event: ProbeEvent): ProbeEventDisplay {
+  const card = probeEventCard(event);
   return {
-    title: probeEventKindLabel(event.kind),
-    summary: probeEventReadableSummary(event),
-    bark: probeEventBarkStatus(event),
-    dedupe: probeEventDedupeStatus(event),
-    source: event.source?.trim() || "未知来源",
-    time: probeEventTimeLabel(event.created_at)
+    title: card.title,
+    summary: card.summary,
+    bark: card.bark.label,
+    dedupe: card.dedupe.label,
+    source: card.source,
+    time: card.time
+  };
+}
+
+export function probeEventCard(event: ProbeEvent): ProbeEventCard {
+  const payload = probeEventPayload(event);
+  const eventType = cleanProbeEventText(stringFromRecord(payload, "event_type"));
+  const source = cleanProbeEventText(stringFromRecord(payload, "source")) || cleanProbeEventText(event.source) || "未知来源";
+  const threadId = cleanProbeEventText(stringFromRecord(payload, "thread_id")) || cleanProbeEventText(event.thread_id);
+  const turnId = cleanProbeEventText(stringFromRecord(payload, "turn_id"));
+  const bodyLength = numberFromRecord(payload, "body_length");
+  const bodySha = cleanProbeEventText(stringFromRecord(payload, "body_sha256"));
+  const reason = cleanProbeEventText(stringFromRecord(payload, "reason_label")) || cleanProbeEventText(stringFromRecord(payload, "reason"));
+  const summary = structuredProbeEventSummary(event, payload);
+  const details: Array<{ label: string; value: string }> = [];
+
+  if (threadId) details.push({ label: "线程", value: threadId });
+  if (turnId) details.push({ label: "Turn", value: turnId });
+  if (bodyLength !== null || bodySha) {
+    details.push({
+      label: "Body",
+      value: [
+        bodyLength !== null ? `${bodyLength} bytes` : "",
+        bodySha ? `sha256 ${bodySha}` : ""
+      ].filter(Boolean).join(" · ")
+    });
+  }
+  details.push({ label: "来源", value: source });
+
+  return {
+    title: probeEventKindLabel(eventType || event.kind),
+    headline: cleanProbeEventText(stringFromRecord(payload, "thread_title"))
+      || cleanProbeEventText(event.title)
+      || eventType
+      || cleanProbeEventText(event.kind)
+      || "Probe 事件",
+    summary,
+    reason,
+    source,
+    time: cleanProbeEventText(stringFromRecord(payload, "beijing_time")) || probeEventTimeLabel(event.created_at),
+    bark: probeEventBarkBadge(event),
+    dedupe: probeEventDedupeBadge(event),
+    details
   };
 }
 
 export function probeEventReadableSummary(event: ProbeEvent): string {
+  const payload = probeEventPayload(event);
+  const structured = structuredProbeEventSummary(event, payload);
+  if (structured) return structured;
   const message = cleanProbeEventText(event.message);
   if (message) return message;
-  const payload = probeEventPayload(event);
   const candidates = [
     stringFromRecord(payload, "summary"),
     stringFromRecord(payload, "status"),
@@ -330,32 +389,48 @@ export function probeEventReadableSummary(event: ProbeEvent): string {
 }
 
 export function probeEventBarkStatus(event: ProbeEvent): string {
+  return probeEventBarkBadge(event).label;
+}
+
+export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {
   const bark = recordFromRecord(probeEventPayload(event), "bark");
-  if (!bark) return "Bark 未记录";
+  if (!bark) return { label: "Bark 未记录", tone: "muted" };
   if (bark.sent === true) {
     const status = typeof bark.http_status === "number" ? ` HTTP ${bark.http_status}` : "";
-    return `Bark 已发送${status}`;
+    return { label: `Bark 已发送${status}`, tone: "success" };
   }
   const reason = cleanProbeEventText(stringFromRecord(bark, "reason"));
-  if (bark.skipped === true) return `Bark 跳过${reason ? `: ${reason}` : ""}`;
-  return `Bark 未发送${reason ? `: ${reason}` : ""}`;
+  const dedupeHit = bark.dedupe_hit === true ? " · 去重命中" : "";
+  if (bark.skipped === true) return { label: `Bark 跳过${reason ? `: ${reason}` : ""}${dedupeHit}`, tone: "warning" };
+  return { label: `Bark 未发送${reason ? `: ${reason}` : ""}${dedupeHit}`, tone: reason ? "warning" : "muted" };
 }
 
 export function probeEventDedupeStatus(event: ProbeEvent): string {
+  return probeEventDedupeBadge(event).label;
+}
+
+export function probeEventDedupeBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {
   const payload = probeEventPayload(event);
-  if (payload.duplicate === true) return "重复事件";
+  const dedupe = recordFromRecord(payload, "dedupe");
+  if (dedupe?.duplicate === true) return { label: "重复事件", tone: "warning" };
+  if (dedupe?.claimed === true) return { label: "已认领", tone: "success" };
+  const dedupeStatus = cleanProbeEventText(stringFromRecord(dedupe ?? {}, "status"));
+  if (dedupeStatus) return { label: dedupeStatus, tone: dedupeStatus.toLowerCase().includes("duplicate") ? "warning" : "muted" };
+  if (payload.duplicate === true) return { label: "重复事件", tone: "warning" };
   const outcome = recordFromRecord(payload, "probe_event") ?? recordFromRecord(payload, "outcome");
-  if (outcome?.duplicate === true) return "重复事件";
-  if (outcome?.recorded === true) return "已记录";
-  return event.dedupe_key?.trim() ? "去重键已记录" : "无去重键";
+  if (outcome?.duplicate === true) return { label: "重复事件", tone: "warning" };
+  if (outcome?.recorded === true) return { label: "已记录", tone: "success" };
+  return event.dedupe_key?.trim() ? { label: "去重键已记录", tone: "muted" } : { label: "无去重键", tone: "muted" };
 }
 
 export function probeEventKindLabel(kind?: string | null): string {
   const normalized = kind?.trim();
   const labels: Record<string, string> = {
     "hook-stop": "Stop Hook",
+    hook_stop: "Stop Hook",
     completion: "完成",
     "reply-needed": "需回复",
+    reply_needed: "需回复",
     recoverable: "异常/可恢复",
     running: "运行中",
     "bark-test": "Bark 测试"
@@ -418,8 +493,36 @@ function stringFromRecord(record: Record<string, unknown>, key: string): string 
   return typeof value === "string" ? value : null;
 }
 
+function numberFromRecord(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function cleanProbeEventText(value?: string | null): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function structuredProbeEventSummary(event: ProbeEvent, payload: Record<string, unknown>): string {
+  const candidates = [
+    stringFromRecord(payload, "body_summary"),
+    stringFromRecord(payload, "reason_label"),
+    stringFromRecord(payload, "summary"),
+    stringFromRecord(payload, "status"),
+    stringFromRecord(payload, "reason"),
+    event.message,
+    event.title
+  ];
+  const kind = cleanProbeEventText(stringFromRecord(payload, "event_type") || event.kind).toLowerCase();
+  const kindLabel = probeEventKindLabel(kind).toLowerCase();
+  const summary = candidates
+    .map(cleanProbeEventText)
+    .find((candidate) => {
+      if (!candidate) return false;
+      const normalized = candidate.toLowerCase();
+      return normalized !== kind && normalized !== kindLabel;
+    });
+  if (summary) return summary;
+  return event.thread_id ? `线程 ${event.thread_id}` : "Probe 事件已记录";
 }
 
 function probeEventTimeLabel(value: string | number): string {

@@ -529,15 +529,74 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
         limit,
         events: [
           {
-            id: "probe-event-demo",
+            id: "probe-event-reply-demo",
+            kind: "reply-needed",
+            thread_id: "019e95a0-demo",
+            title: "Raw reply event",
+            message: "Raw fallback message",
+            dedupe_key: "reply-needed:019e95a0-demo:turn-plan-demo",
+            source: "nexushubd probe passive-scan",
+            payload: {
+              event_type: "reply-needed",
+              thread_title: "Plan Mode 修复",
+              thread_id: "019e95a0-demo",
+              turn_id: "turn-plan-demo",
+              beijing_time: "2026-06-16 09:30:00 CST",
+              reason_label: "等待用户确认",
+              body_summary: "Plan Mode 等待用户确认",
+              body_sha256: "6b5d9f4f5a5a",
+              body_length: 324,
+              source: "nexushubd probe passive-scan",
+              bark: { sent: false, skipped: true, reason: "dedupe", http_status: 200, dedupe_hit: true },
+              dedupe: { claimed: true, duplicate: false, status: "claimed" }
+            },
+            created_at: new Date().toISOString(),
+            handled_at: null
+          },
+          {
+            id: "probe-event-completion-demo",
+            kind: "completion",
+            thread_id: "019e5281-demo",
+            title: "Completion",
+            message: "Thread completed",
+            dedupe_key: "completion:019e5281-demo:turn-done",
+            source: "nexushubd probe hook-stop",
+            payload: {
+              event_type: "completion",
+              thread_title: "检查仓库状态",
+              thread_id: "019e5281-demo",
+              turn_id: "turn-done",
+              reason_label: "任务完成",
+              body_summary: "仓库状态干净",
+              body_length: 128,
+              source: "nexushubd probe hook-stop",
+              bark: { sent: true, skipped: false, http_status: 200, dedupe_hit: false },
+              dedupe: { claimed: true, duplicate: false, status: "claimed" }
+            },
+            created_at: new Date(Date.now() - 300000).toISOString(),
+            handled_at: null
+          },
+          {
+            id: "probe-event-hook-demo",
             kind: "hook-stop",
             thread_id: "019e95a0-demo",
             title: "Codex Stop Hook",
             message: "Stop Hook event recorded by NexusHub Probe",
             dedupe_key: "hook-stop:019e95a0-demo:turn-demo",
             source: "nexushubd probe hook-stop",
-            payload: { session_id: "session-demo", transcript_path: "/tmp/transcript.jsonl" },
-            created_at: new Date().toISOString(),
+            payload: {
+              event_type: "hook-stop",
+              thread_title: "Plan Mode 修复",
+              thread_id: "019e95a0-demo",
+              turn_id: "turn-demo",
+              reason_label: "Stop Hook",
+              body_summary: "Stop Hook event recorded by NexusHub Probe",
+              body_length: 212,
+              source: "nexushubd probe hook-stop",
+              bark: { skipped: true, reason: "notifications-disabled", dedupe_hit: false },
+              dedupe: { claimed: false, duplicate: true, status: "duplicate" }
+            },
+            created_at: new Date(Date.now() - 600000).toISOString(),
             handled_at: null
           }
         ]
@@ -1016,6 +1075,8 @@ export function subscribeThreadEvents(
 export async function listJobs(): Promise<JobRecord[]> {
   if (USE_DEMO) {
     return [
+      { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "Probe Bark 测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "POST https://api.day.app\nHTTP 200\nBark push accepted" },
+      { id: "probe-logs-demo", kind: "probe_logs_db_maintain", status: "succeeded", title: "Probe logs-db dry-run", started_at: 1780731666, finished_at: 1780731672, exit_code: 0, output: "dry_run=true\nwould_delete_probe_events=42\ncompact=false" },
       { id: "job-demo", kind: "update_precheck", status: "succeeded", title: "Codex update precheck", started_at: 1780731606, output: "codex-cli 0.137.0\nintegrity_check: ok" },
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];

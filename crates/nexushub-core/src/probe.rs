@@ -324,6 +324,7 @@ impl ProbeRuntime {
 
     pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
         let event_kind = input.event_kind();
+        let event_type = probe_event_type(&input);
         let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
         let thread_component = event_thread_id.as_deref().unwrap_or("unknown-thread");
         let turn_component = input.turn_id.as_deref().unwrap_or("unknown-turn");
@@ -333,37 +334,83 @@ impl ProbeRuntime {
             dedupe_component(turn_component)
         );
         let notify_completion = matches!(input.kind, ProbeEventInputKind::NotifyCompletion);
-        let (title, message) = probe_event_text(event_kind, notify_completion);
         let last_assistant_message = input
             .last_assistant_message
             .as_deref()
-            .map(|value| summarize_probe_event_assistant_message(value, event_kind));
+            .map(|value| summarize_probe_event_assistant_message(value, &event_type));
+        let (title, message) = probe_event_text(&event_type);
+        let body_summary = last_assistant_message
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .and_then(Value::as_str)
+            .unwrap_or(&message)
+            .to_string();
+        let body_length = last_assistant_message
+            .as_ref()
+            .and_then(|value| value.get("original_length"))
+            .and_then(Value::as_u64)
+            .unwrap_or(message.len() as u64);
+        let body_sha256 = last_assistant_message
+            .as_ref()
+            .and_then(|value| value.get("sha256"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| hex::encode(Sha256::digest(message.as_bytes())));
+        let beijing_time = Utc::now()
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
+            .format("%Y-%m-%d %H:%M:%S CST")
+            .to_string();
+        let bark = probe_event_bark_text(
+            &event_type,
+            event_thread_id.as_deref(),
+            &title,
+            &message,
+            Some(&body_summary),
+        );
+        let source = if notify_completion {
+            "nexushubd probe notify-completion".to_string()
+        } else {
+            "nexushubd probe hook-stop".to_string()
+        };
+        let payload = json!({
+            "turn_id": input.turn_id.clone(),
+            "session_id": input.session_id.clone(),
+            "transcript_path": input.transcript_path.clone(),
+            "last_assistant_message": last_assistant_message.clone(),
+            "thread_title": title.clone(),
+            "thread_id": event_thread_id.clone(),
+            "body_summary": body_summary.clone(),
+            "body_sha256": body_sha256.clone(),
+            "body_length": body_length,
+            "beijing_time": beijing_time.clone(),
+            "reason_label": title.clone(),
+            "source": source.clone(),
+            "host_label": self.config.codex.host_label.clone(),
+            "platform": self.paths.kind,
+            "notify_completion": notify_completion,
+            "auto_reply": false,
+            "hidden_desktop_control": false,
+            "legacy_sentinel_cli_runtime": false,
+            "event_type": event_type.clone(),
+            "bark": {
+                "title": bark.title.clone(),
+                "body": bark.body.clone()
+            }
+        });
         ProbeBuiltEvent {
             kind: event_kind.to_string(),
+            event_type: event_type.clone(),
             thread_id: event_thread_id,
             turn_id: input.turn_id.clone(),
             title,
             message,
+            bark_title: bark.title.clone(),
+            bark_body: bark.body.clone(),
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_key,
             ttl_seconds: PROBE_EVENT_TTL_SECONDS,
-            source: if notify_completion {
-                "nexushubd probe notify-completion".to_string()
-            } else {
-                "nexushubd probe hook-stop".to_string()
-            },
-            payload: json!({
-                "turn_id": input.turn_id,
-                "session_id": input.session_id,
-                "transcript_path": input.transcript_path,
-                "last_assistant_message": last_assistant_message,
-                "host_label": self.config.codex.host_label,
-                "platform": self.paths.kind,
-                "notify_completion": notify_completion,
-                "auto_reply": false,
-                "hidden_desktop_control": false,
-                "legacy_sentinel_cli_runtime": false
-            }),
+            source,
+            payload,
         }
     }
 
@@ -757,10 +804,13 @@ enum ProbeEventInputKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeBuiltEvent {
     pub kind: String,
+    pub event_type: String,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub title: String,
     pub message: String,
+    pub bark_title: String,
+    pub bark_body: String,
     pub dedupe_namespace: String,
     pub dedupe_key: String,
     pub ttl_seconds: i64,
@@ -1331,26 +1381,81 @@ fn now_ts() -> i64 {
         .unwrap_or_default()
 }
 
-fn probe_event_text(event_kind: &str, notify_completion: bool) -> (String, String) {
-    if notify_completion || event_kind == "completion" {
-        return (
-            "任务完成".to_string(),
-            "Codex completion event recorded by NexusHub Probe".to_string(),
-        );
+fn probe_event_type(input: &ProbeEventInput) -> String {
+    match input.kind {
+        ProbeEventInputKind::NotifyCompletion => "completion".to_string(),
+        ProbeEventInputKind::HookStop => match input.hook_kind.as_str() {
+            "reply-needed" | "reply_needed" => "reply_needed".to_string(),
+            "recoverable" => "recoverable".to_string(),
+            _ => "hook_stop".to_string(),
+        },
     }
-    match event_kind {
-        "reply-needed" | "reply_needed" => (
+}
+
+fn probe_event_text(event_type: &str) -> (String, String) {
+    if event_type == "completion" {
+        return ("任务完成".to_string(), "Codex 任务已正常完成。".to_string());
+    }
+    match event_type {
+        "reply_needed" => (
             "需要回复".to_string(),
-            "Codex reply-needed event recorded by NexusHub Probe".to_string(),
+            "Codex 正在等待用户回复或选择后继续。".to_string(),
         ),
         "recoverable" => (
             "可恢复任务".to_string(),
-            "Codex recoverable event recorded by NexusHub Probe".to_string(),
+            "Codex 任务可恢复，需要查看并手动处理。".to_string(),
         ),
         _ => (
             "Codex Stop Hook".to_string(),
-            "Stop Hook event recorded by NexusHub Probe".to_string(),
+            "Stop Hook 事件已记录。".to_string(),
         ),
+    }
+}
+
+fn probe_event_bark_text(
+    event_type: &str,
+    thread_id: Option<&str>,
+    title: &str,
+    message: &str,
+    detail: Option<&str>,
+) -> ProbeBarkText {
+    match event_type {
+        "completion" => ProbeBarkText {
+            title: format!("线程正常完成：{}", title),
+            body: format!(
+                "线程 ID：{}\n\n最后反馈：{}\n\n{}",
+                thread_id.unwrap_or("-"),
+                message,
+                detail.unwrap_or("Codex 会话已完成。")
+            ),
+        },
+        "reply_needed" => ProbeBarkText {
+            title: format!("等待回复：{}", title),
+            body: format!(
+                "线程 ID：{}\n\n状态说明：{}\n\n待回复内容：\n{}",
+                thread_id.unwrap_or("-"),
+                message,
+                detail.unwrap_or(message)
+            ),
+        },
+        "recoverable" => ProbeBarkText {
+            title: format!("线程可恢复：{}", title),
+            body: format!(
+                "线程 ID：{}\n\n原因：{}\n\n最后异常信息：\n{}",
+                thread_id.unwrap_or("-"),
+                title,
+                detail.unwrap_or(message)
+            ),
+        },
+        _ => ProbeBarkText {
+            title: format!("探针事件：{}", title),
+            body: format!(
+                "线程 ID：{}\n\n事件说明：{}\n\n{}",
+                thread_id.unwrap_or("-"),
+                message,
+                title
+            ),
+        },
     }
 }
 
@@ -1364,6 +1469,12 @@ fn summarize_probe_event_assistant_message(value: &str, classification: &str) ->
         "sha256": hex::encode(Sha256::digest(value.as_bytes())),
         "classification": classification,
     })
+}
+
+#[derive(Debug)]
+struct ProbeBarkText {
+    title: String,
+    body: String,
 }
 
 fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
@@ -1496,17 +1607,54 @@ mod tests {
         ));
 
         assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
         assert_eq!(event.title, "需要回复");
+        assert_eq!(event.message, "Codex 正在等待用户回复或选择后继续。");
+        assert_eq!(event.bark_title, "等待回复：需要回复");
+        assert!(event.bark_body.contains("线程 ID：thread-a"));
+        assert!(event
+            .bark_body
+            .contains("状态说明：Codex 正在等待用户回复或选择后继续。"));
+        assert!(event.bark_body.contains("待回复内容："));
+        assert!(event.bark_body.contains("[redacted sensitive line]"));
+        assert!(event.payload["event_type"].as_str().unwrap() == "reply_needed");
+        assert!(event.payload["bark"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("等待回复"));
+        assert!(event.payload["bark"]["body"]
+            .as_str()
+            .unwrap()
+            .contains("待回复内容"));
+        assert!(event.payload["bark"].get("device_key").is_none());
+        assert!(event.payload["bark"].get("sound").is_none());
+        assert!(event.payload["bark"].get("group").is_none());
+        assert!(event.payload["bark"].get("url").is_none());
+        assert_eq!(event.payload["thread_title"], "需要回复");
+        assert_eq!(event.payload["thread_id"], "thread-a");
+        assert_eq!(event.payload["turn_id"], "turn-a");
+        assert_eq!(event.payload["reason_label"], "需要回复");
         assert_eq!(
-            event.message,
-            "Codex reply-needed event recorded by NexusHub Probe"
+            event.payload["body_summary"].as_str().unwrap(),
+            event.payload["last_assistant_message"]["summary"]
+                .as_str()
+                .unwrap()
         );
+        assert_eq!(event.payload["body_length"], message.len() as u64);
+        assert_eq!(
+            event.payload["body_sha256"],
+            event.payload["last_assistant_message"]["sha256"]
+        );
+        assert!(event.payload["beijing_time"]
+            .as_str()
+            .unwrap()
+            .contains("CST"));
         let stored = &event.payload["last_assistant_message"];
         assert!(stored["summary"]
             .as_str()
             .unwrap()
             .contains("[redacted sensitive line]"));
-        assert_eq!(stored["classification"], "reply-needed");
+        assert_eq!(stored["classification"], "reply_needed");
         assert_eq!(
             stored["original_length"].as_u64().unwrap(),
             message.len() as u64
@@ -1527,11 +1675,41 @@ mod tests {
             Some("turn-b"),
             "recoverable",
         ));
+        assert_eq!(recoverable.event_type, "recoverable");
         assert_eq!(recoverable.title, "可恢复任务");
         assert_eq!(
             recoverable.message,
-            "Codex recoverable event recorded by NexusHub Probe"
+            "Codex 任务可恢复，需要查看并手动处理。"
         );
+        assert_eq!(recoverable.bark_title, "线程可恢复：可恢复任务");
+        assert!(recoverable.bark_body.contains("线程 ID：thread-a"));
+        assert!(recoverable.bark_body.contains("原因：可恢复任务"));
+    }
+
+    #[test]
+    fn build_event_formats_completion_bark_message_from_structural_event() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let completion = runtime.build_event(ProbeEventInput::notify_completion(
+            Some("thread-a"),
+            Some("turn-a"),
+        ));
+
+        assert_eq!(completion.kind, "completion");
+        assert_eq!(completion.event_type, "completion");
+        assert_eq!(completion.message, "Codex 任务已正常完成。");
+        assert_eq!(completion.bark_title, "线程正常完成：任务完成");
+        assert!(completion.bark_body.contains("线程 ID：thread-a"));
+        assert!(completion
+            .bark_body
+            .contains("最后反馈：Codex 任务已正常完成。"));
+        assert_eq!(completion.payload["event_type"], "completion");
+        assert_eq!(completion.payload["bark"]["title"], completion.bark_title);
+        assert_eq!(completion.payload["bark"]["body"], completion.bark_body);
+        assert!(completion.payload["bark"].get("device_key").is_none());
     }
 
     fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {

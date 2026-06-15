@@ -266,14 +266,9 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             kind,
         } => match handle_hook_stop_command(config, &db, thread_id, turn_id, kind).await {
             Ok(result) => {
-                eprintln!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "probe_event": result.outcome,
-                        "bark": result.bark,
-                    }))?
-                );
-                println!("{}", serde_json::to_string(&result.stdout)?);
+                let (stdout, stderr) = hook_stop_cli_output(&result)?;
+                eprint!("{stderr}");
+                print!("{stdout}");
             }
             Err(err) => {
                 eprintln!(
@@ -738,9 +733,14 @@ struct ProbeBarkOutcome {
     skipped: bool,
     reason: Option<String>,
     http_status: Option<u16>,
+    server_url: Option<String>,
+    request_url: Option<String>,
+    request_count: usize,
+    chunk_count: usize,
     notifications_enabled: bool,
     relevant_switch_enabled: bool,
     device_key_configured: bool,
+    dedupe_hit: bool,
     dedupe_key: Option<String>,
 }
 
@@ -757,9 +757,14 @@ impl ProbeBarkOutcome {
             skipped: false,
             reason: None,
             http_status: Some(status),
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
             notifications_enabled,
             relevant_switch_enabled,
             device_key_configured,
+            dedupe_hit: false,
             dedupe_key,
         }
     }
@@ -775,9 +780,14 @@ impl ProbeBarkOutcome {
             skipped: true,
             reason: Some(reason.to_string()),
             http_status: None,
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
             notifications_enabled,
             relevant_switch_enabled,
             device_key_configured,
+            dedupe_hit: reason == "dedupe",
             dedupe_key: None,
         }
     }
@@ -794,9 +804,14 @@ impl ProbeBarkOutcome {
             skipped: false,
             reason: Some("http_status".to_string()),
             http_status: Some(status),
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
             notifications_enabled,
             relevant_switch_enabled,
             device_key_configured,
+            dedupe_hit: false,
             dedupe_key,
         }
     }
@@ -813,11 +828,29 @@ impl ProbeBarkOutcome {
             skipped: false,
             reason: Some(reason.to_string()),
             http_status: None,
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
             notifications_enabled,
             relevant_switch_enabled,
             device_key_configured,
+            dedupe_hit: false,
             dedupe_key,
         }
+    }
+
+    fn with_delivery_metadata(
+        mut self,
+        server_url: &str,
+        request_count: usize,
+        chunk_count: usize,
+    ) -> Self {
+        self.server_url = Some(server_url.to_string());
+        self.request_url = (request_count > 0).then(|| "[redacted]".to_string());
+        self.request_count = request_count;
+        self.chunk_count = chunk_count;
+        self
     }
 }
 
@@ -832,6 +865,18 @@ async fn handle_built_probe_event(
         outcome,
         bark,
     })
+}
+
+fn hook_stop_cli_output(result: &HookStopResult) -> Result<(String, String)> {
+    let stdout = format!("{}\n", serde_json::to_string(&result.stdout)?);
+    let stderr = format!(
+        "{}\n",
+        serde_json::to_string(&json!({
+            "probe_event": result.outcome,
+            "bark": result.bark,
+        }))?
+    );
+    Ok((stdout, stderr))
 }
 
 async fn record_probe_event_with_bark(
@@ -854,7 +899,10 @@ async fn record_probe_event_with_bark(
             "key": &event.dedupe_key,
             "claimed": claimed,
             "duplicate": !claimed,
+            "status": if claimed { "claimed" } else { "duplicate" },
         });
+        payload["bark_status"] = json!(probe_bark_status_label(&bark));
+        payload["dedupe_status"] = json!(if claimed { "claimed" } else { "duplicate" });
         db.record_probe_event(NewProbeEvent {
             kind: &event.kind,
             thread_id: event.thread_id.as_deref(),
@@ -912,8 +960,8 @@ async fn handle_probe_event_bark(
         config,
         device_key.as_deref().unwrap_or_default(),
         &ProbeBarkRequest {
-            title: event.title.clone(),
-            body: event.message.clone(),
+            title: event.bark_title.clone(),
+            body: event.bark_body.clone(),
             dedupe_key: event.dedupe_key.clone(),
         },
         std::time::Duration::from_secs(8),
@@ -927,6 +975,18 @@ fn probe_event_bark_switch_enabled(config: &Config, kind: &str) -> bool {
         "reply-needed" => config.probe.notifications.notify_reply_needed,
         "recoverable" => config.probe.notifications.notify_recoverable,
         _ => config.probe.notifications.notify_completion,
+    }
+}
+
+fn probe_bark_status_label(bark: &ProbeBarkOutcome) -> &'static str {
+    if bark.sent {
+        "sent"
+    } else if bark.skipped && bark.reason.as_deref() == Some("dedupe") {
+        "dedupe_hit"
+    } else if bark.skipped {
+        "skipped"
+    } else {
+        "failed"
     }
 }
 
@@ -998,6 +1058,7 @@ async fn send_bark_notification(
     let chunks = utf8_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
     let chunk_count = chunks.len();
     let mut last_status = None;
+    let mut request_count = 0usize;
     for (index, chunk) in chunks.iter().enumerate() {
         let chunk_title = if chunk_count > 1 {
             format!("{} ({}/{})", request.title, index + 1, chunk_count)
@@ -1012,6 +1073,7 @@ async fn send_bark_notification(
         );
         body["body"] = json!(chunk);
         let response = client.post(chunk_url).json(&body).send().await;
+        request_count += 1;
         let response = match response {
             Ok(response) => response,
             Err(err) => {
@@ -1027,7 +1089,8 @@ async fn send_bark_notification(
                     true,
                     true,
                     Some(request.dedupe_key.clone()),
-                ));
+                )
+                .with_delivery_metadata(base, request_count, chunk_count));
             }
         };
         let status = response.status().as_u16();
@@ -1039,7 +1102,8 @@ async fn send_bark_notification(
                 true,
                 true,
                 Some(request.dedupe_key.clone()),
-            ));
+            )
+            .with_delivery_metadata(base, request_count, chunk_count));
         }
     }
     Ok(ProbeBarkOutcome::sent(
@@ -1048,7 +1112,8 @@ async fn send_bark_notification(
         true,
         true,
         Some(request.dedupe_key.clone()),
-    ))
+    )
+    .with_delivery_metadata(base, request_count, chunk_count))
 }
 
 fn url_path_encode(value: &str) -> String {
@@ -1456,19 +1521,22 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                     thread.active_turn_id.as_deref(),
                     Some(thread.id.as_str()),
                     None,
-                    None,
+                    thread.latest_message.as_deref(),
                     status,
                 ));
+            event.source = "nexushubd probe passive-scan".to_string();
+            event.payload["source"] = json!(event.source.clone());
+            event.payload["thread_title"] = json!(thread.title.clone());
+            event.payload["thread_id"] = json!(thread.id.clone());
+            if let Some(active_turn_id) = thread.active_turn_id.as_deref() {
+                event.payload["turn_id"] = json!(active_turn_id);
+            }
             match status {
                 "reply-needed" => {
-                    event.title = "需要回复".to_string();
-                    event.message = format!("Codex thread {} needs a reply", thread.id);
-                    event.source = "nexushubd probe passive-scan".to_string();
+                    event.payload["reason_label"] = json!("等待用户确认");
                 }
                 "recoverable" => {
-                    event.title = "可恢复任务".to_string();
-                    event.message = format!("Codex thread {} is recoverable", thread.id);
-                    event.source = "nexushubd probe passive-scan".to_string();
+                    event.payload["reason_label"] = json!("异常/可恢复");
                 }
                 _ => {}
             }
@@ -1785,11 +1853,12 @@ hooks = false
         );
         assert_eq!(
             events[0].payload["last_assistant_message"]["classification"],
-            "hook-stop"
+            "hook_stop"
         );
         assert_eq!(events[0].payload["dedupe"]["namespace"], "probe_event");
         assert_eq!(events[0].payload["dedupe"]["claimed"], true);
         assert_eq!(events[0].payload["dedupe"]["duplicate"], false);
+        assert_eq!(events[0].kind, "hook-stop");
     }
 
     #[tokio::test]
@@ -1834,6 +1903,7 @@ hooks = false
         assert!(duplicate.bark.skipped);
         assert_eq!(duplicate.bark.reason.as_deref(), Some("dedupe"));
         assert!(duplicate.bark.device_key_configured);
+        assert!(duplicate.bark.dedupe_hit);
         assert!(!serde_json::to_string(&duplicate)
             .unwrap()
             .contains("super-secret-device"));
@@ -1958,6 +2028,72 @@ hooks = false
             })
             .collect::<String>();
         assert_eq!(combined, request.body);
+    }
+
+    #[tokio::test]
+    async fn send_bark_success_reports_redacted_request_metadata() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        config.probe.notifications.group = "Probe Group".to_string();
+
+        let result = send_bark_notification(
+            &config,
+            b"device-key-secret",
+            &ProbeBarkRequest {
+                title: "NexusHub Probe test".to_string(),
+                body: "ok".to_string(),
+                dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
+            },
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.sent);
+        assert_eq!(result.reason, None);
+        assert_eq!(result.http_status, Some(200));
+        assert_eq!(result.request_count, 1);
+        assert_eq!(result.chunk_count, 1);
+        assert_eq!(result.server_url.as_deref(), Some(server.url().as_str()));
+        assert!(result.request_url.as_deref().is_some_and(|value| {
+            value == "[redacted]" || !value.contains("device-key-secret")
+        }));
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("device-key-secret"));
+        let _ = server.request();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_cli_payload_keeps_stdout_codex_only_and_stderr_diagnostics() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let result = handle_built_probe_event(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
+                Some("thread-a"),
+                Some("turn-a"),
+                "hook-stop",
+            )),
+        )
+        .await
+        .unwrap();
+
+        let (stdout, stderr) = hook_stop_cli_output(&result).unwrap();
+        assert_eq!(stdout.trim(), r#"{"continue":true,"suppressOutput":false}"#);
+        let diagnostics: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(diagnostics["probe_event"]["recorded"], true);
+        assert_eq!(diagnostics["bark"]["skipped"], true);
+        assert_eq!(diagnostics["bark"]["reason"], "notifications_disabled");
+        assert!(!stdout.contains("bark"));
+        assert!(!stdout.contains("probe_event"));
     }
 
     #[test]

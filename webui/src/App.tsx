@@ -93,7 +93,7 @@ import {
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
-  probeEventDisplay,
+  probeEventCard,
   probeNumberInputDraftValue,
   probeSections,
   probeSettingsValidation,
@@ -4336,17 +4336,27 @@ function ProbeEventsCard({
 }
 
 function ProbeEventRow({ event }: { event: ProbeEvent }) {
-  const display = probeEventDisplay(event);
+  const card = probeEventCard(event);
   return (
-    <article className="preview-item">
+    <article className="preview-item probe-event-card">
       <div>
-        <strong>{display.title}</strong>
-        <span>{display.summary}</span>
+        <strong>{card.title} · {card.headline}</strong>
+        <span>{card.summary}</span>
       </div>
-      <small>{display.bark} · {display.dedupe} · {display.source} · {display.time}</small>
+      {card.reason && <small>{card.reason}</small>}
+      <div className="probe-event-detail-row">
+        <span className={`status-chip tone-${card.bark.tone}`}>{card.bark.label}</span>
+        <span className={`status-chip tone-${card.dedupe.tone}`}>{card.dedupe.label}</span>
+        {card.details.map((detail) => (
+          <span key={`${detail.label}:${detail.value}`}>{detail.label}: {detail.value}</span>
+        ))}
+        <span>{card.time}</span>
+      </div>
     </article>
   );
 }
+
+export { probeEventCard };
 
 export function probeEventSummary(event: ProbeEvent): string {
   const thread = event.thread_id ? `线程 ${event.thread_id}` : "无线程";
@@ -4356,6 +4366,13 @@ export function probeEventSummary(event: ProbeEvent): string {
     event.payload?.last_assistant_message ? "assistant" : ""
   ].filter(Boolean);
   return [thread, fields.length ? fields.join(" · ") : "payload 已脱敏"].join(" · ");
+}
+
+export function shouldAutoScrollProbeFeed(
+  current: MessageScrollSnapshot,
+  _previous?: MessageScrollSnapshot | null
+): boolean {
+  return current.scrollHeight - current.scrollTop - current.clientHeight <= 32;
 }
 
 function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {
