@@ -9,6 +9,7 @@ use chrono::{TimeZone, Utc};
 use rusqlite::{params, Connection, ErrorCode, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -336,7 +337,7 @@ impl ProbeRuntime {
         let last_assistant_message = input
             .last_assistant_message
             .as_deref()
-            .map(sanitize_probe_event_assistant_message);
+            .map(|value| summarize_probe_event_assistant_message(value, event_kind));
         ProbeBuiltEvent {
             kind: event_kind.to_string(),
             thread_id: event_thread_id,
@@ -1353,11 +1354,16 @@ fn probe_event_text(event_kind: &str, notify_completion: bool) -> (String, Strin
     }
 }
 
-fn sanitize_probe_event_assistant_message(value: &str) -> String {
-    truncate_utf8_with_marker(
-        &redact_output(value),
-        PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES,
-    )
+fn summarize_probe_event_assistant_message(value: &str, classification: &str) -> Value {
+    let redacted = redact_output(value);
+    let summary = truncate_utf8_with_marker(&redacted, PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
+    json!({
+        "summary": summary,
+        "original_length": value.len(),
+        "redacted_length": redacted.len(),
+        "sha256": hex::encode(Sha256::digest(value.as_bytes())),
+        "classification": classification,
+    })
 }
 
 fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
@@ -1495,11 +1501,26 @@ mod tests {
             event.message,
             "Codex reply-needed event recorded by NexusHub Probe"
         );
-        let stored = event.payload["last_assistant_message"].as_str().unwrap();
-        assert!(stored.contains("[redacted sensitive line]"));
-        assert!(!stored.contains("secret-token"));
-        assert!(stored.contains("[truncated]"));
-        assert!(stored.len() <= PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
+        let stored = &event.payload["last_assistant_message"];
+        assert!(stored["summary"]
+            .as_str()
+            .unwrap()
+            .contains("[redacted sensitive line]"));
+        assert_eq!(stored["classification"], "reply-needed");
+        assert_eq!(
+            stored["original_length"].as_u64().unwrap(),
+            message.len() as u64
+        );
+        assert!(
+            stored["redacted_length"].as_u64().unwrap()
+                >= stored["summary"].as_str().unwrap().len() as u64
+        );
+        assert!(stored["sha256"].as_str().unwrap().len() >= 64);
+        assert!(!stored.to_string().contains("secret-token"));
+        assert!(stored["summary"].as_str().unwrap().contains("[truncated]"));
+        assert!(
+            stored["summary"].as_str().unwrap().len() <= PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES
+        );
 
         let recoverable = runtime.build_event(ProbeEventInput::hook_stop(
             Some("thread-a"),

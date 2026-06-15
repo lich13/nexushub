@@ -25,6 +25,7 @@ type AppExports = typeof import("./App") & {
   activeComposerMenuKind?: (draft: string, cursor: number, plugins?: PluginInfo[] | null) => "slash" | "plugin" | null;
   exactSlashCommandFromDraft?: (draft: string) => string | null;
   slashCommandForComposerSubmit?: (draft: string) => string | null;
+  composerSubmitDraftValue?: (stateValue: string, domValue?: string | null) => string;
   composerMenuKeyAction?: (input: {
     key: string;
     shiftKey?: boolean;
@@ -210,6 +211,16 @@ describe("conversation helpers", () => {
       expect(app.slashCommandForComposerSubmit?.(draft)).toBeNull();
       expect(app.buildPayload?.(draft, config).message).toBe(draft);
     }
+  });
+
+  test("composer submit uses the textarea DOM value when React state lags behind", async () => {
+    const app = await loadApp();
+
+    const currentDraft = app.composerSubmitDraftValue?.("/plugins", "/plugins 文本");
+
+    expect(currentDraft).toBe("/plugins 文本");
+    expect(app.slashCommandForComposerSubmit?.(currentDraft ?? "")).toBeNull();
+    expect(app.buildPayload?.(currentDraft ?? "", app.defaultRunConfig?.() ?? {}).message).toBe("/plugins 文本");
   });
 
   test("exact /plugins stays an explicit control command while /plugins text remains a message", async () => {

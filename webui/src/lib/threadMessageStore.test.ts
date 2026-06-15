@@ -184,6 +184,32 @@ describe("thread message store", () => {
     expect(store.slots.get("thread-b")?.feedback).toBeNull();
   });
 
+  test("tracks bottom-follow revisions only for message appends and explicit follow actions", () => {
+    const store = createThreadMessageStoreState();
+    const slot = applyThreadDetailToSlot(store, "thread-a", detail("thread-a", [block("a1")]));
+    const initialFollowRevision = slot.bottomFollowRevision;
+
+    setThreadFeedback(store, "thread-a", "status only");
+    setThreadLastResult(store, "thread-a", {
+      bridge: true,
+      thread_id: "thread-a",
+      turn_id: "turn-a",
+      fallback: false
+    });
+    applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a",
+      blocks: [block("older")],
+      total_blocks: 2,
+      has_more_blocks: false,
+      before_cursor: null
+    });
+
+    expect(store.slots.get("thread-a")?.bottomFollowRevision).toBe(initialFollowRevision);
+
+    applyRealtimeBlocksToThreadSlot(store, "thread-a", [block("a2")]);
+    expect(store.slots.get("thread-a")?.bottomFollowRevision).toBe((initialFollowRevision ?? 0) + 1);
+  });
+
   test("keeps visible last event when detail refresh only has internal or empty event", () => {
     const store = createThreadMessageStoreState();
     applyThreadDetailToSlot(store, "thread-a", {

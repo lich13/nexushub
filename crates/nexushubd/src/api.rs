@@ -4812,6 +4812,13 @@ mod tests {
                 "codex-sentinel",
             ),
             (
+                "/api/probe/bark/test",
+                None,
+                "probe_bark_test",
+                "探针 Bark 测试",
+                "device_key",
+            ),
+            (
                 "/api/probe/logs-db/maintain",
                 None,
                 "probe_logs_db_maintain_dry_run",
@@ -4819,7 +4826,7 @@ mod tests {
                 "rm -rf",
             ),
         ]
-            as [(&str, Option<&str>, &str, &str, &str); 2]
+            as [(&str, Option<&str>, &str, &str, &str); 3]
         {
             let missing_csrf = app
                 .clone()

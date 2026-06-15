@@ -93,6 +93,17 @@ const settings: ProbeSettings = {
 describe("Probe UI helpers", () => {
   test("uses Chinese probe labels and only slim first-screen sections", () => {
     expect(PROBE_NAV_LABEL).toBe("探针");
+    expect(probeSections.map((section) => section.id)).toEqual([
+      "overview",
+      "reply-needed",
+      "recoverable",
+      "running",
+      "hook",
+      "bark",
+      "logs-db",
+      "events",
+      "settings"
+    ]);
     expect(probeSections.map((section) => section.label)).toEqual([
       "总览",
       "需回复",
@@ -139,6 +150,25 @@ describe("Probe UI helpers", () => {
     expect(display.source).toBe("nexushubd probe passive-scan");
     expect(display.time).toContain("2026-06-15");
     expect(JSON.stringify(display)).not.toContain("secret-device-key");
+  });
+
+  test("event summaries do not repeat raw kind or duplicate title when payload has context", () => {
+    const event: ProbeEvent = {
+      id: "event-summary",
+      kind: "reply-needed",
+      thread_id: "thread-a",
+      title: "reply-needed",
+      message: "",
+      dedupe_key: "reply-needed:thread-a:turn-a",
+      source: "nexushubd probe passive-scan",
+      payload: {
+        summary: "Plan Mode 等待用户确认",
+        status: "reply-needed"
+      },
+      created_at: "2026-06-15T00:00:00Z"
+    };
+
+    expect(probeEventDisplay(event).summary).toBe("Plan Mode 等待用户确认");
   });
 
   test("builds a form draft and leaves configured Bark device_key unchanged when blank", () => {

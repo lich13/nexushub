@@ -9,9 +9,9 @@ use nexushub_core::{
     app_server::AppServerBridge,
     codex::resolve_codex_paths,
     config::{
-        patch_probe_config_toml, CodexProbeConfigPatch, Config, ProbeConfigFilePatch,
-        ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
-        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+        patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
+        Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
+        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     db::{NewProbeEvent, PanelDb},
     platform::PlatformPaths,
@@ -382,15 +382,13 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             println!("{}", serde_json::to_string_pretty(&stored)?);
         }
         ProbeCommand::LifecycleRepair => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({"ok": true, "action": "lifecycle_repair"}))?
+            anyhow::bail!(
+                "unsupported_probe_action: lifecycle_repair has no fixed NexusHub implementation"
             );
         }
         ProbeCommand::ServiceRestart => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({"ok": true, "action": "service_restart"}))?
+            anyhow::bail!(
+                "unsupported_probe_action: service_restart has no fixed NexusHub implementation"
             );
         }
         ProbeCommand::LegacyImport => {
@@ -851,6 +849,12 @@ async fn record_probe_event_with_bark(
     if claimed {
         let mut payload = event.payload.clone();
         payload["bark"] = serde_json::to_value(&bark)?;
+        payload["dedupe"] = json!({
+            "namespace": &event.dedupe_namespace,
+            "key": &event.dedupe_key,
+            "claimed": claimed,
+            "duplicate": !claimed,
+        });
         db.record_probe_event(NewProbeEvent {
             kind: &event.kind,
             thread_id: event.thread_id.as_deref(),
@@ -958,6 +962,16 @@ async fn send_bark_notification(
         .server_url
         .trim()
         .trim_end_matches('/');
+    if !valid_probe_notification_server_url(base) {
+        tracing::warn!("Bark notification server URL rejected by Probe policy");
+        return Ok(ProbeBarkOutcome::failed_request(
+            "invalid_server_url",
+            config.probe.notifications.enabled,
+            true,
+            true,
+            Some(request.dedupe_key.clone()),
+        ));
+    }
     let mut body = json!({
         "body": request.body,
         "group": config.probe.notifications.group,
@@ -1001,13 +1015,14 @@ async fn send_bark_notification(
         let response = match response {
             Ok(response) => response,
             Err(err) => {
-                tracing::warn!("Bark notification request failed: {err}");
+                let reason = if err.is_timeout() {
+                    "timeout"
+                } else {
+                    "request_error"
+                };
+                tracing::warn!("Bark notification request failed: {reason}");
                 return Ok(ProbeBarkOutcome::failed_request(
-                    if err.is_timeout() {
-                        "timeout"
-                    } else {
-                        "request_error"
-                    },
+                    reason,
                     config.probe.notifications.enabled,
                     true,
                     true,
@@ -1522,6 +1537,19 @@ mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::SystemTime;
 
+    #[tokio::test]
+    async fn unsupported_probe_cli_actions_do_not_report_fake_success() {
+        let config = Config::default();
+
+        for command in [ProbeCommand::LifecycleRepair, ProbeCommand::ServiceRestart] {
+            let db = PanelDb::open(":memory:").unwrap();
+            let err = run_probe_command(command, &config, db).await.unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("unsupported"));
+            assert!(!message.contains("\"ok\": true"));
+        }
+    }
+
     #[test]
     fn legacy_import_maps_server_bark_observability_and_logs_db_without_plaintext_secret() {
         let unique = SystemTime::now()
@@ -1752,9 +1780,16 @@ hooks = false
             "/tmp/transcript.jsonl"
         );
         assert_eq!(
-            events[0].payload["last_assistant_message"],
+            events[0].payload["last_assistant_message"]["summary"],
             "assistant body"
         );
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["classification"],
+            "hook-stop"
+        );
+        assert_eq!(events[0].payload["dedupe"]["namespace"], "probe_event");
+        assert_eq!(events[0].payload["dedupe"]["claimed"], true);
+        assert_eq!(events[0].payload["dedupe"]["duplicate"], false);
     }
 
     #[tokio::test]

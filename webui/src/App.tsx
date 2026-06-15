@@ -95,8 +95,10 @@ import {
   buildProbeSettingsPayload,
   probeEventDisplay,
   probeNumberInputDraftValue,
+  probeSections,
   probeSettingsValidation,
   PROBE_NAV_LABEL,
+  type ProbeSectionId,
   type ProbeSettingsDraft
 } from "./lib/probeUi";
 import { clearSession, loadSession, saveSession } from "./lib/session";
@@ -174,6 +176,7 @@ type MessageBlockState = {
   hasMoreBlocks: boolean;
   beforeCursor: string | null;
   visibleUpdateRevision: number;
+  bottomFollowRevision: number;
 };
 
 type ComposerUpload = UploadRecord & {
@@ -920,6 +923,10 @@ export function shouldAutoFollowMessageStream(snapshot: MessageScrollSnapshot, t
   return snapshot.scrollHeight - snapshot.scrollTop - snapshot.clientHeight <= threshold;
 }
 
+export function composerSubmitDraftValue(stateValue: string, domValue?: string | null): string {
+  return typeof domValue === "string" ? domValue : stateValue;
+}
+
 function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
   const blocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   return {
@@ -927,7 +934,8 @@ function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
     totalBlocks: detail.total_blocks ?? blocks.length,
     hasMoreBlocks: Boolean(detail.has_more_blocks),
     beforeCursor: detail.before_cursor ?? null,
-    visibleUpdateRevision: 0
+    visibleUpdateRevision: 0,
+    bottomFollowRevision: 0
   };
 }
 
@@ -939,7 +947,8 @@ function mergeIncomingMessageBlockState(current: MessageBlockState, detail: Thre
     totalBlocks: detail.total_blocks ?? Math.max(current.totalBlocks, nextBlocks.length),
     hasMoreBlocks: Boolean(detail.has_more_blocks ?? current.hasMoreBlocks),
     beforeCursor: detail.before_cursor ?? current.beforeCursor,
-    visibleUpdateRevision: nextBlocks === current.blocks ? current.visibleUpdateRevision : current.visibleUpdateRevision + 1
+    visibleUpdateRevision: nextBlocks === current.blocks ? current.visibleUpdateRevision : current.visibleUpdateRevision + 1,
+    bottomFollowRevision: nextBlocks === current.blocks ? current.bottomFollowRevision : current.bottomFollowRevision + 1
   };
 }
 
@@ -1645,6 +1654,7 @@ function ComposerAttachmentList({
 }
 
 function SlashCommandTextarea({
+  inputRef,
   value,
   onChange,
   placeholder,
@@ -1655,6 +1665,7 @@ function SlashCommandTextarea({
   onSubmitShortcut,
   disabled = false
 }: {
+  inputRef?: (node: HTMLTextAreaElement | null) => void;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
@@ -1662,7 +1673,7 @@ function SlashCommandTextarea({
   plugins?: PluginInfo[] | null;
   pluginsUnavailable?: boolean;
   onSlashCommand?: (command: string) => void;
-  onSubmitShortcut?: () => void;
+  onSubmitShortcut?: (value?: string | null) => void;
   disabled?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1706,14 +1717,14 @@ function SlashCommandTextarea({
       textarea.setSelectionRange(next.cursor, next.cursor);
     });
   };
-  const maybeRunExactSlashCommand = () => {
+  const maybeRunExactSlashCommand = (currentValue = value) => {
     if (!onSlashCommand) return false;
-    const command = exactSlashCommandFromDraft(value);
+    const command = exactSlashCommandFromDraft(currentValue);
     if (!command) return false;
     onSlashCommand(command);
     return true;
   };
-  const selectedSlashMatchesExactDraft = (command: string) => exactSlashCommandFromDraft(value) === command;
+  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue) === command;
 
   useEffect(() => {
     if (selected >= suggestions.length) {
@@ -1754,7 +1765,10 @@ function SlashCommandTextarea({
         </div>
       )}
       <textarea
-        ref={textareaRef}
+        ref={(node) => {
+          textareaRef.current = node;
+          inputRef?.(node);
+        }}
         value={value}
         disabled={disabled}
         onChange={(event) => {
@@ -1777,8 +1791,8 @@ function SlashCommandTextarea({
             if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              if (!maybeRunExactSlashCommand()) {
-                onSubmitShortcut?.();
+              if (!maybeRunExactSlashCommand(event.currentTarget.value)) {
+                onSubmitShortcut?.(event.currentTarget.value);
               }
             }
             return;
@@ -1808,15 +1822,15 @@ function SlashCommandTextarea({
               insertPlugin(item as PluginMentionCandidate);
             } else {
               const command = (item as SlashCommand).command;
-              if (selectedSlashMatchesExactDraft(command) && maybeRunExactSlashCommand()) {
+              if (selectedSlashMatchesExactDraft(command, event.currentTarget.value) && maybeRunExactSlashCommand(event.currentTarget.value)) {
                 return;
               }
               insertCommand(command);
             }
           } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
-            if (!maybeRunExactSlashCommand()) {
-              onSubmitShortcut?.();
+            if (!maybeRunExactSlashCommand(event.currentTarget.value)) {
+              onSubmitShortcut?.(event.currentTarget.value);
             }
           }
         }}
@@ -2132,8 +2146,10 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const qc = useQueryClient();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const shouldFollowMessagesRef = useRef(true);
   const previousThreadIdRef = useRef(threadId);
+  const [explicitBottomFollowRevision, setExplicitBottomFollowRevision] = useState(0);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
   const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
@@ -2147,6 +2163,10 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   }, []);
   const followNextMessageUpdate = useCallback(() => {
     shouldFollowMessagesRef.current = true;
+    setExplicitBottomFollowRevision((revision) => revision + 1);
+  }, []);
+  const attachComposerTextarea = useCallback((node: HTMLTextAreaElement | null) => {
+    composerTextareaRef.current = node;
   }, []);
   const setActiveFeedback = useCallback((message: string | null) => {
     messageStore.setFeedback(threadId, message);
@@ -2160,7 +2180,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     totalBlocks: slot.totalBlocks || fallbackBlockState.totalBlocks,
     hasMoreBlocks: slot.hasMoreBlocks || fallbackBlockState.hasMoreBlocks,
     beforeCursor: slot.beforeCursor ?? fallbackBlockState.beforeCursor,
-    visibleUpdateRevision: slot.visibleUpdateRevision
+    visibleUpdateRevision: slot.visibleUpdateRevision,
+    bottomFollowRevision: slot.bottomFollowRevision || fallbackBlockState.bottomFollowRevision
   };
   const lastResult = slot.lastResult;
   const feedback = slot.feedback;
@@ -2237,7 +2258,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     requestAnimationFrame(() => {
       messageEndRef.current?.scrollIntoView({ block: "end" });
     });
-  }, [messageBlockState.visibleUpdateRevision, threadId, pending?.questions.length, planBlock?.id, approvalBlock?.id]);
+  }, [messageBlockState.bottomFollowRevision, threadId, explicitBottomFollowRevision]);
 
   useEffect(() => {
     if (!currentActionId) messageStore.setHiddenActionKey(threadId, null);
@@ -2581,9 +2602,11 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const planRevisePending = planReviseMutation.isPending && planReviseMutation.variables?.threadId === summary.id;
   const approvalPending = approvalMutation.isPending && approvalMutation.variables?.threadId === summary.id;
 
-  const submitComposer = useCallback(() => {
+  const submitComposer = useCallback((domValue?: string | null) => {
     if (attachments.uploadInProgress) return;
-    const exactSlash = slashCommandForComposerSubmit(draft);
+    const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
+    if (currentDraft !== draft) setDraft(currentDraft);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
@@ -2592,7 +2615,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       followNextMessageUpdate();
       sendMutation.mutate({
         threadId: summary.id,
-        message: draft,
+        message: currentDraft,
         config: payloadRunConfig,
         uploads: [...attachments.readyUploads]
       });
@@ -2600,7 +2623,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       followNextMessageUpdate();
       steerMutation.mutate({
         threadId: summary.id,
-        message: draft,
+        message: currentDraft,
         config: payloadRunConfig,
         uploads: [...attachments.readyUploads]
       });
@@ -2732,6 +2755,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             onChange={attachments.onFileInputChange}
           />
           <SlashCommandTextarea
+            inputRef={attachComposerTextarea}
             value={draft}
             onChange={setDraft}
             placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送到 root Codex app-server"}
@@ -3041,6 +3065,7 @@ export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" |
 
 function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean; csrfToken?: string | null; onCreated: (id: string) => void }) {
   const qc = useQueryClient();
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
   const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
@@ -3059,7 +3084,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     [runConfig, runOptions.models]
   );
   const mutation = useMutation({
-    mutationFn: () => createThread(buildPayload(draft, payloadRunConfig, attachments.readyUploads), csrfToken),
+    mutationFn: ({ message }: { message: string }) => createThread(buildPayload(message, payloadRunConfig, attachments.readyUploads), csrfToken),
     onSuccess: (next) => {
       setResult(next);
       setDraft("");
@@ -3088,13 +3113,17 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     }
     setFeedback(action.message ?? "该命令需要已有线程");
   };
-  const submitComposer = () => {
-    const exactSlash = slashCommandForComposerSubmit(draft);
+  const submitComposer = (domValue?: string | null) => {
+    const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
+    if (currentDraft !== draft) setDraft(currentDraft);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
     }
-    if (!attachments.uploadInProgress && (draft.trim() || attachments.readyUploads.length)) mutation.mutate();
+    if (!attachments.uploadInProgress && (currentDraft.trim() || attachments.readyUploads.length)) {
+      mutation.mutate({ message: currentDraft });
+    }
   };
   if (loading) {
     return <div className="empty-state"><Bot size={32} /><strong>正在读取线程</strong></div>;
@@ -3116,6 +3145,9 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           onChange={attachments.onFileInputChange}
         />
         <SlashCommandTextarea
+          inputRef={(node) => {
+            composerTextareaRef.current = node;
+          }}
           value={draft}
           onChange={setDraft}
           placeholder="输入第一条消息"
@@ -3625,6 +3657,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionStatus, setActionStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
+  const [activeSection, setActiveSection] = useState<ProbeSectionId>("overview");
   const data = status.data?.data;
   const available = status.data?.available ?? false;
   const currentSettings = settings.data?.data;
@@ -3684,6 +3717,116 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
     setDraft(buildProbeSettingsDraft(currentSettings));
   }, [currentSettings, draft]);
 
+  const overviewSection = (
+    <>
+      <section className="probe-core-metrics" aria-label="探针核心指标">
+        <Metric label="Codex APP" value={probeEnabled ? "运行中" : available ? "停用" : "不可用"} tone={statusTone === "danger" ? "danger" : statusTone} />
+        <Metric label="运行中" value={String(data?.running_count ?? 0)} tone={(data?.running_count ?? 0) > 0 ? "success" : undefined} />
+        <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
+        <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
+        <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
+        <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
+        <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
+        <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
+      </section>
+      <section className="probe-control-grid" aria-label="探针线程状态">
+        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
+        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />
+        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />
+      </section>
+    </>
+  );
+  const activeSectionContent = (() => {
+    switch (activeSection) {
+      case "reply-needed":
+        return <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />;
+      case "recoverable":
+        return <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />;
+      case "running":
+        return <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />;
+      case "hook":
+        return (
+          <Panel title="Hook" icon={<GitFork size={18} />}>
+            <ProbeHookCard
+              status={data}
+              draft={draft}
+              busy={probeJobMutation.isPending}
+              onInstall={() => probeJobMutation.mutate("hooks-install")}
+            />
+          </Panel>
+        );
+      case "bark":
+        return (
+          <Panel title="Bark" icon={<Cloud size={18} />}>
+            {draft ? (
+              <ProbeBarkCard
+                draft={draft}
+                setDraft={setDraft}
+                configuredDeviceKey={barkConfigured}
+                saveStatus={saveStatus}
+                saving={saveMutation.isPending}
+                testing={pendingProbeAction === "bark-test"}
+                onSave={() => saveMutation.mutate()}
+                onTest={() => probeJobMutation.mutate("bark-test")}
+              />
+            ) : (
+              <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
+            )}
+          </Panel>
+        );
+      case "logs-db":
+        return (
+          <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
+            <ProbeLogsDbCard
+              logsDb={logsDb}
+              busy={probeJobMutation.isPending}
+              executeArmed={logsDbExecuteArmed}
+              onDryRun={() => probeJobMutation.mutate("logs-db-dry-run")}
+              onArmExecute={() => setLogsDbExecuteArmed(true)}
+              onCancelExecute={() => setLogsDbExecuteArmed(false)}
+              onExecute={() => probeJobMutation.mutate("logs-db-execute")}
+            />
+          </Panel>
+        );
+      case "events":
+        return (
+          <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+            <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
+          </Panel>
+        );
+      case "settings":
+        return (
+          <>
+            <Panel title="设置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
+              {actionStatus && <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
+              {draft ? (
+                <ProbeRuntimeSettingsCard
+                  draft={draft}
+                  setDraft={setDraft}
+                  errors={settingsErrors}
+                  saveStatus={saveStatus}
+                  saving={saveMutation.isPending}
+                  status={data}
+                  settings={currentSettings}
+                  logsDb={logsDb}
+                  configuredDeviceKey={barkConfigured}
+                  onSave={() => saveMutation.mutate()}
+                />
+              ) : (
+                <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
+              )}
+            </Panel>
+            <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
+              <JobList jobs={probeJobs} />
+            </Panel>
+          </>
+        );
+      case "overview":
+      default:
+        return overviewSection;
+    }
+  })();
+
   return (
     <div className="probe-layout">
       <div className="probe-header">
@@ -3710,88 +3853,20 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(logsDbStatusText)}</span>
       </section>
 
-      <section className="probe-core-metrics" aria-label="探针核心指标">
-        <Metric label="Codex APP" value={probeEnabled ? "运行中" : available ? "停用" : "不可用"} tone={statusTone === "danger" ? "danger" : statusTone} />
-        <Metric label="运行中" value={String(data?.running_count ?? 0)} tone={(data?.running_count ?? 0) > 0 ? "success" : undefined} />
-        <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
-        <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
-        <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
-        <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
-        <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
-        <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
-      </section>
+      <div className="segmented" aria-label="Probe sections">
+        {probeSections.map((section) => (
+          <button
+            key={section.id}
+            className={activeSection === section.id ? "active" : ""}
+            onClick={() => setActiveSection(section.id)}
+            type="button"
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
 
-      <section className="probe-control-grid" aria-label="探针线程状态">
-        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
-        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />
-        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />
-      </section>
-
-      <section className="probe-control-grid">
-        <Panel title="Hook" icon={<GitFork size={18} />}>
-          <ProbeHookCard
-            status={data}
-            draft={draft}
-            busy={probeJobMutation.isPending}
-            onInstall={() => probeJobMutation.mutate("hooks-install")}
-          />
-        </Panel>
-        <Panel title="Bark" icon={<Cloud size={18} />}>
-          {draft ? (
-            <ProbeBarkCard
-              draft={draft}
-              setDraft={setDraft}
-              configuredDeviceKey={barkConfigured}
-              saveStatus={saveStatus}
-              saving={saveMutation.isPending}
-              testing={pendingProbeAction === "bark-test"}
-              onSave={() => saveMutation.mutate()}
-              onTest={() => probeJobMutation.mutate("bark-test")}
-            />
-          ) : (
-            <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
-          )}
-        </Panel>
-        <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
-          <ProbeLogsDbCard
-            logsDb={logsDb}
-            busy={probeJobMutation.isPending}
-            executeArmed={logsDbExecuteArmed}
-            onDryRun={() => probeJobMutation.mutate("logs-db-dry-run")}
-            onArmExecute={() => setLogsDbExecuteArmed(true)}
-            onCancelExecute={() => setLogsDbExecuteArmed(false)}
-            onExecute={() => probeJobMutation.mutate("logs-db-execute")}
-          />
-        </Panel>
-      </section>
-
-      <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
-        <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
-      </Panel>
-
-      <Panel title="设置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
-        {actionStatus && <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
-        {draft ? (
-          <ProbeRuntimeSettingsCard
-            draft={draft}
-            setDraft={setDraft}
-            errors={settingsErrors}
-            saveStatus={saveStatus}
-            saving={saveMutation.isPending}
-            status={data}
-            settings={currentSettings}
-            logsDb={logsDb}
-            configuredDeviceKey={barkConfigured}
-            onSave={() => saveMutation.mutate()}
-          />
-        ) : (
-          <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
-        )}
-      </Panel>
-
-      <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
-        <JobList jobs={probeJobs} />
-      </Panel>
+      {activeSectionContent}
 
       {!available && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">

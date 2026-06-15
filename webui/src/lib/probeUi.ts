@@ -4,7 +4,7 @@ export const PROBE_NAV_LABEL = "探针";
 
 export const probeSections = [
   { id: "overview", label: "总览" },
-  { id: "needs-reply", label: "需回复" },
+  { id: "reply-needed", label: "需回复" },
   { id: "recoverable", label: "异常/可恢复" },
   { id: "running", label: "运行中" },
   { id: "hook", label: "Hook" },
@@ -309,13 +309,21 @@ export function probeEventReadableSummary(event: ProbeEvent): string {
   if (message) return message;
   const payload = probeEventPayload(event);
   const candidates = [
-    event.title,
     stringFromRecord(payload, "summary"),
     stringFromRecord(payload, "status"),
     stringFromRecord(payload, "reason"),
-    stringFromRecord(payload, "kind")
+    stringFromRecord(payload, "kind"),
+    event.title
   ];
-  const summary = candidates.map(cleanProbeEventText).find(Boolean);
+  const kind = cleanProbeEventText(event.kind).toLowerCase();
+  const kindLabel = probeEventKindLabel(event.kind).toLowerCase();
+  const summary = candidates
+    .map(cleanProbeEventText)
+    .find((candidate) => {
+      if (!candidate) return false;
+      const normalized = candidate.toLowerCase();
+      return normalized !== kind && normalized !== kindLabel;
+    });
   if (summary) return summary;
   if (event.thread_id) return `线程 ${event.thread_id}`;
   return "Probe 事件已记录";

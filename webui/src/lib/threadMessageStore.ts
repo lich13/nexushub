@@ -7,6 +7,7 @@ export type ThreadMessageSlot = {
   hasMoreBlocks: boolean;
   beforeCursor: string | null;
   visibleUpdateRevision: number;
+  bottomFollowRevision: number;
   loadingEarlier: boolean;
   loadError: string | null;
   feedback: string | null;
@@ -36,6 +37,7 @@ export function createThreadMessageSlot(): ThreadMessageSlot {
     hasMoreBlocks: false,
     beforeCursor: null,
     visibleUpdateRevision: 0,
+    bottomFollowRevision: 0,
     loadingEarlier: false,
     loadError: null,
     feedback: null,
@@ -73,7 +75,8 @@ export function applyThreadDetailToSlot(
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;
   const mergedBlocks = mergeBlocksPreservingHistory(slot.blocks, incomingBlocks);
-  const changed = mergedBlocks !== slot.blocks
+  const blocksChanged = mergedBlocks !== slot.blocks;
+  const changed = blocksChanged
     || slot.summary !== detail.summary
     || slot.totalBlocks !== (detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length))
     || slot.hasMoreBlocks !== Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
@@ -92,6 +95,7 @@ export function applyThreadDetailToSlot(
   }
   slot.fetchedAt = Date.now();
   if (changed) slot.visibleUpdateRevision += 1;
+  if (blocksChanged) slot.bottomFollowRevision += 1;
   return slot;
 }
 
@@ -131,6 +135,7 @@ export function applyRealtimeBlocksToThreadSlot(
     slot.blocks = nextBlocks;
     slot.totalBlocks = Math.max(slot.totalBlocks, nextBlocks.length);
     slot.visibleUpdateRevision += 1;
+    slot.bottomFollowRevision += 1;
   }
   return slot;
 }
