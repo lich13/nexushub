@@ -1793,7 +1793,7 @@ hooks = false
     async fn send_bark_builds_redacted_request_and_reports_non_success() {
         let server = TestHttpServer::start_n(
             1,
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
         let mut config = Config::default();
         config.probe.notifications.server_url = server.url();
@@ -1833,7 +1833,10 @@ hooks = false
 
     #[tokio::test]
     async fn send_bark_splits_long_body_on_utf8_boundaries() {
-        let server = TestHttpServer::start_n(3, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let server = TestHttpServer::start_n(
+            3,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
         let mut config = Config::default();
         config.probe.notifications.server_url = server.url();
         config.probe.notifications.group = "Probe Group".to_string();
