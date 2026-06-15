@@ -797,9 +797,11 @@ describe("archive delete API compatibility", () => {
     const app = await import("../App");
 
     expect(app.slashCommandSuggestions("/goal r", 7)).toEqual([
-      expect.objectContaining({ command: "/goal resume", description: "恢复当前线程 Goal" })
+      expect.objectContaining({ command: "/goal resume", description: expect.stringContaining("恢复") })
     ]);
-    expect(app.slashCommandSuggestions("/goal r", 7, false)).toEqual([]);
+    expect(app.slashCommandSuggestions("/goal r", 7, false)).toEqual([
+      expect.objectContaining({ command: "/goal resume", requiresThread: true })
+    ]);
   });
 
   test("does not surface stale pending blocks without reply-needed state or active turn", async () => {

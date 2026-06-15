@@ -825,16 +825,16 @@ button { cursor: pointer; }
 }
 .permission-summary strong { display: block; font-size: 12px; }
 .permission-summary span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-.slash-composer { position: relative; }
+.slash-composer { position: relative; overflow: visible; }
 .slash-menu {
   position: absolute;
   left: 0;
   right: 0;
   bottom: calc(100% + 6px);
-  z-index: 6;
+  z-index: 30;
   display: grid;
   gap: 4px;
-  max-height: 220px;
+  max-height: min(420px, 48vh);
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--chat-border);
@@ -844,10 +844,10 @@ button { cursor: pointer; }
 }
 .slash-option {
   display: grid;
-  grid-template-columns: minmax(92px, 0.34fr) 1fr;
+  grid-template-columns: minmax(132px, 0.34fr) 1fr;
   gap: 10px;
-  align-items: center;
-  min-height: 34px;
+  align-items: start;
+  min-height: 46px;
   padding: 7px 9px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -856,7 +856,27 @@ button { cursor: pointer; }
   text-align: left;
 }
 .slash-option strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.slash-option span { color: var(--chat-muted); font-size: 12px; }
+.slash-option-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--chat-muted);
+  font-size: 12px;
+}
+.slash-option-copy span,
+.slash-option-copy small,
+.slash-option-copy em {
+  overflow-wrap: anywhere;
+}
+.slash-option-copy small {
+  color: #7a8797;
+  font-style: normal;
+}
+.slash-option-copy em {
+  color: #a16207;
+  font-size: 11px;
+  font-style: normal;
+}
 .slash-option.selected {
   border-color: rgba(56, 189, 248, 0.38);
   background: rgba(56, 189, 248, 0.12);
@@ -1739,6 +1759,13 @@ button { cursor: pointer; }
   .composer-grid .cwd-field { grid-column: 1 / -1; }
   .composer-actions { align-items: stretch; flex-direction: column; }
   .composer-actions .primary-button { width: 100%; min-width: 96px; }
+  .slash-menu {
+    max-height: min(300px, 44vh);
+  }
+  .slash-option {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
   .drawer-backdrop {
     position: fixed;
     inset: 0;

@@ -5,8 +5,17 @@ type AppExports = typeof import("./App") & {
   composerFileInputAcceptValue?: () => string | undefined;
   formatGoalStatus?: (goal: Pick<GoalModeState, "enabled" | "status"> | null | undefined) => string;
   segmentInternalReferences?: (text: string) => Array<{ type: "text" | "internal_reference"; text: string; copyText?: string; kind?: string }>;
-  slashCommandSuggestions?: (draft: string, cursor: number) => Array<{ command: string; description: string }>;
+  slashCommands?: Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
+  slashCommandSuggestions?: (draft: string, cursor: number, hasThread?: boolean) => Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
   applySlashCommandSelection?: (draft: string, cursor: number, command: string) => { value: string; cursor: number };
+  renderSlashCommandMenuHtml?: (draft: string, cursor: number, hasThread?: boolean, selected?: number) => string;
+  nextSlashCommandSelection?: (current: number, total: number, key: string) => number;
+  slashCommandKeyAction?: (input: {
+    key: string;
+    shiftKey?: boolean;
+    selected: number;
+    suggestions: Array<{ command: string }>;
+  }) => { action: "move"; selected: number } | { action: "insert"; command: string } | { action: "dismiss" } | { action: "none" };
   nextRenameDraftValue?: (input: {
     previousThreadId: string;
     threadId: string;
@@ -50,12 +59,70 @@ describe("conversation helpers", () => {
     ]));
   });
 
-  test("slash command helpers include goal resume and insert without submitting", async () => {
+  test("slash command catalog covers Codex TUI commands with Chinese descriptions and usage hints", async () => {
     const app = await loadApp();
 
-    expect(app.slashCommandSuggestions?.("/go", 3)).toEqual([
-      expect.objectContaining({ command: "/goal resume", description: "恢复当前线程 Goal" })
+    const requiredCommands = [
+      "/permissions", "/ide", "/keymap", "/vim", "/sandbox-add-read-dir", "/agent", "/apps", "/plugins", "/hooks",
+      "/clear", "/archive", "/compact", "/copy", "/diff", "/exit", "/quit", "/experimental", "/approve",
+      "/memories", "/skills", "/feedback", "/init", "/logout", "/mcp", "/mention", "/model", "/fast", "/plan",
+      "/goal", "/goal pause", "/goal resume", "/goal clear", "/personality", "/ps", "/stop", "/fork", "/side",
+      "/btw", "/raw", "/resume", "/new", "/review", "/status", "/debug-config", "/statusline", "/title", "/theme"
+    ];
+    const commands = app.slashCommands?.map((item) => item.command);
+
+    expect(commands).toEqual(requiredCommands);
+    expect(app.slashCommands?.every((item) => item.description.trim().length > 0)).toBe(true);
+    expect(app.slashCommands?.every((item) => /[\u4e00-\u9fff]/.test(item.description))).toBe(true);
+    expect(app.slashCommands?.every((item) => item.usageHint.trim().length > 0)).toBe(true);
+    expect(app.slashCommands?.filter((item) => item.command.startsWith("/goal")).every((item) => item.requiresThread)).toBe(true);
+  });
+
+  test("slash command helpers filter full catalog and keep thread commands visible for new threads", async () => {
+    const app = await loadApp();
+
+    expect(app.slashCommandSuggestions?.("/", 1).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
+    expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([
+      "/goal", "/goal pause", "/goal resume", "/goal clear"
     ]);
+    expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([
+      expect.objectContaining({
+        command: "/goal resume",
+        description: expect.stringContaining("恢复"),
+        usageHint: expect.stringContaining("/goal resume"),
+        requiresThread: true
+      })
+    ]);
+    expect(app.slashCommandSuggestions?.("/goal resume", "/goal resume".length, false)).toEqual([
+      expect.objectContaining({ command: "/goal resume", requiresThread: true })
+    ]);
+    expect(app.slashCommandSuggestions?.("/theme", 6)).toEqual([
+      expect.objectContaining({ command: "/theme", description: expect.stringContaining("主题") })
+    ]);
+  });
+
+  test("slash command menu renders listbox with command, Chinese explanation, usage, and thread marker", async () => {
+    const app = await loadApp();
+
+    const html = app.renderSlashCommandMenuHtml?.("/goal r", 7, false);
+
+    expect(html).toContain('role="listbox"');
+    expect(html).toContain("/goal resume");
+    expect(html).toContain("恢复");
+    expect(html).toContain("用法");
+    expect(html).toContain("需要已有线程");
+  });
+
+  test("slash command selection helpers support keyboard actions and insert without submitting", async () => {
+    const app = await loadApp();
+    const suggestions = app.slashCommandSuggestions?.("/", 1) ?? [];
+
+    expect(app.nextSlashCommandSelection?.(0, suggestions.length, "ArrowDown")).toBe(1);
+    expect(app.nextSlashCommandSelection?.(0, suggestions.length, "ArrowUp")).toBe(suggestions.length - 1);
+    expect(app.slashCommandKeyAction?.({ key: "ArrowDown", selected: 0, suggestions })).toEqual({ action: "move", selected: 1 });
+    expect(app.slashCommandKeyAction?.({ key: "Escape", selected: 0, suggestions })).toEqual({ action: "dismiss" });
+    expect(app.slashCommandKeyAction?.({ key: "Enter", selected: 2, suggestions })).toEqual({ action: "insert", command: suggestions[2].command });
+    expect(app.slashCommandKeyAction?.({ key: "Enter", shiftKey: true, selected: 2, suggestions })).toEqual({ action: "none" });
     expect(app.applySlashCommandSelection?.("继续 /go", 6, "/goal resume")).toEqual({
       value: "继续 /goal resume ",
       cursor: "继续 /goal resume ".length

@@ -213,13 +213,58 @@ const secondsPerDay = 86400;
 type SlashCommand = {
   command: string;
   description: string;
+  usageHint: string;
   requiresThread?: boolean;
 };
 
 export const slashCommands: SlashCommand[] = [
-  { command: "/goal resume", description: "恢复当前线程 Goal", requiresThread: true },
-  { command: "/clear", description: "清空当前输入" },
-  { command: "/help", description: "插入可用命令提示" }
+  { command: "/permissions", description: "调整权限与审批模式", usageHint: "/permissions" },
+  { command: "/ide", description: "加入 IDE 上下文", usageHint: "/ide" },
+  { command: "/keymap", description: "查看或调整 TUI 快捷键", usageHint: "/keymap" },
+  { command: "/vim", description: "切换 Vim 输入模式", usageHint: "/vim" },
+  { command: "/sandbox-add-read-dir", description: "添加沙盒只读目录，Windows 专用", usageHint: "/sandbox-add-read-dir <path>" },
+  { command: "/agent", description: "切换或查看子代理线程", usageHint: "/agent", requiresThread: true },
+  { command: "/apps", description: "浏览 apps 与 connectors", usageHint: "/apps" },
+  { command: "/plugins", description: "浏览插件", usageHint: "/plugins" },
+  { command: "/hooks", description: "查看生命周期 hooks", usageHint: "/hooks" },
+  { command: "/clear", description: "清空当前输入或开启新会话语义", usageHint: "/clear" },
+  { command: "/archive", description: "归档当前会话", usageHint: "/archive", requiresThread: true },
+  { command: "/compact", description: "压缩当前上下文", usageHint: "/compact", requiresThread: true },
+  { command: "/copy", description: "复制最新回复", usageHint: "/copy", requiresThread: true },
+  { command: "/diff", description: "查看当前 diff", usageHint: "/diff", requiresThread: true },
+  { command: "/exit", description: "退出当前会话", usageHint: "/exit", requiresThread: true },
+  { command: "/quit", description: "退出当前会话", usageHint: "/quit", requiresThread: true },
+  { command: "/experimental", description: "查看实验功能", usageHint: "/experimental" },
+  { command: "/approve", description: "批准一次自动审查拒绝后的重试", usageHint: "/approve", requiresThread: true },
+  { command: "/memories", description: "查看记忆设置", usageHint: "/memories" },
+  { command: "/skills", description: "浏览或使用技能", usageHint: "/skills" },
+  { command: "/feedback", description: "提交反馈", usageHint: "/feedback" },
+  { command: "/init", description: "生成 AGENTS.md", usageHint: "/init" },
+  { command: "/logout", description: "退出登录", usageHint: "/logout" },
+  { command: "/mcp", description: "查看 MCP 工具", usageHint: "/mcp" },
+  { command: "/mention", description: "引用文件或目录", usageHint: "/mention <path>" },
+  { command: "/model", description: "切换模型或推理等级", usageHint: "/model" },
+  { command: "/fast", description: "切换 Fast 服务层", usageHint: "/fast" },
+  { command: "/plan", description: "切换计划模式，可带内联提示", usageHint: "/plan [prompt]" },
+  { command: "/goal", description: "查看或设置当前线程 Goal", usageHint: "/goal [objective]", requiresThread: true },
+  { command: "/goal pause", description: "暂停当前线程 Goal", usageHint: "/goal pause", requiresThread: true },
+  { command: "/goal resume", description: "恢复当前线程 Goal", usageHint: "/goal resume", requiresThread: true },
+  { command: "/goal clear", description: "清除当前线程 Goal", usageHint: "/goal clear", requiresThread: true },
+  { command: "/personality", description: "切换沟通风格", usageHint: "/personality" },
+  { command: "/ps", description: "查看后台终端", usageHint: "/ps", requiresThread: true },
+  { command: "/stop", description: "停止后台终端", usageHint: "/stop", requiresThread: true },
+  { command: "/fork", description: "分叉当前对话", usageHint: "/fork", requiresThread: true },
+  { command: "/side", description: "开启旁路对话", usageHint: "/side [prompt]", requiresThread: true },
+  { command: "/btw", description: "开启旁路对话别名", usageHint: "/btw [prompt]", requiresThread: true },
+  { command: "/raw", description: "切换原始滚动输出", usageHint: "/raw", requiresThread: true },
+  { command: "/resume", description: "恢复历史会话", usageHint: "/resume" },
+  { command: "/new", description: "新建会话", usageHint: "/new" },
+  { command: "/review", description: "请求工作区 review", usageHint: "/review" },
+  { command: "/status", description: "查看会话状态", usageHint: "/status" },
+  { command: "/debug-config", description: "查看配置层诊断", usageHint: "/debug-config" },
+  { command: "/statusline", description: "配置状态栏", usageHint: "/statusline" },
+  { command: "/title", description: "配置终端标题", usageHint: "/title" },
+  { command: "/theme", description: "选择语法主题", usageHint: "/theme" }
 ];
 
 type TurnstileWidgetId = string;
@@ -1058,9 +1103,7 @@ export function slashCommandSuggestions(draft: string, cursor: number, hasThread
   const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
   if (!query) return [];
   return slashCommands
-    .filter((item) => hasThread || !item.requiresThread)
-    .filter((item) => item.command.toLowerCase().startsWith(query))
-    .slice(0, 8);
+    .filter((item) => item.command.toLowerCase().startsWith(query));
 }
 
 export function applySlashCommandSelection(draft: string, cursor: number, command: string): { value: string; cursor: number } {
@@ -1072,6 +1115,61 @@ export function applySlashCommandSelection(draft: string, cursor: number, comman
   }
   const value = `${draft.slice(0, query.start)}${insertion}${draft.slice(query.end)}`;
   return { value, cursor: query.start + insertion.length };
+}
+
+export function nextSlashCommandSelection(current: number, total: number, key: string): number {
+  if (key === "ArrowDown") return moveActionSelection(current, total, 1);
+  if (key === "ArrowUp") return moveActionSelection(current, total, -1);
+  return current;
+}
+
+export function slashCommandKeyAction({
+  key,
+  shiftKey = false,
+  selected,
+  suggestions
+}: {
+  key: string;
+  shiftKey?: boolean;
+  selected: number;
+  suggestions: Array<{ command: string }>;
+}): { action: "move"; selected: number } | { action: "insert"; command: string } | { action: "dismiss" } | { action: "none" } {
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    return { action: "move", selected: nextSlashCommandSelection(selected, suggestions.length, key) };
+  }
+  if (key === "Escape") return { action: "dismiss" };
+  if (key === "Enter" && !shiftKey && suggestions.length > 0) {
+    return { action: "insert", command: suggestions[selected]?.command ?? suggestions[0].command };
+  }
+  return { action: "none" };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function renderSlashCommandMenuHtml(draft: string, cursor: number, hasThread = true, selected = 0): string {
+  const suggestions = slashCommandSuggestions(draft, cursor, hasThread);
+  if (suggestions.length === 0) return "";
+  const options = suggestions.map((item, index) => {
+    const className = index === selected ? "slash-option selected" : "slash-option";
+    const threadBadge = item.requiresThread && !hasThread ? '<em class="slash-thread-note">需要已有线程</em>' : "";
+    return [
+      `<button type="button" class="${className}" role="option" aria-selected="${index === selected}">`,
+      `<strong>${escapeHtml(item.command)}</strong>`,
+      '<span class="slash-option-copy">',
+      `<span>${escapeHtml(item.description)}</span>`,
+      `<small>用法 ${escapeHtml(item.usageHint)}</small>`,
+      threadBadge,
+      "</span>",
+      "</button>"
+    ].join("");
+  }).join("");
+  return `<div class="slash-menu" role="listbox" aria-label="Slash 命令">${options}</div>`;
 }
 
 export function nextRenameDraftValue(input: {
@@ -1280,7 +1378,11 @@ function SlashCommandTextarea({
               aria-selected={index === selected}
             >
               <strong>{item.command}</strong>
-              <span>{item.description}</span>
+              <span className="slash-option-copy">
+                <span>{item.description}</span>
+                <small>用法 {item.usageHint}</small>
+                {item.requiresThread && !hasThread ? <em>需要已有线程</em> : null}
+              </span>
             </button>
           ))}
         </div>
@@ -1304,20 +1406,17 @@ function SlashCommandTextarea({
         }}
         onKeyDown={(event) => {
           if (!open) return;
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const action = slashCommandKeyAction({ key: event.key, shiftKey: event.shiftKey, selected, suggestions });
+          if (action.action === "move") {
             event.preventDefault();
-            setSelected((current) => moveActionSelection(current, suggestions.length, event.key === "ArrowDown" ? 1 : -1));
-            return;
-          }
-          if (event.key === "Escape") {
+            setSelected(action.selected);
+          } else if (action.action === "dismiss") {
             event.preventDefault();
             setSelected(0);
             setDismissedSignature(signature);
-            return;
-          }
-          if (event.key === "Enter" && !event.shiftKey) {
+          } else if (action.action === "insert") {
             event.preventDefault();
-            insertCommand(suggestions[selected]?.command ?? suggestions[0].command);
+            insertCommand(action.command);
           }
         }}
         placeholder={placeholder}
