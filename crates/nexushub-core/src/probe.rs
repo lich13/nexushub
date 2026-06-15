@@ -1385,6 +1385,7 @@ fn probe_event_type(input: &ProbeEventInput) -> String {
     match input.kind {
         ProbeEventInputKind::NotifyCompletion => "completion".to_string(),
         ProbeEventInputKind::HookStop => match input.hook_kind.as_str() {
+            "completion" => "completion".to_string(),
             "reply-needed" | "reply_needed" => "reply_needed".to_string(),
             "recoverable" => "recoverable".to_string(),
             _ => "hook_stop".to_string(),

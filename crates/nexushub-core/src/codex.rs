@@ -1199,6 +1199,11 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
     Ok(scan)
 }
 
+pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
+    let scan = scan_rollout(path, 1)?;
+    Ok(scan.latest_message)
+}
+
 fn latest_active_task_turn(active_tasks: &[Option<String>]) -> Option<String> {
     active_tasks.iter().rev().find_map(Clone::clone)
 }
@@ -3729,6 +3734,38 @@ mod tests {
 
         assert_eq!(scan.message_count, 1);
         assert_eq!(scan.latest_message.as_deref(), Some("真实回复"));
+    }
+
+    #[test]
+    fn rollout_latest_assistant_message_reads_last_visible_assistant_message() {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-latest-assistant-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        let events = [
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"first answer"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"next"}]}}),
+            json!({"type":"subagent_notification","message":"worker done"}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"final answer"}]}}),
+        ];
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            super::rollout_latest_assistant_message(&path)
+                .unwrap()
+                .as_deref(),
+            Some("final answer")
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]

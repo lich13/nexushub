@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     app_server::AppServerBridge,
-    codex::resolve_codex_paths,
+    codex::{resolve_codex_paths, rollout_latest_assistant_message},
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
         Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
@@ -417,6 +417,18 @@ async fn handle_hook_stop_command(
     let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
     });
+    let transcript_last_assistant_message = payload_last_assistant_message
+        .is_none()
+        .then(|| {
+            payload_transcript_path
+                .as_deref()
+                .map(Path::new)
+                .and_then(|path| rollout_latest_assistant_message(path).ok().flatten())
+        })
+        .flatten();
+    let last_assistant_message = payload_last_assistant_message
+        .as_deref()
+        .or(transcript_last_assistant_message.as_deref());
     let event_thread_id = thread_id
         .or(payload_thread_id.clone())
         .or(payload_session_id.clone());
@@ -430,7 +442,7 @@ async fn handle_hook_stop_command(
         event_turn_id.as_deref(),
         payload_session_id.as_deref(),
         payload_transcript_path.as_deref(),
-        payload_last_assistant_message.as_deref(),
+        last_assistant_message,
         &event_kind,
     ));
     handle_built_probe_event(config, db, event).await
@@ -477,11 +489,15 @@ fn redact_sensitive_json(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map.iter_mut() {
-                let lower = key.to_ascii_lowercase();
-                if lower.contains("device_key")
-                    || lower.contains("secret")
-                    || lower.contains("token")
-                    || lower.contains("password")
+                let key = key.to_ascii_lowercase();
+                if key == "device_key_configured" {
+                    continue;
+                } else if key.contains("device_key")
+                    || key.contains("secret")
+                    || key.contains("token")
+                    || key.contains("password")
+                    || key.contains("authorization")
+                    || key == "request_url"
                 {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -1859,6 +1875,46 @@ hooks = false
         assert_eq!(events[0].payload["dedupe"]["claimed"], true);
         assert_eq!(events[0].payload["dedupe"]["duplicate"], false);
         assert_eq!(events[0].kind, "hook-stop");
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_transcript_latest_assistant_when_stdin_omits_body() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-hook-transcript-summary");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"first answer"}]}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"final answer"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-transcript"),
+            Some("turn-transcript"),
+            Some("session-transcript"),
+            Some(transcript.to_string_lossy().as_ref()),
+            rollout_latest_assistant_message(&transcript)
+                .unwrap()
+                .as_deref(),
+            "hook-stop",
+        ));
+
+        handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["summary"],
+            "final answer"
+        );
+        assert_eq!(events[0].payload["body_summary"], "final answer");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
