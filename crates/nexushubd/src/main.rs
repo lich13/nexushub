@@ -15,7 +15,10 @@ use nexushub_core::{
     },
     db::{NewProbeEvent, PanelDb},
     platform::PlatformPaths,
-    probe::{ProbeEventInput, ProbeEventOutcome, ProbeLogsDbMaintenanceResult, ProbeRuntime},
+    probe::{
+        ProbeEventInput, ProbeEventOutcome, ProbeLogsDbMaintenanceResult, ProbeRuntime,
+        DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS,
+    },
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -107,6 +110,8 @@ enum ProbeCommand {
         dry_run: bool,
         #[arg(long)]
         compact: bool,
+        #[arg(long, default_value_t = DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS)]
+        quick_check_timeout_seconds: u64,
     },
     LifecycleRepair,
     ServiceRestart,
@@ -263,9 +268,16 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 }))?
             );
         }
-        ProbeCommand::LogsDbMaintain { dry_run, compact } => {
-            let result = probe_runtime(config)
-                .maintain_logs_db_with_compaction(dry_run, compact && !dry_run)?;
+        ProbeCommand::LogsDbMaintain {
+            dry_run,
+            compact,
+            quick_check_timeout_seconds,
+        } => {
+            let result = probe_runtime(config).maintain_logs_db_with_compaction_timeout(
+                dry_run,
+                compact && !dry_run,
+                std::time::Duration::from_secs(quick_check_timeout_seconds),
+            )?;
             db.set_setting(
                 PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
                 &serde_json::to_string(&result)?,

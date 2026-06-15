@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
+pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone)]
 pub struct ProbeRuntime {
@@ -168,13 +169,27 @@ impl ProbeRuntime {
         dry_run: bool,
         compact: bool,
     ) -> Result<ProbeLogsDbMaintenanceResult> {
+        self.maintain_logs_db_with_compaction_timeout(
+            dry_run,
+            compact,
+            Duration::from_secs(DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS),
+        )
+    }
+
+    pub fn maintain_logs_db_with_compaction_timeout(
+        &self,
+        dry_run: bool,
+        compact: bool,
+        quick_check_timeout: Duration,
+    ) -> Result<ProbeLogsDbMaintenanceResult> {
         let resolved = self.resolved_codex_paths();
-        maintain_codex_logs_db(
+        maintain_codex_logs_db_with_quick_check_timeout(
             &resolved,
             &self.config.probe.logs_db,
             dry_run,
             compact,
             now_ts(),
+            quick_check_timeout,
         )
     }
 
@@ -622,6 +637,7 @@ pub struct ProbeLogsDbMaintenanceResult {
     pub checkpoint_result: Option<String>,
     pub vacuumed: bool,
     pub quick_check_before_vacuum: Option<String>,
+    pub quick_check_timeout_seconds: Option<u64>,
     pub skip_reason: Option<String>,
     pub error: Option<String>,
     pub ran_at: String,
@@ -887,12 +903,13 @@ struct CodexLogsSnapshot {
     journal_mode: Option<String>,
 }
 
-fn maintain_codex_logs_db(
+fn maintain_codex_logs_db_with_quick_check_timeout(
     resolved: &ResolvedCodexPaths,
     logs_config: &ProbeLogsDbConfig,
     dry_run: bool,
     compact: bool,
     now: i64,
+    quick_check_timeout: Duration,
 ) -> Result<ProbeLogsDbMaintenanceResult> {
     let path = resolved.logs_db.clone();
     let cutoff = logs_cutoff(logs_config.retention_days, now);
@@ -926,6 +943,7 @@ fn maintain_codex_logs_db(
         checkpoint_result: None,
         vacuumed: false,
         quick_check_before_vacuum: None,
+        quick_check_timeout_seconds: None,
         skip_reason: None,
         error: None,
         ran_at,
@@ -1036,7 +1054,7 @@ fn maintain_codex_logs_db(
     }
 
     if compact {
-        maybe_vacuum_codex_logs(&conn, &path, logs_config, &mut result);
+        maybe_vacuum_codex_logs(&conn, &path, logs_config, &mut result, quick_check_timeout);
     }
     if result.ok {
         result.checkpoint_attempted = true;
@@ -1051,6 +1069,7 @@ fn maybe_vacuum_codex_logs(
     path: &Path,
     config: &ProbeLogsDbConfig,
     result: &mut ProbeLogsDbMaintenanceResult,
+    quick_check_timeout: Duration,
 ) {
     if !config.auto_compact_when_codex_closed {
         result.skip_reason = Some("vacuum_disabled".to_string());
@@ -1090,7 +1109,8 @@ fn maybe_vacuum_codex_logs(
             }
         }
     }
-    match quick_check(conn, Duration::from_secs(60)) {
+    result.quick_check_timeout_seconds = Some(quick_check_timeout.as_secs());
+    match quick_check(conn, quick_check_timeout) {
         Ok(()) => result.quick_check_before_vacuum = Some("ok".to_string()),
         Err(reason) => {
             result.quick_check_before_vacuum = Some(reason.clone());
@@ -1308,5 +1328,93 @@ fn dedupe_component(value: &str) -> String {
         "unknown".to_string()
     } else {
         normalized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_uses_caller_supplied_quick_check_timeout() {
+        let root = unique_temp_dir("nexushub-probe-quick-check-timeout");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        seed_codex_logs_db(&logs_path, &[100, 200_000]);
+
+        let resolved = ResolvedCodexPaths {
+            configured_codex_home: None,
+            home: codex_home.clone(),
+            logs_db: logs_path.clone(),
+            state_db: codex_home.join("state_5.sqlite"),
+            session_index: codex_home.join("session_index.jsonl"),
+            sessions_dir: codex_home.join("sessions"),
+            configured_app_server_socket: None,
+            app_server_socket: None,
+            codex_home_source: "test".to_string(),
+            logs_db_source: "test".to_string(),
+            app_server_socket_source: None,
+            discovery_warnings: Vec::new(),
+        };
+        let mut config = ProbeLogsDbConfig {
+            retention_days: 1,
+            delete_chunk_rows: 10,
+            max_delete_rows_per_run: 10,
+            compact_min_freelist_mb: 0,
+            compact_min_freelist_ratio_percent: 0,
+            minimum_free_space_mb: 0,
+            ..ProbeLogsDbConfig::default()
+        };
+        config.auto_compact_when_codex_closed = true;
+
+        let result = maintain_codex_logs_db_with_quick_check_timeout(
+            &resolved,
+            &config,
+            false,
+            true,
+            200_000,
+            Duration::from_secs(600),
+        )
+        .unwrap();
+
+        assert!(result.vacuumed);
+        assert_eq!(result.quick_check_before_vacuum.as_deref(), Some("ok"));
+        assert_eq!(result.quick_check_timeout_seconds, Some(600));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                target TEXT NOT NULL,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+            "#,
+        )
+        .unwrap();
+        for ts in timestamps {
+            conn.execute(
+                "INSERT INTO logs(ts, ts_nanos, level, target, estimated_bytes) VALUES(?1, 0, 'INFO', 'test', 1)",
+                params![ts],
+            )
+            .unwrap();
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
     }
 }
