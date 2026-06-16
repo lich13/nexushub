@@ -166,6 +166,10 @@ if 'install_systemd_unit' not in main_body:
     raise SystemExit("update.sh main must refresh systemd before restarting NexusHub")
 if main_body.find('install_systemd_unit') > main_body.find('systemctl restart "${SERVICE_NAME}"'):
     raise SystemExit("update.sh must refresh systemd before restarting NexusHub")
+if '[[ -f "${CONFIG_FILE}" ]] && cp "${CONFIG_FILE}" "${BACKUP}/config.toml"' not in main_body:
+    raise SystemExit("update.sh must back up config.toml before migration")
+if 'install -m 0644 -o root -g root "${BACKUP}/config.toml" "${CONFIG_FILE}"' not in main_body:
+    raise SystemExit("update.sh must restore config.toml when health check fails")
 
 print("update.sh systemd unit refresh behavior: ok")
 PY

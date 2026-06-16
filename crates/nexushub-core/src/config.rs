@@ -41,6 +41,7 @@ pub struct CodexConfig {
     #[serde(default = "default_codex_home")]
     pub home: PathBuf,
     pub workspace: PathBuf,
+    #[serde(default)]
     pub app_server_service: String,
     #[serde(default = "default_app_server_socket")]
     pub app_server_socket: Option<PathBuf>,
@@ -1173,7 +1174,6 @@ trust_forwarded_headers = true
 
 [codex]
 workspace = "/home/ubuntu/codex-workspace"
-app_server_service = "codex-app-server-root.service"
 host_label = "43.155.235.227"
 
 [security]
@@ -1199,6 +1199,7 @@ panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is
         let config: Config = toml::from_str(input).unwrap();
 
         assert_eq!(config.codex.home.to_string_lossy(), "auto");
+        assert!(config.codex.app_server_service.is_empty());
     }
 
     #[test]

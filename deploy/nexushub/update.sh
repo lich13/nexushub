@@ -581,6 +581,7 @@ main() {
   [[ -f "${INSTALL_BIN}" ]] && cp "${INSTALL_BIN}" "${BACKUP}/nexushubd"
   [[ -d "${WEBUI_DIR}" ]] && cp -a "${WEBUI_DIR}" "${BACKUP}/webui"
   [[ -f "${SYSTEMD_UNIT}" ]] && cp "${SYSTEMD_UNIT}" "${BACKUP}/systemd.service"
+  [[ -f "${CONFIG_FILE}" ]] && cp "${CONFIG_FILE}" "${BACKUP}/config.toml"
 
   install -m 0755 -o root -g root "${ROOT}/bin/nexushubd" "${INSTALL_BIN}"
   rm -rf "${WEBUI_DIR}"
@@ -615,6 +616,9 @@ main() {
   if [[ -f "${BACKUP}/systemd.service" ]]; then
     install -m 0644 -o root -g root "${BACKUP}/systemd.service" "${SYSTEMD_UNIT}"
     systemctl daemon-reload || true
+  fi
+  if [[ -f "${BACKUP}/config.toml" ]]; then
+    install -m 0644 -o root -g root "${BACKUP}/config.toml" "${CONFIG_FILE}"
   fi
   systemctl restart "${SERVICE_NAME}" || true
   die "update failed"
