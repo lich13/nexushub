@@ -491,7 +491,7 @@ describe("conversation helpers", () => {
         thread_title: "Plan Mode 修复",
         thread_id: "thread-a",
         turn_id: "turn-a",
-        beijing_time: "2026-06-16 09:30:00 CST",
+        beijing_time: "2026-06-16 09:30:00 北京时间",
         reason_label: "等待用户确认",
         body_summary: "Plan Mode 等待用户确认",
         body_sha256: "abc123",

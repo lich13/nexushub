@@ -319,8 +319,8 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                     config,
                     device_key.as_deref().unwrap_or_default(),
                     &ProbeBarkRequest {
-                        title: "NexusHub Probe test".to_string(),
-                        body: "Probe notification route is configured.".to_string(),
+                        title: "Codex Sentinel Lite".to_string(),
+                        body: "Bark 推送通道正常。".to_string(),
                         dedupe_key: "probe-bark-test".to_string(),
                     },
                     std::time::Duration::from_secs(8),
@@ -816,6 +816,12 @@ struct ProbeBarkRequest {
     dedupe_key: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct BarkPushResponse {
+    code: Option<i64>,
+    message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ProbeBarkOutcome {
     sent: bool,
@@ -1119,13 +1125,13 @@ async fn send_bark_notification(
             ));
         }
     };
-    let base = config
-        .probe
-        .notifications
-        .server_url
-        .trim()
-        .trim_end_matches('/');
-    if !valid_probe_notification_server_url(base) {
+    let server_url = config.probe.notifications.server_url.trim();
+    let server_url = if server_url.is_empty() {
+        "https://api.day.app"
+    } else {
+        server_url
+    };
+    if !valid_probe_notification_server_url(server_url) {
         tracing::warn!("Bark notification server URL rejected by Probe policy");
         return Ok(ProbeBarkOutcome::failed_request(
             "invalid_server_url",
@@ -1135,16 +1141,24 @@ async fn send_bark_notification(
             Some(request.dedupe_key.clone()),
         ));
     }
-    let mut body = json!({
-        "body": request.body,
-        "group": config.probe.notifications.group,
-    });
-    if let Some(sound) = config.probe.notifications.sound.as_deref() {
-        body["sound"] = json!(sound);
-    }
-    if let Some(open_url) = config.probe.notifications.url.as_deref() {
-        body["url"] = json!(open_url);
-    }
+    let base = if server_url.ends_with('/') {
+        server_url.to_string()
+    } else {
+        format!("{server_url}/")
+    };
+    let push_url = match reqwest::Url::parse(&base).and_then(|url| url.join("push")) {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!("Bark notification push URL build failed: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "invalid_server_url",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
     let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(client) => client,
         Err(err) => {
@@ -1168,14 +1182,12 @@ async fn send_bark_notification(
         } else {
             request.title.clone()
         };
-        let chunk_url = format!(
-            "{}/{}/{}",
-            base,
-            url_path_encode(device_key),
-            url_path_encode(&chunk_title)
-        );
-        body["body"] = json!(chunk);
-        let response = client.post(chunk_url).json(&body).send().await;
+        let payload = json!({
+            "device_key": device_key.trim(),
+            "title": chunk_title,
+            "body": chunk,
+        });
+        let response = client.post(push_url.clone()).json(&payload).send().await;
         request_count += 1;
         let response = match response {
             Ok(response) => response,
@@ -1193,7 +1205,7 @@ async fn send_bark_notification(
                     true,
                     Some(request.dedupe_key.clone()),
                 )
-                .with_delivery_metadata(base, request_count, chunk_count));
+                .with_delivery_metadata(server_url, request_count, chunk_count));
             }
         };
         let status = response.status().as_u16();
@@ -1206,7 +1218,36 @@ async fn send_bark_notification(
                 true,
                 Some(request.dedupe_key.clone()),
             )
-            .with_delivery_metadata(base, request_count, chunk_count));
+            .with_delivery_metadata(server_url, request_count, chunk_count));
+        }
+        let bark_response = match response.json::<BarkPushResponse>().await {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!("Bark notification response decode failed: {err}");
+                return Ok(ProbeBarkOutcome::failed_request(
+                    "response_decode",
+                    config.probe.notifications.enabled,
+                    true,
+                    true,
+                    Some(request.dedupe_key.clone()),
+                )
+                .with_delivery_metadata(server_url, request_count, chunk_count));
+            }
+        };
+        if bark_response.code != Some(200) {
+            if let Some(message) = bark_response.message.as_deref() {
+                tracing::warn!("Bark notification rejected: {message}");
+            }
+            let mut outcome = ProbeBarkOutcome::failed_request(
+                "bark_response_code",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            )
+            .with_delivery_metadata(server_url, request_count, chunk_count);
+            outcome.http_status = Some(status);
+            return Ok(outcome);
         }
     }
     Ok(ProbeBarkOutcome::sent(
@@ -1216,19 +1257,7 @@ async fn send_bark_notification(
         true,
         Some(request.dedupe_key.clone()),
     )
-    .with_delivery_metadata(base, request_count, chunk_count))
-}
-
-fn url_path_encode(value: &str) -> String {
-    value
-        .bytes()
-        .flat_map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
-            }
-            _ => format!("%{byte:02X}").chars().collect(),
-        })
-        .collect()
+    .with_delivery_metadata(server_url, request_count, chunk_count))
 }
 
 fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
@@ -1256,22 +1285,15 @@ fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 }
 
 fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    let raw_chunks = utf8_chunks(value, max_bytes);
+    let raw_chunks = utf8_chunks(value.trim(), max_bytes);
     let chunk_count = raw_chunks.len();
     if chunk_count <= 1 {
         return raw_chunks;
     }
-    let prefix_bytes = (1..=chunk_count)
-        .map(|index| format!("第 {index}/{chunk_count} 段\n\n").len())
-        .max()
-        .unwrap_or(0);
-    let content_limit = max_bytes.saturating_sub(prefix_bytes).max(1);
-    let content_chunks = utf8_chunks(value, content_limit);
-    let final_count = content_chunks.len();
-    content_chunks
+    raw_chunks
         .into_iter()
         .enumerate()
-        .map(|(index, chunk)| format!("第 {}/{final_count} 段\n\n{chunk}", index + 1))
+        .map(|(index, chunk)| format!("第 {}/{chunk_count} 段\n\n{chunk}", index + 1))
         .collect()
 }
 
@@ -2335,6 +2357,7 @@ hooks = false
         assert!(event.bark_body.contains("末尾唯一完整反馈"));
         assert!(!event.bark_body.contains("secret-token"));
         assert!(!event.bark_body.contains("[truncated]"));
+        assert!(!event.bark_body.contains("最后反馈："));
         assert!(event.payload["bark"].get("body").is_none());
         assert_eq!(
             event.payload["body_source"],
@@ -2407,6 +2430,27 @@ hooks = false
         assert!(body.contains("选项 2：先调整"));
         assert!(!body.contains("fallback should not be used"));
 
+        let event = probe_runtime(&Config::default()).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-question"),
+                Some("turn-question"),
+                Some("thread-question"),
+                None,
+                Some(&body),
+                "reply-needed",
+            )
+            .with_thread_title(Some("问题线程"))
+            .with_body_source(source.as_deref()),
+        );
+        let event_time = event.payload["beijing_time"].as_str().unwrap();
+        assert_eq!(event.bark_title, "等待回复：问题线程");
+        assert_eq!(
+            event.bark_body,
+            format!(
+                "线程 ID：thread-question\n\n事件时间：{event_time}\n\n状态说明：Codex 正在等待用户回复或选择后继续。\n\n待回复内容：\n{body}"
+            )
+        );
+
         let plan_thread = nexushub_core::codex::ThreadSummary {
             pending_elicitation: None,
             latest_message: Some(
@@ -2426,10 +2470,10 @@ hooks = false
     }
 
     #[tokio::test]
-    async fn send_bark_builds_redacted_request_and_reports_non_success() {
+    async fn send_bark_posts_lite_payload_and_reports_non_success_response_code() {
         let server = TestHttpServer::start_n(
             1,
-            "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 39\r\n\r\n{\"code\":400,\"message\":\"bad bark token\"}",
         );
         let mut config = Config::default();
         config.probe.notifications.server_url = server.url();
@@ -2438,8 +2482,8 @@ hooks = false
         config.probe.notifications.url = Some("https://661313.xyz/nexushub/".to_string());
 
         let request = ProbeBarkRequest {
-            title: "NexusHub Probe test".to_string(),
-            body: "Probe notification route is configured.".to_string(),
+            title: "Codex Sentinel Lite".to_string(),
+            body: "Bark 推送通道正常。".to_string(),
             dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
         };
         let result = send_bark_notification(
@@ -2453,25 +2497,30 @@ hooks = false
 
         assert!(!result.sent);
         assert!(!result.skipped);
-        assert_eq!(result.reason.as_deref(), Some("http_status"));
-        assert_eq!(result.http_status, Some(503));
+        assert_eq!(result.reason.as_deref(), Some("bark_response_code"));
+        assert_eq!(result.http_status, Some(200));
         assert!(result.device_key_configured);
         assert!(!serde_json::to_string(&result)
             .unwrap()
             .contains("device key"));
         let raw = server.request();
-        assert!(raw.starts_with("POST /device%20key%2Fwith%20spaces/NexusHub%20Probe%20test "));
-        assert!(raw.contains(r#""body":"Probe notification route is configured.""#));
-        assert!(raw.contains(r#""group":"Probe Group""#));
-        assert!(raw.contains(r#""sound":"bell""#));
-        assert!(raw.contains(r#""url":"https://661313.xyz/nexushub/""#));
+        assert!(raw.starts_with("POST /push "));
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let payload: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(payload["device_key"], "device key/with spaces");
+        assert_eq!(payload["title"], "Codex Sentinel Lite");
+        assert_eq!(payload["body"], "Bark 推送通道正常。");
+        assert_eq!(payload.as_object().unwrap().len(), 3);
+        assert!(payload.get("group").is_none());
+        assert!(payload.get("sound").is_none());
+        assert!(payload.get("url").is_none());
     }
 
     #[tokio::test]
     async fn send_bark_splits_long_body_on_utf8_boundaries_with_segment_prefix() {
         let server = TestHttpServer::start_n(
-            11,
-            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            10,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
         let mut config = Config::default();
         config.probe.notifications.server_url = server.url();
@@ -2493,20 +2542,22 @@ hooks = false
 
         assert!(result.sent);
         assert_eq!(result.http_status, Some(200));
-        assert_eq!(result.chunk_count, 11);
-        let requests = server.requests(11);
-        assert_eq!(requests.len(), 11);
+        assert_eq!(result.chunk_count, 10);
+        let requests = server.requests(10);
+        assert_eq!(requests.len(), 10);
         for (index, raw) in requests.iter().enumerate() {
-            assert!(raw.starts_with(&format!(
-                "POST /device-key/NexusHub%20Probe%20long%20body%20%28{}%2F11%29 ",
-                index + 1
-            )));
+            assert!(raw.starts_with("POST /push "));
             let body = raw.split("\r\n\r\n").nth(1).unwrap();
             let payload: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(payload["device_key"], "device-key");
+            assert_eq!(
+                payload["title"],
+                format!("NexusHub Probe long body ({}/10)", index + 1)
+            );
             let chunk = payload["body"].as_str().unwrap();
-            let prefix = format!("第 {}/11 段\n\n", index + 1);
+            let prefix = format!("第 {}/10 段\n\n", index + 1);
             assert!(chunk.starts_with(&prefix));
-            assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.strip_prefix(&prefix).unwrap().len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let combined = requests
@@ -2518,18 +2569,42 @@ hooks = false
                     .as_str()
                     .unwrap()
                     .to_string();
-                let prefix = format!("第 {}/11 段\n\n", index + 1);
+                let prefix = format!("第 {}/10 段\n\n", index + 1);
                 chunk.strip_prefix(&prefix).unwrap().to_string()
             })
             .collect::<String>();
         assert_eq!(combined, request.body);
     }
 
+    #[test]
+    fn bark_body_chunks_match_lite_split_and_trim_body() {
+        let body = format!("  {}  \n", "完成".repeat(4_000));
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert_eq!(chunks.len(), 10);
+        assert!(!chunks[0].contains("  完成"));
+        for (index, chunk) in chunks.iter().enumerate() {
+            let prefix = format!("第 {}/10 段\n\n", index + 1);
+            assert!(chunk.starts_with(&prefix));
+            assert!(chunk.strip_prefix(&prefix).unwrap().len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.is_char_boundary(chunk.len()));
+        }
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let prefix = format!("第 {}/10 段\n\n", index + 1);
+                chunk.strip_prefix(&prefix).unwrap()
+            })
+            .collect::<String>();
+        assert_eq!(joined, body.trim());
+    }
+
     #[tokio::test]
     async fn send_bark_success_reports_redacted_request_metadata() {
         let server = TestHttpServer::start_n(
             1,
-            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
         let mut config = Config::default();
         config.probe.notifications.enabled = true;
@@ -2540,7 +2615,7 @@ hooks = false
             &config,
             b"device-key-secret",
             &ProbeBarkRequest {
-                title: "NexusHub Probe test".to_string(),
+                title: "Codex Sentinel Lite".to_string(),
                 body: "ok".to_string(),
                 dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
             },
@@ -2562,6 +2637,32 @@ hooks = false
             .unwrap()
             .contains("device-key-secret"));
         let _ = server.request();
+    }
+
+    #[tokio::test]
+    async fn bark_test_uses_codex_sentinel_lite_title_and_body() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
+            .unwrap();
+
+        run_probe_command(ProbeCommand::BarkTest, &config, db)
+            .await
+            .unwrap();
+
+        let raw = server.request();
+        assert!(raw.starts_with("POST /push "));
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let payload: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(payload["device_key"], "device-key");
+        assert_eq!(payload["title"], "Codex Sentinel Lite");
+        assert_eq!(payload["body"], "Bark 推送通道正常。");
     }
 
     #[tokio::test]

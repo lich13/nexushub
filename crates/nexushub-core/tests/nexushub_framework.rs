@@ -515,11 +515,8 @@ fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
     assert_eq!(plan.kind, "bark-test");
     assert_eq!(plan.payload["configured"], true);
     assert_eq!(plan.payload["device_key"], "[configured]");
-    assert_eq!(plan.payload["bark_payload"]["title"], "NexusHub Probe test");
-    assert_eq!(
-        plan.payload["bark_payload"]["body"],
-        "Probe notification route is configured."
-    );
+    assert_eq!(plan.payload["bark_payload"]["title"], "Codex Sentinel Lite");
+    assert_eq!(plan.payload["bark_payload"]["body"], "Bark 推送通道正常。");
     assert!(plan.payload["bark_payload"].get("device_key").is_none());
     assert!(plan.payload["bark_payload"].get("sound").is_none());
     assert!(plan.payload["bark_payload"].get("group").is_none());

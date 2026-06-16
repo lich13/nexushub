@@ -541,7 +541,7 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
               thread_title: "Plan Mode 修复",
               thread_id: "019e95a0-demo",
               turn_id: "turn-plan-demo",
-              beijing_time: "2026-06-16 09:30:00 CST",
+              beijing_time: "2026-06-16 09:30:00 北京时间",
               reason_label: "等待用户确认",
               body_summary: "Plan Mode 等待用户确认",
               body_sha256: "6b5d9f4f5a5a",

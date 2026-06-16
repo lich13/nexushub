@@ -386,8 +386,8 @@ impl ProbeRuntime {
                 "server_url": self.config.probe.notifications.server_url,
                 "device_key": if device_key_configured { "[configured]" } else { "[missing]" },
                 "bark_payload": {
-                    "title": "NexusHub Probe test",
-                    "body": "Probe notification route is configured."
+                    "title": "Codex Sentinel Lite",
+                    "body": "Bark 推送通道正常。"
                 },
                 "redacted_fields": ["device_key", "sound", "group", "url"],
                 "would_call_legacy_sentinel_cli": false
@@ -471,14 +471,14 @@ impl ProbeRuntime {
         );
         let beijing_time = Utc::now()
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
-            .format("%Y-%m-%d %H:%M:%S CST")
+            .format("%Y-%m-%d %H:%M:%S 北京时间")
             .to_string();
         let bark_detail = probe_event_bark_detail(&event_type, &body_source, &redacted_body);
         let bark_message = probe_event_bark_message(&event_type, &body_source, &message);
         let bark = probe_event_bark_text(
             &event_type,
             event_thread_id.as_deref(),
-            &title,
+            input.thread_title.as_deref(),
             &bark_message,
             Some(&bark_detail),
             &beijing_time,
@@ -1745,18 +1745,19 @@ fn default_probe_event_body(event_type: &str) -> &'static str {
 fn probe_event_bark_text(
     event_type: &str,
     thread_id: Option<&str>,
-    title: &str,
+    title: Option<&str>,
     message: &str,
     detail: Option<&str>,
     event_time: &str,
 ) -> ProbeBarkText {
+    let title = fallback_bark_title(title);
+    let thread_id = thread_id.unwrap_or("").trim();
     match event_type {
         "completion" => ProbeBarkText {
             title: format!("线程正常完成：{}", title),
             body: format!(
-                "线程标题：{}\n线程 ID：{}\n最后反馈时间：{}\n\n最后反馈：\n{}",
-                title,
-                thread_id.unwrap_or("-"),
+                "{}\n\n最后反馈时间：{}\n\n{}",
+                thread_id,
                 event_time,
                 detail.unwrap_or(message)
             ),
@@ -1764,9 +1765,8 @@ fn probe_event_bark_text(
         "reply_needed" => ProbeBarkText {
             title: format!("等待回复：{}", title),
             body: format!(
-                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n状态说明：{}\n\n待回复内容：\n{}",
-                title,
-                thread_id.unwrap_or("-"),
+                "线程 ID：{}\n\n事件时间：{}\n\n状态说明：{}\n\n待回复内容：\n{}",
+                thread_id,
                 event_time,
                 message,
                 detail.unwrap_or(message)
@@ -1775,33 +1775,32 @@ fn probe_event_bark_text(
         "recoverable" => ProbeBarkText {
             title: format!("线程异常停止：{}", title),
             body: format!(
-                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n原因：{}\n\n最后异常信息：\n{}",
-                title,
-                thread_id.unwrap_or("-"),
-                event_time,
-                title,
+                "{}\n\n原因：{}\n\n最后异常信息：\n{}",
+                thread_id,
+                message,
                 detail.unwrap_or(message)
             ),
         },
         _ => ProbeBarkText {
             title: format!("探针事件：{}", title),
             body: format!(
-                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n事件说明：{}\n\n{}",
-                title,
-                thread_id.unwrap_or("-"),
-                event_time,
-                message,
-                title
+                "线程 ID：{}\n\n事件时间：{}\n\n事件说明：{}\n\n{}",
+                thread_id, event_time, message, title
             ),
         },
     }
 }
 
 fn probe_event_bark_message(event_type: &str, body_source: &str, fallback: &str) -> String {
-    if event_type == "reply_needed" && body_source == "proposed_plan" {
-        return "等待用户回复：Plan 已完成，正在等待确认后继续。".to_string();
-    }
+    let _ = (event_type, body_source);
     fallback.to_string()
+}
+
+fn fallback_bark_title(title: Option<&str>) -> &str {
+    title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未命名线程")
 }
 
 fn probe_event_bark_detail(event_type: &str, body_source: &str, redacted_body: &str) -> String {
@@ -2003,12 +2002,13 @@ mod tests {
         assert_eq!(event.event_type, "reply_needed");
         assert_eq!(event.title, "需要回复");
         assert_eq!(event.message, "Codex 正在等待用户回复或选择后继续。");
-        assert_eq!(event.bark_title, "等待回复：需要回复");
+        assert_eq!(event.bark_title, "等待回复：未命名线程");
         assert!(event.bark_body.contains("线程 ID：thread-a"));
         assert!(event
             .bark_body
             .contains("状态说明：Codex 正在等待用户回复或选择后继续。"));
         assert!(event.bark_body.contains("待回复内容："));
+        assert!(!event.bark_body.contains("线程标题："));
         assert!(event.bark_body.contains("[redacted sensitive line]"));
         assert!(event.bark_body.contains("完成完成完成"));
         assert!(event.bark_body.contains("UNIQUE_FULL_BARK_TAIL"));
@@ -2054,7 +2054,7 @@ mod tests {
         assert!(event.payload["beijing_time"]
             .as_str()
             .unwrap()
-            .contains("CST"));
+            .ends_with("北京时间"));
         let stored = &event.payload["last_assistant_message"];
         assert!(stored["summary"]
             .as_str()
@@ -2090,9 +2090,12 @@ mod tests {
             recoverable.message,
             "Codex 任务可恢复，需要查看并手动处理。"
         );
-        assert_eq!(recoverable.bark_title, "线程异常停止：线程异常停止");
-        assert!(recoverable.bark_body.contains("线程 ID：thread-a"));
-        assert!(recoverable.bark_body.contains("原因：线程异常停止"));
+        assert_eq!(recoverable.bark_title, "线程异常停止：未命名线程");
+        assert!(recoverable.bark_body.contains("thread-a"));
+        assert!(recoverable
+            .bark_body
+            .contains("原因：Codex 任务可恢复，需要查看并手动处理。"));
+        assert!(!recoverable.bark_body.contains("线程标题："));
     }
 
     #[test]
@@ -2110,16 +2113,81 @@ mod tests {
         assert_eq!(completion.kind, "completion");
         assert_eq!(completion.event_type, "completion");
         assert_eq!(completion.message, "Codex 任务已正常完成。");
-        assert_eq!(completion.bark_title, "线程正常完成：任务完成");
-        assert!(completion.bark_body.contains("线程标题：任务完成"));
-        assert!(completion.bark_body.contains("线程 ID：thread-a"));
-        assert!(completion.bark_body.contains("最后反馈时间："));
-        assert!(completion.bark_body.contains("最后反馈："));
-        assert!(completion.bark_body.contains("Codex 任务已正常完成。"));
+        let beijing_time = completion.payload["beijing_time"].as_str().unwrap();
+        assert_eq!(completion.bark_title, "线程正常完成：未命名线程");
+        assert_eq!(
+            completion.bark_body,
+            format!("thread-a\n\n最后反馈时间：{beijing_time}\n\nCodex 任务已正常完成。")
+        );
         assert_eq!(completion.payload["event_type"], "completion");
         assert_eq!(completion.payload["bark"]["title"], completion.bark_title);
         assert!(completion.payload["bark"].get("body").is_none());
         assert!(completion.payload["bark"].get("device_key").is_none());
+    }
+
+    #[test]
+    fn build_event_bark_text_matches_codex_sentinel_lite_formats() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let completion = runtime.build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-complete"),
+                Some("turn-complete"),
+                Some("thread-complete"),
+                None,
+                Some("最终反馈。"),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("完成线程")),
+        );
+        let completion_time = completion.payload["beijing_time"].as_str().unwrap();
+        assert_eq!(completion.bark_title, "线程正常完成：完成线程");
+        assert_eq!(
+            completion.bark_body,
+            format!("thread-complete\n\n最后反馈时间：{completion_time}\n\n最终反馈。")
+        );
+
+        let reply = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-reply"),
+                Some("turn-reply"),
+                Some("thread-reply"),
+                None,
+                Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
+                "reply-needed",
+            )
+            .with_thread_title(Some("等待确认")),
+        );
+        let reply_time = reply.payload["beijing_time"].as_str().unwrap();
+        assert_eq!(reply.bark_title, "等待回复：等待确认");
+        assert_eq!(
+            reply.bark_body,
+            format!(
+                "线程 ID：thread-reply\n\n事件时间：{reply_time}\n\n状态说明：Codex 正在等待用户回复或选择后继续。\n\n待回复内容：\n# 修复计划\n- 等待确认"
+            )
+        );
+        assert!(!reply.bark_body.contains("<proposed_plan>"));
+        assert!(!reply.bark_body.contains("</proposed_plan>"));
+
+        let recoverable = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-error"),
+                Some("turn-error"),
+                Some("thread-error"),
+                None,
+                Some("stream disconnected before completion"),
+                "recoverable",
+            )
+            .with_thread_title(Some("异常线程")),
+        );
+        assert_eq!(recoverable.bark_title, "线程异常停止：异常线程");
+        assert_eq!(
+            recoverable.bark_body,
+            "thread-error\n\n原因：Codex 任务可恢复，需要查看并手动处理。\n\n最后异常信息：\nstream disconnected before completion"
+        );
     }
 
     #[test]
@@ -2191,8 +2259,9 @@ mod tests {
             "completion"
         );
         assert_eq!(event.payload["body_summary"], "ok");
-        assert!(event.bark_title.starts_with("线程正常完成："));
-        assert!(event.bark_body.contains("最后反馈："));
+        assert_eq!(event.bark_title, "线程正常完成：未命名线程");
+        assert!(!event.bark_body.contains("最后反馈："));
+        assert!(event.bark_body.ends_with("\n\nok"));
         assert!(
             event.dedupe_key.starts_with("completion:"),
             "dedupe key must use the classified event kind"
@@ -2243,7 +2312,7 @@ mod tests {
         assert_eq!(event.kind, "reply-needed");
         assert!(event
             .bark_body
-            .contains("状态说明：等待用户回复：Plan 已完成，正在等待确认后继续。"));
+            .contains("状态说明：Codex 正在等待用户回复或选择后继续。"));
         assert!(event.bark_body.contains("# 修复计划\n- 等待确认"));
         assert!(!event.bark_body.contains("<proposed_plan>"));
         assert!(!event.bark_body.contains("</proposed_plan>"));
@@ -2345,7 +2414,7 @@ mod tests {
         assert_eq!(event.kind, "completion");
         assert_eq!(event.event_type, "completion");
         assert_eq!(event.payload["raw_kind"], "hook-stop");
-        assert!(event.bark_body.contains("最后反馈："));
+        assert!(!event.bark_body.contains("最后反馈："));
         assert!(event.bark_body.contains("一切已经处理完毕"));
     }
 
