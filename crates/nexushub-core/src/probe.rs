@@ -158,9 +158,6 @@ impl ProbeRuntime {
             resolved_codex_home: resolved.home.clone(),
             codex_home_source: resolved.codex_home_source.clone(),
             logs_db_source: resolved.logs_db_source.clone(),
-            configured_app_server_socket: None,
-            resolved_app_server_socket: None,
-            app_server_socket_source: None,
             discovery_warnings: resolved.discovery_warnings.clone(),
             host_label: self.config.codex.host_label.clone(),
         })
@@ -171,11 +168,6 @@ impl ProbeRuntime {
         ProbeDiagnostics {
             doctor_status: self.doctor_status_text(),
             lifecycle_status: self.lifecycle_status_text(),
-            app_server_service: String::new(),
-            app_server_socket: None,
-            configured_app_server_socket: None,
-            resolved_app_server_socket: None,
-            app_server_socket_source: None,
             configured_codex_home: resolved.configured_codex_home,
             resolved_codex_home: resolved.home,
             codex_home_source: resolved.codex_home_source,
@@ -232,7 +224,7 @@ impl ProbeRuntime {
             installed: self.config.probe.hooks.manage_stop_hook,
             managed: self.config.probe.hooks.manage_stop_hook,
             hook_command,
-            reload_app_server_after_install: false,
+            restart_required_after_install: false,
             supported_events: vec!["hook-stop".to_string(), "notify-completion".to_string()],
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_ttl_seconds: PROBE_EVENT_TTL_SECONDS,
@@ -299,14 +291,14 @@ impl ProbeRuntime {
                             .display()
                     ),
                     format!("Stop Hook 命令包含 `{}`", self.hook_command()),
-                    "不重载任何 app-server 服务".to_string(),
+                    "不重载任何外部 Codex 服务".to_string(),
                 ],
                 payload: json!({
                     "codex_home": self.resolved_codex_paths().home,
                     "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
                     "codex_home_source": self.resolved_codex_paths().codex_home_source,
                     "hook_command": self.hook_command(),
-                    "reload_app_server_after_install": false,
+                    "restart_required_after_install": false,
                 }),
                 requires_confirmation: true,
                 command: "nexushubd probe hooks-install".to_string(),
@@ -548,10 +540,7 @@ impl ProbeRuntime {
     }
 
     fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
-        resolve_codex_paths(
-            &self.config.codex.home,
-            self.config.codex.app_server_socket.as_deref(),
-        )
+        resolve_codex_paths(&self.config.codex.home)
     }
 
     fn doctor_status_text(&self) -> String {
@@ -721,9 +710,6 @@ pub struct ProbeStatus {
     pub resolved_codex_home: PathBuf,
     pub codex_home_source: String,
     pub logs_db_source: String,
-    pub configured_app_server_socket: Option<PathBuf>,
-    pub resolved_app_server_socket: Option<PathBuf>,
-    pub app_server_socket_source: Option<String>,
     pub discovery_warnings: Vec<String>,
     pub host_label: String,
 }
@@ -732,11 +718,6 @@ pub struct ProbeStatus {
 pub struct ProbeDiagnostics {
     pub doctor_status: String,
     pub lifecycle_status: String,
-    pub app_server_service: String,
-    pub app_server_socket: Option<PathBuf>,
-    pub configured_app_server_socket: Option<PathBuf>,
-    pub resolved_app_server_socket: Option<PathBuf>,
-    pub app_server_socket_source: Option<String>,
     pub configured_codex_home: Option<String>,
     pub resolved_codex_home: PathBuf,
     pub codex_home_source: String,
@@ -755,7 +736,7 @@ pub struct ProbeHookStatus {
     pub installed: bool,
     pub managed: bool,
     pub hook_command: String,
-    pub reload_app_server_after_install: bool,
+    pub restart_required_after_install: bool,
     pub supported_events: Vec<String>,
     pub dedupe_namespace: String,
     pub dedupe_ttl_seconds: i64,
@@ -1675,9 +1656,9 @@ fn is_probe_terminal_stop_error(text: &str) -> bool {
         || lower.starts_with("exceeded retry limit")
         || lower.starts_with("429 too many requests")
         || lower.starts_with("this content was flagged for possible cybersecurity risk")
-        || lower.starts_with("codex app-server reported terminal thread status")
-        || lower.starts_with("codex app-server reported terminal turn status")
-        || lower.starts_with("codex app-server reported interrupted turn status")
+        || lower.starts_with("codex supervisor reported terminal thread status")
+        || lower.starts_with("codex supervisor reported terminal turn status")
+        || lower.starts_with("codex supervisor reported interrupted turn status")
         || lower.starts_with("background turn supervisor failed")
 }
 

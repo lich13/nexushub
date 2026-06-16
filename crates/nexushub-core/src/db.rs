@@ -109,6 +109,28 @@ pub struct NewProbeEvent<'a> {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadGoal {
+    pub thread_id: String,
+    pub objective: Option<String>,
+    pub token_budget: Option<u64>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThreadGoalUpdate<'a> {
+    pub thread_id: &'a str,
+    pub objective: Option<&'a str>,
+    pub token_budget: Option<u64>,
+    pub status: &'a str,
+    pub completed_at: Option<i64>,
+    pub blocked_reason: Option<&'a str>,
+}
+
 impl PanelDb {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_secret_box(path, SecretBox::deterministic_dev())
@@ -249,6 +271,17 @@ impl PanelDb {
               created_at INTEGER NOT NULL,
               PRIMARY KEY(namespace, dedupe_key)
             );
+
+            CREATE TABLE IF NOT EXISTS codex_thread_goals (
+              thread_id TEXT PRIMARY KEY,
+              objective TEXT,
+              token_budget INTEGER,
+              status TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              completed_at INTEGER,
+              blocked_reason TEXT
+            );
             "#,
         )?;
         add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
@@ -271,6 +304,67 @@ impl PanelDb {
         drop(conn);
         self.migrate_turnstile_secret_setting()?;
         Ok(())
+    }
+
+    pub fn get_thread_goal(&self, thread_id: &str) -> Result<Option<ThreadGoal>> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.query_row(
+            r#"
+            SELECT thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
+            FROM codex_thread_goals
+            WHERE thread_id=?1
+            "#,
+            params![thread_id],
+            thread_goal_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn upsert_thread_goal(&self, update: ThreadGoalUpdate<'_>) -> Result<ThreadGoal> {
+        let now = Self::now();
+        let completed_at = update.completed_at.or({
+            if matches!(update.status, "complete" | "completed") {
+                Some(now)
+            } else {
+                None
+            }
+        });
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            r#"
+            INSERT INTO codex_thread_goals(
+              thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
+            )
+            VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)
+            ON CONFLICT(thread_id) DO UPDATE SET
+              objective=excluded.objective,
+              token_budget=excluded.token_budget,
+              status=excluded.status,
+              updated_at=excluded.updated_at,
+              completed_at=excluded.completed_at,
+              blocked_reason=excluded.blocked_reason
+            "#,
+            params![
+                update.thread_id,
+                update.objective,
+                update.token_budget.map(|value| value as i64),
+                update.status,
+                now,
+                completed_at,
+                update.blocked_reason,
+            ],
+        )?;
+        conn.query_row(
+            r#"
+            SELECT thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
+            FROM codex_thread_goals
+            WHERE thread_id=?1
+            "#,
+            params![update.thread_id],
+            thread_goal_from_row,
+        )
+        .map_err(Into::into)
     }
 
     fn migrate_turnstile_secret_setting(&self) -> Result<()> {
@@ -1042,6 +1136,20 @@ fn probe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeEvent>
     })
 }
 
+fn thread_goal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadGoal> {
+    let token_budget: Option<i64> = row.get(2)?;
+    Ok(ThreadGoal {
+        thread_id: row.get(0)?,
+        objective: row.get(1)?,
+        token_budget: token_budget.and_then(|value| u64::try_from(value).ok()),
+        status: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+        completed_at: row.get(6)?,
+        blocked_reason: row.get(7)?,
+    })
+}
+
 fn setting_bool(value: Option<String>, default: bool) -> bool {
     value
         .as_deref()
@@ -1118,6 +1226,46 @@ mod tests {
         })
         .unwrap();
         assert!(db.session_by_token("token").unwrap().is_some());
+    }
+
+    #[test]
+    fn thread_goal_store_sets_gets_and_updates_without_codex_state_db() {
+        let db = PanelDb::open(":memory:").unwrap();
+
+        assert!(db.get_thread_goal("thread-a").unwrap().is_none());
+
+        let goal = db
+            .upsert_thread_goal(super::ThreadGoalUpdate {
+                thread_id: "thread-a",
+                objective: Some("ship local goal"),
+                token_budget: Some(123),
+                status: "active",
+                completed_at: None,
+                blocked_reason: None,
+            })
+            .unwrap();
+        assert_eq!(goal.thread_id, "thread-a");
+        assert_eq!(goal.objective.as_deref(), Some("ship local goal"));
+        assert_eq!(goal.token_budget, Some(123));
+        assert_eq!(goal.status, "active");
+        assert!(goal.completed_at.is_none());
+
+        let updated = db
+            .upsert_thread_goal(super::ThreadGoalUpdate {
+                thread_id: "thread-a",
+                objective: None,
+                token_budget: None,
+                status: "cleared",
+                completed_at: None,
+                blocked_reason: None,
+            })
+            .unwrap();
+        assert_eq!(updated.objective, None);
+        assert_eq!(updated.token_budget, None);
+        assert_eq!(updated.status, "cleared");
+
+        let stored = db.get_thread_goal("thread-a").unwrap().unwrap();
+        assert_eq!(stored.status, "cleared");
     }
 
     #[test]

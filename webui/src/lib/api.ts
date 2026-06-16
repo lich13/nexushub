@@ -102,7 +102,7 @@ async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<
 
 async function optionalApiFetch<T>(path: string, options: RequestOptions = {}): Promise<OptionalResult<T>> {
   try {
-    return { available: true, data: await apiFetch<T>(path, options) };
+    return normalizeOptionalResult(await apiFetch<T>(path, options));
   } catch (error) {
     if (isMissingEndpoint(error)) {
       return { available: false, error: error instanceof Error ? error.message : String(error) };
@@ -129,13 +129,25 @@ async function apiFetchFirst<T>(paths: string[], options: RequestOptions = {}, l
 
 async function optionalApiFetchFirst<T>(paths: string[], options: RequestOptions = {}): Promise<OptionalResult<T>> {
   try {
-    return { available: true, data: await apiFetchFirst<T>(paths, options) };
+    return normalizeOptionalResult(await apiFetchFirst<T>(paths, options));
   } catch (error) {
     if (isMissingEndpoint(error)) {
       return { available: false, error: error instanceof Error ? error.message : String(error) };
     }
     throw error;
   }
+}
+
+function normalizeOptionalResult<T>(payload: T): OptionalResult<T> {
+  if (payload && typeof payload === "object" && "available" in payload && (payload as { available?: unknown }).available === false) {
+    const unavailable = payload as { reason?: unknown; error?: unknown };
+    return {
+      available: false,
+      reason: typeof unavailable.reason === "string" ? unavailable.reason : null,
+      error: typeof unavailable.error === "string" ? unavailable.error : undefined
+    };
+  }
+  return { available: true, data: payload };
 }
 
 export async function getPublicSettings(): Promise<PublicSettings> {

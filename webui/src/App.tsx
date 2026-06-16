@@ -2602,14 +2602,14 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       case "resume_goal":
         setDraft("");
         resumeGoalMode(summary.id, csrfToken).then((result) => {
-          messageStore.setFeedback(threadId, result.available ? "Goal 已恢复" : "Goal API 不可用");
+          messageStore.setFeedback(threadId, result.available ? "Goal 已恢复" : optionalUnavailableMessage("Goal", result));
           qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
         }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
         break;
       case "clear_goal":
         setDraft("");
         clearGoalMode(summary.id, csrfToken).then((result) => {
-          messageStore.setFeedback(threadId, result.available ? "Goal 已清除" : "Goal API 不可用");
+          messageStore.setFeedback(threadId, result.available ? "Goal 已清除" : optionalUnavailableMessage("Goal", result));
           qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
         }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
         break;
@@ -3043,7 +3043,7 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
       token_budget: tokenBudget.trim() ? Number(tokenBudget) : null
     }, threadId, csrfToken),
     onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已保存" : "Goal API 不可用");
+      setFeedback(result.available ? "Goal 已保存" : optionalUnavailableMessage("Goal", result));
       qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
     },
     onError: (err: Error) => setFeedback(err.message)
@@ -3051,7 +3051,7 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
   const clearGoal = useMutation({
     mutationFn: () => clearGoalMode(threadId, csrfToken),
     onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已清除" : "Goal API 不可用");
+      setFeedback(result.available ? "Goal 已清除" : optionalUnavailableMessage("Goal", result));
       setObjective("");
       setTokenBudget("");
       qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
@@ -3061,7 +3061,7 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
   const resumeGoal = useMutation({
     mutationFn: () => resumeGoalMode(threadId, csrfToken),
     onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已恢复" : "Goal API 不可用");
+      setFeedback(result.available ? "Goal 已恢复" : optionalUnavailableMessage("Goal", result));
       qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
     },
     onError: (err: Error) => setFeedback(err.message)
@@ -3070,7 +3070,7 @@ function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: strin
   return (
     <Panel title="Goal" icon={<Goal size={18} />}>
       {goal.data && !goal.data.available ? (
-        <div className="config-note">Goal API 不可用</div>
+        <div className="config-note">{optionalUnavailableMessage("Goal", goal.data)}</div>
       ) : (
         <>
           <Metric label="状态" value={formatGoalStatus(goalState)} tone={goalState?.enabled ? "success" : undefined} />
@@ -4663,6 +4663,16 @@ export function failureCategoryLabel(category: string): string {
     unknown: "未知失败"
   };
   return labels[category] ?? category;
+}
+
+export function optionalUnavailableMessage(
+  feature: string,
+  result?: { available: boolean; reason?: string | null; error?: string | null } | null
+): string {
+  const label = feature.trim() || "功能";
+  if (!result || result.available) return `${label} 已就绪`;
+  const detail = result.reason?.trim() || result.error?.trim();
+  return detail ? `${label} 不可用：${detail}` : `${label} 暂不可用`;
 }
 
 export function buildPayload(message: string, config: RunConfig, attachments: Pick<UploadRecord, "id">[] = []): ThreadSendPayload {

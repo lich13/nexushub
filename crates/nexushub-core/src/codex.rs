@@ -184,20 +184,12 @@ impl Default for CodexPathDiscoveryOptions {
     }
 }
 
-pub fn resolve_codex_paths(
-    configured_home: &Path,
-    configured_app_server_socket: Option<&Path>,
-) -> ResolvedCodexPaths {
-    resolve_codex_paths_with_options(
-        configured_home,
-        configured_app_server_socket,
-        &CodexPathDiscoveryOptions::default(),
-    )
+pub fn resolve_codex_paths(configured_home: &Path) -> ResolvedCodexPaths {
+    resolve_codex_paths_with_options(configured_home, &CodexPathDiscoveryOptions::default())
 }
 
 pub fn resolve_codex_paths_with_options(
     configured_home: &Path,
-    configured_app_server_socket: Option<&Path>,
     options: &CodexPathDiscoveryOptions,
 ) -> ResolvedCodexPaths {
     let configured_codex_home = configured_path_value(configured_home);
@@ -280,37 +272,20 @@ pub fn resolve_codex_paths_with_options(
         }
     });
     let codex_home_source = codex_home_source.to_string();
-    let configured_app_server_socket = configured_app_server_socket
-        .filter(|path| !is_auto_path(path))
-        .map(Path::to_path_buf);
-    let (app_server_socket, app_server_socket_source) =
-        resolve_app_server_socket(&home, configured_app_server_socket.as_deref());
-
     ResolvedCodexPaths {
         configured_codex_home,
         logs_db: home.join("logs_2.sqlite"),
         state_db: home.join("state_5.sqlite"),
         session_index: home.join("session_index.jsonl"),
         sessions_dir: home.join("sessions"),
-        configured_app_server_socket,
-        app_server_socket,
+        configured_app_server_socket: None,
+        app_server_socket: None,
         codex_home_source: codex_home_source.clone(),
         logs_db_source: codex_home_source,
-        app_server_socket_source,
+        app_server_socket_source: None,
         discovery_warnings: warnings,
         home,
     }
-}
-
-fn resolve_app_server_socket(
-    home: &Path,
-    configured_app_server_socket: Option<&Path>,
-) -> (Option<PathBuf>, Option<String>) {
-    let _ = home;
-    if let Some(socket) = configured_app_server_socket {
-        return (Some(socket.to_path_buf()), Some("configured".to_string()));
-    }
-    (None, None)
 }
 
 fn is_auto_path(path: &Path) -> bool {
@@ -361,14 +336,22 @@ pub fn list_threads(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let mut rows = read_thread_rows(paths)?;
-    let rollout_map = read_session_index(paths).unwrap_or_default();
+    let session_index = read_session_index(paths).unwrap_or_default();
     let mut hidden_subagents = HashSet::new();
     for row in &mut rows {
+        let index_entry = session_index.get(&row.id);
         if row.rollout_path.is_none() {
-            row.rollout_path = rollout_map.get(&row.id).cloned();
+            row.rollout_path = index_entry.and_then(|entry| entry.path.clone());
         }
         if row.rollout_path.is_none() {
             row.rollout_path = find_rollout_path(paths, &row.id);
+        }
+        if !is_usable_thread_title(&row.title) {
+            if let Some(index_entry) = index_entry {
+                if let Some(title) = index_entry.title_candidate() {
+                    row.title = title;
+                }
+            }
         }
         if enrich_thread_from_rollout(row).unwrap_or(false) {
             hidden_subagents.insert(row.id.clone());
@@ -384,6 +367,11 @@ pub fn list_threads(
             if !matches_status(row, status) {
                 return false;
             }
+            if status == "all" && matches!(row.status, ThreadStatus::Archived) {
+                return false;
+            }
+        } else if matches!(row.status, ThreadStatus::Archived) {
+            return false;
         }
         if let Some(needle) = &needle {
             let title = row.title.to_ascii_lowercase();
@@ -895,10 +883,7 @@ fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
         };
         Ok(Some(ThreadSummary {
             id,
-            title: title
-                .as_deref()
-                .and_then(thread_title_candidate)
-                .unwrap_or_else(|| "未命名线程".to_string()),
+            title: choose_initial_thread_title(title.as_deref(), first_user_message.as_deref()),
             status,
             updated_at: updated_raw.as_ref().and_then(format_cell_time),
             archived_at,
@@ -985,10 +970,30 @@ fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'
     names.iter().copied().find(|name| columns.contains(*name))
 }
 
-fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, PathBuf>> {
+#[derive(Debug, Clone, Default)]
+struct SessionIndexEntry {
+    path: Option<PathBuf>,
+    title: Option<String>,
+    first_user_message: Option<String>,
+}
+
+impl SessionIndexEntry {
+    fn title_candidate(&self) -> Option<String> {
+        self.title
+            .as_deref()
+            .and_then(thread_title_candidate)
+            .or_else(|| {
+                self.first_user_message
+                    .as_deref()
+                    .and_then(first_user_message_title)
+            })
+    }
+}
+
+fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, SessionIndexEntry>> {
     let index = paths.session_index();
     let text = fs::read_to_string(&index).with_context(|| format!("read {}", index.display()))?;
-    let mut map = HashMap::new();
+    let mut map: HashMap<String, SessionIndexEntry> = HashMap::new();
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
@@ -999,17 +1004,58 @@ fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, PathBuf>> {
         let Some(id) = value.get("id").and_then(Value::as_str) else {
             continue;
         };
-        let path = value
-            .get("path")
-            .or_else(|| value.get("rollout_path"))
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .or_else(|| find_rollout_path(paths, id));
-        if let Some(path) = path {
-            map.insert(id.to_string(), path);
+        let mut entry = SessionIndexEntry {
+            path: session_index_path(paths, id, &value),
+            title: session_index_title(&value),
+            first_user_message: session_index_string_field(&value, "first_user_message")
+                .or_else(|| session_index_string_field(&value, "firstUserMessage")),
+        };
+        if let Some(existing) = map.get_mut(id) {
+            if existing.path.is_none() {
+                existing.path = entry.path.take();
+            }
+            if existing.title.is_none() {
+                existing.title = entry.title.take();
+            }
+            if existing.first_user_message.is_none() {
+                existing.first_user_message = entry.first_user_message.take();
+            }
+        } else {
+            map.insert(id.to_string(), entry);
         }
     }
     Ok(map)
+}
+
+fn session_index_path(paths: &CodexPaths, id: &str, value: &Value) -> Option<PathBuf> {
+    value
+        .get("path")
+        .or_else(|| value.get("rollout_path"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .or_else(|| find_rollout_path(paths, id))
+}
+
+fn session_index_title(value: &Value) -> Option<String> {
+    [
+        "title",
+        "name",
+        "thread_title",
+        "threadTitle",
+        "session_title",
+        "sessionTitle",
+    ]
+    .into_iter()
+    .find_map(|field| session_index_string_field(value, field))
+}
+
+fn session_index_string_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn find_rollout_path(paths: &CodexPaths, thread_id: &str) -> Option<PathBuf> {
@@ -2725,6 +2771,13 @@ fn first_user_message_title(text: &str) -> Option<String> {
     is_usable_thread_title(&value).then_some(value)
 }
 
+fn choose_initial_thread_title(title: Option<&str>, first_user_message: Option<&str>) -> String {
+    title
+        .and_then(thread_title_candidate)
+        .or_else(|| first_user_message.and_then(first_user_message_title))
+        .unwrap_or_else(|| "未命名线程".to_string())
+}
+
 fn thread_title_candidate(text: &str) -> Option<String> {
     let value = trim_text(text, 80);
     (is_usable_thread_title(&value) && text.trim().chars().count() <= 120).then_some(value)
@@ -3347,9 +3400,6 @@ mod tests {
         mark_codex_home(&configured);
         mark_codex_home(&env_home);
         mark_codex_home(&socket_home);
-        let socket = socket_home
-            .join("app-server-control")
-            .join("app-server-control.sock");
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
@@ -3358,7 +3408,7 @@ mod tests {
             home_scan_root: root.join("home"),
         };
 
-        let resolved = resolve_codex_paths_with_options(&configured, Some(&socket), &options);
+        let resolved = resolve_codex_paths_with_options(&configured, &options);
 
         assert_eq!(resolved.home, configured);
         assert_eq!(resolved.codex_home_source, "configured");
@@ -3387,8 +3437,8 @@ mod tests {
             home_scan_root: root.join("home"),
         };
 
-        let auto = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
-        let empty = resolve_codex_paths_with_options(Path::new(""), None, &options);
+        let auto = resolve_codex_paths_with_options(Path::new("auto"), &options);
+        let empty = resolve_codex_paths_with_options(Path::new(""), &options);
 
         assert_eq!(auto.home, env_home);
         assert_eq!(auto.configured_codex_home, None);
@@ -3406,13 +3456,8 @@ mod tests {
         let current_home = root.join("current-user");
         mark_codex_home(&socket_home);
         mark_codex_home(&current_home.join(".codex"));
-        let socket = socket_home
-            .join("app-server-control")
-            .join("app-server-control.sock");
-
         let resolved = resolve_codex_paths_with_options(
             Path::new("auto"),
-            Some(&socket),
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: Some(current_home.clone()),
@@ -3424,12 +3469,9 @@ mod tests {
 
         assert_eq!(resolved.home, current_home.join(".codex"));
         assert_eq!(resolved.codex_home_source, "current_user");
-        assert_eq!(resolved.configured_app_server_socket, Some(socket.clone()));
-        assert_eq!(resolved.app_server_socket, Some(socket));
-        assert_eq!(
-            resolved.app_server_socket_source.as_deref(),
-            Some("configured")
-        );
+        assert_eq!(resolved.configured_app_server_socket, None);
+        assert_eq!(resolved.app_server_socket, None);
+        assert_eq!(resolved.app_server_socket_source, None);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3446,7 +3488,7 @@ mod tests {
             home_scan_root: root.join("home"),
         };
 
-        let resolved = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
+        let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
         assert_eq!(resolved.home, env_home);
         assert_eq!(resolved.app_server_socket, None);
@@ -3467,7 +3509,7 @@ mod tests {
             home_scan_root: root.join("home"),
         };
 
-        let resolved = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
+        let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
         assert_eq!(resolved.home, env_home);
         assert_eq!(resolved.app_server_socket, None);
@@ -3490,7 +3532,6 @@ mod tests {
 
         let current_resolved = resolve_codex_paths_with_options(
             &invalid_config,
-            None,
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: Some(current_home.clone()),
@@ -3508,7 +3549,6 @@ mod tests {
 
         let root_resolved = resolve_codex_paths_with_options(
             Path::new("auto"),
-            None,
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: None,
@@ -3522,7 +3562,6 @@ mod tests {
 
         let ubuntu_resolved = resolve_codex_paths_with_options(
             Path::new("auto"),
-            None,
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: None,
@@ -3535,7 +3574,6 @@ mod tests {
 
         let scan_resolved = resolve_codex_paths_with_options(
             Path::new("auto"),
-            None,
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: None,
@@ -3550,10 +3588,9 @@ mod tests {
     }
 
     #[test]
-    fn resolved_codex_paths_preserves_configured_socket_outside_resolved_home() {
+    fn resolved_codex_paths_ignores_configured_socket_outside_resolved_home() {
         let root = unique_temp_dir("resolved-codex-custom-socket");
         let env_home = root.join("env/.codex");
-        let custom_socket = root.join("run/codex.sock");
         mark_codex_home(&env_home);
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
@@ -3563,16 +3600,12 @@ mod tests {
             home_scan_root: root.join("home"),
         };
 
-        let resolved =
-            resolve_codex_paths_with_options(Path::new("auto"), Some(&custom_socket), &options);
+        let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
 
         assert_eq!(resolved.home, env_home);
-        assert_eq!(resolved.app_server_socket, Some(custom_socket.clone()));
-        assert_eq!(resolved.configured_app_server_socket, Some(custom_socket));
-        assert_eq!(
-            resolved.app_server_socket_source.as_deref(),
-            Some("configured")
-        );
+        assert_eq!(resolved.app_server_socket, None);
+        assert_eq!(resolved.configured_app_server_socket, None);
+        assert_eq!(resolved.app_server_socket_source, None);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4223,6 +4256,263 @@ mod tests {
     }
 
     #[test]
+    fn db_first_user_message_titles_list_and_detail_when_db_title_is_unusable() {
+        let root = unique_temp_dir("db-first-user-title");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-first-user.jsonl");
+        fs::write(&rollout, "").unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                first_user_message TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, first_user_message, preview)
+             VALUES('first-user-thread', ?1, 1, 1, 'codex', '/tmp', ?2, '请把本地线程标题恢复为首条用户消息摘要，并验证详情页。', '')",
+            (
+                rollout.display().to_string(),
+                "这是一个超过一百二十个字符的临时标题，不能直接作为线程标题使用，但也不能因此丢弃 first_user_message 的兜底能力。这个字段可能来自旧版本数据库里的助手正文或其他不可用内容，需要继续尝试更可靠的用户消息。这里继续补足长度，确保它一定超过一百二十个字符。",
+            ),
+        )
+        .unwrap();
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let row = rows
+            .iter()
+            .find(|thread| thread.id == "first-user-thread")
+            .unwrap();
+        assert_eq!(
+            row.title,
+            "请把本地线程标题恢复为首条用户消息摘要，并验证详情页。"
+        );
+        let detail = thread_detail(&CodexPaths::new(&root), "first-user-thread")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            detail.summary.title,
+            "请把本地线程标题恢复为首条用户消息摘要，并验证详情页。"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_metadata_title_or_first_user_message_titles_db_row_without_rollout_path() {
+        let root = unique_temp_dir("session-index-metadata-title");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('index-title-thread', '', 1, 2, 'codex', '/tmp', 'Untitled', '')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('index-user-thread', '', 1, 1, 'codex', '/tmp', 'Untitled', '')",
+            [],
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            [
+                json!({"id":"index-title-thread","title":"session index 标题"}).to_string(),
+                json!({"id":"index-user-thread","first_user_message":"用 session index 首条用户消息作为标题"}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let by_id = rows
+            .iter()
+            .map(|row| (row.id.as_str(), row.title.as_str()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_id.get("index-title-thread"), Some(&"session index 标题"));
+        assert_eq!(
+            by_id.get("index-user-thread"),
+            Some(&"用 session index 首条用户消息作为标题")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_path_finds_rollout_title_when_filename_omits_thread_id() {
+        let root = unique_temp_dir("session-index-rollout-path");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("unrelated-file-name.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"session_meta":{"payload":{"title":"Untitled"}}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"标题来自 session index 指向的 rollout"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            json!({"id":"thread-id-not-in-filename","path":rollout}).to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('thread-id-not-in-filename', '', 1, 1, 'codex', '/tmp', 'Untitled', '')",
+            [],
+        )
+        .unwrap();
+
+        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|thread| thread.id == "thread-id-not-in-filename")
+            .unwrap();
+
+        assert_eq!(row.rollout_path.as_deref(), Some(rollout.as_path()));
+        assert_eq!(row.title, "标题来自 session index 指向的 rollout");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plan_and_assistant_preview_do_not_override_real_user_title() {
+        let root = unique_temp_dir("plan-preview-title");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-plan-preview.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"session_meta":{"payload":{"title":"Assistant preview: This is a very long assistant response body that should not become a thread title because it is only preview text."}}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>实现计划不应成为标题</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"Assistant preview: This is a long assistant body and must not override the user request."}]}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"真实用户标题应该保留"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('plan-preview-thread', ?1, 1, 1, 'codex', '/tmp', 'Untitled', 'Assistant preview: This is a long assistant preview and must not become the title.')",
+            [rollout.display().to_string()],
+        )
+        .unwrap();
+
+        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|thread| thread.id == "plan-preview-thread")
+            .unwrap();
+
+        assert_eq!(row.title, "真实用户标题应该保留");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archived_thread_is_hidden_from_default_and_all_lists_but_visible_in_archived_list() {
+        let root = unique_temp_dir("archived-hidden-default");
+        fs::create_dir_all(&root).unwrap();
+        let active_rollout = root.join("active-rollout.jsonl");
+        fs::write(&active_rollout, "").unwrap();
+        let archived_rollout = root.join("archived-rollout.jsonl");
+        fs::write(
+            &archived_rollout,
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-active"}})
+                .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview)
+             VALUES('active-thread', ?1, 1, 2, 'codex', '', '/tmp', 'active', '', '', 0, '')",
+            [active_rollout.display().to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview)
+             VALUES('archived-thread', ?1, 1, 1, 'codex', '', '/tmp', 'archived', '', '', 1, '')",
+            [archived_rollout.display().to_string()],
+        )
+        .unwrap();
+
+        let default_rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let all_rows = list_threads(&CodexPaths::new(&root), Some("all"), None, 10).unwrap();
+        let archived_rows =
+            list_threads(&CodexPaths::new(&root), Some("archived"), None, 10).unwrap();
+
+        assert!(default_rows.iter().all(|row| row.id != "archived-thread"));
+        assert!(all_rows.iter().all(|row| row.id != "archived-thread"));
+        assert!(archived_rows.iter().any(|row| row.id == "archived-thread"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn list_threads_sanitizes_proposed_plan_latest_message_but_keeps_reply_needed() {
         let root = unique_temp_dir("thread-plan-latest-message");
         fs::create_dir_all(&root).unwrap();
@@ -4602,7 +4892,7 @@ mod tests {
         .unwrap();
         write_thread_db(&root, "test-thread", &rollout, 1, 1);
 
-        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+        let row = list_threads(&CodexPaths::new(&root), Some("archived"), None, 10)
             .unwrap()
             .into_iter()
             .find(|thread| thread.id == "test-thread")

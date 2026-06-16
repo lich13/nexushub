@@ -63,6 +63,7 @@ type AppExports = typeof import("./App") & {
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
   codexVisibleCopy?: () => Record<string, string>;
   failureCategoryLabel?: (category: string) => string;
+  optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -457,6 +458,8 @@ describe("conversation helpers", () => {
 
     qc.setQueryData(["threads", "all", ""], threads);
     qc.setQueryData(["threads", "running", ""], [threads[1], threads[2]]);
+    qc.setQueryData(["threads", { status: "all", q: "" }], [threads[0], threads[1]]);
+    qc.setQueryData(["threads-extra"], [threads[1]]);
     qc.setQueryData(["thread", "thread-b"], detail(threads[1]));
     qc.setQueryData(["thread", "thread-c"], detail(threads[2]));
 
@@ -467,6 +470,8 @@ describe("conversation helpers", () => {
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-a", "thread-c", "thread-archived"]);
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "running", ""])?.map((thread) => thread.id)).toEqual(["thread-c"]);
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", { status: "all", q: "" }])?.map((thread) => thread.id)).toEqual(["thread-a"]);
+    expect(qc.getQueryData<ThreadSummary[]>(["threads-extra"])?.map((thread) => thread.id)).toEqual(["thread-b"]);
     expect(qc.getQueryData(["thread", "thread-b"])).toBeUndefined();
     expect(qc.getQueryData(["thread", "thread-c"])).toBeDefined();
     expect(cleared).toEqual(["thread-b"]);
@@ -620,9 +625,26 @@ describe("conversation helpers", () => {
     const app = await loadApp();
 
     expect(app.formatGoalStatus?.({ enabled: true, status: "running" })).toBe("运行中");
+    expect(app.formatGoalStatus?.({ enabled: true, status: "active" })).toBe("运行中");
     expect(app.formatGoalStatus?.({ enabled: true, status: "completed" })).toBe("已完成");
+    expect(app.formatGoalStatus?.({ enabled: true, status: "complete" })).toBe("已完成");
     expect(app.formatGoalStatus?.({ enabled: true, status: "blocked" })).toBe("已阻塞");
     expect(app.formatGoalStatus?.({ enabled: false, status: "missing_thread" })).toBe("未选择线程");
+    expect(app.formatGoalStatus?.({ enabled: false, status: "idle" })).toBe("未启用");
     expect(app.formatGoalStatus?.({ enabled: false, status: "cleared" })).toBe("已清除");
+  });
+
+  test("goal unavailable copy uses explicit local-read degradation reasons", async () => {
+    const app = await loadApp();
+
+    expect(app.optionalUnavailableMessage?.("Goal", {
+      available: false,
+      reason: "Codex state database is missing"
+    })).toBe("Goal 不可用：Codex state database is missing");
+    expect(app.optionalUnavailableMessage?.("Goal", {
+      available: false,
+      error: "HTTP 404"
+    })).toBe("Goal 不可用：HTTP 404");
+    expect(app.optionalUnavailableMessage?.("Goal", { available: false })).toBe("Goal 暂不可用");
   });
 });

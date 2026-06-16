@@ -28,6 +28,16 @@ pub struct JobEvent {
     pub chunk: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexActionResult {
+    pub bridge: bool,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub job_id: Option<String>,
+    pub fallback: bool,
+    pub message: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct JobRunner {
     db: PanelDb,

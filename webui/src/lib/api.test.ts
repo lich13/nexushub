@@ -154,6 +154,25 @@ describe("archive delete API compatibility", () => {
     expect(JSON.parse(options.body)).toEqual({ thread_id: "thread-a" });
   });
 
+  test("goal endpoints preserve explicit local-read unavailable responses", async () => {
+    const { getGoalMode } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      available: false,
+      reason: "Codex state database is missing"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getGoalMode("thread-a");
+
+    expect(result).toEqual({
+      available: false,
+      reason: "Codex state database is missing"
+    });
+  });
+
   test("stop thread posts stop payload with csrf", async () => {
     const { stopThread } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {

@@ -39,6 +39,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const DEFAULT_CONFIG: &str = "/opt/nexushub/config.toml";
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
+const PROBE_PASSIVE_SENT_MARKER_PREFIX: &str = "probe_passive_sent_marker:";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
@@ -162,10 +163,7 @@ async fn main() -> Result<()> {
         Command::Doctor => {
             let config = Config::load(&cli.config)?;
             let db = open_panel_db(&config)?;
-            let resolved = resolve_codex_paths(
-                &config.codex.home,
-                config.codex.app_server_socket.as_deref(),
-            );
+            let resolved = resolve_codex_paths(&config.codex.home);
             println!("config={}", cli.config.display());
             println!("db={}", db.path().display());
             println!("codex_home={}", resolved.home.display());
@@ -558,10 +556,7 @@ fn notify_completion_thread_summary(
     config: &Config,
     thread_id: &str,
 ) -> Result<Option<nexushub_core::codex::ThreadSummary>> {
-    let resolved = resolve_codex_paths(
-        &config.codex.home,
-        config.codex.app_server_socket.as_deref(),
-    );
+    let resolved = resolve_codex_paths(&config.codex.home);
     Ok(
         list_threads(&resolved.codex_paths(), None, Some(thread_id), 1)?
             .into_iter()
@@ -594,10 +589,7 @@ async fn probe_thread_snapshot(
 }
 
 async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
-    let resolved = resolve_codex_paths(
-        &config.codex.home,
-        config.codex.app_server_socket.as_deref(),
-    );
+    let resolved = resolve_codex_paths(&config.codex.home);
     let hooks_path = resolved.home.join("hooks.json");
     let codex_config_path = resolved.home.join("config.toml");
     let hook_command = format!(
@@ -935,6 +927,23 @@ async fn record_probe_event_with_bark(
     mut event: nexushub_core::probe::ProbeBuiltEvent,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
     normalize_probe_event_dedupe_key(&mut event);
+    if passive_unresolved_action_sent(db, &event)? {
+        let mut outcome = ProbeEventOutcome::from_claim(&event, false);
+        outcome.recorded = false;
+        outcome.duplicate = true;
+        let relevant_switch_enabled = probe_event_bark_switch_enabled(config, &event.kind);
+        let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
+        let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+        return Ok((
+            outcome,
+            ProbeBarkOutcome::skipped(
+                "sent_marker",
+                config.probe.notifications.enabled,
+                relevant_switch_enabled,
+                configured,
+            ),
+        ));
+    }
     let claimed = db.claim_probe_dedupe(
         &event.dedupe_namespace,
         &event.dedupe_key,
@@ -967,6 +976,7 @@ async fn record_probe_event_with_bark(
             source: &event.source,
             payload,
         })?;
+        mark_passive_unresolved_action_sent(db, &event)?;
     } else {
         outcome.recorded = false;
         outcome.duplicate = true;
@@ -979,9 +989,14 @@ fn normalize_probe_event_dedupe_key(event: &mut nexushub_core::probe::ProbeBuilt
     if event.kind != "reply-needed" {
         return;
     }
-    if event.payload.get("body_source").and_then(Value::as_str) != Some("proposed_plan") {
-        return;
+    match event.payload.get("body_source").and_then(Value::as_str) {
+        Some("proposed_plan") => normalize_proposed_plan_dedupe_key(event),
+        Some("request_user_input") => normalize_request_user_input_dedupe_key(event),
+        _ => {}
     }
+}
+
+fn normalize_proposed_plan_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
     let thread_id = event
         .thread_id
         .as_deref()
@@ -1023,6 +1038,147 @@ fn normalize_probe_event_dedupe_key(event: &mut nexushub_core::probe::ProbeBuilt
     );
     event.payload["dedupe_plan_hash"] = json!(plan_hash);
     event.payload["dedupe_item_or_call_id"] = json!(item_or_call_id);
+}
+
+fn normalize_request_user_input_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
+    let thread_id = event
+        .thread_id
+        .as_deref()
+        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+    let turn_id = event
+        .turn_id
+        .as_deref()
+        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "Turn ID："))
+        .unwrap_or("unknown")
+        .to_string();
+    let call_id = event
+        .payload
+        .get("call_id")
+        .and_then(Value::as_str)
+        .or_else(|| event.payload.get("item_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "Call ID："))
+        .unwrap_or(turn_id.as_str())
+        .to_string();
+    let input_hash = request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
+        event
+            .payload
+            .get("body_sha256")
+            .and_then(Value::as_str)
+            .and_then(|value| value.get(..16))
+            .unwrap_or("unknown")
+            .to_string()
+    });
+    event.dedupe_key = format!(
+        "{}:{}:{}:{}:{}",
+        dedupe_component(&event.kind),
+        dedupe_component(&thread_id),
+        dedupe_component(&turn_id),
+        dedupe_component(&call_id),
+        dedupe_component(&format!("input_hash:{input_hash}")),
+    );
+    event.payload["dedupe_input_hash"] = json!(input_hash);
+    event.payload["dedupe_item_or_call_id"] = json!(call_id);
+}
+
+fn passive_unresolved_action_sent(
+    db: &PanelDb,
+    event: &nexushub_core::probe::ProbeBuiltEvent,
+) -> Result<bool> {
+    let Some(key) = passive_unresolved_action_marker_key(event) else {
+        return Ok(false);
+    };
+    Ok(db.get_setting(&key)?.is_some())
+}
+
+fn mark_passive_unresolved_action_sent(
+    db: &PanelDb,
+    event: &nexushub_core::probe::ProbeBuiltEvent,
+) -> Result<()> {
+    let Some(key) = passive_unresolved_action_marker_key(event) else {
+        return Ok(());
+    };
+    db.set_setting(
+        &key,
+        &json!({
+            "dedupe_key": event.dedupe_key,
+            "thread_id": event.thread_id,
+            "turn_id": event.turn_id,
+            "body_source": event.payload.get("body_source").and_then(Value::as_str),
+            "body_sha256": event.payload.get("body_sha256").and_then(Value::as_str),
+        })
+        .to_string(),
+    )
+}
+
+fn passive_unresolved_action_marker_key(
+    event: &nexushub_core::probe::ProbeBuiltEvent,
+) -> Option<String> {
+    if event.kind != "reply-needed" {
+        return None;
+    }
+    if event.payload.get("scan_source").and_then(Value::as_str) != Some("passive-scan") {
+        return None;
+    }
+    let body_source = event.payload.get("body_source").and_then(Value::as_str)?;
+    if !matches!(body_source, "proposed_plan" | "request_user_input") {
+        return None;
+    }
+    let thread_id = event
+        .thread_id
+        .as_deref()
+        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("unknown");
+    let turn_id = event
+        .turn_id
+        .as_deref()
+        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "Turn ID："))
+        .or_else(|| prefixed_body_value(&event.bark_body, "turn_id:"))
+        .unwrap_or("unknown");
+    let action_id = event
+        .payload
+        .get("item_id")
+        .and_then(Value::as_str)
+        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "Call ID："))
+        .or_else(|| prefixed_body_value(&event.bark_body, "item_id:"))
+        .or_else(|| prefixed_body_value(&event.bark_body, "call_id:"))
+        .unwrap_or(turn_id);
+    let content_key = if body_source == "proposed_plan" {
+        proposed_plan_hash_from_text(&event.bark_body)
+            .or_else(|| {
+                event
+                    .payload
+                    .get("body_sha256")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.get(..16))
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
+        request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
+            event
+                .payload
+                .get("body_sha256")
+                .and_then(Value::as_str)
+                .and_then(|value| value.get(..16))
+                .unwrap_or("unknown")
+                .to_string()
+        })
+    };
+    Some(format!(
+        "{}{}:{}:{}:{}:{}:{}",
+        PROBE_PASSIVE_SENT_MARKER_PREFIX,
+        dedupe_component(body_source),
+        dedupe_component(thread_id),
+        dedupe_component(turn_id),
+        dedupe_component(action_id),
+        dedupe_component(&content_key),
+        dedupe_component(&event.kind),
+    ))
 }
 
 fn merge_bark_outcome_payload(payload: &mut Value, bark: &ProbeBarkOutcome) -> Result<()> {
@@ -1312,7 +1468,7 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 }
 
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
-    format!("第 {index}/{chunk_count} 段\n\n")
+    format!("第 {index}/{chunk_count} 段\n")
 }
 
 fn dedupe_component(value: &str) -> String {
@@ -1354,6 +1510,26 @@ fn proposed_plan_hash_from_text(value: &str) -> Option<String> {
                 .filter(|plan| !plan.is_empty())
         })?;
     Some(stable_hash64_hex(plan.trim()))
+}
+
+fn request_user_input_hash_from_text(value: &str) -> Option<String> {
+    let body = value
+        .split_once("待回复内容：")
+        .map(|(_, body)| body)
+        .unwrap_or(value);
+    let normalized = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.starts_with("时间：")
+                && !line.starts_with("时间:")
+                && !line.starts_with("事件时间：")
+                && !line.starts_with("事件时间:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let normalized = normalized.trim();
+    (!normalized.is_empty()).then(|| stable_hash64_hex(normalized))
 }
 
 fn stable_hash64_hex(value: &str) -> String {
@@ -1723,6 +1899,9 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
         let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
         for thread in threads {
             let (body, body_source) = probe_thread_notification_body(&thread, status);
+            if !probe_thread_passive_bark_fresh(&thread, status, body_source.as_deref()) {
+                continue;
+            }
             let transcript_path = thread
                 .rollout_path
                 .as_ref()
@@ -1769,6 +1948,9 @@ fn probe_thread_notification_body(
 ) -> (Option<String>, Option<String>) {
     if status == "reply-needed" {
         if let Some(elicitation) = &thread.pending_elicitation {
+            if !thread_rollout_still_request_user_input_needed(thread) {
+                return (None, None);
+            }
             return (
                 Some(format_pending_elicitation(elicitation)),
                 Some("request_user_input".to_string()),
@@ -1796,6 +1978,9 @@ fn probe_thread_notification_body(
                 rollout_completion_last_agent_message(path, thread.active_turn_id.as_deref())
             {
                 if message.contains("<proposed_plan>") && message.contains("</proposed_plan>") {
+                    if !thread_rollout_still_reply_needed(thread) {
+                        return (None, None);
+                    }
                     return (
                         Some(format_proposed_plan_reply_needed(
                             &thread.id,
@@ -1825,6 +2010,21 @@ fn probe_thread_notification_body(
     )
 }
 
+fn probe_thread_passive_bark_fresh(
+    thread: &nexushub_core::codex::ThreadSummary,
+    status: &str,
+    body_source: Option<&str>,
+) -> bool {
+    if status != "reply-needed" {
+        return true;
+    }
+    match body_source {
+        Some("request_user_input") => thread_rollout_still_request_user_input_needed(thread),
+        Some("proposed_plan") => thread_rollout_still_reply_needed(thread),
+        Some(_) | None => false,
+    }
+}
+
 fn thread_rollout_still_reply_needed(thread: &nexushub_core::codex::ThreadSummary) -> bool {
     if thread.rollout_path.is_none() {
         return true;
@@ -1846,6 +2046,29 @@ fn thread_rollout_still_reply_needed(thread: &nexushub_core::codex::ThreadSummar
         .is_some_and(|turn_id| Some(turn_id) == thread.active_turn_id.as_deref())
         || (thread.active_turn_id.is_none() && refreshed.active_turn_id.is_none());
     reply_needed && has_plan_message && same_turn
+}
+
+fn thread_rollout_still_request_user_input_needed(
+    thread: &nexushub_core::codex::ThreadSummary,
+) -> bool {
+    if thread.rollout_path.is_none() {
+        return thread.pending_elicitation.is_some();
+    }
+    let mut refreshed = thread.clone();
+    if nexushub_core::codex::enrich_thread_from_rollout(&mut refreshed).is_err() {
+        return false;
+    }
+    let reply_needed = matches!(
+        refreshed.status,
+        nexushub_core::codex::ThreadStatus::ReplyNeeded
+    );
+    let has_pending_elicitation = refreshed.pending_elicitation.is_some();
+    let same_turn = refreshed
+        .active_turn_id
+        .as_deref()
+        .is_some_and(|turn_id| Some(turn_id) == thread.active_turn_id.as_deref())
+        || (thread.active_turn_id.is_none() && refreshed.active_turn_id.is_none());
+    reply_needed && has_pending_elicitation && same_turn
 }
 
 fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
@@ -2305,7 +2528,7 @@ hooks = false
     }
 
     #[tokio::test]
-    async fn passive_reply_needed_scan_dedupes_for_six_hours_while_hook_window_stays_short() {
+    async fn passive_reply_needed_scan_uses_sent_marker_while_hook_window_stays_short() {
         let mut config = Config::default();
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -2343,7 +2566,7 @@ hooks = false
 
         assert!(first.0.recorded);
         assert!(!duplicate.0.recorded);
-        assert_eq!(duplicate.1.reason.as_deref(), Some("dedupe"));
+        assert_eq!(duplicate.1.reason.as_deref(), Some("sent_marker"));
         let events = db.list_probe_events(10).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload["dedupe_ttl_seconds"], 6 * 60 * 60);
@@ -2596,7 +2819,9 @@ hooks = false
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
-        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-plan-ttl-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
@@ -2641,7 +2866,7 @@ hooks = false
             .unwrap();
 
         assert!(first.0.recorded);
-        assert_eq!(duplicate.1.reason.as_deref(), Some("dedupe"));
+        assert_eq!(duplicate.1.reason.as_deref(), Some("sent_marker"));
         assert!(!duplicate.0.recorded);
         assert!(changed.0.recorded);
         assert_ne!(first_key, changed_key);
@@ -2653,6 +2878,155 @@ hooks = false
         );
         let events = db.list_probe_events(10).unwrap();
         assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_does_not_resend_after_ttl_expires() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-plan-ttl-marker-single");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = format_proposed_plan_reply_needed(
+            "thread-plan-ttl",
+            "turn-plan-ttl",
+            "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>",
+        );
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-plan-ttl"),
+                    Some("turn-plan-ttl"),
+                    Some("thread-plan-ttl"),
+                    None,
+                    Some(&body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("旧计划 TTL 线程"))
+                .with_body_source(Some("proposed_plan"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_event_does_not_resend_after_ttl_expires() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-input-ttl-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续";
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-question-ttl"),
+                    Some("turn-question"),
+                    Some("thread-question-ttl"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("问题 TTL 线程"))
+                .with_body_source(Some("request_user_input"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_marker_ignores_scan_time_changes() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let make_body = |time: &str| {
+            format!(
+                "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：{time}\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续"
+            )
+        };
+        let make_event = |body: String| {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-question-time"),
+                    Some("turn-question"),
+                    Some("thread-question-time"),
+                    None,
+                    Some(&body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("问题时间线程"))
+                .with_body_source(Some("request_user_input"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(
+            &config,
+            &db,
+            make_event(make_body("2026-06-16 12:00:00 北京时间")),
+        )
+        .await
+        .unwrap();
+        let second = record_probe_event_with_bark(
+            &config,
+            &db,
+            make_event(make_body("2026-06-16 12:05:00 北京时间")),
+        )
+        .await
+        .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(second.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!second.0.recorded);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -2744,7 +3118,7 @@ hooks = false
                 )
             );
             let chunk = payload["body"].as_str().unwrap();
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
+            let prefix = format!("第 {}/{} 段\n", index + 1, result.chunk_count);
             assert!(chunk.starts_with(&prefix));
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
@@ -2759,7 +3133,7 @@ hooks = false
                     .as_str()
                     .unwrap()
                     .to_string();
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
+                let prefix = format!("第 {}/{} 段\n", index + 1, result.chunk_count);
                 chunk.strip_prefix(&prefix).unwrap().to_string()
             })
             .collect::<String>();
@@ -2820,7 +3194,7 @@ hooks = false
                     )
                 );
                 let chunk = payload["body"].as_str().unwrap();
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
+                let prefix = format!("第 {}/{} 段\n", index + 1, bark.request_count);
                 let body_part = chunk.strip_prefix(&prefix).unwrap();
                 assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
                 body_part.to_string()
@@ -2842,7 +3216,7 @@ hooks = false
 
         assert!(!chunks[0].contains("  完成"));
         for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
             assert!(chunk.starts_with(&prefix));
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
@@ -2852,7 +3226,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
@@ -2869,7 +3243,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
                 let body_part = chunk.strip_prefix(&prefix).unwrap();
                 assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
                 body_part
@@ -2885,7 +3259,7 @@ hooks = false
 
         assert_eq!(chunks.len(), 2);
         for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert_eq!(body_part.len(), PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(body_part.is_char_boundary(body_part.len()));
@@ -2894,7 +3268,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
@@ -3073,6 +3447,89 @@ hooks = false
         }
     }
 
+    #[test]
+    fn passive_reply_needed_fallback_suppresses_old_plan_after_later_completion() {
+        let dir = temp_test_dir("nexushub-fallback-old-plan-completed");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧 fallback 计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"继续"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"执行完成。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"执行完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-fallback-old-plan".to_string(),
+            title: "fallback 旧计划线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 4,
+            latest_message: None,
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: None,
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_fallback_suppresses_old_plan_when_completion_has_no_body() {
+        let dir = temp_test_dir("nexushub-fallback-old-plan-empty-complete");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧 fallback 计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"继续"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let fallback = rollout_completion_last_agent_message(&rollout, Some("turn-plan"))
+            .unwrap()
+            .expect("fallback plan");
+        assert!(fallback.contains("<proposed_plan>"));
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-fallback-empty-complete".to_string(),
+            title: "fallback 空完成线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 3,
+            latest_message: None,
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: Some("turn-plan".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[tokio::test]
     async fn probe_thread_scan_does_not_resend_completed_old_plan_when_app_server_is_offline() {
         let dir = temp_test_dir("nexushub-thread-scan-old-plan-offline");
@@ -3127,6 +3584,99 @@ hooks = false
 
         assert_eq!(count, 0);
         assert!(db.list_probe_events(10).unwrap().is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_does_not_resend_after_ttl_or_revive_after_answer() {
+        let dir = temp_test_dir("nexushub-request-user-input-no-revive");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let rollout = codex_home.join("sessions").join("rollout-question.jsonl");
+        fs::write(
+            &rollout,
+            json!({
+                "type": "response_item",
+                "turn_id": "turn-question",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "status": "pending",
+                    "call_id": "call-question",
+                    "questions": [{
+                        "id": "choice",
+                        "header": "Mode",
+                        "question": "Continue?",
+                        "options": [
+                            {"label": "继续", "description": "按计划执行"},
+                            {"label": "停止"}
+                        ]
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                updated_at INTEGER,
+                archived_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            params![
+                "thread-question-no-repeat",
+                "待选择线程",
+                chrono::Utc::now().timestamp_millis(),
+                rollout.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.codex.app_server_socket = Some(dir.join("missing.sock"));
+        config.codex.bridge_enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let first_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
+            .await
+            .unwrap();
+        db.maintain_probe_events(1, 100, false).unwrap();
+        let second_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
+            .await
+            .unwrap();
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-question","payload":{"type":"function_call","name":"request_user_input","status":"pending","call_id":"call-question","questions":[{"id":"choice","header":"Mode","question":"Continue?","options":[{"label":"继续","description":"按计划执行"},{"label":"停止"}]}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-question","payload":{"type":"UserInputAnswer","call_id":"call-question","answers":{"choice":["继续"]}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-question","last_agent_message":"已继续。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let answered_count = run_probe_thread_scan_if_due(AppState::new(config, db.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(first_count, 1);
+        assert_eq!(second_count, 0);
+        assert_eq!(answered_count, 0);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,16 +19,9 @@ pub struct SystemStatus {
     pub discovery_warnings: Vec<String>,
     pub state_db: String,
     pub panel_db: String,
-    pub app_server_socket: Option<String>,
-    pub configured_app_server_socket: Option<String>,
-    pub resolved_app_server_socket: Option<String>,
-    pub app_server_socket_source: Option<String>,
-    pub app_server_service: ServiceStatus,
     pub state_db_integrity: Option<String>,
     pub hidden_thread_count: usize,
-    pub thread_source_counts: HashMap<String, usize>,
-    pub app_server_source_counts: HashMap<String, usize>,
-    pub app_server_hidden_thread_count: usize,
+    pub thread_source_counts: std::collections::HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,10 +45,7 @@ pub struct VersionInfo {
 }
 
 pub async fn system_status(config: &Config) -> Result<SystemStatus> {
-    let resolved = resolve_codex_paths(
-        &config.codex.home,
-        config.codex.app_server_socket.as_deref(),
-    );
+    let resolved = resolve_codex_paths(&config.codex.home);
     let paths = CodexPaths::new(&resolved.home);
     let state_db_integrity = crate::codex::db_integrity(&paths).ok();
     let hidden_thread_count = crate::codex::hidden_thread_ids(&paths)
@@ -73,20 +63,9 @@ pub async fn system_status(config: &Config) -> Result<SystemStatus> {
         discovery_warnings: resolved.discovery_warnings,
         state_db: paths.state_db().display().to_string(),
         panel_db: config.paths.db_path.display().to_string(),
-        app_server_socket: None,
-        configured_app_server_socket: None,
-        resolved_app_server_socket: None,
-        app_server_socket_source: None,
-        app_server_service: ServiceStatus {
-            active: false,
-            active_state: None,
-            sub_state: None,
-        },
         state_db_integrity,
         hidden_thread_count,
         thread_source_counts,
-        app_server_source_counts: HashMap::new(),
-        app_server_hidden_thread_count: 0,
     })
 }
 

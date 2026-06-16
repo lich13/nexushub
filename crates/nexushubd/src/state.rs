@@ -46,10 +46,7 @@ impl AppState {
 
     pub fn resolved_codex_paths(&self) -> ResolvedCodexPaths {
         let config = self.config();
-        resolve_codex_paths(
-            &config.codex.home,
-            config.codex.app_server_socket.as_deref(),
-        )
+        resolve_codex_paths(&config.codex.home)
     }
 
     pub fn codex_paths(&self) -> CodexPaths {

@@ -264,4 +264,29 @@ describe("thread message store", () => {
       expect(store.slots.get("thread-a")?.summary?.title).toBe("真实标题");
     }
   });
+
+  test("short real titles can replace placeholders while assistant prose cannot", () => {
+    const store = createThreadMessageStoreState();
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("a1")]),
+      summary: { ...summary("thread-a"), title: "Untitled Thread" }
+    });
+
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("a2")]),
+      summary: { ...summary("thread-a"), title: "Goal UI 修复" }
+    });
+
+    expect(store.slots.get("thread-a")?.summary?.title).toBe("Goal UI 修复");
+
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("a3")]),
+      summary: {
+        ...summary("thread-a"),
+        title: "先补失败测试覆盖 Goal 可用态和归档缓存，然后实现最小修复并运行 webui 测试。"
+      }
+    });
+
+    expect(store.slots.get("thread-a")?.summary?.title).toBe("Goal UI 修复");
+  });
 });

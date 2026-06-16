@@ -1,4 +1,3 @@
-pub mod app_server;
 pub mod archive;
 pub mod claude_code;
 pub mod codex;

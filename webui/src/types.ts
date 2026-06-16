@@ -179,20 +179,9 @@ export type SystemStatus = {
   discovery_warnings?: string[] | null;
   state_db?: string | null;
   panel_db: string;
-  app_server_socket?: string | null;
-  configured_app_server_socket?: string | null;
-  resolved_app_server_socket?: string | null;
-  app_server_socket_source?: string | null;
-  app_server_service?: {
-    active: boolean;
-    active_state?: string | null;
-    sub_state?: string | null;
-  };
   state_db_integrity?: string | null;
   hidden_thread_count?: number | null;
   thread_source_counts?: Record<string, number> | null;
-  app_server_source_counts?: Record<string, number> | null;
-  app_server_hidden_thread_count?: number | null;
 };
 
 export type SystemVersion = {
@@ -278,6 +267,7 @@ export type OptionalResult<T> = {
   available: boolean;
   data?: T;
   error?: string;
+  reason?: string | null;
 };
 
 export type AgentProviderInfo = {
@@ -415,9 +405,6 @@ export type ProbeStatus = {
   resolved_codex_home?: string | null;
   codex_home_source?: string | null;
   logs_db_source?: string | null;
-  configured_app_server_socket?: string | null;
-  resolved_app_server_socket?: string | null;
-  app_server_socket_source?: string | null;
   discovery_warnings?: string[] | null;
   host_label?: string | null;
 };
@@ -451,14 +438,6 @@ export type ProbeSettings = {
     logs_db_source?: string | null;
     discovery_warnings?: string[] | null;
     workspace?: string | null;
-    app_server_service?: string | null;
-    app_server_socket?: string | null;
-    configured_app_server_socket?: string | null;
-    resolved_app_server_socket?: string | null;
-    app_server_socket_source?: string | null;
-    bridge_enabled?: boolean | null;
-    bridge_transport?: string | null;
-    bridge_timeout_seconds?: number | null;
     host_label: string;
   };
   probe: Record<string, unknown> & {
@@ -467,7 +446,6 @@ export type ProbeSettings = {
     recent_limit?: number;
     hooks?: Record<string, unknown> & {
       manage_stop_hook?: boolean;
-      reload_app_server_after_install?: boolean;
     };
     notifications?: Record<string, unknown> & {
       enabled?: boolean;

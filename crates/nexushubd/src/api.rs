@@ -18,7 +18,6 @@ use axum::{
     Json, Router,
 };
 use nexushub_core::{
-    app_server::BridgeActionResult,
     archive,
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
@@ -27,7 +26,8 @@ use nexushub_core::{
         ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
         ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
-    db::{JobRecord, NewSession, ThreadFollowUp},
+    db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
+    jobs::CodexActionResult,
     platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
@@ -401,15 +401,10 @@ async fn patch_probe_settings(
 
 async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let mut value = serde_json::to_value(probe_runtime(&state).lifecycle_status())
-        .map_err(anyhow::Error::from)?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "app_server_service".to_string(),
-            json!(state.config().codex.app_server_service),
-        );
-    }
-    ok(value)
+    ok(
+        serde_json::to_value(probe_runtime(&state).lifecycle_status())
+            .map_err(anyhow::Error::from)?,
+    )
 }
 
 async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -776,10 +771,7 @@ fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
 }
 
 fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
-    let resolved = nexushub_core::codex::resolve_codex_paths(
-        &config.codex.home,
-        config.codex.app_server_socket.as_deref(),
-    );
+    let resolved = nexushub_core::codex::resolve_codex_paths(&config.codex.home);
     Ok(json!({
         "codex": {
             "home": resolved.configured_codex_home.clone(),
@@ -787,16 +779,8 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
             "resolved_codex_home": resolved.home,
             "codex_home_source": resolved.codex_home_source,
             "logs_db_source": resolved.logs_db_source,
-            "configured_app_server_socket": Value::Null,
-            "resolved_app_server_socket": Value::Null,
-            "app_server_socket_source": Value::Null,
             "discovery_warnings": resolved.discovery_warnings,
             "workspace": config.codex.workspace,
-            "app_server_service": "",
-            "app_server_socket": Value::Null,
-            "bridge_enabled": false,
-            "bridge_transport": Value::Null,
-            "bridge_timeout_seconds": Value::Null,
             "host_label": config.codex.host_label,
         },
         "probe": config.probe,
@@ -1368,12 +1352,7 @@ async fn thread_detail(
 
 fn api_error_for_thread_detail_load(err: anyhow::Error) -> ApiError {
     let message = err.to_string();
-    let status = if message.starts_with("app-server thread/read failed") {
-        StatusCode::BAD_GATEWAY
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    api_error(status, &message)
+    api_error(StatusCode::INTERNAL_SERVER_ERROR, &message)
 }
 
 async fn thread_blocks(
@@ -1579,7 +1558,7 @@ async fn create_thread(
         None,
         json!({"cwd": cwd.display().to_string()}),
     )?;
-    ok(BridgeActionResult {
+    ok(CodexActionResult {
         bridge: false,
         thread_id: None,
         turn_id: None,
@@ -1687,7 +1666,7 @@ async fn send_message(
         None,
         json!({"job_id": job_id}),
     )?;
-    ok(BridgeActionResult {
+    ok(CodexActionResult {
         bridge: false,
         thread_id: Some(id),
         turn_id: None,
@@ -1725,7 +1704,7 @@ async fn steer_thread(
         None,
         json!({"followup_id": followup.id}),
     )?;
-    ok(BridgeActionResult {
+    ok(CodexActionResult {
         bridge: false,
         thread_id: Some(id),
         turn_id: None,
@@ -2309,7 +2288,7 @@ fn start_codex_resume_job(
     state: &AppState,
     thread_id: &str,
     message: String,
-) -> Result<BridgeActionResult, ApiError> {
+) -> Result<CodexActionResult, ApiError> {
     let args = vec![
         "exec".to_string(),
         "resume".to_string(),
@@ -2333,7 +2312,7 @@ fn start_codex_resume_job(
         .db
         .link_job_thread(&job_id, Some(thread_id), None)
         .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
-    Ok(BridgeActionResult {
+    Ok(CodexActionResult {
         bridge: false,
         thread_id: Some(thread_id.to_string()),
         turn_id: None,
@@ -2521,8 +2500,9 @@ async fn codex_goal_get(
     let Some(thread_id) = non_empty(query.thread_id.as_deref()) else {
         return ok(goal_empty("missing_thread"));
     };
-    let _ = thread_id;
-    ok(goal_unavailable("unavailable"))
+    ok(local_goal_response(
+        state.db.get_thread_goal(thread_id)?.as_ref(),
+    ))
 }
 
 async fn codex_goal_set(
@@ -2535,14 +2515,21 @@ async fn codex_goal_set(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    let _ = (
+    let objective = payload
+        .objective
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let status = normalize_local_goal_status(payload.status.as_deref(), payload.enabled, objective);
+    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
         thread_id,
-        payload.objective,
-        payload.status,
-        payload.token_budget,
-        payload.enabled,
-    );
-    ok(goal_unavailable("unavailable"))
+        objective,
+        token_budget: payload.token_budget,
+        status: &status,
+        completed_at: None,
+        blocked_reason: None,
+    })?;
+    ok(local_goal_response(Some(&goal)))
 }
 
 async fn codex_goal_clear(
@@ -2555,8 +2542,15 @@ async fn codex_goal_clear(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    let _ = thread_id;
-    ok(goal_unavailable("unavailable"))
+    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
+        thread_id,
+        objective: None,
+        token_budget: None,
+        status: "cleared",
+        completed_at: None,
+        blocked_reason: None,
+    })?;
+    ok(local_goal_response(Some(&goal)))
 }
 
 async fn codex_goal_resume(
@@ -2569,8 +2563,18 @@ async fn codex_goal_resume(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    let _ = thread_id;
-    ok(goal_unavailable("unavailable"))
+    let existing = state.db.get_thread_goal(thread_id)?;
+    let objective = existing.as_ref().and_then(|goal| goal.objective.as_deref());
+    let token_budget = existing.as_ref().and_then(|goal| goal.token_budget);
+    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
+        thread_id,
+        objective,
+        token_budget,
+        status: "active",
+        completed_at: None,
+        blocked_reason: None,
+    })?;
+    ok(local_goal_response(Some(&goal)))
 }
 
 async fn panel_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -3917,7 +3921,7 @@ fn goal_enabled(goal: &Value, status: &str) -> bool {
 
 fn goal_empty(status: &str) -> Value {
     json!({
-        "available": false,
+        "available": !matches!(status, "missing_thread" | "unavailable"),
         "enabled": false,
         "objective": null,
         "token_budget": null,
@@ -3925,6 +3929,67 @@ fn goal_empty(status: &str) -> Value {
     })
 }
 
+fn local_goal_response(goal: Option<&ThreadGoal>) -> Value {
+    let Some(goal) = goal else {
+        return goal_empty("idle");
+    };
+    let enabled = local_goal_enabled(goal);
+    json!({
+        "available": true,
+        "enabled": enabled,
+        "objective": goal.objective,
+        "token_budget": goal.token_budget,
+        "status": goal.status,
+        "completed_at": goal.completed_at,
+        "blocked_reason": goal.blocked_reason,
+        "raw": {
+            "source": "local",
+            "thread_id": goal.thread_id,
+            "created_at": goal.created_at,
+            "updated_at": goal.updated_at,
+        },
+    })
+}
+
+fn local_goal_enabled(goal: &ThreadGoal) -> bool {
+    if matches!(goal.status.as_str(), "idle" | "missing_thread" | "cleared") {
+        return false;
+    }
+    goal.objective
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || matches!(
+            goal.status.as_str(),
+            "active" | "running" | "complete" | "completed" | "blocked" | "paused"
+        )
+}
+
+fn normalize_local_goal_status(
+    status: Option<&str>,
+    enabled: Option<bool>,
+    objective: Option<&str>,
+) -> String {
+    let normalized = status
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    match normalized.as_deref() {
+        Some("complete" | "completed") => "complete".to_string(),
+        Some("blocked") => "blocked".to_string(),
+        Some("paused") => "paused".to_string(),
+        Some("cleared" | "clear") => "cleared".to_string(),
+        Some("idle") => "idle".to_string(),
+        Some("active" | "running") => "active".to_string(),
+        Some(_) => "active".to_string(),
+        None if enabled == Some(false) && objective.is_none() => "cleared".to_string(),
+        None if enabled == Some(false) => "paused".to_string(),
+        None if objective.is_some() || enabled == Some(true) => "active".to_string(),
+        None => "idle".to_string(),
+    }
+}
+
+#[allow(dead_code)]
 fn goal_unavailable(status: &str) -> Value {
     json!({
         "available": false,
@@ -4292,50 +4357,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn goal_routes_return_unavailable_without_app_server_socket() {
+    async fn goal_routes_use_local_store_without_app_server_socket() {
         let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
         seed_local_codex_thread(&home, "thread-a", "local title");
         let app = router(state);
 
-        for (method, uri, body) in [
-            ("GET", "/api/codex/goal?thread_id=thread-a", ""),
-            (
-                "POST",
-                "/api/codex/goal",
-                r#"{"thread_id":"thread-a","objective":"ship"}"#,
-            ),
-            (
-                "POST",
-                "/api/codex/goal/clear",
-                r#"{"thread_id":"thread-a"}"#,
-            ),
-            (
-                "POST",
-                "/api/codex/goal/resume",
-                r#"{"thread_id":"thread-a"}"#,
-            ),
-        ] {
+        async fn request_goal(
+            app: axum::Router,
+            method: &str,
+            uri: &str,
+            body: &str,
+            session_token: &str,
+            csrf_token: &str,
+        ) -> serde_json::Value {
             let mut builder = Request::builder()
                 .method(method)
                 .uri(uri)
                 .header("cookie", format!("nexushub_session={session_token}"));
             if method == "POST" {
                 builder = builder
-                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("x-csrf-token", csrf_token)
                     .header("content-type", "application/json");
             }
             let response = app
                 .clone()
-                .oneshot(builder.body(Body::from(body)).unwrap())
+                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["available"], false, "{method} {uri}");
-            assert_eq!(value["enabled"], false, "{method} {uri}");
-            assert_ne!(value["status"], "active", "{method} {uri}");
+            serde_json::from_slice(&body).unwrap()
         }
+
+        let initial = request_goal(
+            app.clone(),
+            "GET",
+            "/api/codex/goal?thread_id=thread-a",
+            "",
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(initial["available"], true);
+        assert_eq!(initial["enabled"], false);
+        assert_eq!(initial["status"], "idle");
+
+        let set = request_goal(
+            app.clone(),
+            "POST",
+            "/api/codex/goal",
+            r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(set["available"], true);
+        assert_eq!(set["enabled"], true);
+        assert_eq!(set["objective"], "ship local goal");
+        assert_eq!(set["token_budget"], 12345);
+        assert_eq!(set["status"], "active");
+
+        let get = request_goal(
+            app.clone(),
+            "GET",
+            "/api/codex/goal?thread_id=thread-a",
+            "",
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(get["available"], true);
+        assert_eq!(get["enabled"], true);
+        assert_eq!(get["objective"], "ship local goal");
+        assert_eq!(get["token_budget"], 12345);
+        assert_eq!(get["status"], "active");
+
+        let cleared = request_goal(
+            app.clone(),
+            "POST",
+            "/api/codex/goal/clear",
+            r#"{"thread_id":"thread-a"}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(cleared["available"], true);
+        assert_eq!(cleared["enabled"], false);
+        assert_eq!(cleared["objective"], serde_json::Value::Null);
+        assert_eq!(cleared["token_budget"], serde_json::Value::Null);
+        assert_eq!(cleared["status"], "cleared");
+
+        let resumed = request_goal(
+            app,
+            "POST",
+            "/api/codex/goal/resume",
+            r#"{"thread_id":"thread-a"}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(resumed["available"], true);
+        assert_eq!(resumed["enabled"], true);
+        assert_eq!(resumed["status"], "active");
         let _ = fs::remove_dir_all(home);
     }
 
@@ -4577,7 +4700,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn goal_resume_route_requires_csrf_and_returns_unavailable_without_local_goal_store() {
+    async fn goal_resume_route_requires_csrf_and_uses_local_goal_store() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
@@ -4597,7 +4720,7 @@ mod tests {
         assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
 
         let app = router(state);
-        let unavailable = app
+        let resumed = app
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4610,12 +4733,13 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(unavailable.status(), StatusCode::OK);
-        let body = to_bytes(unavailable.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let body = to_bytes(resumed.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(payload["available"], false);
-        assert_eq!(payload["enabled"], false);
-        assert_eq!(payload["status"], "unavailable");
+        assert_eq!(payload["available"], true);
+        assert_eq!(payload["enabled"], true);
+        assert_eq!(payload["status"], "active");
+        assert_eq!(payload["raw"]["source"], "local");
     }
 
     #[tokio::test]

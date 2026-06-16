@@ -41,16 +41,16 @@ pub struct CodexConfig {
     #[serde(default = "default_codex_home")]
     pub home: PathBuf,
     pub workspace: PathBuf,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub app_server_service: String,
-    #[serde(default = "default_app_server_socket")]
+    #[serde(default, skip_serializing)]
     pub app_server_socket: Option<PathBuf>,
-    #[serde(default = "default_bridge_enabled")]
+    #[serde(default, skip_serializing)]
     pub bridge_enabled: bool,
-    #[serde(default = "default_bridge_transport")]
-    pub bridge_transport: BridgeTransport,
-    #[serde(default = "default_bridge_timeout_seconds")]
-    pub bridge_timeout_seconds: u64,
+    #[serde(default, skip_serializing)]
+    pub bridge_transport: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub bridge_timeout_seconds: Option<u64>,
     pub host_label: String,
 }
 
@@ -210,32 +210,8 @@ pub struct ProbeLogsDbConfigPatch {
     pub minimum_free_space_mb: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BridgeTransport {
-    Websocket,
-    JsonLine,
-    Lsp,
-}
-
-fn default_app_server_socket() -> Option<PathBuf> {
-    None
-}
-
 fn default_codex_home() -> PathBuf {
     PathBuf::from("auto")
-}
-
-fn default_bridge_enabled() -> bool {
-    false
-}
-
-fn default_bridge_transport() -> BridgeTransport {
-    BridgeTransport::Websocket
-}
-
-fn default_bridge_timeout_seconds() -> u64 {
-    20
 }
 
 fn default_true() -> bool {
@@ -460,10 +436,10 @@ impl Default for Config {
                 home: default_codex_home(),
                 workspace: PathBuf::from("/home/ubuntu/codex-workspace"),
                 app_server_service: String::new(),
-                app_server_socket: default_app_server_socket(),
-                bridge_enabled: default_bridge_enabled(),
-                bridge_transport: default_bridge_transport(),
-                bridge_timeout_seconds: default_bridge_timeout_seconds(),
+                app_server_socket: None,
+                bridge_enabled: false,
+                bridge_transport: None,
+                bridge_timeout_seconds: None,
                 host_label: DEFAULT_HOST_LABEL.to_string(),
             },
             probe: ProbeConfig::default(),
@@ -535,9 +511,6 @@ impl Config {
         }
         if self.security.login_rate_limit_per_minute == 0 {
             self.security.login_rate_limit_per_minute = 8;
-        }
-        if self.codex.bridge_timeout_seconds == 0 {
-            self.codex.bridge_timeout_seconds = 20;
         }
         if self.codex.host_label.trim().is_empty() || self.codex.host_label == legacy_host_label() {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();

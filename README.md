@@ -20,7 +20,7 @@ Current scope:
 - Desktop navigation can be hidden to give the conversation workspace more horizontal room.
 - System status, job history, and responsive sky-blue dark WebUI.
 
-Thread listing, thread details, status cards, Probe, archive deletion, and logs-db maintenance read Codex local state directly from the resolved Codex home: `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, approvals, and goal actions that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical Plan/choice/approval items are only surfaced when they are still the latest unresolved action.
+Thread listing, thread details, status cards, Probe, archive deletion, Goal Mode, and logs-db maintenance read or persist NexusHub state locally from the resolved Codex home plus the NexusHub panel DB: `state_5.sqlite`, `session_index.jsonl`, rollout files, `logs_2.sqlite`, and `nexushub.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, and approvals that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical Plan/choice/approval items are only surfaced when they are still the latest unresolved action.
 
 ## Runtime Layout
 
