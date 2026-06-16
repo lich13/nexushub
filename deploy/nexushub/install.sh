@@ -123,6 +123,25 @@ install_codex_wrappers() {
   install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
 }
 
+install_codex_home_write_paths() {
+  install -d -m 0700 -o root -g root /root/.codex
+
+  local ubuntu_owner="root"
+  local ubuntu_group="root"
+  if getent passwd ubuntu >/dev/null 2>&1; then
+    ubuntu_owner="ubuntu"
+    ubuntu_group="$(id -gn ubuntu 2>/dev/null || printf 'ubuntu')"
+  fi
+
+  if [[ ! -d /home ]]; then
+    install -d -m 0755 -o root -g root /home
+  fi
+  if [[ ! -d /home/ubuntu ]]; then
+    install -d -m 0755 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu
+  fi
+  install -d -m 0700 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu/.codex
+}
+
 install_config() {
   local source_dir
   source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -485,6 +504,7 @@ main() {
   install_payload
   install_codex_wrappers
   install_config
+  install_codex_home_write_paths
   install_systemd
   install_nginx
   log "installed ${INSTALL_BIN}"

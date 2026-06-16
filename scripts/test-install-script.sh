@@ -86,6 +86,20 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
+codex_paths_match = re.search(r"install_codex_home_write_paths\(\) \{\n(?P<body>.*?)\n\}", text, re.S)
+if not codex_paths_match:
+    raise SystemExit("install_codex_home_write_paths function not found")
+
+codex_paths_body = codex_paths_match.group("body")
+for needle in [
+    "/root/.codex",
+    "/home/ubuntu/.codex",
+    "getent passwd ubuntu",
+    "install -d -m 0700",
+]:
+    if needle not in codex_paths_body:
+        raise SystemExit(f"install_codex_home_write_paths missing {needle}")
+
 match = re.search(r"install_systemd\(\) \{\n(?P<body>.*?)\n\}", text, re.S)
 if not match:
     raise SystemExit("install_systemd function not found")
@@ -96,6 +110,15 @@ if 'systemctl restart "${SERVICE_NAME}"' not in body:
 
 if body.find('systemctl restart "${SERVICE_NAME}"') < body.find('systemctl daemon-reload'):
     raise SystemExit("install_systemd must restart only after daemon-reload")
+
+main_match = re.search(r"main\(\) \{\n(?P<body>.*?)\n\}", text, re.S)
+if not main_match:
+    raise SystemExit("main function not found")
+main_body = main_match.group("body")
+if 'install_codex_home_write_paths' not in main_body:
+    raise SystemExit("main must prepare Codex home write paths before installing systemd")
+if main_body.find('install_codex_home_write_paths') > main_body.find('install_systemd'):
+    raise SystemExit("main must prepare Codex home write paths before install_systemd")
 
 print("install_systemd restart behavior: ok")
 PY

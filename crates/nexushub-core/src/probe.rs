@@ -1987,7 +1987,7 @@ mod tests {
             Some("turn-product-named"),
             Some("thread-product-named"),
             None,
-            Some("NexusHub Probe v0.1.66 smoke completion finished normally."),
+            Some("NexusHub Probe v0.1.67 smoke completion finished normally."),
             "hook-stop",
         ));
 
