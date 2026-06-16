@@ -87,10 +87,15 @@ fn redact_probe_event_json(value: &mut Value) {
             }
         }
         Value::String(text) => {
-            *text = redact_output(text);
+            *text = redact_probe_event_text(text);
         }
         _ => {}
     }
+}
+
+fn redact_probe_event_text(text: &str) -> String {
+    let redacted = redact_output(text);
+    extract_proposed_plan_text(&redacted).unwrap_or(redacted)
 }
 
 #[derive(Debug, Clone)]

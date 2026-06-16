@@ -4680,7 +4680,7 @@ mod tests {
                         "summary": "hello",
                         "sha256": "abc123"
                     },
-                    "body_summary": "safe summary",
+                    "body_summary": "<proposed_plan>\n# Safe summary\n</proposed_plan>",
                     "body_sha256": "abc123",
                     "body_length": 9876,
                     "body_source": "last_assistant_message",
@@ -4746,7 +4746,7 @@ mod tests {
         assert_eq!(event["payload"]["bark"]["chunk_count"], 3);
         assert_eq!(event["payload"]["bark"]["request_count"], 3);
         assert!(event["payload"]["bark"].get("body").is_none());
-        assert_eq!(event["payload"]["body_summary"], "safe summary");
+        assert_eq!(event["payload"]["body_summary"], "# Safe summary");
         assert_eq!(event["payload"]["body_sha256"], "abc123");
         assert_eq!(event["payload"]["body_length"], 9876);
         assert_eq!(event["payload"]["body_source"], "last_assistant_message");
@@ -4765,6 +4765,9 @@ mod tests {
         assert!(!serde_json::to_string(event)
             .unwrap()
             .contains("完整 Bark 正文不应返回"));
+        assert!(!serde_json::to_string(event)
+            .unwrap()
+            .contains("<proposed_plan>"));
     }
 
     #[tokio::test]
