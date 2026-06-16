@@ -1648,10 +1648,9 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                     status,
                 )
                 .with_thread_title(Some(thread.title.as_str()))
-                .with_body_source(body_source.as_deref()),
+                .with_body_source(body_source.as_deref())
+                .with_passive_scan_source(),
             );
-            event.source = "nexushubd probe passive-scan".to_string();
-            event.payload["source"] = json!(event.source.clone());
             event.payload["thread_title"] = json!(thread.title.clone());
             event.payload["thread_id"] = json!(thread.id.clone());
             if let Some(active_turn_id) = thread.active_turn_id.as_deref() {
@@ -1691,14 +1690,28 @@ fn probe_thread_notification_body(
             .as_deref()
             .filter(|value| value.contains("<proposed_plan>") && value.contains("</proposed_plan>"))
         {
-            return (Some(message.to_string()), Some("proposed_plan".to_string()));
+            return (
+                Some(format_proposed_plan_reply_needed(
+                    &thread.id,
+                    thread.active_turn_id.as_deref().unwrap_or("-"),
+                    message,
+                )),
+                Some("proposed_plan".to_string()),
+            );
         }
         if let Some(path) = thread.rollout_path.as_deref() {
             if let Ok(Some(message)) =
                 rollout_completion_last_agent_message(path, thread.active_turn_id.as_deref())
             {
                 if message.contains("<proposed_plan>") && message.contains("</proposed_plan>") {
-                    return (Some(message), Some("proposed_plan".to_string()));
+                    return (
+                        Some(format_proposed_plan_reply_needed(
+                            &thread.id,
+                            thread.active_turn_id.as_deref().unwrap_or("-"),
+                            &message,
+                        )),
+                        Some("proposed_plan".to_string()),
+                    );
                 }
             }
         }
@@ -1721,35 +1734,62 @@ fn probe_thread_notification_body(
 }
 
 fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
-    let mut lines = Vec::new();
-    lines.push("request_user_input 等待回复".to_string());
+    let call_id = elicitation.item_id.as_deref().unwrap_or("-");
+    let turn_id = elicitation.turn_id.as_deref().unwrap_or("-");
+    let mut lines = vec![
+        "等待用户选择：Plan Mode 已请求用户选择后继续。".to_string(),
+        String::new(),
+        format!("Call ID：{call_id}"),
+        format!("Turn ID：{turn_id}"),
+        format!("时间：{}", passive_scan_time_label()),
+        "状态说明：这一轮正在等待用户选择，不是异常停止。".to_string(),
+        String::new(),
+        "待选择内容：".to_string(),
+    ];
     for (index, question) in elicitation.questions.iter().enumerate() {
         let number = index + 1;
+        lines.push(format!("问题 {number}：{}", question.question.trim()));
         if let Some(header) = question
             .header
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
         {
-            lines.push(format!("{number}. {header}"));
-            lines.push(format!("问题：{}", question.question));
-        } else {
-            lines.push(format!("{number}. {}", question.question));
+            lines.push(format!("标题：{header}"));
         }
         for (option_index, option) in question.options.iter().enumerate() {
             let marker = option_index + 1;
-            match option
+            lines.push(format!("选项 {marker}：{}", option.label.trim()));
+            if let Some(description) = option
                 .description
                 .as_deref()
-                .filter(|value| !value.trim().is_empty())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
             {
-                Some(description) => {
-                    lines.push(format!("   {marker}) {} - {description}", option.label));
-                }
-                None => lines.push(format!("   {marker}) {}", option.label)),
+                lines.push(format!("说明：{description}"));
             }
         }
     }
     lines.join("\n")
+}
+
+fn format_proposed_plan_reply_needed(thread_id: &str, turn_id: &str, raw: &str) -> String {
+    let plan_text = nexushub_core::codex::extract_proposed_plan_text(raw)
+        .unwrap_or_else(|| raw.trim().to_string());
+    format!(
+        "等待用户回复：Plan 已完成，正在等待确认后继续。\n\nthread_id: {}\nturn_id: {}\n时间: {}\n状态说明: 这一轮已经写出 Plan 并等待用户确认，所以这是待回复，不是异常停止或普通完成。\n\nPlan 摘要:\n{}",
+        thread_id.trim(),
+        turn_id.trim(),
+        passive_scan_time_label(),
+        plan_text.trim()
+    )
+}
+
+fn passive_scan_time_label() -> String {
+    chrono::Utc::now()
+        .with_timezone(&chrono::FixedOffset::east_opt(8 * 60 * 60).expect("valid Beijing offset"))
+        .format("%Y-%m-%d %H:%M:%S 北京时间")
+        .to_string()
 }
 
 fn add_probe_events_maintenance_fields(
@@ -2164,6 +2204,71 @@ hooks = false
     }
 
     #[tokio::test]
+    async fn passive_reply_needed_scan_dedupes_for_six_hours_while_hook_window_stays_short() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let passive_input = || {
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-passive"),
+                Some("turn-passive"),
+                Some("thread-passive"),
+                None,
+                Some("等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-passive\nTurn ID：turn-passive\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：继续吗？\n选项 1：继续"),
+                "reply-needed",
+            )
+            .with_body_source(Some("request_user_input"))
+            .with_passive_scan_source()
+        };
+
+        let first = record_probe_event_with_bark(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(passive_input()),
+        )
+        .await
+        .unwrap();
+        let duplicate = record_probe_event_with_bark(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(passive_input()),
+        )
+        .await
+        .unwrap();
+
+        assert!(first.0.recorded);
+        assert!(!duplicate.0.recorded);
+        assert_eq!(duplicate.1.reason.as_deref(), Some("dedupe"));
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["dedupe_ttl_seconds"], 6 * 60 * 60);
+        assert_eq!(events[0].payload["scan_source"], "passive-scan");
+
+        let hook = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-hook"),
+            Some("turn-hook"),
+            Some("thread-hook"),
+            None,
+            Some("等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-hook\nTurn ID：turn-hook"),
+            "reply-needed",
+        ));
+
+        assert_eq!(
+            hook.ttl_seconds,
+            nexushub_core::probe::PROBE_EVENT_TTL_SECONDS
+        );
+        assert_eq!(
+            hook.payload["dedupe_ttl_seconds"],
+            nexushub_core::probe::PROBE_EVENT_TTL_SECONDS
+        );
+        assert_eq!(hook.payload["scan_source"], "hook-stop");
+    }
+
+    #[tokio::test]
     async fn notify_completion_uses_completion_bark_switch() {
         let mut config = Config::default();
         config.probe.notifications.enabled = true;
@@ -2250,6 +2355,74 @@ hooks = false
         assert!(stored[0].payload["bark"].get("body").is_none());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_body_formats_questions_and_extracts_plan_text() {
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-question".to_string(),
+            title: "问题线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 1,
+            latest_message: Some("fallback should not be used".to_string()),
+            cwd: None,
+            model: None,
+            rollout_path: None,
+            active_turn_id: Some("turn-question".to_string()),
+            active_job_id: None,
+            pending_elicitation: Some(nexushub_core::codex::PendingElicitation {
+                turn_id: Some("turn-question".to_string()),
+                item_id: Some("call-question".to_string()),
+                questions: vec![nexushub_core::codex::UserInputQuestion {
+                    id: "q1".to_string(),
+                    header: Some("Mode".to_string()),
+                    question: "怎么继续？".to_string(),
+                    options: vec![
+                        nexushub_core::codex::UserInputOption {
+                            label: "直接执行".to_string(),
+                            description: Some("按当前计划继续".to_string()),
+                        },
+                        nexushub_core::codex::UserInputOption {
+                            label: "先调整".to_string(),
+                            description: Some("补充约束后再执行".to_string()),
+                        },
+                    ],
+                }],
+            }),
+            last_event_kind: None,
+        };
+
+        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+
+        let body = body.expect("request_user_input body");
+        assert_eq!(source.as_deref(), Some("request_user_input"));
+        assert!(body.contains("等待用户选择"));
+        assert!(body.contains("Call ID：call-question"));
+        assert!(body.contains("Turn ID：turn-question"));
+        assert!(body.contains("问题 1：怎么继续？"));
+        assert!(body.contains("选项 1：直接执行"));
+        assert!(body.contains("说明：按当前计划继续"));
+        assert!(body.contains("选项 2：先调整"));
+        assert!(!body.contains("fallback should not be used"));
+
+        let plan_thread = nexushub_core::codex::ThreadSummary {
+            pending_elicitation: None,
+            latest_message: Some(
+                "<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            ..thread
+        };
+
+        let (body, source) = probe_thread_notification_body(&plan_thread, "reply-needed");
+
+        let body = body.expect("plan body");
+        assert_eq!(source.as_deref(), Some("proposed_plan"));
+        assert!(body.contains("等待用户回复：Plan 已完成，正在等待确认后继续。"));
+        assert!(body.contains("# 修复计划\n- 等待确认"));
+        assert!(!body.contains("<proposed_plan>"));
+        assert!(!body.contains("</proposed_plan>"));
     }
 
     #[tokio::test]
@@ -2779,7 +2952,13 @@ hooks = false
         assert_eq!(events[0].kind, "reply-needed");
         assert_eq!(events[0].payload["thread_title"], "stale reply");
         assert_eq!(events[0].payload["body_source"], "request_user_input");
-        assert_eq!(events[0].payload["body_summary"], "request_user_input 等待回复\n1. 确认\n问题：Continue?\n   1) 继续 - 按计划执行\n   2) 停止");
+        let body_summary = events[0].payload["body_summary"].as_str().unwrap();
+        assert!(body_summary.contains("等待用户选择"));
+        assert!(body_summary.contains("Turn ID：turn-stale"));
+        assert!(body_summary.contains("问题 1：Continue?"));
+        assert!(body_summary.contains("选项 1：继续"));
+        assert!(body_summary.contains("说明：按计划执行"));
+        assert!(body_summary.contains("选项 2：停止"));
         assert!(events[0].payload["bark"].get("body").is_none());
         assert!(events[0].payload["bark"]["title"]
             .as_str()

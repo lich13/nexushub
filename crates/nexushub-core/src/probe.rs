@@ -1,5 +1,5 @@
 use crate::{
-    codex::{resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
+    codex::{extract_proposed_plan_text, resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
     config::{Config, ProbeLogsDbConfig},
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
+pub const PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS: i64 = 6 * 60 * 60;
 pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
 const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
 
@@ -402,17 +403,29 @@ impl ProbeRuntime {
             .last_assistant_message
             .as_deref()
             .unwrap_or_else(|| default_probe_event_body(&event_type));
-        let redacted_body = redact_output(raw_body);
-        let last_assistant_message = input
-            .last_assistant_message
-            .as_deref()
-            .map(|value| summarize_probe_event_assistant_message(value, &event_type));
         let (default_title, message) = probe_event_text(&event_type);
         let title = input
             .thread_title
             .as_deref()
             .unwrap_or(default_title.as_str())
             .to_string();
+        let mut body_source = input
+            .body_source
+            .as_deref()
+            .unwrap_or(if input.last_assistant_message.is_some() {
+                "last_assistant_message"
+            } else {
+                "default"
+            })
+            .to_string();
+        if event_type == "reply_needed" && extract_proposed_plan_text(raw_body).is_some() {
+            body_source = "proposed_plan".to_string();
+        }
+        let redacted_body = redact_output(raw_body);
+        let last_assistant_message = input
+            .last_assistant_message
+            .as_deref()
+            .map(|value| summarize_probe_event_assistant_message(value, &event_type, &body_source));
         let body_summary = last_assistant_message
             .as_ref()
             .and_then(|value| value.get("summary"))
@@ -430,41 +443,48 @@ impl ProbeRuntime {
             .and_then(Value::as_str)
             .map(ToString::to_string)
             .unwrap_or_else(|| hex::encode(Sha256::digest(message.as_bytes())));
-        let body_source = input
-            .body_source
-            .as_deref()
-            .unwrap_or(if input.last_assistant_message.is_some() {
-                "last_assistant_message"
-            } else {
-                "default"
-            })
-            .to_string();
         let body_truncated = body_summary.contains("[truncated]");
         let body_hash_component = body_sha256.get(..16).unwrap_or(body_sha256.as_str());
+        let dedupe_body_component =
+            probe_event_dedupe_body_component(&event_type, &redacted_body, body_hash_component);
+        let ttl_seconds = input.ttl_seconds.unwrap_or(PROBE_EVENT_TTL_SECONDS);
+        let scan_source = input
+            .scan_source
+            .as_deref()
+            .unwrap_or(if notify_completion {
+                "notify-completion"
+            } else {
+                "hook-stop"
+            })
+            .to_string();
         let dedupe_key = format!(
             "{event_kind}:{}:{}:{}:{}",
             dedupe_component(thread_component),
             dedupe_component(turn_component),
             dedupe_component(&event_type),
-            dedupe_component(body_hash_component)
+            dedupe_component(&dedupe_body_component)
         );
         let beijing_time = Utc::now()
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
             .format("%Y-%m-%d %H:%M:%S CST")
             .to_string();
+        let bark_detail = probe_event_bark_detail(&event_type, &body_source, &redacted_body);
+        let bark_message = probe_event_bark_message(&event_type, &body_source, &message);
         let bark = probe_event_bark_text(
             &event_type,
             event_thread_id.as_deref(),
             &title,
-            &message,
-            Some(&redacted_body),
+            &bark_message,
+            Some(&bark_detail),
             &beijing_time,
         );
-        let source = if notify_completion {
-            "nexushubd probe notify-completion".to_string()
-        } else {
-            "nexushubd probe hook-stop".to_string()
-        };
+        let source = input.source_override.clone().unwrap_or_else(|| {
+            if notify_completion {
+                "nexushubd probe notify-completion".to_string()
+            } else {
+                "nexushubd probe hook-stop".to_string()
+            }
+        });
         let payload = json!({
             "raw_kind": input.event_kind(),
             "turn_id": input.turn_id.clone(),
@@ -478,6 +498,8 @@ impl ProbeRuntime {
             "body_length": body_length,
             "body_source": body_source.clone(),
             "body_truncated": body_truncated,
+            "dedupe_ttl_seconds": ttl_seconds,
+            "scan_source": scan_source.clone(),
             "beijing_time": beijing_time.clone(),
             "reason_label": title.clone(),
             "source": source.clone(),
@@ -494,6 +516,8 @@ impl ProbeRuntime {
                 "body_length": body_length,
                 "body_source": body_source.clone(),
                 "body_truncated": body_truncated,
+                "dedupe_ttl_seconds": ttl_seconds,
+                "scan_source": scan_source.clone(),
                 "chunk_count": null,
                 "request_count": null,
                 "status": "pending"
@@ -510,7 +534,7 @@ impl ProbeRuntime {
             bark_body: bark.body.clone(),
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_key,
-            ttl_seconds: PROBE_EVENT_TTL_SECONDS,
+            ttl_seconds,
             source,
             payload,
         }
@@ -847,6 +871,9 @@ pub struct ProbeEventInput {
     thread_title: Option<String>,
     last_assistant_message: Option<String>,
     body_source: Option<String>,
+    scan_source: Option<String>,
+    ttl_seconds: Option<i64>,
+    source_override: Option<String>,
     hook_kind: String,
 }
 
@@ -872,6 +899,9 @@ impl ProbeEventInput {
             thread_title: None,
             last_assistant_message: last_assistant_message.map(ToString::to_string),
             body_source: last_assistant_message.map(|_| "last_assistant_message".to_string()),
+            scan_source: None,
+            ttl_seconds: None,
+            source_override: None,
             hook_kind: if kind.trim().is_empty() {
                 "hook-stop".to_string()
             } else {
@@ -905,6 +935,9 @@ impl ProbeEventInput {
                 .filter(|value| !value.is_empty())
                 .map(ToString::to_string)
                 .or_else(|| last_assistant_message.map(|_| "last_assistant_message".to_string())),
+            scan_source: None,
+            ttl_seconds: None,
+            source_override: None,
             hook_kind: "completion".to_string(),
         }
     }
@@ -930,6 +963,13 @@ impl ProbeEventInput {
         if self.last_assistant_message.is_some() && self.body_source.is_none() {
             self.body_source = Some("last_assistant_message".to_string());
         }
+        self
+    }
+
+    pub fn with_passive_scan_source(mut self) -> Self {
+        self.scan_source = Some("passive-scan".to_string());
+        self.ttl_seconds = Some(PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS);
+        self.source_override = Some("nexushubd probe passive-scan".to_string());
         self
     }
 
@@ -1752,8 +1792,60 @@ fn probe_event_bark_text(
     }
 }
 
-fn summarize_probe_event_assistant_message(value: &str, classification: &str) -> Value {
-    let redacted = redact_output(value);
+fn probe_event_bark_message(event_type: &str, body_source: &str, fallback: &str) -> String {
+    if event_type == "reply_needed" && body_source == "proposed_plan" {
+        return "等待用户回复：Plan 已完成，正在等待确认后继续。".to_string();
+    }
+    fallback.to_string()
+}
+
+fn probe_event_bark_detail(event_type: &str, body_source: &str, redacted_body: &str) -> String {
+    if event_type == "reply_needed" && body_source == "proposed_plan" {
+        return extract_proposed_plan_text(redacted_body)
+            .unwrap_or_else(|| redacted_body.to_string());
+    }
+    redacted_body.to_string()
+}
+
+fn probe_event_dedupe_body_component(
+    event_type: &str,
+    body: &str,
+    fallback_hash_component: &str,
+) -> String {
+    if event_type == "reply_needed" {
+        if let Some(turn_id) = prefixed_body_value(body, "turn_id:") {
+            return format!("turn:{turn_id}");
+        }
+        if let Some(call_id) = prefixed_body_value(body, "call_id:") {
+            return format!("call:{call_id}");
+        }
+        if let Some(call_id) = prefixed_body_value(body, "Call ID：") {
+            return format!("call:{call_id}");
+        }
+        if let Some(turn_id) = prefixed_body_value(body, "Turn ID：") {
+            return format!("turn:{turn_id}");
+        }
+    }
+    fallback_hash_component.to_string()
+}
+
+fn prefixed_body_value(body: &str, prefix: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn summarize_probe_event_assistant_message(
+    value: &str,
+    classification: &str,
+    body_source: &str,
+) -> Value {
+    let redacted = if classification == "reply_needed" && body_source == "proposed_plan" {
+        extract_proposed_plan_text(&redact_output(value)).unwrap_or_else(|| redact_output(value))
+    } else {
+        redact_output(value)
+    };
     let summary = truncate_utf8_with_marker(&redacted, PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
     json!({
         "summary": summary,
@@ -2125,6 +2217,83 @@ mod tests {
             "reply_needed"
         );
         assert!(event.bark_body.contains("待回复内容"));
+    }
+
+    #[test]
+    fn reply_needed_plan_bark_body_uses_extracted_plan_without_xml_tags() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-plan"),
+            Some("turn-plan"),
+            Some("thread-plan"),
+            Some("/tmp/rollout-plan.jsonl"),
+            Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "reply-needed");
+        assert!(event
+            .bark_body
+            .contains("状态说明：等待用户回复：Plan 已完成，正在等待确认后继续。"));
+        assert!(event.bark_body.contains("# 修复计划\n- 等待确认"));
+        assert!(!event.bark_body.contains("<proposed_plan>"));
+        assert!(!event.bark_body.contains("</proposed_plan>"));
+        assert_eq!(event.payload["bark"]["body_source"], "proposed_plan");
+        assert!(event.payload["body_summary"]
+            .as_str()
+            .unwrap()
+            .contains("# 修复计划\n- 等待确认"));
+        assert!(!event.payload["body_summary"]
+            .as_str()
+            .unwrap()
+            .contains("<proposed_plan>"));
+        assert!(!event.payload["last_assistant_message"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("<proposed_plan>"));
+    }
+
+    #[test]
+    fn passive_scan_status_events_use_six_hour_ttl_and_scan_metadata() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let passive = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-passive"),
+                Some("turn-passive"),
+                Some("thread-passive"),
+                None,
+                Some("等待用户选择"),
+                "reply-needed",
+            )
+            .with_passive_scan_source(),
+        );
+
+        assert_eq!(passive.kind, "reply-needed");
+        assert_eq!(passive.ttl_seconds, 6 * 60 * 60);
+        assert_eq!(passive.source, "nexushubd probe passive-scan");
+        assert_eq!(passive.payload["scan_source"], "passive-scan");
+        assert_eq!(passive.payload["dedupe_ttl_seconds"], 6 * 60 * 60);
+
+        let hook = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-hook"),
+            Some("turn-hook"),
+            Some("thread-hook"),
+            None,
+            Some("等待用户选择"),
+            "reply-needed",
+        ));
+
+        assert_eq!(hook.ttl_seconds, PROBE_EVENT_TTL_SECONDS);
+        assert_eq!(hook.payload["dedupe_ttl_seconds"], PROBE_EVENT_TTL_SECONDS);
+        assert_eq!(hook.payload["scan_source"], "hook-stop");
     }
 
     #[test]

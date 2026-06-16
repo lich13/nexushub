@@ -84,6 +84,16 @@ pub struct UserInputAnswer {
     pub note: Option<String>,
 }
 
+pub fn extract_proposed_plan_text(text: &str) -> Option<String> {
+    let (_, after_start) = text.split_once("<proposed_plan>")?;
+    let plan = after_start
+        .split_once("</proposed_plan>")
+        .map(|(body, _)| body)
+        .unwrap_or(after_start)
+        .trim();
+    (!plan.is_empty()).then(|| plan.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageBlock {
     pub id: String,
