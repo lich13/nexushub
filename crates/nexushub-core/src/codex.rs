@@ -1204,6 +1204,50 @@ pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
     Ok(scan.latest_message)
 }
 
+pub fn rollout_completion_last_agent_message(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<String>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
+    let mut latest_assistant = None;
+    let mut latest_task_complete = None;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(message) = parse_message_event(&value) {
+            if message.role == "assistant" && !message.text.trim().is_empty() {
+                latest_assistant = Some(message.text);
+            }
+        }
+        if rollout_event_type(&value) != "task_complete" {
+            continue;
+        }
+        if let Some(expected_turn_id) = turn_id {
+            let event_turn = event_turn_id(&value);
+            if event_turn.as_deref() != Some(expected_turn_id) {
+                continue;
+            }
+        }
+        let payload = value.get("payload").unwrap_or(&value);
+        let last_agent_message = value
+            .get("last_agent_message")
+            .or_else(|| payload.get("last_agent_message"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(str::to_string);
+        if last_agent_message.is_some() {
+            latest_task_complete = last_agent_message;
+        }
+    }
+    Ok(latest_task_complete.or(latest_assistant))
+}
+
 fn latest_active_task_turn(active_tasks: &[Option<String>]) -> Option<String> {
     active_tasks.iter().rev().find_map(Clone::clone)
 }

@@ -270,7 +270,14 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     assert_eq!(hook.kind, "hook-stop");
     assert_eq!(hook.thread_id.as_deref(), Some("thread-a"));
     assert_eq!(hook.dedupe_namespace, "probe_event");
-    assert_eq!(hook.dedupe_key, "hook-stop:thread-a:turn-1");
+    assert!(hook
+        .dedupe_key
+        .starts_with("hook-stop:thread-a:turn-1:hook_stop:"));
+    assert!(hook.payload["bark"].get("body").is_none());
+    assert_eq!(
+        hook.payload["bark"]["body_sha256"],
+        hook.payload["body_sha256"]
+    );
     assert_eq!(hook.ttl_seconds, 300);
     assert_eq!(hook.payload["notify_completion"], false);
     assert_eq!(hook.payload["auto_reply"], false);
@@ -288,7 +295,10 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
         Some("turn-1"),
     ));
     assert_eq!(completion.kind, "completion");
-    assert_eq!(completion.dedupe_key, "completion:thread-a:turn-1");
+    assert!(completion
+        .dedupe_key
+        .starts_with("completion:thread-a:turn-1:completion:"));
+    assert!(completion.payload["bark"].get("body").is_none());
     assert_eq!(completion.payload["notify_completion"], true);
     assert_eq!(completion.payload["auto_reply"], false);
 

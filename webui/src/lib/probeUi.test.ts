@@ -193,10 +193,13 @@ describe("Probe UI helpers", () => {
         body_length: 324,
         source: "nexushubd probe passive-scan",
         bark: {
+          title: "等待回复：Plan Mode 修复",
           sent: true,
           skipped: false,
           http_status: 200,
-          dedupe_hit: false
+          dedupe_hit: false,
+          chunk_count: 4,
+          request_count: 4
         },
         dedupe: {
           claimed: true,
@@ -225,12 +228,49 @@ describe("Probe UI helpers", () => {
     expect(card.details).toEqual(expect.arrayContaining([
       { label: "线程", value: "thread-a" },
       { label: "Turn", value: "turn-a" },
-      { label: "Body", value: "324 bytes · sha256 abc123" }
+      { label: "Body", value: "324 bytes · sha256 abc123" },
+      { label: "Bark", value: "等待回复：Plan Mode 修复 · 4 段 · 4 请求" }
     ]));
     expect(card.summary).not.toBe("Raw event message");
     expect(JSON.stringify(card)).not.toContain("secret-device-key");
     expect(JSON.stringify(card)).not.toContain("secret-bark-key");
     expect(JSON.stringify(card)).not.toContain("secret-token");
+  });
+
+  test("event cards show safe Bark chunk metadata without rendering stored body fields", () => {
+    const event: ProbeEvent = {
+      id: "event-bark-body",
+      kind: "completion",
+      thread_id: "thread-safe",
+      source: "nexushubd probe notify-completion",
+      payload: {
+        event_type: "completion",
+        thread_title: "完整反馈测试",
+        body_summary: "安全摘要",
+        body_sha256: "hash",
+        body_length: 12000,
+        body_source: "task_complete.last_agent_message",
+        body_truncated: true,
+        bark: {
+          title: "线程正常完成：完整反馈测试",
+          body: "完整正文不应出现在卡片",
+          sent: true,
+          http_status: 200,
+          chunk_count: 6,
+          request_count: 6
+        }
+      },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    const card = probeEventCard(event);
+
+    expect(card.summary).toBe("安全摘要");
+    expect(card.details).toEqual(expect.arrayContaining([
+      { label: "Body", value: "12000 bytes · sha256 hash · 已截断 · task_complete.last_agent_message" },
+      { label: "Bark", value: "线程正常完成：完整反馈测试 · 6 段 · 6 请求" }
+    ]));
+    expect(JSON.stringify(card)).not.toContain("完整正文不应出现在卡片");
   });
 
   test("marks skipped Bark and duplicate dedupe outcomes with warning labels", () => {

@@ -7,7 +7,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     app_server::AppServerBridge,
-    codex::{resolve_codex_paths, rollout_latest_assistant_message},
+    codex::{
+        list_threads, resolve_codex_paths, rollout_completion_last_agent_message,
+        rollout_latest_assistant_message,
+    },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
         Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
@@ -40,7 +43,7 @@ const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
-const PROBE_BARK_BODY_CHUNK_BYTES: usize = 8_192;
+const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -291,10 +294,14 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             );
         }
         ProbeCommand::NotifyCompletion { thread_id, turn_id } => {
-            let event = probe_runtime(config).build_event(ProbeEventInput::notify_completion(
+            let stdin_payload = read_optional_stdin_json()?;
+            let input = notify_completion_context(
+                config,
+                stdin_payload.as_ref(),
                 thread_id.as_deref(),
                 turn_id.as_deref(),
-            ));
+            )?;
+            let event = probe_runtime(config).build_event(input);
             let (outcome, bark) = record_probe_event_with_bark(config, &db, event).await?;
             println!(
                 "{}",
@@ -402,7 +409,7 @@ async fn handle_hook_stop_command(
     turn_id: Option<String>,
     kind: String,
 ) -> Result<HookStopResult> {
-    let stdin_payload = read_hook_stop_stdin_json()?;
+    let stdin_payload = read_optional_stdin_json()?;
     let payload_thread_id = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
     });
@@ -449,7 +456,7 @@ async fn handle_hook_stop_command(
     handle_built_probe_event(config, db, event).await
 }
 
-fn read_hook_stop_stdin_json() -> Result<Option<Value>> {
+fn read_optional_stdin_json() -> Result<Option<Value>> {
     let stdin = io::stdin();
     if stdin.is_terminal() {
         return Ok(None);
@@ -463,7 +470,7 @@ fn read_hook_stop_stdin_json() -> Result<Option<Value>> {
     }
     serde_json::from_str(&buffer)
         .map(Some)
-        .context("parse hook stop stdin json")
+        .context("parse stdin json")
 }
 
 fn read_string_field(value: &Value, keys: &[&str]) -> Option<String> {
@@ -475,6 +482,101 @@ fn read_string_field(value: &Value, keys: &[&str]) -> Option<String> {
             .filter(|text| !text.is_empty())
             .map(str::to_string)
     })
+}
+
+fn notify_completion_context(
+    config: &Config,
+    payload: Option<&Value>,
+    cli_thread_id: Option<&str>,
+    cli_turn_id: Option<&str>,
+) -> Result<ProbeEventInput> {
+    let payload_thread_id = payload.and_then(|value| {
+        read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
+    });
+    let payload_turn_id =
+        payload.and_then(|value| read_string_field(value, &["turn_id", "turnId"]));
+    let thread_id = cli_thread_id.map(str::to_string).or(payload_thread_id);
+    let turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id);
+    let session_id =
+        payload.and_then(|value| read_string_field(value, &["session_id", "sessionId"]));
+    let transcript_path =
+        payload.and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
+    let payload_thread_title = payload
+        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]));
+    let explicit_message = payload.and_then(|value| {
+        read_string_field(
+            value,
+            &[
+                "last_assistant_message",
+                "lastAssistantMessage",
+                "last_agent_message",
+                "lastAgentMessage",
+                "body",
+                "message",
+            ],
+        )
+    });
+    let resolved_thread = if transcript_path.is_none() && thread_id.is_some() {
+        notify_completion_thread_summary(config, thread_id.as_deref().unwrap())
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let resolved_transcript_path = transcript_path.or_else(|| {
+        resolved_thread
+            .as_ref()
+            .and_then(|thread| thread.rollout_path.as_ref())
+            .map(|path| path.to_string_lossy().to_string())
+    });
+    let thread_title = payload_thread_title.or_else(|| {
+        resolved_thread
+            .as_ref()
+            .map(|thread| thread.title.clone())
+            .filter(|title| !title.trim().is_empty())
+    });
+    let (message, body_source) = if let Some(message) = explicit_message {
+        (Some(message), Some("stdin.last_agent_message".to_string()))
+    } else if let Some(path) = resolved_transcript_path.as_deref() {
+        match rollout_completion_last_agent_message(Path::new(path), turn_id.as_deref())? {
+            Some(message) => (
+                Some(message),
+                Some("task_complete.last_agent_message".to_string()),
+            ),
+            None => (None, None),
+        }
+    } else if let Some(message) = resolved_thread
+        .as_ref()
+        .and_then(|thread| thread.latest_message.clone())
+    {
+        (Some(message), Some("thread.latest_message".to_string()))
+    } else {
+        (None, None)
+    };
+    Ok(ProbeEventInput::notify_completion_with_context(
+        thread_id.as_deref().or(session_id.as_deref()),
+        turn_id.as_deref(),
+        session_id.as_deref(),
+        resolved_transcript_path.as_deref(),
+        message.as_deref(),
+        body_source.as_deref(),
+    )
+    .with_thread_title(thread_title.as_deref()))
+}
+
+fn notify_completion_thread_summary(
+    config: &Config,
+    thread_id: &str,
+) -> Result<Option<nexushub_core::codex::ThreadSummary>> {
+    let resolved = resolve_codex_paths(
+        &config.codex.home,
+        config.codex.app_server_socket.as_deref(),
+    );
+    Ok(
+        list_threads(&resolved.codex_paths(), None, Some(thread_id), 1)?
+            .into_iter()
+            .find(|thread| thread.id == thread_id),
+    )
 }
 
 fn probe_runtime(config: &Config) -> ProbeRuntime {
@@ -880,7 +982,7 @@ async fn record_probe_event_with_bark(
     let bark = handle_probe_event_bark(config, db, &event, claimed).await?;
     if claimed {
         let mut payload = event.payload.clone();
-        payload["bark"] = serde_json::to_value(&bark)?;
+        merge_bark_outcome_payload(&mut payload, &bark)?;
         payload["dedupe"] = json!({
             "namespace": &event.dedupe_namespace,
             "key": &event.dedupe_key,
@@ -905,6 +1007,20 @@ async fn record_probe_event_with_bark(
     }
 
     Ok((outcome, bark))
+}
+
+fn merge_bark_outcome_payload(payload: &mut Value, bark: &ProbeBarkOutcome) -> Result<()> {
+    let outcome = serde_json::to_value(bark)?;
+    if let Some(existing) = payload.get_mut("bark").and_then(Value::as_object_mut) {
+        if let Some(outcome_object) = outcome.as_object() {
+            for (key, value) in outcome_object {
+                existing.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        payload["bark"] = outcome;
+    }
+    Ok(())
 }
 
 async fn handle_probe_event_bark(
@@ -1042,7 +1158,7 @@ async fn send_bark_notification(
             ));
         }
     };
-    let chunks = utf8_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
+    let chunks = bark_body_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
     let chunk_count = chunks.len();
     let mut last_status = None;
     let mut request_count = 0usize;
@@ -1137,6 +1253,26 @@ fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
         start = end;
     }
     chunks
+}
+
+fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    let raw_chunks = utf8_chunks(value, max_bytes);
+    let chunk_count = raw_chunks.len();
+    if chunk_count <= 1 {
+        return raw_chunks;
+    }
+    let prefix_bytes = (1..=chunk_count)
+        .map(|index| format!("第 {index}/{chunk_count} 段\n\n").len())
+        .max()
+        .unwrap_or(0);
+    let content_limit = max_bytes.saturating_sub(prefix_bytes).max(1);
+    let content_chunks = utf8_chunks(value, content_limit);
+    let final_count = content_chunks.len();
+    content_chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| format!("第 {}/{final_count} 段\n\n{chunk}", index + 1))
+        .collect()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1497,20 +1633,23 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     for status in ["reply-needed", "recoverable"] {
         let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
         for thread in threads {
-            if thread.active_turn_id.as_deref().is_none()
-                && thread.active_job_id.as_deref().is_none()
-            {
-                continue;
-            }
-            let mut event =
-                probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            let (body, body_source) = probe_thread_notification_body(&thread, status);
+            let transcript_path = thread
+                .rollout_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string());
+            let mut event = probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
                     Some(thread.id.as_str()),
                     thread.active_turn_id.as_deref(),
                     Some(thread.id.as_str()),
-                    None,
-                    thread.latest_message.as_deref(),
+                    transcript_path.as_deref(),
+                    body.as_deref(),
                     status,
-                ));
+                )
+                .with_thread_title(Some(thread.title.as_str()))
+                .with_body_source(body_source.as_deref()),
+            );
             event.source = "nexushubd probe passive-scan".to_string();
             event.payload["source"] = json!(event.source.clone());
             event.payload["thread_title"] = json!(thread.title.clone());
@@ -1534,6 +1673,83 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
         }
     }
     Ok(recorded)
+}
+
+fn probe_thread_notification_body(
+    thread: &nexushub_core::codex::ThreadSummary,
+    status: &str,
+) -> (Option<String>, Option<String>) {
+    if status == "reply-needed" {
+        if let Some(elicitation) = &thread.pending_elicitation {
+            return (
+                Some(format_pending_elicitation(elicitation)),
+                Some("request_user_input".to_string()),
+            );
+        }
+        if let Some(message) = thread
+            .latest_message
+            .as_deref()
+            .filter(|value| value.contains("<proposed_plan>") && value.contains("</proposed_plan>"))
+        {
+            return (Some(message.to_string()), Some("proposed_plan".to_string()));
+        }
+        if let Some(path) = thread.rollout_path.as_deref() {
+            if let Ok(Some(message)) =
+                rollout_completion_last_agent_message(path, thread.active_turn_id.as_deref())
+            {
+                if message.contains("<proposed_plan>") && message.contains("</proposed_plan>") {
+                    return (Some(message), Some("proposed_plan".to_string()));
+                }
+            }
+        }
+    }
+    if status == "recoverable" {
+        if let Some(message) = thread.latest_message.as_deref() {
+            return (
+                Some(message.to_string()),
+                Some("latest_exception".to_string()),
+            );
+        }
+    }
+    (
+        thread.latest_message.clone(),
+        thread
+            .latest_message
+            .as_ref()
+            .map(|_| "latest_message".to_string()),
+    )
+}
+
+fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
+    let mut lines = Vec::new();
+    lines.push("request_user_input 等待回复".to_string());
+    for (index, question) in elicitation.questions.iter().enumerate() {
+        let number = index + 1;
+        if let Some(header) = question
+            .header
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            lines.push(format!("{number}. {header}"));
+            lines.push(format!("问题：{}", question.question));
+        } else {
+            lines.push(format!("{number}. {}", question.question));
+        }
+        for (option_index, option) in question.options.iter().enumerate() {
+            let marker = option_index + 1;
+            match option
+                .description
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                Some(description) => {
+                    lines.push(format!("   {marker}) {} - {description}", option.label));
+                }
+                None => lines.push(format!("   {marker}) {}", option.label)),
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn add_probe_events_maintenance_fields(
@@ -1970,6 +2186,73 @@ hooks = false
     }
 
     #[tokio::test]
+    async fn notify_completion_uses_complete_last_agent_message_from_rollout_without_storing_body()
+    {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-notify-completion-rollout");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let final_message = format!(
+            "最终反馈第一行\n{}\nAuthorization: Bearer secret-token\n末尾唯一完整反馈",
+            "完整正文".repeat(900)
+        );
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":"short assistant fallback"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":final_message}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(event.kind, "completion");
+        assert!(event.bark_body.contains("最终反馈第一行"));
+        assert!(event.bark_body.contains("完整正文完整正文"));
+        assert!(event.bark_body.contains("末尾唯一完整反馈"));
+        assert!(!event.bark_body.contains("secret-token"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(event.payload["bark"].get("body").is_none());
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
+        let stored = db.list_probe_events(10).unwrap();
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(!stored_json.contains("secret-token"));
+        assert_eq!(
+            stored[0].payload["body_summary"],
+            event.payload["body_summary"]
+        );
+        assert_eq!(
+            stored[0].payload["body_sha256"],
+            event.payload["body_sha256"]
+        );
+        assert!(stored[0].payload["bark"].get("body").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn send_bark_builds_redacted_request_and_reports_non_success() {
         let server = TestHttpServer::start_n(
             1,
@@ -2012,9 +2295,9 @@ hooks = false
     }
 
     #[tokio::test]
-    async fn send_bark_splits_long_body_on_utf8_boundaries() {
+    async fn send_bark_splits_long_body_on_utf8_boundaries_with_segment_prefix() {
         let server = TestHttpServer::start_n(
-            3,
+            11,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
         let mut config = Config::default();
@@ -2037,27 +2320,33 @@ hooks = false
 
         assert!(result.sent);
         assert_eq!(result.http_status, Some(200));
-        let requests = server.requests(3);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(result.chunk_count, 11);
+        let requests = server.requests(11);
+        assert_eq!(requests.len(), 11);
         for (index, raw) in requests.iter().enumerate() {
             assert!(raw.starts_with(&format!(
-                "POST /device-key/NexusHub%20Probe%20long%20body%20%28{}%2F3%29 ",
+                "POST /device-key/NexusHub%20Probe%20long%20body%20%28{}%2F11%29 ",
                 index + 1
             )));
             let body = raw.split("\r\n\r\n").nth(1).unwrap();
             let payload: Value = serde_json::from_str(body).unwrap();
             let chunk = payload["body"].as_str().unwrap();
+            let prefix = format!("第 {}/11 段\n\n", index + 1);
+            assert!(chunk.starts_with(&prefix));
             assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let combined = requests
             .iter()
-            .map(|raw| {
+            .enumerate()
+            .map(|(index, raw)| {
                 let body = raw.split("\r\n\r\n").nth(1).unwrap();
-                serde_json::from_str::<Value>(body).unwrap()["body"]
+                let chunk = serde_json::from_str::<Value>(body).unwrap()["body"]
                     .as_str()
                     .unwrap()
-                    .to_string()
+                    .to_string();
+                let prefix = format!("第 {}/11 段\n\n", index + 1);
+                chunk.strip_prefix(&prefix).unwrap().to_string()
             })
             .collect::<String>();
         assert_eq!(combined, request.body);
@@ -2414,8 +2703,8 @@ hooks = false
     }
 
     #[tokio::test]
-    async fn probe_thread_scan_suppresses_stale_reply_needed_when_thread_is_running() {
-        let dir = temp_test_dir("nexushub-thread-scan-running-suppression");
+    async fn probe_thread_scan_records_request_user_input_body_for_reply_needed() {
+        let dir = temp_test_dir("nexushub-thread-scan-request-user-input");
         let codex_home = dir.join(".codex");
         fs::create_dir_all(&codex_home).unwrap();
         fs::create_dir_all(codex_home.join("sessions")).unwrap();
@@ -2433,8 +2722,12 @@ hooks = false
                     "call_id": "call-choice",
                     "questions": [{
                         "id": "q1",
+                        "header": "确认",
                         "question": "Continue?",
-                        "options": []
+                        "options": [
+                            {"label": "继续", "description": "按计划执行"},
+                            {"label": "停止"}
+                        ]
                     }]
                 }
             })
@@ -2477,15 +2770,21 @@ hooks = false
         config.probe.notifications.notify_recoverable = true;
         let db = PanelDb::open(":memory:").unwrap();
         let state = AppState::new(config, db.clone());
-        db.create_job("job-live", "codex_chat", "running visible followup")
-            .unwrap();
-        db.link_job_thread("job-live", Some("stale-reply"), Some("turn-live"))
-            .unwrap();
 
         let count = run_probe_thread_scan_if_due(state).await.unwrap();
 
-        assert_eq!(count, 0);
-        assert!(db.list_probe_events(10).unwrap().is_empty());
+        assert_eq!(count, 1);
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "reply-needed");
+        assert_eq!(events[0].payload["thread_title"], "stale reply");
+        assert_eq!(events[0].payload["body_source"], "request_user_input");
+        assert_eq!(events[0].payload["body_summary"], "request_user_input 等待回复\n1. 确认\n问题：Continue?\n   1) 继续 - 按计划执行\n   2) 停止");
+        assert!(events[0].payload["bark"].get("body").is_none());
+        assert!(events[0].payload["bark"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("等待回复"));
         fs::remove_dir_all(&dir).unwrap();
     }
 

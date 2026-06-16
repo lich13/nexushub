@@ -4676,12 +4676,26 @@ mod tests {
                 payload: json!({
                     "session_id": "session-a",
                     "transcript_path": "/tmp/turn.json",
-                    "last_assistant_message": "hello",
+                    "last_assistant_message": {
+                        "summary": "hello",
+                        "sha256": "abc123"
+                    },
+                    "body_summary": "safe summary",
+                    "body_sha256": "abc123",
+                    "body_length": 9876,
+                    "body_source": "last_assistant_message",
+                    "body_truncated": true,
                     "device_key": "secret-device",
                     "bark": {
+                        "title": "等待回复：Hook event",
+                        "chunk_count": 3,
+                        "request_count": 3,
+                        "sent": true,
+                        "http_status": 200,
                         "request_url": "https://api.day.app/secret-device/title",
                         "device_key_configured": true,
-                        "dedupe_key": "hook-stop:thread-a"
+                        "dedupe_key": "hook-stop:thread-a",
+                        "body": "完整 Bark 正文不应返回"
                     },
                     "nested": {
                         "token": "abc",
@@ -4728,6 +4742,15 @@ mod tests {
         assert_eq!(event["payload"]["bark"]["request_url"], "[redacted]");
         assert_eq!(event["payload"]["bark"]["device_key_configured"], true);
         assert_eq!(event["payload"]["bark"]["dedupe_key"], "hook-stop:thread-a");
+        assert_eq!(event["payload"]["bark"]["title"], "等待回复：Hook event");
+        assert_eq!(event["payload"]["bark"]["chunk_count"], 3);
+        assert_eq!(event["payload"]["bark"]["request_count"], 3);
+        assert!(event["payload"]["bark"].get("body").is_none());
+        assert_eq!(event["payload"]["body_summary"], "safe summary");
+        assert_eq!(event["payload"]["body_sha256"], "abc123");
+        assert_eq!(event["payload"]["body_length"], 9876);
+        assert_eq!(event["payload"]["body_source"], "last_assistant_message");
+        assert_eq!(event["payload"]["body_truncated"], true);
         assert_eq!(event["payload"]["nested"]["token"], "[redacted]");
         assert_eq!(
             event["payload"]["nested"]["headers"][0]["Authorization"],
@@ -4735,7 +4758,13 @@ mod tests {
         );
         assert_eq!(event["payload"]["session_id"], "session-a");
         assert_eq!(event["payload"]["transcript_path"], "/tmp/turn.json");
-        assert_eq!(event["payload"]["last_assistant_message"], "hello");
+        assert_eq!(
+            event["payload"]["last_assistant_message"]["summary"],
+            "hello"
+        );
+        assert!(!serde_json::to_string(event)
+            .unwrap()
+            .contains("完整 Bark 正文不应返回"));
     }
 
     #[tokio::test]

@@ -327,6 +327,9 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
   const turnId = cleanProbeEventText(stringFromRecord(payload, "turn_id"));
   const bodyLength = numberFromRecord(payload, "body_length");
   const bodySha = cleanProbeEventText(stringFromRecord(payload, "body_sha256"));
+  const bodySource = cleanProbeEventText(stringFromRecord(payload, "body_source"));
+  const bodyTruncated = payload.body_truncated === true;
+  const bark = recordFromRecord(payload, "bark");
   const reason = cleanProbeEventText(stringFromRecord(payload, "reason_label")) || cleanProbeEventText(stringFromRecord(payload, "reason"));
   const summary = structuredProbeEventSummary(event, payload);
   const details: Array<{ label: string; value: string }> = [];
@@ -338,10 +341,14 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
       label: "Body",
       value: [
         bodyLength !== null ? `${bodyLength} bytes` : "",
-        bodySha ? `sha256 ${bodySha}` : ""
+        bodySha ? `sha256 ${bodySha}` : "",
+        bodyTruncated ? "已截断" : "",
+        bodySource
       ].filter(Boolean).join(" · ")
     });
   }
+  const barkDetail = probeEventBarkDetail(bark);
+  if (barkDetail) details.push({ label: "Bark", value: barkDetail });
   details.push({ label: "来源", value: source });
 
   return {
@@ -359,6 +366,18 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
     dedupe: probeEventDedupeBadge(event),
     details
   };
+}
+
+function probeEventBarkDetail(bark: Record<string, unknown> | null): string {
+  if (!bark) return "";
+  const title = cleanProbeEventText(stringFromRecord(bark, "title"));
+  const chunkCount = numberFromRecord(bark, "chunk_count");
+  const requestCount = numberFromRecord(bark, "request_count");
+  return [
+    title,
+    chunkCount !== null && chunkCount > 1 ? `${chunkCount} 段` : "",
+    requestCount !== null && requestCount > 1 ? `${requestCount} 请求` : ""
+  ].filter(Boolean).join(" · ");
 }
 
 export function probeEventReadableSummary(event: ProbeEvent): string {

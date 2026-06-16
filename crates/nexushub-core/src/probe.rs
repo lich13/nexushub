@@ -53,6 +53,15 @@ fn redact_probe_event_string(value: &str) -> String {
 fn redact_probe_event_json(value: &mut Value) {
     match value {
         Value::Object(map) => {
+            let remove_bark_body = map.get("body").is_some()
+                && map.contains_key("device_key_configured")
+                && (map.contains_key("sent")
+                    || map.contains_key("skipped")
+                    || map.contains_key("chunk_count")
+                    || map.contains_key("request_count"));
+            if remove_bark_body {
+                map.remove("body");
+            }
             for (key, value) in map.iter_mut() {
                 let lower = key.to_ascii_lowercase();
                 if lower == "device_key_configured" {
@@ -388,17 +397,22 @@ impl ProbeRuntime {
         let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
         let thread_component = event_thread_id.as_deref().unwrap_or("unknown-thread");
         let turn_component = input.turn_id.as_deref().unwrap_or("unknown-turn");
-        let dedupe_key = format!(
-            "{event_kind}:{}:{}",
-            dedupe_component(thread_component),
-            dedupe_component(turn_component)
-        );
         let notify_completion = matches!(input.kind, ProbeEventInputKind::NotifyCompletion);
+        let raw_body = input
+            .last_assistant_message
+            .as_deref()
+            .unwrap_or_else(|| default_probe_event_body(&event_type));
+        let redacted_body = redact_output(raw_body);
         let last_assistant_message = input
             .last_assistant_message
             .as_deref()
             .map(|value| summarize_probe_event_assistant_message(value, &event_type));
-        let (title, message) = probe_event_text(&event_type);
+        let (default_title, message) = probe_event_text(&event_type);
+        let title = input
+            .thread_title
+            .as_deref()
+            .unwrap_or(default_title.as_str())
+            .to_string();
         let body_summary = last_assistant_message
             .as_ref()
             .and_then(|value| value.get("summary"))
@@ -416,6 +430,24 @@ impl ProbeRuntime {
             .and_then(Value::as_str)
             .map(ToString::to_string)
             .unwrap_or_else(|| hex::encode(Sha256::digest(message.as_bytes())));
+        let body_source = input
+            .body_source
+            .as_deref()
+            .unwrap_or(if input.last_assistant_message.is_some() {
+                "last_assistant_message"
+            } else {
+                "default"
+            })
+            .to_string();
+        let body_truncated = body_summary.contains("[truncated]");
+        let body_hash_component = body_sha256.get(..16).unwrap_or(body_sha256.as_str());
+        let dedupe_key = format!(
+            "{event_kind}:{}:{}:{}:{}",
+            dedupe_component(thread_component),
+            dedupe_component(turn_component),
+            dedupe_component(&event_type),
+            dedupe_component(body_hash_component)
+        );
         let beijing_time = Utc::now()
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
             .format("%Y-%m-%d %H:%M:%S CST")
@@ -425,7 +457,8 @@ impl ProbeRuntime {
             event_thread_id.as_deref(),
             &title,
             &message,
-            Some(&body_summary),
+            Some(&redacted_body),
+            &beijing_time,
         );
         let source = if notify_completion {
             "nexushubd probe notify-completion".to_string()
@@ -443,6 +476,8 @@ impl ProbeRuntime {
             "body_summary": body_summary.clone(),
             "body_sha256": body_sha256.clone(),
             "body_length": body_length,
+            "body_source": body_source.clone(),
+            "body_truncated": body_truncated,
             "beijing_time": beijing_time.clone(),
             "reason_label": title.clone(),
             "source": source.clone(),
@@ -455,7 +490,13 @@ impl ProbeRuntime {
             "event_type": event_type.clone(),
             "bark": {
                 "title": bark.title.clone(),
-                "body": bark.body.clone()
+                "body_sha256": body_sha256.clone(),
+                "body_length": body_length,
+                "body_source": body_source.clone(),
+                "body_truncated": body_truncated,
+                "chunk_count": null,
+                "request_count": null,
+                "status": "pending"
             }
         });
         ProbeBuiltEvent {
@@ -803,7 +844,9 @@ pub struct ProbeEventInput {
     turn_id: Option<String>,
     session_id: Option<String>,
     transcript_path: Option<String>,
+    thread_title: Option<String>,
     last_assistant_message: Option<String>,
+    body_source: Option<String>,
     hook_kind: String,
 }
 
@@ -826,7 +869,9 @@ impl ProbeEventInput {
             turn_id: turn_id.map(ToString::to_string),
             session_id: session_id.map(ToString::to_string),
             transcript_path: transcript_path.map(ToString::to_string),
+            thread_title: None,
             last_assistant_message: last_assistant_message.map(ToString::to_string),
+            body_source: last_assistant_message.map(|_| "last_assistant_message".to_string()),
             hook_kind: if kind.trim().is_empty() {
                 "hook-stop".to_string()
             } else {
@@ -836,15 +881,88 @@ impl ProbeEventInput {
     }
 
     pub fn notify_completion(thread_id: Option<&str>, turn_id: Option<&str>) -> Self {
+        Self::notify_completion_with_context(thread_id, turn_id, None, None, None, None)
+    }
+
+    pub fn notify_completion_with_context(
+        thread_id: Option<&str>,
+        turn_id: Option<&str>,
+        session_id: Option<&str>,
+        transcript_path: Option<&str>,
+        last_assistant_message: Option<&str>,
+        body_source: Option<&str>,
+    ) -> Self {
         Self {
             kind: ProbeEventInputKind::NotifyCompletion,
             thread_id: thread_id.map(ToString::to_string),
             turn_id: turn_id.map(ToString::to_string),
-            session_id: None,
-            transcript_path: None,
-            last_assistant_message: None,
+            session_id: session_id.map(ToString::to_string),
+            transcript_path: transcript_path.map(ToString::to_string),
+            thread_title: None,
+            last_assistant_message: last_assistant_message.map(ToString::to_string),
+            body_source: body_source
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| last_assistant_message.map(|_| "last_assistant_message".to_string())),
             hook_kind: "completion".to_string(),
         }
+    }
+
+    pub fn with_thread_title(mut self, thread_title: Option<&str>) -> Self {
+        self.thread_title = thread_title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        self
+    }
+
+    pub fn with_body_source(mut self, body_source: Option<&str>) -> Self {
+        self.body_source = body_source
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        self
+    }
+
+    pub fn with_last_assistant_message(mut self, message: Option<&str>) -> Self {
+        self.last_assistant_message = message.map(ToString::to_string);
+        if self.last_assistant_message.is_some() && self.body_source.is_none() {
+            self.body_source = Some("last_assistant_message".to_string());
+        }
+        self
+    }
+
+    pub fn thread_id(&self) -> Option<&str> {
+        self.thread_id.as_deref()
+    }
+
+    pub fn turn_id(&self) -> Option<&str> {
+        self.turn_id.as_deref()
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    pub fn transcript_path(&self) -> Option<&str> {
+        self.transcript_path.as_deref()
+    }
+
+    pub fn last_assistant_message(&self) -> Option<&str> {
+        self.last_assistant_message.as_deref()
+    }
+
+    pub fn body_source(&self) -> Option<&str> {
+        self.body_source.as_deref()
+    }
+
+    pub fn thread_title(&self) -> Option<&str> {
+        self.thread_title.as_deref()
+    }
+
+    pub fn is_notify_completion(&self) -> bool {
+        matches!(self.kind, ProbeEventInputKind::NotifyCompletion)
     }
 
     fn event_kind(&self) -> &str {
@@ -890,6 +1008,7 @@ pub struct ProbeBuiltEvent {
     pub title: String,
     pub message: String,
     pub bark_title: String,
+    #[serde(skip)]
     pub bark_body: String,
     pub dedupe_namespace: String,
     pub dedupe_key: String,
@@ -1497,7 +1616,7 @@ fn classify_hook_stop_event(body: &str) -> Option<(&'static str, &'static str, &
         return Some(("reply_needed", "需要回复", "reply_needed"));
     }
     if is_probe_terminal_stop_error(trimmed) {
-        return Some(("recoverable", "可恢复任务", "recoverable"));
+        return Some(("recoverable", "线程异常停止", "recoverable"));
     }
     Some(("completion", "任务完成", "completion"))
 }
@@ -1559,7 +1678,7 @@ fn probe_event_text(event_type: &str) -> (String, String) {
             "Codex 正在等待用户回复或选择后继续。".to_string(),
         ),
         "recoverable" => (
-            "可恢复任务".to_string(),
+            "线程异常停止".to_string(),
             "Codex 任务可恢复，需要查看并手动处理。".to_string(),
         ),
         _ => (
@@ -1569,37 +1688,52 @@ fn probe_event_text(event_type: &str) -> (String, String) {
     }
 }
 
+fn default_probe_event_body(event_type: &str) -> &'static str {
+    match event_type {
+        "completion" => "Codex 任务已正常完成。",
+        "reply_needed" => "Codex 正在等待用户回复或选择后继续。",
+        "recoverable" => "Codex 任务可恢复，需要查看并手动处理。",
+        _ => "Stop Hook 事件已记录。",
+    }
+}
+
 fn probe_event_bark_text(
     event_type: &str,
     thread_id: Option<&str>,
     title: &str,
     message: &str,
     detail: Option<&str>,
+    event_time: &str,
 ) -> ProbeBarkText {
     match event_type {
         "completion" => ProbeBarkText {
             title: format!("线程正常完成：{}", title),
             body: format!(
-                "线程 ID：{}\n\n最后反馈：{}\n\n{}",
+                "线程标题：{}\n线程 ID：{}\n最后反馈时间：{}\n\n最后反馈：\n{}",
+                title,
                 thread_id.unwrap_or("-"),
-                message,
-                detail.unwrap_or("Codex 会话已完成。")
+                event_time,
+                detail.unwrap_or(message)
             ),
         },
         "reply_needed" => ProbeBarkText {
             title: format!("等待回复：{}", title),
             body: format!(
-                "线程 ID：{}\n\n状态说明：{}\n\n待回复内容：\n{}",
+                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n状态说明：{}\n\n待回复内容：\n{}",
+                title,
                 thread_id.unwrap_or("-"),
+                event_time,
                 message,
                 detail.unwrap_or(message)
             ),
         },
         "recoverable" => ProbeBarkText {
-            title: format!("线程可恢复：{}", title),
+            title: format!("线程异常停止：{}", title),
             body: format!(
-                "线程 ID：{}\n\n原因：{}\n\n最后异常信息：\n{}",
+                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n原因：{}\n\n最后异常信息：\n{}",
+                title,
                 thread_id.unwrap_or("-"),
+                event_time,
                 title,
                 detail.unwrap_or(message)
             ),
@@ -1607,8 +1741,10 @@ fn probe_event_bark_text(
         _ => ProbeBarkText {
             title: format!("探针事件：{}", title),
             body: format!(
-                "线程 ID：{}\n\n事件说明：{}\n\n{}",
+                "线程标题：{}\n线程 ID：{}\n事件时间：{}\n\n事件说明：{}\n\n{}",
+                title,
                 thread_id.unwrap_or("-"),
+                event_time,
                 message,
                 title
             ),
@@ -1752,7 +1888,10 @@ mod tests {
         let mut config = Config::default();
         config.codex.host_label = "probe-test".to_string();
         let runtime = ProbeRuntime::new(config, PlatformPaths::current());
-        let message = format!("first line\nTOKEN=secret-token\n{}", "完成".repeat(3000));
+        let message = format!(
+            "first line\nTOKEN=secret-token\n{}UNIQUE_FULL_BARK_TAIL",
+            "完成".repeat(3000)
+        );
 
         let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
             Some("thread-a"),
@@ -1774,15 +1913,28 @@ mod tests {
             .contains("状态说明：Codex 正在等待用户回复或选择后继续。"));
         assert!(event.bark_body.contains("待回复内容："));
         assert!(event.bark_body.contains("[redacted sensitive line]"));
+        assert!(event.bark_body.contains("完成完成完成"));
+        assert!(event.bark_body.contains("UNIQUE_FULL_BARK_TAIL"));
+        assert!(!event.bark_body.contains("[truncated]"));
         assert!(event.payload["event_type"].as_str().unwrap() == "reply_needed");
         assert!(event.payload["bark"]["title"]
             .as_str()
             .unwrap()
             .contains("等待回复"));
-        assert!(event.payload["bark"]["body"]
-            .as_str()
-            .unwrap()
-            .contains("待回复内容"));
+        assert!(event.payload["bark"].get("body").is_none());
+        assert!(event.payload["bark_body"].is_null());
+        assert_eq!(
+            event.payload["bark"]["body_sha256"],
+            event.payload["body_sha256"]
+        );
+        assert_eq!(
+            event.payload["bark"]["body_length"],
+            event.payload["body_length"]
+        );
+        assert_eq!(
+            event.payload["bark"]["body_source"],
+            "last_assistant_message"
+        );
         assert!(event.payload["bark"].get("device_key").is_none());
         assert!(event.payload["bark"].get("sound").is_none());
         assert!(event.payload["bark"].get("group").is_none());
@@ -1826,6 +1978,9 @@ mod tests {
         assert!(
             stored["summary"].as_str().unwrap().len() <= PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES
         );
+        let serialized_event = serde_json::to_string(&event).unwrap();
+        assert!(!serialized_event.contains("bark_body"));
+        assert!(!serialized_event.contains("UNIQUE_FULL_BARK_TAIL"));
 
         let recoverable = runtime.build_event(ProbeEventInput::hook_stop(
             Some("thread-a"),
@@ -1833,14 +1988,14 @@ mod tests {
             "recoverable",
         ));
         assert_eq!(recoverable.event_type, "recoverable");
-        assert_eq!(recoverable.title, "可恢复任务");
+        assert_eq!(recoverable.title, "线程异常停止");
         assert_eq!(
             recoverable.message,
             "Codex 任务可恢复，需要查看并手动处理。"
         );
-        assert_eq!(recoverable.bark_title, "线程可恢复：可恢复任务");
+        assert_eq!(recoverable.bark_title, "线程异常停止：线程异常停止");
         assert!(recoverable.bark_body.contains("线程 ID：thread-a"));
-        assert!(recoverable.bark_body.contains("原因：可恢复任务"));
+        assert!(recoverable.bark_body.contains("原因：线程异常停止"));
     }
 
     #[test]
@@ -1859,14 +2014,59 @@ mod tests {
         assert_eq!(completion.event_type, "completion");
         assert_eq!(completion.message, "Codex 任务已正常完成。");
         assert_eq!(completion.bark_title, "线程正常完成：任务完成");
+        assert!(completion.bark_body.contains("线程标题：任务完成"));
         assert!(completion.bark_body.contains("线程 ID：thread-a"));
-        assert!(completion
-            .bark_body
-            .contains("最后反馈：Codex 任务已正常完成。"));
+        assert!(completion.bark_body.contains("最后反馈时间："));
+        assert!(completion.bark_body.contains("最后反馈："));
+        assert!(completion.bark_body.contains("Codex 任务已正常完成。"));
         assert_eq!(completion.payload["event_type"], "completion");
         assert_eq!(completion.payload["bark"]["title"], completion.bark_title);
-        assert_eq!(completion.payload["bark"]["body"], completion.bark_body);
+        assert!(completion.payload["bark"].get("body").is_none());
         assert!(completion.payload["bark"].get("device_key").is_none());
+    }
+
+    #[test]
+    fn event_dedupe_key_changes_when_body_hash_changes() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let first = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-dedupe"),
+            Some("turn-dedupe"),
+            Some("thread-dedupe"),
+            None,
+            Some("第一版完成反馈"),
+            "hook-stop",
+        ));
+        let second = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-dedupe"),
+            Some("turn-dedupe"),
+            Some("thread-dedupe"),
+            None,
+            Some("第二版完成反馈"),
+            "hook-stop",
+        ));
+        let duplicate = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-dedupe"),
+            Some("turn-dedupe"),
+            Some("thread-dedupe"),
+            None,
+            Some("第一版完成反馈"),
+            "hook-stop",
+        ));
+
+        assert_ne!(first.payload["body_sha256"], second.payload["body_sha256"]);
+        assert_ne!(first.dedupe_key, second.dedupe_key);
+        assert_eq!(first.dedupe_key, duplicate.dedupe_key);
+        assert!(first.dedupe_key.contains(
+            first.payload["body_sha256"]
+                .as_str()
+                .unwrap()
+                .get(..16)
+                .unwrap()
+        ));
     }
 
     #[test]
@@ -1987,7 +2187,7 @@ mod tests {
             Some("turn-product-named"),
             Some("thread-product-named"),
             None,
-            Some("NexusHub Probe v0.1.67 smoke completion finished normally."),
+            Some("NexusHub Probe v0.1.68 smoke completion finished normally."),
             "hook-stop",
         ));
 
