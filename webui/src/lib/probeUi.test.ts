@@ -267,6 +267,27 @@ describe("Probe UI helpers", () => {
     expect(JSON.stringify(card)).not.toContain("完整正文不应出现在卡片");
   });
 
+  test("event card summary is compact even when backend keeps a long safe summary", () => {
+    const event: ProbeEvent = {
+      id: "event-long-summary",
+      kind: "completion",
+      thread_id: "thread-a",
+      source: "nexushubd probe notify-completion",
+      payload: {
+        event_type: "completion",
+        body_summary: "长正文片段 ".repeat(80),
+        body_length: 4096,
+        body_sha256: "abc123"
+      },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    const card = probeEventCard(event);
+
+    expect(card.summary.length).toBeLessThanOrEqual(243);
+    expect(card.summary).toContain("...");
+  });
+
   test("marks skipped Bark and duplicate dedupe outcomes with warning labels", () => {
     const event: ProbeEvent = {
       id: "event-duplicate",

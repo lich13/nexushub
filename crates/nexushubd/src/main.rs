@@ -42,6 +42,7 @@ const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
 const PROBE_PASSIVE_SENT_MARKER_PREFIX: &str = "probe_passive_sent_marker:";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
+const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -2018,11 +2019,30 @@ fn probe_thread_passive_bark_fresh(
     if status != "reply-needed" {
         return true;
     }
+    if !thread_updated_within(thread, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS) {
+        return false;
+    }
     match body_source {
         Some("request_user_input") => thread_rollout_still_request_user_input_needed(thread),
         Some("proposed_plan") => thread_rollout_still_reply_needed(thread),
         Some(_) | None => false,
     }
+}
+
+fn thread_updated_within(
+    thread: &nexushub_core::codex::ThreadSummary,
+    max_age_seconds: i64,
+) -> bool {
+    let Some(updated_at) = thread.updated_at.as_deref() else {
+        return false;
+    };
+    let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
+        return false;
+    };
+    let age_seconds = chrono::Utc::now()
+        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
+        .num_seconds();
+    (0..=max_age_seconds).contains(&age_seconds)
 }
 
 fn thread_rollout_still_reply_needed(thread: &nexushub_core::codex::ThreadSummary) -> bool {
@@ -2811,6 +2831,38 @@ hooks = false
         assert_eq!(body, None);
         assert_eq!(source, None);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_scan_rejects_old_reply_needed_threads() {
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-old-plan".to_string(),
+            title: "旧计划线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: Some(
+                (chrono::Utc::now()
+                    - chrono::Duration::seconds(PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS + 60))
+                .to_rfc3339(),
+            ),
+            archived_at: None,
+            message_count: 1,
+            latest_message: Some(
+                "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            cwd: None,
+            model: None,
+            rollout_path: None,
+            active_turn_id: Some("turn-old".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        assert!(!probe_thread_passive_bark_fresh(
+            &thread,
+            "reply-needed",
+            Some("proposed_plan")
+        ));
     }
 
     #[tokio::test]

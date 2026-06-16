@@ -493,6 +493,10 @@ function cleanProbeEventText(value?: string | null): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+function compactProbeEventSummary(value: string): string {
+  return value.length > 240 ? `${value.slice(0, 240).trimEnd()}...` : value;
+}
+
 function structuredProbeEventSummary(event: ProbeEvent, payload: Record<string, unknown>): string {
   const candidates = [
     stringFromRecord(payload, "body_summary"),
@@ -512,7 +516,7 @@ function structuredProbeEventSummary(event: ProbeEvent, payload: Record<string, 
       const normalized = candidate.toLowerCase();
       return normalized !== kind && normalized !== kindLabel;
     });
-  if (summary) return summary;
+  if (summary) return compactProbeEventSummary(summary);
   return event.thread_id ? `线程 ${event.thread_id}` : "Probe 事件已记录";
 }
 

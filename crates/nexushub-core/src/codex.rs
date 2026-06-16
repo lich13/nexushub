@@ -339,24 +339,28 @@ pub fn list_threads(
     let session_index = read_session_index(paths).unwrap_or_default();
     let mut hidden_subagents = HashSet::new();
     for row in &mut rows {
-        let index_entry = session_index.get(&row.id);
-        if row.rollout_path.is_none() {
-            row.rollout_path = index_entry.and_then(|entry| entry.path.clone());
+        let index_entry = session_index.get(&row.summary.id);
+        if row.summary.rollout_path.is_none() {
+            row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
         }
-        if row.rollout_path.is_none() {
-            row.rollout_path = find_rollout_path(paths, &row.id);
+        if row.summary.rollout_path.is_none() {
+            row.summary.rollout_path = find_rollout_path(paths, &row.summary.id);
         }
-        if !is_usable_thread_title(&row.title) {
-            if let Some(index_entry) = index_entry {
-                if let Some(title) = index_entry.title_candidate() {
-                    row.title = title;
-                }
-            }
+        if !is_usable_thread_title(&row.summary.title) {
+            row.summary.title = index_entry
+                .and_then(SessionIndexEntry::title_candidate)
+                .or_else(|| {
+                    row.first_user_message
+                        .as_deref()
+                        .and_then(first_user_message_title)
+                })
+                .unwrap_or_else(|| "未命名线程".to_string());
         }
-        if enrich_thread_from_rollout(row).unwrap_or(false) {
-            hidden_subagents.insert(row.id.clone());
+        if enrich_thread_from_rollout(&mut row.summary).unwrap_or(false) {
+            hidden_subagents.insert(row.summary.id.clone());
         }
     }
+    let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
     rows.retain(|row| !hidden_subagents.contains(&row.id));
 
     let needle = q
@@ -771,7 +775,12 @@ pub fn message_blocks_from_events<'a>(
     block_builder.finish()
 }
 
-fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
+struct LocalThreadRow {
+    summary: ThreadSummary,
+    first_user_message: Option<String>,
+}
+
+fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>> {
     let db = paths.state_db();
     if !db.exists() {
         return Ok(Vec::new());
@@ -881,23 +890,26 @@ fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
         } else {
             ThreadStatus::Recent
         };
-        Ok(Some(ThreadSummary {
-            id,
-            title: choose_initial_thread_title(title.as_deref(), first_user_message.as_deref()),
-            status,
-            updated_at: updated_raw.as_ref().and_then(format_cell_time),
-            archived_at,
-            message_count: 0,
-            latest_message: None,
-            cwd,
-            model,
-            rollout_path: rollout_path
-                .filter(|p| !p.trim().is_empty())
-                .map(PathBuf::from),
-            active_turn_id: None,
-            active_job_id: None,
-            pending_elicitation: None,
-            last_event_kind: None,
+        Ok(Some(LocalThreadRow {
+            summary: ThreadSummary {
+                id,
+                title: choose_initial_thread_title(title.as_deref(), None),
+                status,
+                updated_at: updated_raw.as_ref().and_then(format_cell_time),
+                archived_at,
+                message_count: 0,
+                latest_message: None,
+                cwd,
+                model,
+                rollout_path: rollout_path
+                    .filter(|p| !p.trim().is_empty())
+                    .map(PathBuf::from),
+                active_turn_id: None,
+                active_job_id: None,
+                pending_elicitation: None,
+                last_event_kind: None,
+            },
+            first_user_message,
         }))
     })?;
     Ok(rows
@@ -1040,6 +1052,8 @@ fn session_index_title(value: &Value) -> Option<String> {
     [
         "title",
         "name",
+        "thread_name",
+        "threadName",
         "thread_title",
         "threadTitle",
         "session_title",
@@ -4356,6 +4370,87 @@ mod tests {
             by_id.get("index-user-thread"),
             Some(&"用 session index 首条用户消息作为标题")
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_thread_name_titles_db_row_without_rollout_path() {
+        let root = unique_temp_dir("session-index-thread-name-title");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('thread-name-thread', '', 1, 1, 'codex', '/tmp', 'Untitled', '')",
+            [],
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            json!({"id":"thread-name-thread","thread_name":"更新"}).to_string(),
+        )
+        .unwrap();
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let row = rows
+            .iter()
+            .find(|thread| thread.id == "thread-name-thread")
+            .unwrap();
+
+        assert_eq!(row.title, "更新");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_thread_name_repairs_first_user_message_title_from_old_db() {
+        let root = unique_temp_dir("session-index-thread-name-repairs-db-title");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                first_user_message TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, first_user_message, preview)
+             VALUES('thread-name-thread', '', 1, 1, 'codex', '/tmp', 'Untitled', '请根据上面的计划修复所有线上问题，并完整验收。', '')",
+            [],
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            json!({"id":"thread-name-thread","thread_name":"更新"}).to_string(),
+        )
+        .unwrap();
+
+        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|thread| thread.id == "thread-name-thread")
+            .unwrap();
+
+        assert_eq!(row.title, "更新");
         let _ = fs::remove_dir_all(root);
     }
 
