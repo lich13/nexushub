@@ -22,19 +22,17 @@ The installed service listens on `127.0.0.1:15742`.
 
 For migrations from `codex-cloud-panel`, keep the encrypted Turnstile secret readable by preserving the old encryption key. The installer preserves an existing `/opt/nexushub/env` `NEXUSHUB_SECRET_KEY`; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key if no legacy key exists. Verify by comparing hashes only, never by printing secret values.
 
-Ensure `/opt/nexushub/config.toml` keeps the bridge local:
+Ensure `/opt/nexushub/config.toml` keeps Codex state local:
 
 ```toml
 [codex]
-app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"
-bridge_enabled = true
-bridge_transport = "websocket"
-bridge_timeout_seconds = 20
+workspace = "/home/ubuntu/codex-workspace"
+host_label = "43.155.235.227"
 ```
 
-Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
+Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home and reads `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
 
-Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose root app-server, `/v1`, `/responses`, or metrics publicly.
+Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -56,11 +54,10 @@ ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
 Then log in and verify:
 
 - thread list loads;
-- system status shows `codex-app-server-root.service` active;
-- create/send uses app-server bridge and returns `bridge=true`;
-- `codex exec` appears only as fallback job when bridge is unavailable;
+- system status shows resolved Codex state paths without requiring `codex-app-server-root.service`;
+- create/send starts controlled `codex exec --json` jobs and returns a job-backed response;
 - system status shows `43.155.235.227` / `https://661313.xyz/nexushub/` instead of any removed SSH alias;
-- renamed thread titles refresh from app-server `thread/read`;
+- thread titles refresh from local state DB, `session_index.jsonl`, and rollout metadata without plan-body pollution;
 - Goal settings and permission/model/config selectors load;
 - Turnstile Site Key / Secret Key can be saved, action is `login`, expected hostname is `661313.xyz`, session TTL is 365 days, and token replay protection is active;
 - archive delete dry-run returns counts and `integrity=ok`;

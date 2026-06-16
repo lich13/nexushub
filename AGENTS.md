@@ -11,9 +11,9 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 
 ## Safety Boundaries
 
-- Preserve the local app-server bridge boundary. The WebUI must never expose the root Codex app-server socket, `/v1`, `/responses`, or metrics publicly.
-- Keep Codex state reads based on official Codex state DB, rollout files, session indexes, and app-server bridge responses. Do not mutate official Codex database schemas.
-- Use the app-server bridge first for Codex create/send/stop/thread behavior. `codex exec --json` is fallback only.
+- Preserve the Codex local-state boundary. The WebUI must never expose Codex control sockets, `/v1`, `/responses`, or metrics publicly.
+- Keep Codex state reads based on the official Codex state DB, `session_index.jsonl`, rollout files, and `logs_2.sqlite`. Do not mutate official Codex database schemas.
+- Do not require `codex-app-server-root.service`, `app_server_socket`, bridge settings, or app-server reloads in deploy defaults. New runtime paths must use local Codex state and controlled jobs instead.
 - Do not add arbitrary shell execution to the WebUI. Maintenance actions must be fixed jobs with authorization, CSRF protection, audit records, output redaction, and failure classification.
 - Archive and hidden-thread deletion require dry-run visibility plus button confirmation.
 - Do not add a WebUI network-access checkbox. Generated sandbox policies default network access to enabled.

@@ -223,9 +223,7 @@ pub enum BridgeTransport {
 }
 
 fn default_app_server_socket() -> Option<PathBuf> {
-    Some(PathBuf::from(
-        "/root/.codex/app-server-control/app-server-control.sock",
-    ))
+    None
 }
 
 fn default_codex_home() -> PathBuf {
@@ -233,7 +231,7 @@ fn default_codex_home() -> PathBuf {
 }
 
 fn default_bridge_enabled() -> bool {
-    true
+    false
 }
 
 fn default_bridge_transport() -> BridgeTransport {
@@ -338,7 +336,7 @@ impl Default for ProbeHooksConfig {
     fn default() -> Self {
         Self {
             manage_stop_hook: true,
-            reload_app_server_after_install: true,
+            reload_app_server_after_install: false,
         }
     }
 }
@@ -465,7 +463,7 @@ impl Default for Config {
             codex: CodexConfig {
                 home: default_codex_home(),
                 workspace: PathBuf::from("/home/ubuntu/codex-workspace"),
-                app_server_service: "codex-app-server-root.service".to_string(),
+                app_server_service: String::new(),
                 app_server_socket: default_app_server_socket(),
                 bridge_enabled: default_bridge_enabled(),
                 bridge_transport: default_bridge_transport(),
@@ -759,11 +757,6 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
         editor.set_usize("probe", "recent_limit", probe.recent_limit);
         if let Some(hooks) = probe.hooks.as_ref() {
             editor.set_bool("probe.hooks", "manage_stop_hook", hooks.manage_stop_hook);
-            editor.set_bool(
-                "probe.hooks",
-                "reload_app_server_after_install",
-                hooks.reload_app_server_after_install,
-            );
         }
         if let Some(notifications) = probe.notifications.as_ref() {
             editor.set_bool("probe.notifications", "enabled", notifications.enabled);
@@ -1038,6 +1031,16 @@ mod tests {
     }
 
     #[test]
+    fn default_config_has_no_app_server_runtime_dependency() {
+        let config = Config::default();
+
+        assert!(!config.codex.bridge_enabled);
+        assert!(config.codex.app_server_service.trim().is_empty());
+        assert!(config.codex.app_server_socket.is_none());
+        assert!(!config.probe.hooks.reload_app_server_after_install);
+    }
+
+    #[test]
     fn default_config_includes_builtin_probe_settings() {
         let config = Config::default();
 
@@ -1045,7 +1048,7 @@ mod tests {
         assert_eq!(config.probe.poll_seconds, 15);
         assert_eq!(config.probe.recent_limit, 50);
         assert!(config.probe.hooks.manage_stop_hook);
-        assert!(config.probe.hooks.reload_app_server_after_install);
+        assert!(!config.probe.hooks.reload_app_server_after_install);
         assert!(!config.probe.notifications.enabled);
         assert_eq!(config.probe.notifications.server_url, "https://api.day.app");
         assert!(config.probe.notifications.notify_reply_needed);

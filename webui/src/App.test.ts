@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
 import type { GoalModeState, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
@@ -46,6 +47,7 @@ type AppExports = typeof import("./App") & {
     incomingTitle: string;
     dirty: boolean;
   }) => string;
+  mergeIncomingThreadSummary?: <T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>) => T & Partial<ThreadSummary>;
   mergeSavedThreadTitle?: (threads: ThreadSummary[], threadId: string, title: string) => ThreadSummary[];
   threadSettingsMetricLabels?: () => string[];
   threadResumeCommand?: (threadId?: string | null) => string | null;
@@ -56,6 +58,11 @@ type AppExports = typeof import("./App") & {
     current: { scrollTop: number; clientHeight: number; scrollHeight: number },
     previous?: { scrollTop: number; clientHeight: number; scrollHeight: number } | null
   ) => boolean;
+  nextVisibleThreadIdAfterRemoval?: (threads: ThreadSummary[], removedThreadId: string) => string | null;
+  shouldHydrateThreadDetail?: (threadId: string | null | undefined, detail?: { summary: ThreadSummary } | null) => boolean;
+  clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
+  codexVisibleCopy?: () => Record<string, string>;
+  failureCategoryLabel?: (category: string) => string;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -415,6 +422,78 @@ describe("conversation helpers", () => {
     ]);
   });
 
+  test("thread title merges keep real titles instead of assistant plan or body text", async () => {
+    const app = await loadApp();
+    const current: ThreadSummary = { id: "thread-a", title: "真实标题", status: "Recent", message_count: 1 };
+
+    for (const incomingTitle of [
+      "读取中",
+      "<proposed_plan>1. 检查缓存\n2. 修复归档选择</proposed_plan>",
+      "1. 检查缓存\n2. 清理归档状态\n3. 运行回归测试",
+      "我会先检查现有线程缓存和消息存储行为，然后补上归档后的缓存清理逻辑，最后运行测试确认不会再把 assistant 正文当成标题。"
+    ]) {
+      expect(app.mergeIncomingThreadSummary?.(current, { ...current, title: incomingTitle }).title).toBe("真实标题");
+    }
+
+    expect(app.mergeIncomingThreadSummary?.({ ...current, title: "读取中" }, { ...current, title: "真实新标题" }).title).toBe("真实新标题");
+  });
+
+  test("archiving selects the next visible thread and clears every cached copy of the archived thread", async () => {
+    const app = await loadApp();
+    const qc = new QueryClient();
+    const threads: ThreadSummary[] = [
+      { id: "thread-a", title: "A", status: "Recent", message_count: 1 },
+      { id: "thread-b", title: "B", status: "Recent", message_count: 1 },
+      { id: "thread-c", title: "C", status: "Recent", message_count: 1 },
+      { id: "thread-archived", title: "Archived", status: "Archived", message_count: 1 }
+    ];
+    const detail = (thread: ThreadSummary) => ({
+      summary: thread,
+      messages: [],
+      blocks: [],
+      raw_event_count: 0
+    });
+    const cleared: string[] = [];
+
+    qc.setQueryData(["threads", "all", ""], threads);
+    qc.setQueryData(["threads", "running", ""], [threads[1], threads[2]]);
+    qc.setQueryData(["thread", "thread-b"], detail(threads[1]));
+    qc.setQueryData(["thread", "thread-c"], detail(threads[2]));
+
+    expect(app.nextVisibleThreadIdAfterRemoval?.(threads, "thread-b")).toBe("thread-c");
+    expect(app.nextVisibleThreadIdAfterRemoval?.(threads, "thread-c")).toBe("thread-b");
+
+    app.clearArchivedThreadClientState?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-b");
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-a", "thread-c", "thread-archived"]);
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "running", ""])?.map((thread) => thread.id)).toEqual(["thread-c"]);
+    expect(qc.getQueryData(["thread", "thread-b"])).toBeUndefined();
+    expect(qc.getQueryData(["thread", "thread-c"])).toBeDefined();
+    expect(cleared).toEqual(["thread-b"]);
+  });
+
+  test("archived detail responses are not hydrated back into the active thread view", async () => {
+    const app = await loadApp();
+    const recent: ThreadSummary = { id: "thread-a", title: "A", status: "Recent", message_count: 1 };
+    const archived: ThreadSummary = { id: "thread-a", title: "A", status: "Archived", message_count: 1 };
+
+    expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: recent })).toBe(true);
+    expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: archived })).toBe(false);
+    expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: { ...recent, id: "thread-b" } })).toBe(false);
+  });
+
+  test("visible Codex copy avoids legacy transport labels", async () => {
+    const app = await loadApp();
+    const visibleText = [
+      app.failureCategoryLabel?.("codex_local_state_unavailable"),
+      app.failureCategoryLabel?.("app_server_unavailable")
+    ].join(" ");
+
+    expect(app.failureCategoryLabel?.("codex_local_state_unavailable")).toBe("Codex 本地状态不可用");
+    expect(app.failureCategoryLabel?.("app_server_unavailable")).toBe("Codex 本地状态不可用");
+    expect(visibleText).toBe("Codex 本地状态不可用 Codex 本地状态不可用");
+  });
+
   test("composer file picker has no accept whitelist", async () => {
     const app = await loadApp();
 
@@ -537,7 +616,7 @@ describe("conversation helpers", () => {
     expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 620, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(false);
   });
 
-  test("goal status labels normalize known app-server states in Chinese", async () => {
+  test("goal status labels normalize known local goal states in Chinese", async () => {
     const app = await loadApp();
 
     expect(app.formatGoalStatus?.({ enabled: true, status: "running" })).toBe("运行中");

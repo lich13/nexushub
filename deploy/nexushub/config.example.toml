@@ -5,12 +5,10 @@ trust_forwarded_headers = true
 
 [codex]
 workspace = "/home/ubuntu/codex-workspace"
-app_server_service = "codex-app-server-root.service"
-app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"
-bridge_enabled = true
-bridge_transport = "websocket"
-bridge_timeout_seconds = 20
 host_label = "43.155.235.227"
+# Codex 本地状态库: state_5.sqlite, session_index.jsonl, rollout files, and logs_2.sqlite.
+# NexusHub 通过受控 codex exec job 读取和管理 Codex 状态。
+# codex.home is omitted so NexusHub auto-discovers /root/.codex or /home/ubuntu/.codex.
 
 [probe]
 enabled = true
@@ -19,7 +17,6 @@ recent_limit = 50
 
 [probe.hooks]
 manage_stop_hook = true
-reload_app_server_after_install = true
 
 [probe.notifications]
 enabled = false

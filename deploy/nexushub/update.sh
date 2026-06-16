@@ -358,6 +358,50 @@ def ensure_section(section, required_values, replace_values=None, insert_if_miss
             insert_at += 1
             changed = True
 
+def remove_section_keys(section, keys):
+    global changed, lines
+    start = None
+    end = len(lines)
+    for index, line in enumerate(lines):
+        if line.strip() == f"[{section}]":
+            start = index
+            continue
+        if start is not None and index > start and line.strip().startswith("[") and line.strip().endswith("]"):
+            end = index
+            break
+    if start is None:
+        return
+    filtered = []
+    removed = False
+    for index, line in enumerate(lines):
+        if start < index < end:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in keys:
+                    removed = True
+                    continue
+        filtered.append(line)
+    if removed:
+        lines = filtered
+        changed = True
+
+ensure_section(
+    "codex",
+    {
+        "host_label": '"43.155.235.227"',
+    },
+)
+remove_section_keys(
+    "codex",
+    {
+        "app_server_service",
+        "app_server_socket",
+        "bridge_enabled",
+        "bridge_transport",
+        "bridge_timeout_seconds",
+    },
+)
 ensure_section(
     "server",
     {"listen": '"127.0.0.1:15742"'},
@@ -414,7 +458,12 @@ ensure_section(
     "probe.hooks",
     {
         "manage_stop_hook": "true",
-        "reload_app_server_after_install": "true",
+    },
+)
+remove_section_keys(
+    "probe.hooks",
+    {
+        "reload_app_server_after_install",
     },
 )
 ensure_section(

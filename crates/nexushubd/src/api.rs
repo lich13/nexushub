@@ -18,7 +18,7 @@ use axum::{
     Json, Router,
 };
 use nexushub_core::{
-    app_server::{BridgeActionResult, BridgeTurnOptions},
+    app_server::BridgeActionResult,
     archive,
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
@@ -787,16 +787,16 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
             "resolved_codex_home": resolved.home,
             "codex_home_source": resolved.codex_home_source,
             "logs_db_source": resolved.logs_db_source,
-            "configured_app_server_socket": resolved.configured_app_server_socket.clone(),
-            "resolved_app_server_socket": resolved.app_server_socket.clone(),
-            "app_server_socket_source": resolved.app_server_socket_source.clone(),
+            "configured_app_server_socket": Value::Null,
+            "resolved_app_server_socket": Value::Null,
+            "app_server_socket_source": Value::Null,
             "discovery_warnings": resolved.discovery_warnings,
             "workspace": config.codex.workspace,
-            "app_server_service": config.codex.app_server_service,
-            "app_server_socket": resolved.app_server_socket,
-            "bridge_enabled": config.codex.bridge_enabled,
-            "bridge_transport": config.codex.bridge_transport,
-            "bridge_timeout_seconds": config.codex.bridge_timeout_seconds,
+            "app_server_service": "",
+            "app_server_socket": Value::Null,
+            "bridge_enabled": false,
+            "bridge_transport": Value::Null,
+            "bridge_timeout_seconds": Value::Null,
             "host_label": config.codex.host_label,
         },
         "probe": config.probe,
@@ -897,7 +897,6 @@ pub(crate) async fn load_probe_threads(
 ) -> anyhow::Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
     let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
-    let app_fetch_limit = app_server_thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
         tracing::warn!("failed to read hidden thread metadata for probe: {err}");
         HashSet::new()
@@ -907,25 +906,6 @@ pub(crate) async fn load_probe_threads(
         HashSet::new()
     });
     let mut threads = codex::list_threads(&paths, None, None, local_fetch_limit)?;
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match bridge
-            .thread_list(app_fetch_limit, archived_filter(Some(status)), None)
-            .await
-        {
-            Ok(value) => {
-                let app_threads = app_server_thread_summaries(&value, &threads);
-                if !app_threads.is_empty() {
-                    threads = merge_thread_summaries(threads, app_threads);
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "app-server thread/list failed in probe; using state DB fallback: {err}"
-                );
-            }
-        }
-    }
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     apply_running_jobs_to_threads(state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
@@ -1343,7 +1323,6 @@ async fn list_threads(
     let paths = state.codex_paths();
     let response_limit = requested_thread_limit(query.limit);
     let local_fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
-    let app_fetch_limit = app_server_thread_list_fetch_limit(query.status.as_deref(), query.limit);
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
         tracing::warn!("failed to read hidden thread metadata: {err}");
         HashSet::new()
@@ -1353,27 +1332,6 @@ async fn list_threads(
         HashSet::new()
     });
     let mut threads = codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?;
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match bridge
-            .thread_list(
-                app_fetch_limit,
-                archived_filter(query.status.as_deref()),
-                query.q.as_deref(),
-            )
-            .await
-        {
-            Ok(value) => {
-                let app_threads = app_server_thread_summaries(&value, &threads);
-                if !app_threads.is_empty() {
-                    threads = merge_thread_summaries(threads, app_threads);
-                }
-            }
-            Err(err) => {
-                tracing::warn!("app-server thread/list failed; using state DB fallback: {err}");
-            }
-        }
-    }
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     apply_running_jobs_to_threads(&state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
@@ -1462,20 +1420,7 @@ async fn load_merged_thread_detail(
 ) -> anyhow::Result<Option<ThreadDetail>> {
     let paths = state.codex_paths();
     let mut detail = load_base_thread_detail_cached(state, &paths, id)?;
-    if state.bridge().enabled() {
-        match state.bridge().thread_read(id.to_string(), true).await {
-            Ok(value) => match detail.as_mut() {
-                Some(detail) => apply_app_server_thread_detail(detail, &value),
-                None => detail = app_server_detail_from_read(&value),
-            },
-            Err(err) if detail.is_some() => {
-                tracing::warn!(
-                    "app-server thread/read failed in {label}; using rollout detail: {err}"
-                );
-            }
-            Err(err) => anyhow::bail!("app-server thread/read failed: {err}"),
-        }
-    }
+    let _ = label;
     if let Some(detail) = detail.as_mut() {
         apply_running_job_to_detail(state, detail)?;
         submit_pending_followup_if_ready(state, detail).await;
@@ -1564,11 +1509,6 @@ struct CreateThreadRequest {
     service_tier: Option<String>,
     reasoning_effort: Option<String>,
     cwd: Option<String>,
-    permission_profile: Option<String>,
-    approval_policy: Option<String>,
-    sandbox_mode: Option<String>,
-    network_access: Option<bool>,
-    collaboration_mode: Option<String>,
 }
 
 async fn create_thread(
@@ -1586,39 +1526,6 @@ async fn create_thread(
         .filter(|value| !value.trim().is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| state.config().codex.workspace.clone());
-    let bridge_options = BridgeTurnOptions {
-        message: effective_message.clone(),
-        attachments: prepared_attachments.clone(),
-        model: payload.model.clone(),
-        service_tier: payload.service_tier.clone(),
-        reasoning_effort: payload.reasoning_effort.clone(),
-        cwd: Some(cwd.display().to_string()),
-        permission_profile: payload.permission_profile.clone(),
-        approval_policy: payload.approval_policy.clone(),
-        sandbox_mode: payload.sandbox_mode.clone(),
-        network_access: payload.network_access,
-        collaboration_mode: payload.collaboration_mode.clone(),
-    };
-    if state.bridge().enabled() {
-        match state.bridge().start_thread(bridge_options).await {
-            Ok(result) => {
-                state.db.record_audit(
-                    Some(&auth.admin_id),
-                    "thread.create.bridge_started",
-                    Some("thread"),
-                    result.thread_id.as_deref(),
-                    None,
-                    json!({"turn_id": result.turn_id}),
-                )?;
-                return ok(result);
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "app-server bridge create failed; falling back to codex exec: {err}"
-                );
-            }
-        }
-    }
     let mut args = vec![
         "exec".to_string(),
         "--json".to_string(),
@@ -1678,7 +1585,7 @@ async fn create_thread(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some("app-server bridge unavailable; started codex exec fallback job".to_string()),
+        message: Some("started codex exec fallback job".to_string()),
     })
 }
 
@@ -1701,22 +1608,6 @@ struct SendMessageRequest {
 }
 
 impl SendMessageRequest {
-    fn bridge_options(&self) -> BridgeTurnOptions {
-        BridgeTurnOptions {
-            message: effective_message(&self.message, &self.prepared_attachments),
-            attachments: self.prepared_attachments.clone(),
-            model: self.model.clone(),
-            service_tier: self.service_tier.clone(),
-            reasoning_effort: self.reasoning_effort.clone(),
-            cwd: self.cwd.clone(),
-            permission_profile: self.permission_profile.clone(),
-            approval_policy: self.approval_policy.clone(),
-            sandbox_mode: self.sandbox_mode.clone(),
-            network_access: self.network_access,
-            collaboration_mode: self.collaboration_mode.clone(),
-        }
-    }
-
     fn options_json(&self) -> Value {
         json!({
             "model": &self.model,
@@ -1768,25 +1659,6 @@ async fn send_message(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match bridge.send_turn(id.clone(), payload.bridge_options()).await {
-            Ok(result) => {
-                state.db.record_audit(
-                    Some(&auth.admin_id),
-                    "thread.message.bridge_started",
-                    Some("thread"),
-                    Some(&id),
-                    None,
-                    json!({"turn_id": result.turn_id}),
-                )?;
-                return ok(result);
-            }
-            Err(err) => {
-                tracing::warn!("app-server bridge send failed; falling back to codex exec: {err}");
-            }
-        }
-    }
     let args = vec![
         "exec".to_string(),
         "resume".to_string(),
@@ -1821,29 +1693,8 @@ async fn send_message(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some("app-server bridge unavailable; started codex exec fallback job".to_string()),
+        message: Some("started codex exec fallback job".to_string()),
     })
-}
-
-async fn resolve_active_turn_id(state: &AppState, id: &str) -> Option<String> {
-    let paths = state.codex_paths();
-    let mut detail = match load_base_thread_detail_cached(state, &paths, id) {
-        Ok(Some(detail)) => Some(detail),
-        Ok(None) | Err(_) => None,
-    };
-    if state.bridge().enabled() {
-        if let Ok(value) = state.bridge().thread_read(id.to_string(), true).await {
-            match detail.as_mut() {
-                Some(detail) => apply_app_server_thread_detail(detail, &value),
-                None => detail = app_server_detail_from_read(&value),
-            }
-        }
-    }
-    if let Some(detail) = detail.as_mut() {
-        let _ = apply_running_job_to_detail(state, detail);
-        return detail.summary.active_turn_id.clone();
-    }
-    None
 }
 
 async fn steer_thread(
@@ -1863,43 +1714,6 @@ async fn steer_thread(
         ));
     }
 
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match resolve_active_turn_id(&state, &id).await {
-            Some(expected_turn_id) => {
-                match bridge
-                    .steer_turn(
-                        id.clone(),
-                        expected_turn_id.clone(),
-                        payload.bridge_options(),
-                    )
-                    .await
-                {
-                    Ok(mut result) => {
-                        if result.turn_id.is_none() {
-                            result.turn_id = Some(expected_turn_id);
-                        }
-                        state.db.record_audit(
-                            Some(&auth.admin_id),
-                            "thread.followup.steered",
-                            Some("thread"),
-                            Some(&id),
-                            None,
-                            json!({"turn_id": result.turn_id}),
-                        )?;
-                        return ok(result);
-                    }
-                    Err(err) => {
-                        tracing::warn!("turn/steer failed; queueing follow-up fallback: {err}");
-                    }
-                }
-            }
-            None => {
-                tracing::warn!("turn/steer skipped because active turn could not be resolved");
-            }
-        }
-    }
-
     let followup = state
         .db
         .enqueue_followup(&id, &message, payload.options_json())?;
@@ -1912,14 +1726,12 @@ async fn steer_thread(
         json!({"followup_id": followup.id}),
     )?;
     ok(BridgeActionResult {
-        bridge: true,
+        bridge: false,
         thread_id: Some(id),
         turn_id: None,
         job_id: None,
         fallback: true,
-        message: Some(
-            "turn/steer unavailable; queued follow-up for the next idle turn".to_string(),
-        ),
+        message: Some("queued follow-up for the next idle turn".to_string()),
     })
 }
 
@@ -2103,27 +1915,6 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
         return;
     };
     let request = followup_request(&followup);
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match bridge
-            .send_turn(thread_id.clone(), request.bridge_options())
-            .await
-        {
-            Ok(result) => {
-                let _ = state
-                    .db
-                    .mark_followup_submitted(&followup.id, json!(result));
-                detail.summary.status = ThreadStatus::Running;
-                detail.summary.active_turn_id = result.turn_id;
-                return;
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "queued follow-up bridge send failed; falling back to codex exec: {err}"
-                );
-            }
-        }
-    }
     let args = vec![
         "exec".to_string(),
         "resume".to_string(),
@@ -2237,27 +2028,6 @@ fn followup_response(item: ThreadFollowUp) -> Value {
     })
 }
 
-async fn derive_active_turn_id(state: &AppState, thread_id: &str) -> Option<String> {
-    if state.bridge().enabled() {
-        if let Ok(value) = state
-            .bridge()
-            .thread_read(thread_id.to_string(), true)
-            .await
-        {
-            if let Some(thread) = value.get("thread") {
-                if let Some(turn_id) = app_thread_active_turn_id(thread) {
-                    return Some(turn_id);
-                }
-            }
-        }
-    }
-    let paths = state.codex_paths();
-    codex::thread_detail(&paths, thread_id)
-        .ok()
-        .flatten()
-        .and_then(|detail| detail.summary.active_turn_id)
-}
-
 fn derive_active_job_id(state: &AppState, thread_id: &str) -> Option<String> {
     state
         .db
@@ -2282,32 +2052,7 @@ async fn stop_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let payload = payload.map(|Json(value)| value);
-    let turn_id = payload.as_ref().and_then(|value| value.turn_id.clone());
-    let turn_id = if turn_id.is_none() && state.bridge().enabled() {
-        derive_active_turn_id(&state, &id).await
-    } else {
-        turn_id
-    };
-    if let Some(turn_id) = turn_id {
-        if state.bridge().enabled() {
-            match state.bridge().stop_turn(id.clone(), turn_id.clone()).await {
-                Ok(()) => {
-                    state.db.record_audit(
-                        Some(&auth.admin_id),
-                        "thread.stop.bridge",
-                        Some("thread"),
-                        Some(&id),
-                        None,
-                        json!({"turn_id": turn_id}),
-                    )?;
-                    return ok(json!({"ok": true, "bridge": true}));
-                }
-                Err(err) => {
-                    tracing::warn!("app-server bridge stop failed: {err}");
-                }
-            }
-        }
-    }
+    let requested_turn_id = payload.as_ref().and_then(|value| value.turn_id.clone());
     let job_id = payload
         .as_ref()
         .and_then(|value| value.job_id.clone())
@@ -2330,11 +2075,11 @@ async fn stop_thread(
         Some("thread"),
         Some(&id),
         None,
-        Value::Object(Default::default()),
+        json!({"turn_id": requested_turn_id}),
     )?;
     Err(api_error(
         StatusCode::BAD_REQUEST,
-        "stop requires turn_id for app-server bridge or job_id for fallback job",
+        "stop requires job_id or an active fallback job",
     ))
 }
 
@@ -2345,11 +2090,6 @@ async fn archive_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if state.bridge().enabled() {
-        if let Err(err) = state.bridge().archive_thread(id.clone()).await {
-            tracing::warn!("app-server bridge archive failed; falling back to state DB: {err}");
-        }
-    }
     let paths = state.codex_paths();
     codex::set_thread_archived(&paths, &id, true)?;
     state.db.record_audit(
@@ -2370,11 +2110,6 @@ async fn restore_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if state.bridge().enabled() {
-        if let Err(err) = state.bridge().unarchive_thread(id.clone()).await {
-            tracing::warn!("app-server bridge restore failed; falling back to state DB: {err}");
-        }
-    }
     let paths = state.codex_paths();
     codex::set_thread_archived(&paths, &id, false)?;
     state.db.record_audit(
@@ -2405,33 +2140,17 @@ async fn rename_thread(
     if name.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "name cannot be empty"));
     }
-    let bridge = state.bridge();
-    if bridge.enabled() {
-        match bridge.rename_thread(id.clone(), name.to_string()).await {
-            Ok(()) => {
-                let paths = state.codex_paths();
-                if let Err(err) = codex::set_thread_title(&paths, &id, name) {
-                    tracing::warn!("state DB thread title fallback update failed: {err}");
-                }
-                state.db.record_audit(
-                    Some(&auth.admin_id),
-                    "thread.renamed",
-                    Some("thread"),
-                    Some(&id),
-                    None,
-                    json!({"name": name}),
-                )?;
-                return ok(json!({"ok": true, "bridge": true}));
-            }
-            Err(err) => {
-                tracing::warn!("app-server bridge rename failed: {err}");
-            }
-        }
-    }
-    Err(api_error(
-        StatusCode::BAD_GATEWAY,
-        "rename requires app-server bridge",
-    ))
+    let paths = state.codex_paths();
+    codex::set_thread_title(&paths, &id, name)?;
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        "thread.renamed",
+        Some("thread"),
+        Some(&id),
+        None,
+        json!({"name": name}),
+    )?;
+    ok(json!({"ok": true, "bridge": false}))
 }
 
 async fn fork_thread(
@@ -2441,23 +2160,18 @@ async fn fork_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    match state.bridge().fork_thread(id.clone()).await {
-        Ok(result) => {
-            state.db.record_audit(
-                Some(&auth.admin_id),
-                "thread.forked",
-                Some("thread"),
-                Some(&id),
-                None,
-                json!({"new_thread_id": result.thread_id}),
-            )?;
-            ok(result)
-        }
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("fork requires app-server bridge: {err}"),
-        )),
-    }
+    state.db.record_audit(
+        Some(&auth.admin_id),
+        "thread.fork.unsupported",
+        Some("thread"),
+        Some(&id),
+        None,
+        json!({"available": false}),
+    )?;
+    Err(api_error(
+        StatusCode::NOT_IMPLEMENTED,
+        "fork is unavailable in the local Codex read model",
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2481,16 +2195,16 @@ async fn plan_accept(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let mut result = send_bridge_reply(&state, &id, "1".to_string()).await?;
+    let mut result = start_codex_resume_job(&state, &id, "1".to_string())?;
     result.fallback = true;
-    result.message = Some("Plan accept sent as a new turn because app-server does not expose a dedicated plan accept method".to_string());
+    result.message = Some("Plan accept sent as a controlled codex exec resume job".to_string());
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.accept",
         Some("thread"),
         Some(&id),
         None,
-        json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "bridge_fallback": true}),
+        json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "job_fallback": true}),
     )?;
     ok(result)
 }
@@ -2510,17 +2224,16 @@ async fn plan_revise(
             "revision instructions cannot be empty",
         ));
     }
-    let mut result =
-        send_bridge_reply(&state, &id, format!("请调整计划：\n{instructions}")).await?;
+    let mut result = start_codex_resume_job(&state, &id, format!("请调整计划：\n{instructions}"))?;
     result.fallback = true;
-    result.message = Some("Plan revision sent as a new turn because app-server does not expose a dedicated plan revise method".to_string());
+    result.message = Some("Plan revision sent as a controlled codex exec resume job".to_string());
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.revise",
         Some("thread"),
         Some(&id),
         None,
-        json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "bridge_fallback": true}),
+        json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "job_fallback": true}),
     )?;
     ok(result)
 }
@@ -2556,7 +2269,7 @@ async fn answer_approval(
     )?;
     Err(api_error(
         StatusCode::NOT_IMPLEMENTED,
-        "approval response requires the live app-server JSON-RPC request connection and is not supported by this panel version",
+        "approval response is unavailable in the local Codex read model",
     ))
 }
 
@@ -2585,60 +2298,49 @@ async fn answer_elicitation(
             "answers cannot be empty",
         ));
     }
-    let bridge_options = BridgeTurnOptions {
-        message,
-        attachments: Vec::new(),
-        model: None,
-        service_tier: None,
-        reasoning_effort: None,
-        cwd: None,
-        permission_profile: None,
-        approval_policy: None,
-        sandbox_mode: None,
-        network_access: None,
-        collaboration_mode: None,
-    };
-    match state.bridge().send_turn(id.clone(), bridge_options).await {
-        Ok(mut result) => {
-            result.fallback = true;
-            result.message = Some("Elicitation answer sent as a new turn because live server-request response is not available".to_string());
-            ok(result)
-        }
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("elicitation reply failed: {err}"),
-        )),
-    }
+    let mut result = start_codex_resume_job(&state, &id, message)?;
+    result.fallback = true;
+    result.message =
+        Some("Elicitation answer sent as a controlled codex exec resume job".to_string());
+    ok(result)
 }
 
-async fn send_bridge_reply(
+fn start_codex_resume_job(
     state: &AppState,
     thread_id: &str,
     message: String,
 ) -> Result<BridgeActionResult, ApiError> {
-    let bridge_options = BridgeTurnOptions {
-        message,
-        attachments: Vec::new(),
-        model: None,
-        service_tier: None,
-        reasoning_effort: None,
-        cwd: None,
-        permission_profile: None,
-        approval_policy: None,
-        sandbox_mode: None,
-        network_access: None,
-        collaboration_mode: None,
-    };
+    let args = vec![
+        "exec".to_string(),
+        "resume".to_string(),
+        "--all".to_string(),
+        "--json".to_string(),
+        thread_id.to_string(),
+        "-".to_string(),
+    ];
+    let resolved = state.resolved_codex_paths();
+    let job_id = state
+        .jobs
+        .start_codex_job(
+            "Codex resume thread",
+            &resolved.home,
+            &state.config().codex.workspace,
+            args,
+            message,
+        )
+        .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
     state
-        .bridge()
-        .send_turn(thread_id.to_string(), bridge_options)
-        .await
-        .map_err(|err| {
-            api_error(
-                StatusCode::BAD_GATEWAY,
-                &format!("plan reply failed: {err}"),
-            )
-        })
+        .db
+        .link_job_thread(&job_id, Some(thread_id), None)
+        .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
+    Ok(BridgeActionResult {
+        bridge: false,
+        thread_id: Some(thread_id.to_string()),
+        turn_id: None,
+        job_id: Some(job_id),
+        fallback: true,
+        message: Some("started codex exec fallback job".to_string()),
+    })
 }
 
 async fn thread_events(
@@ -2700,15 +2402,7 @@ async fn thread_events(
 
 async fn system_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let mut status = nexushub_core::system::system_status(&state.config()).await?;
-    if state.bridge().enabled() {
-        if let Ok(value) = state.bridge().thread_list(500, Some(false), None).await {
-            let (source_counts, hidden_count) = app_server_thread_visibility_diagnostics(&value);
-            status.app_server_source_counts = source_counts;
-            status.app_server_hidden_thread_count = hidden_count;
-        }
-    }
-    ok(status)
+    ok(nexushub_core::system::system_status(&state.config()).await?)
 }
 
 async fn system_version(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -2723,13 +2417,7 @@ struct CwdQuery {
 
 async fn codex_models(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge().model_list().await {
-        Ok(value) => ok(value),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("model/list failed: {err}"),
-        )),
-    }
+    ok(default_codex_models())
 }
 
 async fn codex_permission_profiles(
@@ -2738,13 +2426,8 @@ async fn codex_permission_profiles(
     Query(query): Query<CwdQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge().permission_profile_list(query.cwd).await {
-        Ok(value) => ok(value),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("permissionProfile/list failed: {err}"),
-        )),
-    }
+    let _ = query.cwd;
+    ok(default_permission_profiles())
 }
 
 async fn codex_config(
@@ -2753,13 +2436,66 @@ async fn codex_config(
     Query(query): Query<CwdQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.bridge().config_read(query.cwd).await {
-        Ok(value) => ok(normalize_config_response(&value, &state)),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("config/read failed: {err}"),
-        )),
-    }
+    ok(local_codex_config_response(&state, query.cwd))
+}
+
+fn default_codex_models() -> Value {
+    json!([
+        {"id": "gpt-5.5", "label": "GPT-5.5", "default": true},
+        {"id": "gpt-5.5-codex", "label": "GPT-5.5 Codex"},
+        {"id": "gpt-5.4", "label": "GPT-5.4"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini"},
+        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"}
+    ])
+}
+
+fn default_permission_profiles() -> Value {
+    json!([
+        {
+            "id": "danger-full-access",
+            "label": "Danger full access",
+            "sandbox_mode": "danger-full-access",
+            "approval_policy": "never",
+            "network_access": true,
+            "default": true
+        },
+        {
+            "id": "workspace-write",
+            "label": "Workspace write",
+            "sandbox_mode": "workspace-write",
+            "approval_policy": "on-request",
+            "network_access": true
+        },
+        {
+            "id": "read-only",
+            "label": "Read only",
+            "sandbox_mode": "read-only",
+            "approval_policy": "on-request",
+            "network_access": false
+        }
+    ])
+}
+
+fn local_codex_config_response(state: &AppState, cwd: Option<String>) -> Value {
+    let config = state.config();
+    json!({
+        "model": Value::Null,
+        "reasoning_effort": Value::Null,
+        "cwd": cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| config.codex.workspace.to_str().unwrap_or(""))
+            .to_string(),
+        "permission_profile": "danger-full-access",
+        "approval_policy": "never",
+        "sandbox_mode": "danger-full-access",
+        "network_access": true,
+        "raw": {
+            "source": "local",
+            "available": true,
+        },
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -2785,13 +2521,8 @@ async fn codex_goal_get(
     let Some(thread_id) = non_empty(query.thread_id.as_deref()) else {
         return ok(goal_empty("missing_thread"));
     };
-    match state.bridge().goal_get(thread_id.to_string()).await {
-        Ok(value) => ok(normalize_goal_response(&value)),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("thread/goal/get failed: {err}"),
-        )),
-    }
+    let _ = thread_id;
+    ok(goal_unavailable("unavailable"))
 }
 
 async fn codex_goal_set(
@@ -2804,31 +2535,14 @@ async fn codex_goal_set(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    let objective = payload
-        .objective
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("");
-    if objective.is_empty() || payload.enabled == Some(false) {
-        return codex_goal_clear_inner(&state, thread_id).await;
-    }
-    match state
-        .bridge()
-        .goal_set(
-            thread_id.to_string(),
-            objective.to_string(),
-            payload.status.clone(),
-            payload.token_budget,
-        )
-        .await
-    {
-        Ok(value) => ok(normalize_goal_response(&value)),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("thread/goal/set failed: {err}"),
-        )),
-    }
+    let _ = (
+        thread_id,
+        payload.objective,
+        payload.status,
+        payload.token_budget,
+        payload.enabled,
+    );
+    ok(goal_unavailable("unavailable"))
 }
 
 async fn codex_goal_clear(
@@ -2841,7 +2555,8 @@ async fn codex_goal_clear(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    codex_goal_clear_inner(&state, thread_id).await
+    let _ = thread_id;
+    ok(goal_unavailable("unavailable"))
 }
 
 async fn codex_goal_resume(
@@ -2854,39 +2569,8 @@ async fn codex_goal_resume(
     let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
     };
-    if !state.bridge().enabled() {
-        return Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            "thread/goal/resume requires app-server bridge",
-        ));
-    }
-    match state.bridge().goal_resume(thread_id.to_string()).await {
-        Ok(value) => {
-            state.db.record_audit(
-                Some(&auth.admin_id),
-                "thread.goal.resumed",
-                Some("thread"),
-                Some(thread_id),
-                None,
-                json!({}),
-            )?;
-            ok(normalize_goal_response(&value))
-        }
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("thread/goal/resume failed: {err}"),
-        )),
-    }
-}
-
-async fn codex_goal_clear_inner(state: &AppState, thread_id: &str) -> ApiResponse {
-    match state.bridge().goal_clear(thread_id.to_string()).await {
-        Ok(_) => ok(goal_empty("cleared")),
-        Err(err) => Err(api_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("thread/goal/clear failed: {err}"),
-        )),
-    }
+    let _ = thread_id;
+    ok(goal_unavailable("unavailable"))
 }
 
 async fn panel_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -3156,6 +2840,7 @@ fn security_response(state: &AppState) -> anyhow::Result<Value> {
     }))
 }
 
+#[cfg(test)]
 fn archived_filter(status: Option<&str>) -> Option<bool> {
     match status {
         Some("archived") => Some(true),
@@ -3194,6 +2879,7 @@ fn thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize 
     }
 }
 
+#[cfg(test)]
 fn app_server_thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
     if thread_status_filter_needs_full_scan(status) {
         500
@@ -3255,6 +2941,7 @@ fn prune_hidden_thread_summaries(
         .collect()
 }
 
+#[cfg(test)]
 fn merge_thread_summaries(
     fallback: Vec<ThreadSummary>,
     app_threads: Vec<ThreadSummary>,
@@ -3281,6 +2968,7 @@ fn merge_thread_summaries(
     rows
 }
 
+#[cfg(test)]
 fn preserve_fallback_title(row: &mut ThreadSummary, fallback: &ThreadSummary) {
     if is_placeholder_thread_title(&row.title) && !is_placeholder_thread_title(&fallback.title) {
         row.title = fallback.title.clone();
@@ -3291,6 +2979,7 @@ fn preserve_fallback_title(row: &mut ThreadSummary, fallback: &ThreadSummary) {
     }
 }
 
+#[cfg(test)]
 fn is_placeholder_thread_title(title: &str) -> bool {
     let value = title.trim();
     value.is_empty() || matches!(value, "未命名线程" | "Untitled thread" | "Untitled")
@@ -3306,6 +2995,7 @@ fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
     ) || (status == "recent" && matches!(row.status, ThreadStatus::Recent))
 }
 
+#[cfg(test)]
 fn app_server_thread_summaries(value: &Value, fallback: &[ThreadSummary]) -> Vec<ThreadSummary> {
     let fallback_by_id: HashMap<&str, &ThreadSummary> = fallback
         .iter()
@@ -3321,56 +3011,7 @@ fn app_server_thread_summaries(value: &Value, fallback: &[ThreadSummary]) -> Vec
         .collect()
 }
 
-fn app_server_thread_visibility_diagnostics(value: &Value) -> (HashMap<String, usize>, usize) {
-    let mut counts = HashMap::new();
-    let mut hidden = 0;
-    for thread in value
-        .get("data")
-        .and_then(Value::as_array)
-        .or_else(|| value.get("threads").and_then(Value::as_array))
-        .into_iter()
-        .flatten()
-    {
-        let label = app_server_source_label(thread);
-        *counts.entry(label).or_insert(0) += 1;
-        if is_app_server_subagent_thread(thread) || thread_archived(thread) {
-            hidden += 1;
-        }
-    }
-    (counts, hidden)
-}
-
-fn app_server_source_label(thread: &Value) -> String {
-    if thread_archived(thread) {
-        return "archived".to_string();
-    }
-    if is_app_server_subagent_thread(thread) {
-        return "subagent".to_string();
-    }
-    for field in ["sourceKind", "source_kind", "threadSource", "thread_source"] {
-        if let Some(value) = thread
-            .get(field)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return value.to_ascii_lowercase();
-        }
-    }
-    thread
-        .get("source")
-        .and_then(|source| {
-            source
-                .get("kind")
-                .or_else(|| source.get("type"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| source.as_str().map(str::to_string))
-        })
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
+#[cfg(test)]
 fn app_server_thread_summary(
     thread: &Value,
     fallback_by_id: &HashMap<&str, &ThreadSummary>,
@@ -3468,6 +3109,7 @@ fn app_server_thread_summary(
     Some(summary)
 }
 
+#[cfg(test)]
 fn apply_app_server_thread_detail(detail: &mut ThreadDetail, value: &Value) {
     let Some(thread) = value.get("thread") else {
         return;
@@ -3534,6 +3176,7 @@ fn apply_app_server_thread_detail(detail: &mut ThreadDetail, value: &Value) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum AppThreadState {
     Active,
     Recoverable,
@@ -3542,6 +3185,7 @@ enum AppThreadState {
     Unknown,
 }
 
+#[cfg(test)]
 fn merge_app_thread_status(
     fallback: Option<&ThreadSummary>,
     thread: &Value,
@@ -3603,6 +3247,7 @@ fn merge_app_thread_status(
     }
 }
 
+#[cfg(test)]
 fn fallback_stable_status(fallback: Option<&ThreadSummary>) -> ThreadStatus {
     match fallback.map(|thread| &thread.status) {
         Some(ThreadStatus::Archived) => ThreadStatus::Archived,
@@ -3612,6 +3257,7 @@ fn fallback_stable_status(fallback: Option<&ThreadSummary>) -> ThreadStatus {
     }
 }
 
+#[cfg(test)]
 fn fallback_has_clearable_stale_status(summary: &ThreadSummary) -> bool {
     matches!(
         summary.status,
@@ -3622,6 +3268,7 @@ fn fallback_has_clearable_stale_status(summary: &ThreadSummary) -> bool {
         && summary.pending_elicitation.is_none()
 }
 
+#[cfg(test)]
 fn rollout_suppresses_app_running(
     fallback: Option<&ThreadSummary>,
     thread: &Value,
@@ -3649,6 +3296,7 @@ fn rollout_suppresses_app_running(
     codex::rollout_has_completed_turn(path, Some(active_turn_id.as_str())).unwrap_or(false)
 }
 
+#[cfg(test)]
 fn merged_active_turn_id(
     fallback: Option<&ThreadSummary>,
     thread: &Value,
@@ -3665,6 +3313,7 @@ fn merged_active_turn_id(
     }
 }
 
+#[cfg(test)]
 fn fallback_has_pending_signal(fallback: Option<&ThreadSummary>) -> bool {
     let Some(summary) = fallback else {
         return false;
@@ -3672,6 +3321,7 @@ fn fallback_has_pending_signal(fallback: Option<&ThreadSummary>) -> bool {
     summary.active_turn_id.is_some() && summary.pending_elicitation.is_some()
 }
 
+#[cfg(test)]
 fn fallback_has_running_signal(fallback: Option<&ThreadSummary>) -> bool {
     let Some(summary) = fallback else {
         return false;
@@ -3679,6 +3329,7 @@ fn fallback_has_running_signal(fallback: Option<&ThreadSummary>) -> bool {
     summary.active_job_id.is_some()
 }
 
+#[cfg(test)]
 fn detail_has_pending_signal(detail: &ThreadDetail) -> bool {
     if fallback_has_pending_signal(Some(&detail.summary)) {
         return true;
@@ -3691,6 +3342,7 @@ fn detail_has_pending_signal(detail: &ThreadDetail) -> bool {
     })
 }
 
+#[cfg(test)]
 fn detail_pending_turn_id(detail: &ThreadDetail) -> Option<String> {
     let mut pending: Option<&MessageBlock> = None;
     for block in &detail.blocks {
@@ -3705,6 +3357,7 @@ fn detail_pending_turn_id(detail: &ThreadDetail) -> Option<String> {
     pending.and_then(|block| block.turn_id.clone())
 }
 
+#[cfg(test)]
 fn block_clears_pending_signal(block: &MessageBlock, pending: &MessageBlock) -> bool {
     if block_has_pending_signal(block) {
         return false;
@@ -3722,11 +3375,13 @@ fn block_clears_pending_signal(block: &MessageBlock, pending: &MessageBlock) -> 
     matches!(block.role.as_str(), "user" | "assistant" | "tool")
 }
 
+#[cfg(test)]
 fn detail_has_running_signal(detail: &ThreadDetail) -> bool {
     fallback_has_running_signal(Some(&detail.summary))
         || detail.blocks.iter().any(block_has_running_signal)
 }
 
+#[cfg(test)]
 fn detail_active_turn_id(detail: &ThreadDetail) -> Option<String> {
     detail
         .blocks
@@ -3736,6 +3391,7 @@ fn detail_active_turn_id(detail: &ThreadDetail) -> Option<String> {
         .and_then(|block| block.turn_id.clone())
 }
 
+#[cfg(test)]
 fn block_has_pending_signal(block: &MessageBlock) -> bool {
     let kind = block.kind.as_str();
     if kind == "request_user_input" {
@@ -3753,6 +3409,7 @@ fn block_has_pending_signal(block: &MessageBlock) -> bool {
         })
 }
 
+#[cfg(test)]
 fn block_has_running_signal(block: &MessageBlock) -> bool {
     if block_has_pending_signal(block) {
         return false;
@@ -3769,6 +3426,7 @@ fn block_has_running_signal(block: &MessageBlock) -> bool {
             || block.kind.contains("command"))
 }
 
+#[cfg(test)]
 fn app_thread_state(thread: &Value) -> AppThreadState {
     match app_thread_status_text(thread) {
         Some("notLoaded" | "not_loaded") => AppThreadState::NotLoaded,
@@ -3786,6 +3444,7 @@ fn app_thread_state(thread: &Value) -> AppThreadState {
     }
 }
 
+#[cfg(test)]
 fn app_thread_status_text(thread: &Value) -> Option<&str> {
     thread
         .get("status")
@@ -3793,6 +3452,7 @@ fn app_thread_status_text(thread: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+#[cfg(test)]
 fn app_thread_active_turn_id(thread: &Value) -> Option<String> {
     thread
         .pointer("/status/turnId")
@@ -3806,14 +3466,17 @@ fn app_thread_active_turn_id(thread: &Value) -> Option<String> {
         .or_else(|| app_thread_turns_active_turn_id(thread))
 }
 
+#[cfg(test)]
 fn app_thread_has_running_signal(thread: &Value) -> bool {
     app_thread_active_turn_id(thread).is_some()
 }
 
+#[cfg(test)]
 fn app_thread_has_fallback_rollout_path(thread: &Value) -> bool {
     app_thread_rollout_path(thread).is_some()
 }
 
+#[cfg(test)]
 fn app_thread_turns_active_turn_id(thread: &Value) -> Option<String> {
     thread
         .get("turns")
@@ -3835,6 +3498,7 @@ fn app_thread_turns_active_turn_id(thread: &Value) -> Option<String> {
         })
 }
 
+#[cfg(test)]
 fn app_server_detail_from_read(value: &Value) -> Option<ThreadDetail> {
     let thread = value.get("thread")?;
     let fallback_by_id = HashMap::new();
@@ -3857,6 +3521,7 @@ fn app_server_detail_from_read(value: &Value) -> Option<ThreadDetail> {
     Some(detail)
 }
 
+#[cfg(test)]
 fn app_server_thread_item_events(thread: &Value) -> Vec<Value> {
     thread
         .get("turns")
@@ -3879,6 +3544,7 @@ fn app_server_thread_item_events(thread: &Value) -> Vec<Value> {
         .collect()
 }
 
+#[cfg(test)]
 fn app_server_item_events(turn_id: Option<&str>, item: &Value) -> Vec<Value> {
     let Some(payload) = normalize_app_server_item_payload(item) else {
         return Vec::new();
@@ -3916,6 +3582,7 @@ fn app_server_item_events(turn_id: Option<&str>, item: &Value) -> Vec<Value> {
     }
 }
 
+#[cfg(test)]
 fn normalize_app_server_item_payload(item: &Value) -> Option<Value> {
     let item_type = item.get("type").and_then(Value::as_str)?;
     match item_type {
@@ -3967,6 +3634,7 @@ fn normalize_app_server_item_payload(item: &Value) -> Option<Value> {
     }
 }
 
+#[cfg(test)]
 fn item_text(item: &Value) -> Option<String> {
     item.get("text")
         .or_else(|| item.get("message"))
@@ -3991,6 +3659,7 @@ fn item_text(item: &Value) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
+#[cfg(test)]
 fn item_id(item: &Value) -> Option<String> {
     item.get("id")
         .or_else(|| item.get("itemId"))
@@ -3999,6 +3668,7 @@ fn item_id(item: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+#[cfg(test)]
 fn turn_has_running_item(turn: &Value) -> bool {
     turn.get("items")
         .and_then(Value::as_array)
@@ -4017,6 +3687,7 @@ fn turn_has_running_item(turn: &Value) -> bool {
         })
 }
 
+#[cfg(test)]
 fn app_thread_rollout_path(thread: &Value) -> Option<std::path::PathBuf> {
     thread
         .get("path")
@@ -4053,6 +3724,7 @@ fn seed_thread_event_blocks(sent_blocks: &mut HashMap<String, String>, blocks: &
     }
 }
 
+#[cfg(test)]
 fn thread_title(thread: &Value) -> Option<String> {
     ["name", "title"].into_iter().find_map(|field| {
         thread
@@ -4064,6 +3736,7 @@ fn thread_title(thread: &Value) -> Option<String> {
     })
 }
 
+#[cfg(test)]
 fn is_app_server_subagent_thread(thread: &Value) -> bool {
     has_non_empty_string(thread, &["parentThreadId", "parent_thread_id"])
         || has_non_empty_string(thread, &["agentPath", "agent_path"])
@@ -4076,6 +3749,7 @@ fn is_app_server_subagent_thread(thread: &Value) -> bool {
         || source_value_contains_subagent(thread.get("source"))
 }
 
+#[cfg(test)]
 fn has_non_empty_string(value: &Value, fields: &[&str]) -> bool {
     fields.iter().any(|field| {
         value
@@ -4085,6 +3759,7 @@ fn has_non_empty_string(value: &Value, fields: &[&str]) -> bool {
     })
 }
 
+#[cfg(test)]
 fn field_contains_subagent(value: &Value, fields: &[&str]) -> bool {
     fields.iter().any(|field| {
         value
@@ -4094,6 +3769,7 @@ fn field_contains_subagent(value: &Value, fields: &[&str]) -> bool {
     })
 }
 
+#[cfg(test)]
 fn source_value_contains_subagent(source: Option<&Value>) -> bool {
     match source {
         Some(Value::String(text)) => text.to_ascii_lowercase().contains("subagent"),
@@ -4108,6 +3784,7 @@ fn source_value_contains_subagent(source: Option<&Value>) -> bool {
     }
 }
 
+#[cfg(test)]
 fn thread_archived(thread: &Value) -> bool {
     thread
         .get("archived")
@@ -4185,21 +3862,7 @@ fn job_response(job: JobRecord) -> Value {
     value
 }
 
-fn normalize_config_response(value: &Value, state: &AppState) -> Value {
-    let config = value.get("config").unwrap_or(value);
-    let default_cwd = state.config().codex.workspace.to_string_lossy().to_string();
-    json!({
-        "model": config.get("model").and_then(Value::as_str),
-        "reasoning_effort": config.get("model_reasoning_effort").or_else(|| config.get("reasoning_effort")).and_then(Value::as_str),
-        "cwd": config.get("cwd").and_then(Value::as_str).unwrap_or(default_cwd.as_str()),
-        "permission_profile": config.get("default_permissions").or_else(|| config.get("permissions")).and_then(Value::as_str),
-        "approval_policy": config.get("approval_policy").and_then(Value::as_str),
-        "sandbox_mode": config.get("sandbox_mode").and_then(Value::as_str),
-        "network_access": config.get("sandbox_workspace_write").and_then(|value| value.get("network_access")).and_then(Value::as_bool),
-        "raw": value,
-    })
-}
-
+#[cfg(test)]
 fn normalize_goal_response(value: &Value) -> Value {
     let goal = value.get("goal").unwrap_or(value);
     if goal.is_null() {
@@ -4215,6 +3878,7 @@ fn normalize_goal_response(value: &Value) -> Value {
     })
 }
 
+#[cfg(test)]
 fn goal_status(goal: &Value) -> Option<String> {
     goal.get("status")
         .and_then(|value| {
@@ -4231,6 +3895,7 @@ fn goal_status(goal: &Value) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
+#[cfg(test)]
 fn goal_enabled(goal: &Value, status: &str) -> bool {
     if matches!(status, "idle" | "missing_thread" | "cleared") {
         return false;
@@ -4252,10 +3917,22 @@ fn goal_enabled(goal: &Value, status: &str) -> bool {
 
 fn goal_empty(status: &str) -> Value {
     json!({
+        "available": false,
         "enabled": false,
         "objective": null,
         "token_budget": null,
         "status": status,
+    })
+}
+
+fn goal_unavailable(status: &str) -> Value {
+    json!({
+        "available": false,
+        "enabled": false,
+        "objective": null,
+        "token_budget": null,
+        "status": status,
+        "raw": Value::Null,
     })
 }
 
@@ -4312,7 +3989,7 @@ mod tests {
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         apply_running_job_to_thread_list, archived_filter, block_changed, effective_message,
-        filter_thread_summaries, fixed_probe_shell_command, followup_request,
+        filter_thread_summaries, fixed_probe_shell_command, followup_request, load_probe_threads,
         merge_thread_summaries, normalize_goal_response, probe_config_path,
         prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
         thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
@@ -4479,6 +4156,307 @@ mod tests {
         }
     }
 
+    fn seed_local_codex_thread(home: &std::path::Path, thread_id: &str, title: &str) -> PathBuf {
+        fs::create_dir_all(home).unwrap();
+        mark_codex_home(home);
+        let rollout = home.join(format!("{thread_id}.jsonl"));
+        fs::write(
+            &rollout,
+            [
+                json!({"session_meta":{"payload":{"id":thread_id}}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"local detail body"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO threads(id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, archived_at, preview)
+             VALUES(?1, ?2, 1, 2, 'codex', '', '/tmp', ?3, '', '', 0, NULL, 'preview should not replace title')",
+            (thread_id, rollout.display().to_string(), title),
+        )
+        .unwrap();
+        rollout
+    }
+
+    fn app_server_missing_socket_state() -> (crate::state::AppState, String, String, PathBuf) {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let home = temp_test_dir("nexushub-local-codex");
+        let mut config = state.config();
+        config.codex.home = home.clone();
+        config.codex.workspace = home.clone();
+        config.codex.bridge_enabled = true;
+        config.codex.app_server_socket = Some(home.join("missing-app-server.sock"));
+        state.replace_config(config);
+        (state, session_token, csrf_token, home)
+    }
+
+    #[tokio::test]
+    async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
+        let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
+        seed_local_codex_thread(&home, "thread-a", "local title");
+        let app = router(state);
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/threads?limit=10")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list[0]["id"], "thread-a");
+        assert_eq!(list[0]["title"], "local title");
+
+        let detail_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/threads/thread-a")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_body = to_bytes(detail_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
+        assert_eq!(detail["summary"]["title"], "local title");
+
+        let rename_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/threads/thread-a/rename")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"local renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rename_response.status(), StatusCode::OK);
+
+        let rows = nexushub_core::codex::list_threads(
+            &nexushub_core::codex::CodexPaths::new(&home),
+            None,
+            Some("thread-a"),
+            10,
+        )
+        .unwrap();
+        assert_eq!(rows[0].title, "local renamed");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
+        let (state, _session_token, _csrf_token, home) = app_server_missing_socket_state();
+        seed_local_codex_thread(&home, "thread-a", "local title");
+
+        let rows = load_probe_threads(&state, "recent", 10).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "thread-a");
+        assert_eq!(rows[0].title, "local title");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn goal_routes_return_unavailable_without_app_server_socket() {
+        let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
+        seed_local_codex_thread(&home, "thread-a", "local title");
+        let app = router(state);
+
+        for (method, uri, body) in [
+            ("GET", "/api/codex/goal?thread_id=thread-a", ""),
+            (
+                "POST",
+                "/api/codex/goal",
+                r#"{"thread_id":"thread-a","objective":"ship"}"#,
+            ),
+            (
+                "POST",
+                "/api/codex/goal/clear",
+                r#"{"thread_id":"thread-a"}"#,
+            ),
+            (
+                "POST",
+                "/api/codex/goal/resume",
+                r#"{"thread_id":"thread-a"}"#,
+            ),
+        ] {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("nexushub_session={session_token}"));
+            if method == "POST" {
+                builder = builder
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json");
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::from(body)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["available"], false, "{method} {uri}");
+            assert_eq!(value["enabled"], false, "{method} {uri}");
+            assert_ne!(value["status"], "active", "{method} {uri}");
+        }
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn local_codex_routes_do_not_require_app_server_socket() {
+        let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
+        seed_local_codex_thread(&home, "thread-a", "local title");
+        let app = router(state.clone());
+
+        for uri in [
+            "/api/codex/models",
+            "/api/codex/permission-profiles",
+            "/api/codex/config",
+            "/api/system/status",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let text = serde_json::to_string(&value).unwrap();
+            assert!(!text.contains("app-server"), "{uri}");
+        }
+
+        let config_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/codex/config?cwd=%2Ftmp%2Fworkspace")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(config_response.status(), StatusCode::OK);
+        let config_body = to_bytes(config_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let config_value: serde_json::Value = serde_json::from_slice(&config_body).unwrap();
+        assert_eq!(config_value["cwd"], "/tmp/workspace");
+        assert_eq!(config_value["raw"]["source"], "local");
+
+        for (uri, body) in [
+            (
+                "/api/threads/thread-a/plan/accept",
+                r#"{"turn_id":"turn-a","item_id":"plan-a"}"#,
+            ),
+            (
+                "/api/threads/thread-a/plan/revise",
+                r#"{"turn_id":"turn-a","item_id":"plan-a","instructions":"补充检查"}"#,
+            ),
+            (
+                "/api/threads/thread-a/elicitation",
+                r#"{"answers":{"q1":["继续"]}}"#,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["bridge"], false, "{uri}");
+            assert_eq!(value["fallback"], true, "{uri}");
+            assert!(
+                value["job_id"].as_str().is_some_and(|id| !id.is_empty()),
+                "{uri}"
+            );
+        }
+
+        for (uri, body) in [
+            ("/api/threads/thread-a/fork", ""),
+            (
+                "/api/threads/thread-a/approval",
+                r#"{"turn_id":"turn-a","item_id":"approval-a","decision":"approve"}"#,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let error = value["error"].as_str().unwrap();
+            assert!(!error.contains("app-server"), "{uri}");
+        }
+        let _ = fs::remove_dir_all(home);
+    }
+
     #[test]
     fn followup_request_round_trips_attachment_options() {
         let prepared_attachments = vec![
@@ -4599,7 +4577,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn goal_resume_route_requires_csrf_and_uses_bridge_only_failure() {
+    async fn goal_resume_route_requires_csrf_and_returns_unavailable_without_local_goal_store() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
@@ -4619,7 +4597,7 @@ mod tests {
         assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
 
         let app = router(state);
-        let disabled_bridge = app
+        let unavailable = app
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4632,15 +4610,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(disabled_bridge.status(), StatusCode::BAD_GATEWAY);
-        let body = to_bytes(disabled_bridge.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::OK);
+        let body = to_bytes(unavailable.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(payload["error"]
-            .as_str()
-            .unwrap()
-            .contains("thread/goal/resume"));
+        assert_eq!(payload["available"], false);
+        assert_eq!(payload["enabled"], false);
+        assert_eq!(payload["status"], "unavailable");
     }
 
     #[tokio::test]
@@ -5112,13 +5087,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
         let mut config = state.config();
-        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
-        config.codex.home = PathBuf::from("auto");
-        config.codex.app_server_socket = Some(
-            codex_home
-                .join("app-server-control")
-                .join("app-server-control.sock"),
-        );
+        config.codex.home = codex_home.clone();
         config.probe.logs_db.retention_days = 2;
         state.replace_config(config);
 
@@ -5140,13 +5109,16 @@ mod tests {
 
         assert_eq!(logs_db["target"], "codex_logs_2");
         assert_eq!(logs_db["path"], logs_path.to_string_lossy().as_ref());
-        assert!(logs_db["configured_codex_home"].is_null());
+        assert_eq!(
+            logs_db["configured_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
         assert_eq!(
             logs_db["resolved_codex_home"],
             codex_home.to_string_lossy().as_ref()
         );
-        assert_eq!(logs_db["codex_home_source"], "socket");
-        assert_eq!(logs_db["logs_db_source"], "socket");
+        assert_eq!(logs_db["codex_home_source"], "configured");
+        assert_eq!(logs_db["logs_db_source"], "configured");
         assert!(logs_db["discovery_warnings"].as_array().unwrap().is_empty());
         assert_eq!(logs_db["total_rows"], 2);
         assert_eq!(logs_db["old_rows"], 1);
@@ -5173,13 +5145,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
         let mut config = state.config();
-        fs::create_dir_all(codex_home.join("app-server-control")).unwrap();
-        config.codex.home = PathBuf::from("auto");
-        config.codex.app_server_socket = Some(
-            codex_home
-                .join("app-server-control")
-                .join("app-server-control.sock"),
-        );
+        config.codex.home = codex_home.clone();
         config.probe.logs_db.retention_days = 2;
         state.replace_config(config.clone());
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
@@ -5247,13 +5213,16 @@ mod tests {
         assert!(logs_db.get("event_count").is_none());
         assert!(logs_db.get("dedupe_count").is_none());
         assert_eq!(logs_db["target"], "codex_logs_2");
-        assert!(logs_db["configured_codex_home"].is_null());
+        assert_eq!(
+            logs_db["configured_codex_home"],
+            logs_path.parent().unwrap().to_string_lossy().as_ref()
+        );
         assert_eq!(
             logs_db["resolved_codex_home"],
             logs_path.parent().unwrap().to_string_lossy().as_ref()
         );
-        assert_eq!(logs_db["codex_home_source"], "socket");
-        assert_eq!(logs_db["logs_db_source"], "socket");
+        assert_eq!(logs_db["codex_home_source"], "configured");
+        assert_eq!(logs_db["logs_db_source"], "configured");
         assert_eq!(logs_db["total_rows"], 2);
         assert_eq!(logs_db["old_rows"], 1);
         assert_eq!(logs_db["retained_rows"], 1);
@@ -5280,13 +5249,16 @@ mod tests {
         assert_eq!(patch.status(), StatusCode::OK);
         let body = to_bytes(patch.into_body(), usize::MAX).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(payload["codex"]["home"].is_null());
+        assert_eq!(
+            payload["codex"]["home"],
+            logs_path.parent().unwrap().to_string_lossy().as_ref()
+        );
         assert_eq!(
             payload["codex"]["resolved_codex_home"],
             logs_path.parent().unwrap().to_string_lossy().as_ref()
         );
-        assert_eq!(payload["codex"]["codex_home_source"], "socket");
-        assert_eq!(payload["codex"]["logs_db_source"], "socket");
+        assert_eq!(payload["codex"]["codex_home_source"], "configured");
+        assert_eq!(payload["codex"]["logs_db_source"], "configured");
         assert_eq!(payload["notifications"]["device_key_configured"], true);
         assert!(payload["notifications"].get("device_key").is_none());
         assert!(!body

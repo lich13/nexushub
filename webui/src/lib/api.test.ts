@@ -180,7 +180,7 @@ describe("archive delete API compatibility", () => {
     expect(plugins).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "codex",
-        description: expect.stringContaining("app-server"),
+        description: expect.stringContaining("本地线程"),
         invocation_template: "@Codex "
       }),
       expect.objectContaining({
@@ -371,7 +371,7 @@ describe("archive delete API compatibility", () => {
       "/api/probe/settings": {
         codex: {
           home: "/root/.codex",
-          app_server_service: "codex-app-server-root.service",
+          workspace: "/home/ubuntu/codex-workspace",
           host_label: "43.155.235.227"
         },
         probe: { enabled: true, poll_seconds: 15, recent_limit: 50 },
@@ -488,7 +488,7 @@ describe("archive delete API compatibility", () => {
     await expect(startProbeJob("logs-db-dry-run", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
     await expect(startProbeJob("logs-db-execute", "csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
     await saveProbeSettings({
-      codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+      codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
       probe: {
         poll_seconds: 20,
         notifications: { enabled: true, device_key: "secret" },
@@ -509,7 +509,7 @@ describe("archive delete API compatibility", () => {
       ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: true }],
       ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: false, compact: false }],
       ["/api/probe/settings", "PATCH", "csrf-token", {
-        codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+        codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
         probe: {
           poll_seconds: 20,
           notifications: { enabled: true, device_key: "secret" },
@@ -544,9 +544,6 @@ describe("archive delete API compatibility", () => {
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
       codex_home_source: "auto",
-      configured_app_server_socket: "/run/codex/custom.sock",
-      resolved_app_server_socket: "/run/codex/custom.sock",
-      app_server_socket_source: "configured",
       logs_db_source: "resolved_codex_home",
       discovery_warnings: ["configured Codex home missing"]
     };
@@ -577,9 +574,6 @@ describe("archive delete API compatibility", () => {
         configured_codex_home: null,
         resolved_codex_home: "/home/codex/.codex",
         codex_home_source: "auto",
-        configured_app_server_socket: "/run/codex/custom.sock",
-        resolved_app_server_socket: "/run/codex/custom.sock",
-        app_server_socket_source: "configured",
         logs_db_source: "resolved_codex_home",
         discovery_warnings: ["configured Codex home missing"]
       }
@@ -605,8 +599,7 @@ describe("archive delete API compatibility", () => {
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
       codex_home_source: "auto",
-      panel_db: "/opt/nexushub/nexushub.sqlite",
-      app_server_service: { active: true }
+      panel_db: "/opt/nexushub/nexushub.sqlite"
     };
     const logsDb: ProbeLogsDbStatus = {
       path: "/home/codex/.codex/logs_2.sqlite",
@@ -627,7 +620,7 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await saveProbeSettings({
-      codex: { home: "/root/.codex", app_server_service: "codex-app-server-root.service", host_label: "cloud" },
+      codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
       probe: {
         enabled: true,
         notifications: { enabled: true, device_key: "secret", server_url: "https://api.day.app" },
@@ -1724,8 +1717,8 @@ describe("archive delete API compatibility", () => {
     expect(app.followUpMessagePreview({
       status: "error",
       message: "ignored",
-      error: "bridge unavailable"
-    })).toBe("bridge unavailable");
+      error: "local state unavailable"
+    })).toBe("local state unavailable");
   });
 
   test("subscribe thread events uses credentials and dispatches block summary and errors", async () => {

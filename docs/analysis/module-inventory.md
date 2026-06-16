@@ -2,7 +2,7 @@
 
 | Module | Responsibility | Dependencies | Files | Lines | Complexity | S.U.P.E.R Score |
 |:--|:--|:--|--:|--:|:--|:--|
-| `app_server` | Local Codex app-server bridge calls and JSON-RPC handling | Tokio, serde, app-server protocol | 1 | 1255 | High | Syellow Uyellow Pyellow Eyellow Ryellow |
+| `app_server` | Historical app-server protocol compatibility types and tests; not a default runtime path | Tokio, serde, app-server protocol | 1 | 1255 | High | Syellow Uyellow Pyellow Eyellow Ryellow |
 | `codex` | Codex state DB, rollout parsing, thread/detail model | rusqlite, JSONL, filesystem | 1 | 4119 | Critical | Sred Uyellow Pyellow Eyellow Ryellow |
 | `api` | Axum routing, auth gates, Codex actions, jobs, uploads, provider endpoints | `nexushub-core`, Axum | 1 | 4578 | Critical | Sred Uyellow Pyellow Eyellow Ryellow |
 | `db` | NexusHub panel DB, sessions, jobs, follow-up queue | rusqlite, crypto | 1 | 1048 | High | Syellow Ugreen Pyellow Egreen Ryellow |
@@ -20,9 +20,9 @@
 
 ### `app_server`
 - **Path**: `crates/nexushub-core/src/app_server.rs`
-- **Responsibility**: Bridge Codex create/send/stop/thread actions to the local app-server.
+- **Responsibility**: Preserve historical app-server protocol compatibility surfaces while the default runtime uses local state and controlled jobs.
 - **Public API**: `AppServerBridge`, `BridgeActionResult`, `BridgeTurnOptions`.
-- **Transformation Notes**: Keep this as the Codex control boundary; do not leak the root app-server publicly.
+- **Transformation Notes**: Do not reintroduce this module as a default runtime dependency; any future use must stay explicitly configured and private.
 - **S.U.P.E.R Assessment**: Single purpose is partial because protocol details and retry/error shaping live together. Ports need stronger typed contracts before more providers reuse the shape.
 
 ### `codex`

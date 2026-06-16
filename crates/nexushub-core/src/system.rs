@@ -52,13 +52,6 @@ pub struct VersionInfo {
 }
 
 pub async fn system_status(config: &Config) -> Result<SystemStatus> {
-    let service = service_status(&config.codex.app_server_service)
-        .await
-        .unwrap_or(ServiceStatus {
-            active: false,
-            active_state: None,
-            sub_state: None,
-        });
     let resolved = resolve_codex_paths(
         &config.codex.home,
         config.codex.app_server_socket.as_deref(),
@@ -80,20 +73,15 @@ pub async fn system_status(config: &Config) -> Result<SystemStatus> {
         discovery_warnings: resolved.discovery_warnings,
         state_db: paths.state_db().display().to_string(),
         panel_db: config.paths.db_path.display().to_string(),
-        app_server_socket: resolved
-            .app_server_socket
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        configured_app_server_socket: resolved
-            .configured_app_server_socket
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        resolved_app_server_socket: resolved
-            .app_server_socket
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        app_server_socket_source: resolved.app_server_socket_source,
-        app_server_service: service,
+        app_server_socket: None,
+        configured_app_server_socket: None,
+        resolved_app_server_socket: None,
+        app_server_socket_source: None,
+        app_server_service: ServiceStatus {
+            active: false,
+            active_state: None,
+            sub_state: None,
+        },
         state_db_integrity,
         hidden_thread_count,
         thread_source_counts,
@@ -368,30 +356,6 @@ fn compare_pre(left: &[VersionIdentifier], right: &[VersionIdentifier]) -> std::
     left.len().cmp(&right.len())
 }
 
-async fn service_status(service: &str) -> Result<ServiceStatus> {
-    let output = Command::new("systemctl")
-        .args([
-            "show",
-            service,
-            "-p",
-            "ActiveState",
-            "-p",
-            "SubState",
-            "--no-pager",
-        ])
-        .output()
-        .await
-        .context("systemctl show")?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let active_state = parse_systemctl_property(&text, "ActiveState");
-    let sub_state = parse_systemctl_property(&text, "SubState");
-    Ok(ServiceStatus {
-        active: active_state.as_deref() == Some("active"),
-        active_state,
-        sub_state,
-    })
-}
-
 async fn command_stdout(program: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(program).args(args).output().await?;
     if !output.status.success() {
@@ -410,25 +374,9 @@ async fn command_stdout_timeout(
         .with_context(|| format!("{program} timed out"))?
 }
 
-fn parse_systemctl_property(text: &str, key: &str) -> Option<String> {
-    text.lines()
-        .find_map(|line| line.strip_prefix(&format!("{key}=")).map(str::to_string))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        codex_update_available, compare_semver, current_codex_version, extract_semver,
-        parse_systemctl_property,
-    };
-
-    #[test]
-    fn parses_property() {
-        assert_eq!(
-            parse_systemctl_property("ActiveState=active\n", "ActiveState").as_deref(),
-            Some("active")
-        );
-    }
+    use super::{codex_update_available, compare_semver, current_codex_version, extract_semver};
 
     #[test]
     fn extracts_codex_cli_semver() {

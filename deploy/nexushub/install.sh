@@ -155,7 +155,7 @@ install_config() {
     install -m 0640 -o root -g root "${source_dir}/env.example" "${ENV_FILE}"
   fi
   ensure_secret_key
-  ensure_bridge_config
+  ensure_config_defaults
 }
 
 ensure_secret_key() {
@@ -206,7 +206,7 @@ PY
   chown root:root "${ENV_FILE}"
 }
 
-ensure_bridge_config() {
+ensure_config_defaults() {
   python3 - "${CONFIG_FILE}" <<'PY'
 from pathlib import Path
 import sys
@@ -214,50 +214,6 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 lines = text.splitlines()
-section_start = None
-section_end = len(lines)
-
-for index, line in enumerate(lines):
-    if line.strip() == "[codex]":
-        section_start = index
-        continue
-    if section_start is not None and index > section_start and line.strip().startswith("[") and line.strip().endswith("]"):
-        section_end = index
-        break
-
-if section_start is None:
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.append("[codex]")
-    section_start = len(lines) - 1
-    section_end = len(lines)
-
-required = {
-    "host_label": '"43.155.235.227"',
-    "bridge_enabled": "true",
-    "bridge_transport": '"websocket"',
-    "bridge_timeout_seconds": "20",
-}
-insert_if_missing = {
-    "app_server_socket": '"\\/root\\/.codex\\/app-server-control\\/app-server-control.sock"'.replace("\\/", "/"),
-}
-seen = set()
-for index in range(section_start + 1, section_end):
-    stripped = lines[index].strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        continue
-    key = stripped.split("=", 1)[0].strip()
-    if key in required:
-        lines[index] = f"{key} = {required[key]}"
-        seen.add(key)
-    elif key in insert_if_missing:
-        seen.add(key)
-
-insert_at = section_end
-for key, value in {**required, **insert_if_missing}.items():
-    if key not in seen:
-        lines.insert(insert_at, f"{key} = {value}")
-        insert_at += 1
 
 def is_legacy_codex_precheck(key, value):
     if key != "precheck_command":
@@ -307,6 +263,46 @@ def ensure_section(section, required_values, replace_values=None):
             lines.insert(insert_at, f"{key} = {value}")
             insert_at += 1
 
+def remove_section_keys(section, keys):
+    global lines
+    start = None
+    end = len(lines)
+    for index, line in enumerate(lines):
+        if line.strip() == f"[{section}]":
+            start = index
+            continue
+        if start is not None and index > start and line.strip().startswith("[") and line.strip().endswith("]"):
+            end = index
+            break
+    if start is None:
+        return
+    filtered = []
+    for index, line in enumerate(lines):
+        if start < index < end:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in keys:
+                    continue
+        filtered.append(line)
+    lines = filtered
+
+ensure_section(
+    "codex",
+    {
+        "host_label": '"43.155.235.227"',
+    },
+)
+remove_section_keys(
+    "codex",
+    {
+        "app_server_service",
+        "app_server_socket",
+        "bridge_enabled",
+        "bridge_transport",
+        "bridge_timeout_seconds",
+    },
+)
 ensure_section(
     "server",
     {
@@ -391,7 +387,12 @@ ensure_section(
     "probe.hooks",
     {
         "manage_stop_hook": "true",
-        "reload_app_server_after_install": "true",
+    },
+)
+remove_section_keys(
+    "probe.hooks",
+    {
+        "reload_app_server_after_install",
     },
 )
 ensure_section(

@@ -2,7 +2,7 @@
 
 ## Preliminary Direction
 
-Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep the Codex chain intact, replace the cloud Sentinel runtime with a built-in Probe surface, and add a read-only Claude Code provider framework inspired by multi-provider IDE consoles without copying AGPL source.
+Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep Codex local-state compatibility intact, replace the cloud Sentinel runtime with a built-in Probe surface, and add a read-only Claude Code provider framework inspired by multi-provider IDE consoles without copying AGPL source.
 
 ## Current Architecture
 
@@ -11,7 +11,7 @@ flowchart TD
     Browser[WebUI React/Vite] --> API[nexushubd Axum API]
     API --> Core[nexushub-core]
     Core --> CodexState[Codex state DB, session index, rollout files]
-    Core --> Bridge[Local Codex app-server bridge]
+    Core --> Jobs[Controlled codex exec jobs]
     Core --> PanelDb[NexusHub SQLite DB]
     Core --> ClaudeHome[~/.claude read-only]
     Core --> Platform[PlatformPaths]
@@ -19,7 +19,7 @@ flowchart TD
     Nginx[Nginx /nexushub/] --> API
 ```
 
-The daemon listens on `127.0.0.1:15742` and is intended to be exposed only through an HTTPS reverse proxy under `/nexushub/`. Codex create/send/stop/thread actions use the local app-server bridge first. Official Codex state remains the source of truth for thread and rollout reads.
+The daemon listens on `127.0.0.1:15742` and is intended to be exposed only through an HTTPS reverse proxy under `/nexushub/`. Thread list/detail/status/Probe reads use official Codex local state. Create/send uses controlled `codex exec --json` jobs; actions that cannot be operated reliably from local state return an explicit unavailable response.
 
 ## Technology Stack
 
@@ -68,9 +68,9 @@ Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script 
 
 ## External Integrations
 
-- Codex app-server bridge over local socket.
 - Official Codex state DB under `/root/.codex/state_5.sqlite`.
 - Codex rollout/session files under Codex home.
+- Controlled `codex exec --json` jobs for create/send.
 - Fixed cloud Codex admin wrappers under `/home/ubuntu/codex-admin/bin`.
 - Turnstile login verification and encrypted secret storage.
 - GitHub Releases for `lich13/nexushub` updates.

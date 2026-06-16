@@ -1,5 +1,4 @@
 use nexushub_core::{
-    app_server::AppServerBridge,
     codex::{resolve_codex_paths, CodexPaths, ResolvedCodexPaths, ThreadDetail},
     config::Config,
     db::PanelDb,
@@ -43,10 +42,6 @@ impl AppState {
 
     pub fn replace_config(&self, config: Config) {
         *self.config.write().expect("config rwlock") = config;
-    }
-
-    pub fn bridge(&self) -> AppServerBridge {
-        AppServerBridge::new(self.config())
     }
 
     pub fn resolved_codex_paths(&self) -> ResolvedCodexPaths {

@@ -1,17 +1,17 @@
 # NexusHub
 
-`nexushub` is a Rust + React web panel for a cloud Codex app-server. It runs as a local-only daemon on the server and is exposed through Nginx HTTPS.
+`nexushub` is a Rust + React web panel for cloud Codex local state. It runs as a local-only daemon on the server and is exposed through Nginx HTTPS.
 
 Current scope:
 
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
 - Encrypted Turnstile secret storage compatible with legacy codex-cloud-panel and cc-switch-lite key import.
-- Desktop-style conversation workspace backed by the controlled app-server bridge.
-- Thread read model from the resolved Codex home, `session_index.jsonl`, and rollout files.
+- Desktop-style conversation workspace backed by Codex local state and controlled `codex exec --json` jobs.
+- Thread read model from the resolved Codex home, Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`.
 - Running / reply-needed / recoverable / archived status cards.
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
 - Split Panel update and Codex update jobs. Panel updates use `/usr/local/bin/nexushub-update`; Codex updates keep the existing `/home/ubuntu/codex-admin/bin` wrappers.
-- Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and app-server failures.
+- Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
 - Goal Mode, model, reasoning, cwd, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
 - Provider preview framework for Codex, Claude Code, future Cursor CLI, and future Gemini CLI. Codex is the only full-control provider in this release.
@@ -20,7 +20,7 @@ Current scope:
 - Desktop navigation can be hidden to give the conversation workspace more horizontal room.
 - System status, job history, and responsive sky-blue dark WebUI.
 
-Conversation create/send/stop and thread actions use the private app-server bridge first. `codex exec --json` is kept only as fallback for create/send when the bridge is unavailable. Plan accept/revise actions use explicit panel endpoints and are marked `fallback=true` because the current app-server exposes Plan content as turn items rather than a dedicated Plan accept API; approval prompts require a live app-server JSON-RPC request connection and are shown as unsupported instead of being silently converted to text. Historical Plan/choice/approval items are only surfaced when they are still the latest unresolved action.
+Thread listing, thread details, status cards, Probe, archive deletion, and logs-db maintenance read Codex local state directly from the resolved Codex home: `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, approvals, and goal actions that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical Plan/choice/approval items are only surfaced when they are still the latest unresolved action.
 
 ## Runtime Layout
 
@@ -36,21 +36,18 @@ Conversation create/send/stop and thread actions use the private app-server brid
 The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
 `/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`. The installer preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
 
-## App-Server Bridge
+## Codex State
 
-`[codex]` config controls the bridge:
+`[codex]` config controls local Codex state discovery:
 
 ```toml
-app_server_service = "codex-app-server-root.service"
-app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"
-bridge_enabled = true
-bridge_transport = "websocket"
-bridge_timeout_seconds = 20
+workspace = "/home/ubuntu/codex-workspace"
+host_label = "43.155.235.227"
 ```
 
-`codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the app-server socket/state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
+`codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
 
-The public site must expose only `nexushub` through Nginx. Do not publish the root app-server socket, `/v1`, `/responses`, or metrics endpoints. If a response has `fallback=true`, check Job History for the `codex exec` fallback job.
+The public site must expose only `nexushub` through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. If a response has `fallback=true`, check Job History for the controlled `codex exec` job.
 
 ## Probe
 
@@ -118,13 +115,13 @@ curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```
 
-Then log in and verify: thread list loads, system status shows the IP/public endpoint and `codex-app-server-root.service` active, bridge send returns `bridge=true`, renamed thread titles refresh from app-server `thread/read`, Goal and the compact permission menu work, old Plan Mode threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and `/codex-cloud-panel/` remains `404`.
+Then log in and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through the configured control path, Goal and the compact permission menu work, old Plan Mode threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and `/codex-cloud-panel/` remains `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 
 ## Safety Boundaries
 
-- The panel does not expose root Codex app-server directly; bridge access stays local.
+- The panel reads Codex local state directly and does not expose Codex control endpoints.
 - No arbitrary root shell is available from the WebUI.
 - Maintenance actions are fixed jobs only.
 - Secret fields return only configured status.

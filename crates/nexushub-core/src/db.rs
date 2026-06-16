@@ -1272,7 +1272,7 @@ mod tests {
             .enqueue_followup("thread-a", "retry later", json!({}))
             .unwrap();
         let claimed = db.claim_next_pending_followup("thread-a").unwrap().unwrap();
-        db.mark_followup_error(&claimed.id, "bridge unavailable")
+        db.mark_followup_error(&claimed.id, "local state unavailable")
             .unwrap();
 
         assert!(db
@@ -1282,7 +1282,7 @@ mod tests {
         let listed = db.list_followups("thread-a", 10).unwrap();
         let errored = listed.iter().find(|item| item.id == followup.id).unwrap();
         assert_eq!(errored.status, "error");
-        assert_eq!(errored.error.as_deref(), Some("bridge unavailable"));
+        assert_eq!(errored.error.as_deref(), Some("local state unavailable"));
     }
 
     #[test]

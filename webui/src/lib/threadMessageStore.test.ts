@@ -243,4 +243,25 @@ describe("thread message store", () => {
     });
     expect(store.slots.get("thread-a")?.summary?.last_event_kind).toBe("task_complete");
   });
+
+  test("keeps a real thread title when detail refresh sends placeholder, plan, or long assistant body titles", () => {
+    const store = createThreadMessageStoreState();
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("a1")]),
+      summary: { ...summary("thread-a"), title: "真实标题" }
+    });
+
+    for (const incomingTitle of [
+      "读取中",
+      "<proposed_plan>1. 检查\n2. 修复</proposed_plan>",
+      "1. 检查缓存\n2. 清理归档状态\n3. 运行回归测试",
+      "我会先检查现有线程缓存和消息存储行为，然后补上归档后的缓存清理逻辑，最后运行测试确认不会再把 assistant 正文当成标题。"
+    ]) {
+      applyThreadDetailToSlot(store, "thread-a", {
+        ...detail("thread-a", [block(`refresh-${incomingTitle.length}`)]),
+        summary: { ...summary("thread-a"), title: incomingTitle }
+      });
+      expect(store.slots.get("thread-a")?.summary?.title).toBe("真实标题");
+    }
+  });
 });

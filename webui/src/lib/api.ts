@@ -216,14 +216,14 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
         { id: "plan-demo", role: "assistant", kind: "plan", display_kind: "plan", turn_id: "turn-plan-demo", item_id: "plan-demo", status: "pending", resolved: false, plan_status: "pending", text: "<proposed_plan>1. 核对线程状态\n2. 修复 Plan/Questions 展示\n3. 验证并部署</proposed_plan>", questions: [] },
         { id: "question-answered", role: "assistant", kind: "request_user_input_result", display_kind: "question_result", turn_id: "turn-old-demo", status: "completed", resolved: true, answers: [{ question_id: "q0", answers: ["保留"], note: "历史选择已回答" }], questions: [{ id: "q0", question: "历史选项", options: [{ label: "保留" }, { label: "修改" }] }] },
         { id: "question-demo", role: "assistant", kind: "request_user_input", display_kind: "question", turn_id: "turn-plan-demo", call_id: "question-demo", status: "pending", resolved: false, questions: [{ id: "q1", question: "选择执行方式", options: [{ label: "直接实施", description: "使用当前计划继续执行" }, { label: "先修改", description: "补充约束后重新计划" }] }] },
-        { id: "a1", role: "assistant", kind: "agentMessage", text: "状态正常，app-server 处于 active/running。归档删除 dry-run 可执行。", questions: [] },
+        { id: "a1", role: "assistant", kind: "agentMessage", text: "状态正常，本地 Codex 状态库可读。归档删除 dry-run 可执行。", questions: [] },
         ...completedTools,
         { id: "t1", role: "tool", kind: "commandExecution", tool_name: "shell", text: "codex-cloud-doctor\nsqlite integrity_check: ok", status: "completed", questions: [] },
-        { id: "t-running", role: "tool", kind: "function_call", tool_name: "shell", summary: "正在刷新 app-server 状态", text: "systemctl status codex-app-server", status: "running", questions: [] }
+        { id: "t-running", role: "tool", kind: "function_call", tool_name: "shell", summary: "正在刷新本地状态", text: "sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;'", status: "running", questions: [] }
       ],
       messages: [
         { role: "user", kind: "message", text: "检查云机 Codex 状态。" },
-        { role: "assistant", kind: "message", text: "状态正常，app-server 处于 active/running。归档删除 dry-run 可执行。" },
+        { role: "assistant", kind: "message", text: "状态正常，本地 Codex 状态库可读。归档删除 dry-run 可执行。" },
         { role: "tool", kind: "function_call", text: "codex-cloud-doctor\nsqlite integrity_check: ok" }
       ]
     };
@@ -265,7 +265,6 @@ export async function getSystemStatus(): Promise<SystemStatus> {
       resolved_codex_home: "/root/.codex",
       codex_home_source: "config",
       panel_db: "/opt/nexushub/panel.sqlite",
-      app_server_service: { active: true, active_state: "active", sub_state: "running" },
       state_db_integrity: "ok"
     };
   }
@@ -311,7 +310,7 @@ export async function listProviders(): Promise<AgentProviderInfo[]> {
         id: "codex",
         label: "Codex",
         status: "ready",
-        description: "完整 Codex 控制面，使用官方 state DB、rollout 与 app-server bridge。",
+        description: "完整 Codex 控制面，使用官方 state DB、session_index、rollout 与受控 job。",
         capabilities: ["threads", "chat", "plan_questions", "uploads", "updates", "doctor"],
         safety: "保留官方数据结构，不修改 Codex DB schema"
       },
@@ -423,7 +422,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
         label: "Codex",
         status: "ready",
         kind: "builtin",
-        description: "Codex app-server 会话、线程和受控操作",
+        description: "Codex 本地线程、状态和受控操作",
         invocation_template: "@Codex "
       },
       {
@@ -797,7 +796,7 @@ export async function deleteUpload(id: string, csrfToken?: string | null): Promi
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: true, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: false };
+  if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "controlled Codex job queued" };
   return apiFetch<BridgeActionResult>("/api/threads", {
     method: "POST",
     csrfToken,
@@ -806,7 +805,7 @@ export async function createThread(payload: ThreadSendPayload, csrfToken?: strin
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: true, thread_id: threadId, turn_id: "turn-demo", fallback: false };
+  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "controlled Codex job queued" };
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/messages`, {
     method: "POST",
     csrfToken,
@@ -815,7 +814,7 @@ export async function sendMessage(threadId: string, payload: ThreadSendPayload, 
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: true, thread_id: threadId, turn_id: "turn-demo", fallback: false, message: "follow-up steered into the active Codex turn" };
+  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "follow-up queued for the active Codex turn" };
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/steer`, {
     method: "POST",
     csrfToken,
@@ -1212,11 +1211,6 @@ function demoProbeSettings(): ProbeSettings {
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
       workspace: "/home/ubuntu/codex-workspace",
-      app_server_service: "codex-app-server-root.service",
-      app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-      bridge_enabled: true,
-      bridge_transport: "websocket",
-      bridge_timeout_seconds: 20,
       host_label: "43.155.235.227"
     },
     probe: {

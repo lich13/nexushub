@@ -209,8 +209,6 @@ pub fn resolve_codex_paths_with_options(
             "configured Codex home is not valid",
         )
     });
-    let socket_home = configured_app_server_socket.and_then(codex_home_from_app_server_socket_path);
-
     let mut candidates: Vec<(PathBuf, &'static str, &'static str)> = Vec::new();
     if let Some(candidate) = configured_candidate {
         candidates.push(candidate);
@@ -224,13 +222,6 @@ pub fn resolve_codex_paths_with_options(
             path.to_path_buf(),
             "env:CODEX_HOME",
             "CODEX_HOME is not a valid Codex home",
-        ));
-    }
-    if let Some(path) = socket_home {
-        candidates.push((
-            path,
-            "socket",
-            "app-server socket did not resolve to a valid Codex home",
         ));
     }
     if let Some(path) = options.current_user_home.as_ref() {
@@ -315,16 +306,11 @@ fn resolve_app_server_socket(
     home: &Path,
     configured_app_server_socket: Option<&Path>,
 ) -> (Option<PathBuf>, Option<String>) {
+    let _ = home;
     if let Some(socket) = configured_app_server_socket {
         return (Some(socket.to_path_buf()), Some("configured".to_string()));
     }
-    (
-        Some(
-            home.join("app-server-control")
-                .join("app-server-control.sock"),
-        ),
-        Some("resolved_codex_home".to_string()),
-    )
+    (None, None)
 }
 
 fn is_auto_path(path: &Path) -> bool {
@@ -351,14 +337,6 @@ fn is_valid_codex_home(path: &Path) -> bool {
         ]
         .iter()
         .any(|artifact| artifact.exists())
-}
-
-fn codex_home_from_app_server_socket_path(socket: &Path) -> Option<PathBuf> {
-    let parent = socket.parent()?;
-    if parent.file_name().and_then(|value| value.to_str()) == Some("app-server-control") {
-        return parent.parent().map(Path::to_path_buf);
-    }
-    None
 }
 
 fn scanned_home_codex_dirs(home_root: &Path) -> Vec<PathBuf> {
@@ -714,6 +692,12 @@ pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
     }
     row.cwd = scan.cwd;
     row.model = scan.model;
+    if !is_usable_thread_title(&row.title) {
+        row.title = scan
+            .title
+            .or(scan.first_user_message_title)
+            .unwrap_or_else(|| "未命名线程".to_string());
+    }
     row.active_turn_id = scan.active_turn_id;
     row.pending_elicitation = scan.pending_elicitation;
     row.last_event_kind = scan.last_event_kind;
@@ -819,8 +803,8 @@ fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
 
     let columns = table_columns(&conn, "threads")?;
     let title_expr = first_existing(&columns, &["title", "name"])
-        .map(|c| format!("COALESCE({c}, id)"))
-        .unwrap_or_else(|| "id".to_string());
+        .unwrap_or("NULL")
+        .to_string();
     let updated_expr = first_existing(&columns, &["updated_at", "last_activity_at", "created_at"])
         .unwrap_or("NULL")
         .to_string();
@@ -912,7 +896,8 @@ fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
         Ok(Some(ThreadSummary {
             id,
             title: title
-                .filter(|v| !v.trim().is_empty())
+                .as_deref()
+                .and_then(thread_title_candidate)
                 .unwrap_or_else(|| "未命名线程".to_string()),
             status,
             updated_at: updated_raw.as_ref().and_then(format_cell_time),
@@ -1055,6 +1040,8 @@ struct RolloutScan {
     running: bool,
     cwd: Option<String>,
     model: Option<String>,
+    title: Option<String>,
+    first_user_message_title: Option<String>,
     active_turn_id: Option<String>,
     pending_elicitation: Option<PendingElicitation>,
     last_event_kind: Option<String>,
@@ -1103,6 +1090,9 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or(scan.model);
+            if scan.title.is_none() {
+                scan.title = rollout_metadata_title(payload);
+            }
         }
         let event_type = rollout_event_type(&value);
         if !event_type.is_empty() {
@@ -1227,6 +1217,9 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
         if let Some(message) = parse_message_event(&value) {
             scan.message_count += 1;
             let text = trim_text(&message.text, 500);
+            if message.role == "user" && scan.first_user_message_title.is_none() {
+                scan.first_user_message_title = first_user_message_title(&text);
+            }
             if !text.is_empty() {
                 if text.contains("<proposed_plan>") {
                     let (turn_id, item_id) = plan_marker_for_event(&current_plan_marker, &value)
@@ -2704,6 +2697,60 @@ fn contains_proposed_plan(text: &str) -> bool {
     text.contains("<proposed_plan>")
 }
 
+fn rollout_metadata_title(payload: &Value) -> Option<String> {
+    [
+        "thread_title",
+        "threadTitle",
+        "title",
+        "name",
+        "session_title",
+        "sessionTitle",
+    ]
+    .into_iter()
+    .find_map(|field| {
+        payload
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(thread_title_candidate)
+    })
+}
+
+fn first_user_message_title(text: &str) -> Option<String> {
+    let value = trim_text(text, 80);
+    is_usable_thread_title(&value).then_some(value)
+}
+
+fn thread_title_candidate(text: &str) -> Option<String> {
+    let value = trim_text(text, 80);
+    (is_usable_thread_title(&value) && text.trim().chars().count() <= 120).then_some(value)
+}
+
+fn is_usable_thread_title(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "untitled" | "untitled thread" | "未命名线程" | "读取中" | "loading"
+    ) || lower.starts_with("读取中")
+        || lower.starts_with("loading")
+        || lower.contains("<proposed_plan>")
+        || looks_like_assistant_preview_title(trimmed)
+        || is_internal_context_message_text(trimmed)
+    {
+        return false;
+    }
+    true
+}
+
+fn looks_like_assistant_preview_title(text: &str) -> bool {
+    let lower = text.trim().to_ascii_lowercase();
+    (lower.starts_with("assistant preview:") || lower.starts_with("assistant:"))
+        && text.chars().count() > 40
+}
+
 fn is_subagent_session_meta(payload: &Value) -> bool {
     let source_value = payload
         .get("thread_source")
@@ -3278,6 +3325,7 @@ mod tests {
     use rusqlite::Connection;
     use serde_json::json;
     use std::{
+        collections::HashMap,
         env, fs,
         path::{Path, PathBuf},
         sync::atomic::{AtomicUsize, Ordering},
@@ -3347,48 +3395,96 @@ mod tests {
     }
 
     #[test]
-    fn resolved_codex_paths_uses_socket_then_current_root_ubuntu_and_home_scan() {
-        let root = unique_temp_dir("resolved-codex-order");
-        let invalid_config = root.join("missing/.codex");
+    fn resolved_codex_paths_ignores_app_server_socket_for_home_discovery() {
+        let root = unique_temp_dir("resolved-codex-no-socket-discovery");
         let socket_home = root.join("socket-owner/.codex");
         let current_home = root.join("current-user");
-        let root_home = root.join("root/.codex");
-        let ubuntu_home = root.join("ubuntu/.codex");
-        let scanned_home = root.join("home/alice/.codex");
         mark_codex_home(&socket_home);
         mark_codex_home(&current_home.join(".codex"));
-        mark_codex_home(&root_home);
-        mark_codex_home(&ubuntu_home);
-        mark_codex_home(&scanned_home);
         let socket = socket_home
             .join("app-server-control")
             .join("app-server-control.sock");
 
-        let socket_resolved = resolve_codex_paths_with_options(
-            &invalid_config,
+        let resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
             Some(&socket),
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: Some(current_home.clone()),
-                root_codex_home: root_home.clone(),
-                ubuntu_codex_home: ubuntu_home.clone(),
+                root_codex_home: root.join("root/.codex"),
+                ubuntu_codex_home: root.join("ubuntu/.codex"),
                 home_scan_root: root.join("home"),
             },
         );
-        assert_eq!(socket_resolved.home, socket_home);
-        assert_eq!(socket_resolved.codex_home_source, "socket");
-        assert_eq!(socket_resolved.app_server_socket, Some(socket));
+
+        assert_eq!(resolved.home, current_home.join(".codex"));
+        assert_eq!(resolved.codex_home_source, "current_user");
+        assert_eq!(resolved.configured_app_server_socket, Some(socket.clone()));
+        assert_eq!(resolved.app_server_socket, Some(socket));
         assert_eq!(
-            socket_resolved.app_server_socket_source.as_deref(),
+            resolved.app_server_socket_source.as_deref(),
             Some("configured")
         );
-        assert!(socket_resolved
-            .discovery_warnings
-            .iter()
-            .any(|warning| warning.contains("configured Codex home is not valid")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_does_not_synthesize_app_server_socket() {
+        let root = unique_temp_dir("resolved-codex-no-synthetic-socket");
+        let env_home = root.join("env/.codex");
+        mark_codex_home(&env_home);
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: Some(env_home.clone()),
+            current_user_home: None,
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+        };
+
+        let resolved = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
+
+        assert_eq!(resolved.home, env_home);
+        assert_eq!(resolved.app_server_socket, None);
+        assert_eq!(resolved.app_server_socket_source, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_keeps_app_server_socket_empty_without_config() {
+        let root = unique_temp_dir("resolved-codex-no-synth-socket");
+        let env_home = root.join("env/.codex");
+        mark_codex_home(&env_home);
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: Some(env_home.clone()),
+            current_user_home: None,
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+        };
+
+        let resolved = resolve_codex_paths_with_options(Path::new("auto"), None, &options);
+
+        assert_eq!(resolved.home, env_home);
+        assert_eq!(resolved.app_server_socket, None);
+        assert_eq!(resolved.app_server_socket_source, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_uses_current_root_ubuntu_and_home_scan_without_socket() {
+        let root = unique_temp_dir("resolved-codex-order");
+        let invalid_config = root.join("missing/.codex");
+        let current_home = root.join("current-user");
+        let root_home = root.join("root/.codex");
+        let ubuntu_home = root.join("ubuntu/.codex");
+        let scanned_home = root.join("home/alice/.codex");
+        mark_codex_home(&current_home.join(".codex"));
+        mark_codex_home(&root_home);
+        mark_codex_home(&ubuntu_home);
+        mark_codex_home(&scanned_home);
 
         let current_resolved = resolve_codex_paths_with_options(
-            Path::new("auto"),
+            &invalid_config,
             None,
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
@@ -3400,6 +3496,10 @@ mod tests {
         );
         assert_eq!(current_resolved.home, current_home.join(".codex"));
         assert_eq!(current_resolved.codex_home_source, "current_user");
+        assert!(current_resolved
+            .discovery_warnings
+            .iter()
+            .any(|warning| warning.contains("configured Codex home is not valid")));
 
         let root_resolved = resolve_codex_paths_with_options(
             Path::new("auto"),
@@ -4032,6 +4132,88 @@ mod tests {
         let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
 
         assert!(rows.iter().all(|row| row.id != "child-thread"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_threads_title_priority_filters_placeholders_and_preview_titles() {
+        let root = unique_temp_dir("thread-title-priority");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+
+        write_thread_fixture(
+            &conn,
+            &root,
+            "db-title",
+            "真实 DB 标题",
+            "",
+            &[
+                json!({"session_meta":{"payload":{"title":"rollout metadata title"}}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"首条用户消息不应覆盖 DB 标题"}]}}),
+            ],
+            4,
+        );
+        write_thread_fixture(
+            &conn,
+            &root,
+            "metadata-title",
+            "读取中...",
+            "",
+            &[json!({"session_meta":{"payload":{"thread_title":"来自元数据的标题"}}})],
+            3,
+        );
+        write_thread_fixture(
+            &conn,
+            &root,
+            "user-title",
+            "<proposed_plan>计划内容</proposed_plan>",
+            "Assistant preview: This is a very long assistant response body that should not become the local thread title because it is only preview text.",
+            &[
+                json!({"session_meta":{"payload":{"name":"Untitled"}}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"Assistant preview: This is a very long assistant response body that should not become the title."}]}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"请修复本地线程标题显示，并验证结果。"}]}}),
+            ],
+            2,
+        );
+        write_thread_fixture(
+            &conn,
+            &root,
+            "fallback-title",
+            "Untitled",
+            "Assistant preview: This long assistant body must stay out of the title even when no user message exists.",
+            &[json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"Assistant preview: This long assistant body must stay out of the title even when no user message exists."}]}})],
+            1,
+        );
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let by_id = rows
+            .iter()
+            .map(|row| (row.id.as_str(), row.title.as_str()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_id.get("db-title"), Some(&"真实 DB 标题"));
+        assert_eq!(by_id.get("metadata-title"), Some(&"来自元数据的标题"));
+        assert_eq!(
+            by_id.get("user-title"),
+            Some(&"请修复本地线程标题显示，并验证结果。")
+        );
+        assert_eq!(by_id.get("fallback-title"), Some(&"未命名线程"));
+        assert!(by_id.values().all(|title| {
+            !title.contains("<proposed_plan>") && !title.contains("Assistant preview")
+        }));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4917,6 +5099,36 @@ mod tests {
             "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, archived, preview)
              VALUES(?1, ?2, 1, ?3, 'codex', '', '/tmp', 'test', '', '', ?4, '')",
             (thread_id, rollout.display().to_string(), updated_at, archived),
+        )
+        .unwrap();
+    }
+
+    fn write_thread_fixture(
+        conn: &Connection,
+        root: &Path,
+        thread_id: &str,
+        title: &str,
+        preview: &str,
+        events: &[serde_json::Value],
+        updated_at: i64,
+    ) {
+        let rollout = root.join(format!("{thread_id}.jsonl"));
+        let text = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&rollout, text).unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES(?1, ?2, 1, ?3, 'codex', '/tmp', ?4, ?5)",
+            (
+                thread_id,
+                rollout.display().to_string(),
+                updated_at,
+                title,
+                preview,
+            ),
         )
         .unwrap();
     }

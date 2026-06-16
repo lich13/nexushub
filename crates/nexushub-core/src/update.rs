@@ -33,7 +33,7 @@ pub enum JobFailureCategory {
     SqliteIntegrityFailure,
     ReadOnlyFileSystem,
     NetworkTlsEof,
-    AppServerUnavailable,
+    CodexLocalStateUnavailable,
     Unknown,
 }
 
@@ -197,7 +197,7 @@ pub fn analyze_job_failure(
             "websocket",
         ],
     ) {
-        JobFailureCategory::AppServerUnavailable
+        JobFailureCategory::CodexLocalStateUnavailable
     } else {
         JobFailureCategory::Unknown
     };
@@ -299,11 +299,11 @@ fn analysis_for(category: JobFailureCategory) -> JobFailureAnalysis {
                 "If the failure repeats, inspect proxy/firewall settings and GitHub reachability.",
             ],
         ),
-        JobFailureCategory::AppServerUnavailable => (
-            "The Codex app-server bridge or socket was unavailable.",
+        JobFailureCategory::CodexLocalStateUnavailable => (
+            "Codex local state or the controlled Codex job path was unavailable.",
             vec![
-                "Check the configured app-server service status.",
-                "Restart the app-server service after confirming the control socket path.",
+                "Check the resolved Codex home and required state files.",
+                "Review the fixed Codex job output before retrying.",
             ],
         ),
         JobFailureCategory::Unknown => (

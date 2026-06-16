@@ -20,11 +20,6 @@ export type ProbeSettingsDraft = {
   codex: {
     home: string;
     workspace: string;
-    app_server_service: string;
-    app_server_socket: string;
-    bridge_enabled: boolean;
-    bridge_transport: string;
-    bridge_timeout_seconds: number;
     host_label: string;
   };
   probe: {
@@ -34,7 +29,6 @@ export type ProbeSettingsDraft = {
   };
   hooks: {
     manage_stop_hook: boolean;
-    reload_app_server_after_install: boolean;
   };
   notifications: {
     enabled: boolean;
@@ -99,12 +93,6 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
     codex: {
       home: configuredCodexHomeDraftValue(settings),
       workspace: settings.codex.workspace ?? "",
-      app_server_service: settings.codex.app_server_service ?? "",
-      app_server_socket: configuredAppServerSocketDraftValue(settings),
-      bridge_enabled: Boolean(settings.codex.bridge_enabled),
-      bridge_transport: settings.codex.bridge_transport ?? "websocket",
-      bridge_timeout_seconds: toBoundedInteger(settings.codex.bridge_timeout_seconds, 20)
-        ?? 20,
       host_label: settings.codex.host_label ?? ""
     },
     probe: {
@@ -113,8 +101,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       recent_limit: toBoundedInteger(settings.probe.recent_limit, 50) ?? 50
     },
     hooks: {
-      manage_stop_hook: settings.probe.hooks?.manage_stop_hook !== false,
-      reload_app_server_after_install: settings.probe.hooks?.reload_app_server_after_install !== false
+      manage_stop_hook: settings.probe.hooks?.manage_stop_hook !== false
     },
     notifications: {
       enabled: Boolean(settings.notifications.enabled || settings.notifications.device_key_configured),
@@ -181,11 +168,6 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
     codex: {
       home: codexHomePatchValue(draft.codex.home),
       workspace: draft.codex.workspace.trim() || null,
-      app_server_service: draft.codex.app_server_service.trim(),
-      app_server_socket: draft.codex.app_server_socket.trim() || null,
-      bridge_enabled: draft.codex.bridge_enabled,
-      bridge_transport: draft.codex.bridge_transport.trim() || "websocket",
-      bridge_timeout_seconds: draft.codex.bridge_timeout_seconds,
       host_label: draft.codex.host_label.trim()
     },
     probe: {
@@ -193,8 +175,7 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
       poll_seconds: requiredDraftNumber(draft.probe.poll_seconds),
       recent_limit: requiredDraftNumber(draft.probe.recent_limit),
       hooks: {
-        manage_stop_hook: draft.hooks.manage_stop_hook,
-        reload_app_server_after_install: draft.hooks.reload_app_server_after_install
+        manage_stop_hook: draft.hooks.manage_stop_hook
       },
       notifications,
       observability: {
@@ -224,7 +205,6 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
 
 export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   const errors: string[] = [];
-  if (!draft.codex.app_server_service.trim()) errors.push("app-server 服务不能为空");
   if (!draft.codex.host_label.trim()) errors.push("主机标签不能为空");
   if (!isIntegerInRange(draft.probe.poll_seconds, 5, 3600)) {
     errors.push("轮询间隔必须在 5 到 3600 秒之间");
@@ -478,14 +458,6 @@ function configuredCodexHomeDraftValue(settings: ProbeSettings): string {
     return stringOrEmpty(codex.configured_codex_home);
   }
   return stringOrEmpty(codex.home);
-}
-
-function configuredAppServerSocketDraftValue(settings: ProbeSettings): string {
-  const codex = settings.codex as ProbeSettings["codex"] & Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(codex, "configured_app_server_socket")) {
-    return stringOrEmpty(codex.configured_app_server_socket);
-  }
-  return stringOrEmpty(codex.app_server_socket);
 }
 
 function codexHomePatchValue(value: string): string | null {

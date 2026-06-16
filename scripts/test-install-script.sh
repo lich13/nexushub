@@ -22,7 +22,9 @@ checks = {
     "config.example server listen": (config, 'listen = "127.0.0.1:15742"'),
     "config.example panel precheck": (config, "http://127.0.0.1:15742/healthz"),
     "config.example probe section": (config, "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50"),
-    "config.example probe hooks": (config, "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true"),
+    "config.example probe hooks": (config, "[probe.hooks]\nmanage_stop_hook = true"),
+    "config.example codex local state": (config, "Codex 本地状态库: state_5.sqlite, session_index.jsonl, rollout files, and logs_2.sqlite"),
+    "config.example controlled codex exec": (config, "受控 codex exec job"),
     "config.example probe notifications": (config, "[probe.notifications]\nenabled = false\nserver_url = \"https://api.day.app\""),
     "config.example probe observability": (config, "[probe.observability]\nhook_event_max_lines = 500\nhook_cooldown_max_lines = 1000\nlog_max_bytes = 5242880"),
     "config.example probe logs db": (config, "[probe.logs_db]\nenabled = true\nretention_days = 2\nmaintenance_interval_hours = 6"),
@@ -61,8 +63,15 @@ if not codex_match:
 codex_body = codex_match.group("body")
 if re.search(r"(?m)^\s*home\s*=", codex_body):
     raise SystemExit("config.example must omit codex.home so runtime auto-discovery applies")
-if 'app_server_socket = "/root/.codex/app-server-control/app-server-control.sock"' not in codex_body:
-    raise SystemExit("config.example should keep the default root app-server socket")
+for legacy_key in [
+    "app_server_service",
+    "app_server_socket",
+    "bridge_enabled",
+    "bridge_transport",
+    "bridge_timeout_seconds",
+]:
+    if re.search(rf"(?m)^\s*{legacy_key}\s*=", codex_body):
+        raise SystemExit(f"config.example must not require Codex app-server bridge config: {legacy_key}")
 
 rw_match = re.search(r"(?m)^ReadWritePaths=(?P<paths>.+)$", systemd)
 if not rw_match:
@@ -75,6 +84,8 @@ if missing:
 codex_paths = [path for path in paths if path.endswith("/.codex")]
 if codex_paths != ["/root/.codex", "/home/ubuntu/.codex"]:
     raise SystemExit("systemd ReadWritePaths should only grant known root/ubuntu Codex homes, got: " + " ".join(codex_paths))
+if "codex-app-server-root.service" in systemd:
+    raise SystemExit("systemd unit must not require codex-app-server-root.service")
 
 print("Codex home auto-discovery deploy templates: ok")
 PY
@@ -357,7 +368,7 @@ if re.search(r"(?m)^\s*home\s*=", migrated):
     raise SystemExit("install migration should not insert codex.home; runtime auto-discovery should apply")
 for needle in [
     "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50",
-    "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true",
+    "[probe.hooks]\nmanage_stop_hook = true",
     "[probe.notifications]\nenabled = false\nserver_url = \"https://api.day.app\"",
     "notify_completion = true",
     "notify_reply_needed = true",
@@ -378,6 +389,16 @@ for needle in [
 ]:
     if needle not in migrated:
         raise SystemExit(f"probe default was not inserted by install migration: {needle}")
+for stale in [
+    "reload_app_server_after_install",
+    'app_server_service = "codex-app-server-root.service"',
+    "app_server_socket",
+    "bridge_enabled",
+    "bridge_transport",
+    "bridge_timeout_seconds",
+]:
+    if stale in migrated:
+        raise SystemExit(f"install migration should not insert legacy bridge/reload config: {stale}")
 
 legacy_precheck_config = '''
 [update]
@@ -413,12 +434,17 @@ custom_codex_config = """
 [codex]
 home = "/srv/codex/custom-home"
 app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"
+bridge_enabled = true
 """
 migrated_custom_codex = run_config_migration(custom_codex_config)
 if 'home = "/srv/codex/custom-home"' not in migrated_custom_codex:
     raise SystemExit("custom codex.home should be preserved by install migration")
-if 'app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"' not in migrated_custom_codex:
-    raise SystemExit("custom codex app-server socket should be preserved by install migration")
+for stale in [
+    "app_server_socket",
+    "bridge_enabled",
+]:
+    if stale in migrated_custom_codex:
+        raise SystemExit(f"install migration should remove legacy codex app-server config: {stale}")
 for needle in [
     'enabled = false',
     'poll_seconds = 45',
@@ -453,8 +479,8 @@ minimum_free_space_mb = 1024
     migrated_probe = run_config_migration(custom_probe)
     if needle not in migrated_probe:
         raise SystemExit(f"custom probe value should be preserved by install migration: {needle}")
-if 'reload_app_server_after_install = true' not in migrated_probe:
-    raise SystemExit("install migration should fill missing probe.hooks defaults")
+if 'reload_app_server_after_install' in migrated_probe:
+    raise SystemExit("install migration should not fill legacy probe.hooks reload default")
 if 'notify_recoverable = true' not in migrated_probe:
     raise SystemExit("install migration should fill missing probe.notifications defaults")
 if 'busy_timeout_ms = 500' not in migrated_probe:
@@ -614,7 +640,7 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update.sh should not insert codex.home; runtime auto-discovery should apply")
     for needle in [
         "[probe]\nenabled = true\npoll_seconds = 15\nrecent_limit = 50",
-        "[probe.hooks]\nmanage_stop_hook = true\nreload_app_server_after_install = true",
+        "[probe.hooks]\nmanage_stop_hook = true",
         "[probe.notifications]\nenabled = false\nserver_url = \"https://api.day.app\"",
         "notify_completion = true",
         "notify_reply_needed = true",
@@ -635,6 +661,16 @@ with tempfile.TemporaryDirectory() as tmp:
     ]:
         if needle not in migrated:
             raise SystemExit(f"probe default was not inserted by update migration: {needle}")
+    for stale in [
+        "reload_app_server_after_install",
+        'app_server_service = "codex-app-server-root.service"',
+        "app_server_socket",
+        "bridge_enabled",
+        "bridge_transport",
+        "bridge_timeout_seconds",
+    ]:
+        if stale in migrated:
+            raise SystemExit(f"update migration should not insert legacy bridge/reload config: {stale}")
 
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"
@@ -747,6 +783,7 @@ with tempfile.TemporaryDirectory() as tmp:
         [codex]
         home = "/srv/codex/custom-home"
         app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"
+        bridge_enabled = true
     """).lstrip())
     subprocess.run(
         ["bash", "-c", f"source {update_sh}; migrate_codex_update_config {config}"],
@@ -755,8 +792,12 @@ with tempfile.TemporaryDirectory() as tmp:
     preserved_codex = config.read_text()
     if 'home = "/srv/codex/custom-home"' not in preserved_codex:
         raise SystemExit("update.sh should preserve custom codex.home")
-    if 'app_server_socket = "/srv/codex/custom-home/app-server-control/app-server-control.sock"' not in preserved_codex:
-        raise SystemExit("update.sh should preserve custom codex app-server socket")
+    for stale in [
+        "app_server_socket",
+        "bridge_enabled",
+    ]:
+        if stale in preserved_codex:
+            raise SystemExit(f"update.sh should remove legacy codex app-server config: {stale}")
 
 with tempfile.TemporaryDirectory() as tmp:
     config = Path(tmp) / "config.toml"
@@ -798,8 +839,8 @@ with tempfile.TemporaryDirectory() as tmp:
     ]:
         if needle not in preserved_probe:
             raise SystemExit(f"custom probe value should be preserved by update migration: {needle}")
-    if 'reload_app_server_after_install = true' not in preserved_probe:
-        raise SystemExit("update migration should fill missing probe.hooks defaults")
+    if 'reload_app_server_after_install' in preserved_probe:
+        raise SystemExit("update migration should not fill legacy probe.hooks reload default")
     if 'notify_recoverable = true' not in preserved_probe:
         raise SystemExit("update migration should fill missing probe.notifications defaults")
     if 'busy_timeout_ms = 500' not in preserved_probe:

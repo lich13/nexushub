@@ -233,10 +233,50 @@ function defaultLegacyBlocks(detail: ThreadDetail): MessageBlock[] {
 function mergeSummary(current: ThreadSummary | null, incoming: ThreadSummary): ThreadSummary {
   if (!current || current.id !== incoming.id) return incoming;
   const next = { ...current, ...incoming };
+  next.title = mergeThreadSummaryTitle(current.title, incoming.title);
   if (!isVisibleLastEventKind(incoming.last_event_kind) && isVisibleLastEventKind(current.last_event_kind)) {
     next.last_event_kind = current.last_event_kind;
   }
   return next;
+}
+
+export function mergeThreadSummaryTitle(current?: string | null, incoming?: string | null): string {
+  const currentTitle = current?.trim() ?? "";
+  const incomingTitle = incoming?.trim() ?? "";
+  if (!incomingTitle) return currentTitle;
+  if (isUsableThreadTitle(currentTitle) && isNoisyThreadTitle(incomingTitle)) return currentTitle;
+  if (isNoisyThreadTitle(currentTitle) && isUsableThreadTitle(incomingTitle)) return incomingTitle;
+  if (isNoisyThreadTitle(incomingTitle)) return currentTitle;
+  return incomingTitle;
+}
+
+export function isNoisyThreadTitle(title?: string | null): boolean {
+  const value = title?.trim() ?? "";
+  if (!value) return true;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLowerCase();
+  if (["未命名线程", "untitled thread", "untitled", "读取中", "loading", "loading..."].includes(lower)) return true;
+  if (/<\/?proposed_plan>/i.test(value)) return true;
+  if (looksLikePlanBody(value)) return true;
+  if (looksLikeAssistantBodyTitle(normalized)) return true;
+  return normalized.length > 80;
+}
+
+function isUsableThreadTitle(title?: string | null): boolean {
+  return !isNoisyThreadTitle(title);
+}
+
+function looksLikePlanBody(value: string): boolean {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  const planLines = lines.filter((line) => /^(\d+[\.)、]|[-*•])\s+/.test(line));
+  return planLines.length >= Math.min(2, lines.length);
+}
+
+function looksLikeAssistantBodyTitle(value: string): boolean {
+  if (value.length < 40) return false;
+  if (!/[。！？.!?]/.test(value)) return false;
+  return /(?:我会|我将|接下来|先.+然后|然后.+最后|最后.+运行|确认不会再)/.test(value);
 }
 
 function isVisibleLastEventKind(value?: string | null): boolean {

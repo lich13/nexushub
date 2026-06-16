@@ -110,6 +110,8 @@ import {
   clearThreadSlot,
   createThreadMessageStoreState,
   getThreadSlot,
+  isNoisyThreadTitle,
+  mergeThreadSummaryTitle,
   setActiveThreadSlot,
   setThreadFeedback as setThreadSlotFeedback,
   setThreadHiddenActionKey,
@@ -151,6 +153,11 @@ import type {
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
+
+const codexLocalCopy = {
+  loginSubtitle: "Codex 本地状态控制台",
+  threadListEyebrow: "Codex 本地线程"
+};
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
   model: string;
@@ -455,7 +462,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
       }}>
         <div className="brand-mark"><Cloud size={24} /></div>
         <h1>NexusHub</h1>
-        <p>root app-server 专用控制台</p>
+        <p>{codexLocalCopy.loginSubtitle}</p>
         <label>
           <span>管理员</span>
           <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
@@ -580,16 +587,16 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
       return threadDetailRefetchInterval(current, selectedThreadSummary);
     }
   });
-  const selectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
+  const rawSelectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
+  const selectedDetail = shouldHydrateThreadDetail(resolvedSelected, rawSelectedDetail) ? rawSelectedDetail : null;
 
   useEffect(() => {
-    if (!resolvedSelected || selectedDetail?.summary.status !== "Archived") return;
-    removeThreadFromListCaches(qc, resolvedSelected);
-    messageStore.clear(resolvedSelected);
+    if (!resolvedSelected || rawSelectedDetail?.summary.status !== "Archived") return;
+    clearArchivedThreadClientState(qc, messageStore, resolvedSelected);
     if (selectedId === resolvedSelected) {
-      setSelectedId(null);
+      setSelectedId(nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected));
     }
-  }, [messageStore, qc, resolvedSelected, selectedDetail, selectedId]);
+  }, [messageStore, qc, resolvedSelected, rawSelectedDetail, selectedId, visibleThreads]);
 
   useEffect(() => {
     if (!resolvedSelected || !selectedThreadSummary) return;
@@ -612,8 +619,10 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   }, [messageStore, resolvedSelected, selectedThreadSummary]);
 
   useEffect(() => {
-    if (!resolvedSelected || !selectedDetail) return;
-    messageStore.applyDetail(resolvedSelected, selectedDetail);
+    const threadId = resolvedSelected;
+    const detailForSlot = selectedDetail;
+    if (!threadId || !shouldHydrateThreadDetail(threadId, detailForSlot)) return;
+    messageStore.applyDetail(threadId, detailForSlot);
   }, [messageStore, resolvedSelected, selectedDetail]);
 
   const selectThread = (id: SelectedThread) => {
@@ -657,6 +666,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
             csrfToken={csrfToken}
             onSelect={(id) => selectThread(id)}
             onPanelSelect={setView}
+            nextThreadAfterArchive={nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected)}
           />
         ) : (
           <EmptyConversation
@@ -686,7 +696,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
     <div className="thread-list">
       <div className="section-title thread-title-row">
         <div>
-          <span>root app-server</span>
+          <span>{codexLocalCopy.threadListEyebrow}</span>
           <strong>线程</strong>
         </div>
         <div className="thread-title-actions">
@@ -846,15 +856,12 @@ export function conversationTitleText(thread: ThreadTitleLike): string {
 }
 
 function isPlaceholderThreadTitle(title?: string | null): boolean {
-  const value = title?.trim() ?? "";
-  return !value || value === "未命名线程" || value === "Untitled thread" || value === "Untitled";
+  return isNoisyThreadTitle(title);
 }
 
 export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
   const next = { ...current, ...incoming };
-  if (!isPlaceholderThreadTitle(current.title) && isPlaceholderThreadTitle(incoming.title)) {
-    next.title = current.title;
-  }
+  next.title = mergeThreadSummaryTitle(current.title, incoming.title);
   if (!isUserVisibleLastEventKind(incoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
     next.last_event_kind = current.last_event_kind;
   }
@@ -921,6 +928,29 @@ export function removeThreadFromListCaches(qc: QueryClient, threadId: string): v
       rows ? rows.filter((thread) => thread.id !== threadId) : rows
     );
   }
+}
+
+export function clearArchivedThreadClientState(
+  qc: QueryClient,
+  messageStore: Pick<ThreadMessageStoreController, "clear">,
+  threadId: string
+): void {
+  removeThreadFromListCaches(qc, threadId);
+  qc.removeQueries({ queryKey: ["thread", threadId], exact: true });
+  messageStore.clear(threadId);
+}
+
+export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
+  const visible = filterVisibleThreadSummaries(threads);
+  const removedIndex = visible.findIndex((thread) => thread.id === removedThreadId);
+  const remaining = visible.filter((thread) => thread.id !== removedThreadId);
+  if (!remaining.length) return null;
+  if (removedIndex < 0) return remaining[0].id;
+  return (remaining[removedIndex] ?? remaining[removedIndex - 1] ?? remaining[0]).id;
+}
+
+export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null): detail is ThreadDetail {
+  return Boolean(threadId && detail?.summary.id === threadId && detail.summary.status !== "Archived");
 }
 
 function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
@@ -1915,12 +1945,12 @@ export function questionAnswerPayload(questions: CurrentActionQuestion[], answer
   }));
 }
 
-export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, status?: Pick<SystemStatus, "hidden_thread_count" | "app_server_hidden_thread_count" | "app_server_source_counts" | "state_db_integrity">): { hidden: number; visible: number; sourceCounts: string; integrity: string } {
-  const hidden = plan?.hidden_threads ?? status?.app_server_hidden_thread_count ?? status?.hidden_thread_count ?? 0;
+export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, status?: Pick<SystemStatus, "hidden_thread_count" | "state_db_integrity">): { hidden: number; visible: number; sourceCounts: string; integrity: string } {
+  const hidden = plan?.hidden_threads ?? status?.hidden_thread_count ?? 0;
   return {
     hidden,
     visible: plan?.visible_threads ?? 0,
-    sourceCounts: sourceCountsText(plan?.hidden_source_counts ?? status?.app_server_source_counts),
+    sourceCounts: sourceCountsText(plan?.hidden_source_counts),
     integrity: plan?.integrity ?? status?.state_db_integrity ?? "未知"
   };
 }
@@ -2160,7 +2190,7 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
   ]);
 }
 
-function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect }: {
+function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect, nextThreadAfterArchive }: {
   threadId: string;
   detail: ThreadDetail;
   slot: ThreadMessageSlot;
@@ -2168,6 +2198,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   csrfToken?: string | null;
   onSelect: (id: SelectedThread) => void;
   onPanelSelect: (view: View) => void;
+  nextThreadAfterArchive: string | null;
 }) {
   const qc = useQueryClient();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
@@ -2418,10 +2449,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         qc.invalidateQueries({ queryKey: ["threads"] });
         qc.invalidateQueries({ queryKey: ["thread", archivedThreadId] });
       } else {
-        removeThreadFromListCaches(qc, archivedThreadId);
-        qc.removeQueries({ queryKey: ["thread", archivedThreadId] });
-        messageStore.clear(archivedThreadId);
-        onSelect(null);
+        clearArchivedThreadClientState(qc, messageStore, archivedThreadId);
+        onSelect(nextThreadAfterArchive);
         qc.invalidateQueries({ queryKey: ["threads"] });
       }
     },
@@ -2792,7 +2821,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             inputRef={attachComposerTextarea}
             value={draft}
             onChange={setDraft}
-            placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送到 root Codex app-server"}
+            placeholder={summary.status === "ReplyNeeded" ? "输入选择编号、确认语句或补充要求" : "发送给 Codex"}
             hasThread
             plugins={pluginsQuery.data ?? []}
             pluginsUnavailable={pluginsQuery.isError}
@@ -3166,7 +3195,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     <div className="new-thread-state">
       <Bot size={34} />
       <strong>新建 Codex 线程</strong>
-      <span>通过受控 app-server bridge 启动，失败时自动降级为 codex exec job。</span>
+      <span>通过受控 Codex job 启动，并在任务历史中记录。</span>
       <form className="composer new-composer" onSubmit={(event) => {
         event.preventDefault();
         submitComposer();
@@ -3946,14 +3975,11 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <Panel title="系统状态" icon={<HardDrive size={18} />}>
         <Metric label="Hostname" value={hostname} />
         <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
-        <Metric label="app-server" value={status.data?.app_server_service.active ? "active/running" : "inactive"} tone={status.data?.app_server_service.active ? "success" : "danger"} />
         <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
         <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} />
         <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
-        <Metric label="Socket" value={status.data?.app_server_socket ?? "unknown"} />
         <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
-        <Metric label="app sources" value={sourceCountsText(status.data?.app_server_source_counts)} />
       </Panel>
       <Panel title="面板更新" icon={<RefreshCw size={18} />}>
         <PanelVersionMetrics version={version.data} />
@@ -4246,13 +4272,12 @@ function ProbeRuntimeSettingsCard({
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
         <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} />
-        <Metric label="Socket" value={appServerSocketStatusValue(status ?? settings?.codex)} />
         <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} />
         <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} />
       </div>
       <div className="form-grid compact-three">
         <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>
-        <label className="field-label">App Socket<input value={draft.codex.app_server_socket} placeholder="auto" onChange={(event) => setCodex({ app_server_socket: event.target.value })} /></label>
+        <label className="field-label">工作目录<input value={draft.codex.workspace} placeholder="/home/ubuntu/codex-workspace" onChange={(event) => setCodex({ workspace: event.target.value })} /></label>
         <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
         <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>
@@ -4269,7 +4294,6 @@ function ProbeRuntimeSettingsCard({
         <label className="toggle-row"><span>回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span>异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
         <label className="toggle-row"><span>管理 Stop Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
-        <label className="toggle-row"><span>安装后重载</span><input type="checkbox" checked={draft.hooks.reload_app_server_after_install} onChange={(event) => setHooks({ reload_app_server_after_install: event.target.checked })} /></label>
         <label className="toggle-row"><span>启用 Logs DB</span><input type="checkbox" checked={draft.logs_db.enabled} onChange={(event) => setLogsDb({ enabled: event.target.checked })} /></label>
         <label className="toggle-row"><span>退出后维护</span><input type="checkbox" checked={draft.logs_db.maintain_on_codex_exit} onChange={(event) => setLogsDb({ maintain_on_codex_exit: event.target.checked })} /></label>
       </div>
@@ -4426,24 +4450,10 @@ type CodexHomePathFields = {
   codex_home_source?: string | null;
 };
 
-type AppServerSocketPathFields = {
-  app_server_socket?: string | null;
-  configured_app_server_socket?: string | null;
-  resolved_app_server_socket?: string | null;
-  app_server_socket_source?: string | null;
-};
-
 export function codexHomeStatusValue(status?: CodexHomePathFields | null): string {
   return pathWithSource(
     firstStringValue(status, ["resolved_codex_home", "codex_home", "home", "configured_codex_home"]),
     firstStringValue(status, ["codex_home_source"])
-  );
-}
-
-export function appServerSocketStatusValue(status?: AppServerSocketPathFields | null): string {
-  return pathWithSource(
-    firstStringValue(status, ["resolved_app_server_socket", "app_server_socket", "configured_app_server_socket"]),
-    firstStringValue(status, ["app_server_socket_source"])
   );
 }
 
@@ -4648,7 +4658,8 @@ export function failureCategoryLabel(category: string): string {
     codex_auth_failure: "Codex 认证失败",
     sqlite_integrity_failure: "SQLite 完整性失败",
     network_tls_eof: "网络或 TLS 中断",
-    app_server_unavailable: "app-server 不可用",
+    codex_local_state_unavailable: "Codex 本地状态不可用",
+    app_server_unavailable: "Codex 本地状态不可用",
     unknown: "未知失败"
   };
   return labels[category] ?? category;
@@ -4704,7 +4715,7 @@ export function codexUpdateState(version?: Pick<SystemVersion, "codex_update_ava
 
 function actionMessage(result: BridgeActionResult): string {
   if (result.fallback) return result.message ?? `Fallback job ${result.job_id?.slice(0, 8) ?? ""} 已启动`;
-  return `Bridge ${result.turn_id ? `turn ${result.turn_id.slice(0, 8)}` : "请求"} 已提交`;
+  return `Codex ${result.turn_id ? `turn ${result.turn_id.slice(0, 8)}` : "请求"} 已提交`;
 }
 
 function legacyBlocks(detail: ThreadDetail): MessageBlock[] {

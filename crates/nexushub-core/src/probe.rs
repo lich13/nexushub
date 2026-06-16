@@ -158,9 +158,9 @@ impl ProbeRuntime {
             resolved_codex_home: resolved.home.clone(),
             codex_home_source: resolved.codex_home_source.clone(),
             logs_db_source: resolved.logs_db_source.clone(),
-            configured_app_server_socket: resolved.configured_app_server_socket.clone(),
-            resolved_app_server_socket: resolved.app_server_socket.clone(),
-            app_server_socket_source: resolved.app_server_socket_source.clone(),
+            configured_app_server_socket: None,
+            resolved_app_server_socket: None,
+            app_server_socket_source: None,
             discovery_warnings: resolved.discovery_warnings.clone(),
             host_label: self.config.codex.host_label.clone(),
         })
@@ -171,11 +171,11 @@ impl ProbeRuntime {
         ProbeDiagnostics {
             doctor_status: self.doctor_status_text(),
             lifecycle_status: self.lifecycle_status_text(),
-            app_server_service: self.config.codex.app_server_service.clone(),
-            app_server_socket: resolved.app_server_socket.clone(),
-            configured_app_server_socket: resolved.configured_app_server_socket,
-            resolved_app_server_socket: resolved.app_server_socket,
-            app_server_socket_source: resolved.app_server_socket_source,
+            app_server_service: String::new(),
+            app_server_socket: None,
+            configured_app_server_socket: None,
+            resolved_app_server_socket: None,
+            app_server_socket_source: None,
             configured_codex_home: resolved.configured_codex_home,
             resolved_codex_home: resolved.home,
             codex_home_source: resolved.codex_home_source,
@@ -183,12 +183,12 @@ impl ProbeRuntime {
             host_label: self.config.codex.host_label.clone(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             managed_boundaries: vec![
-                "不暴露 root app-server".to_string(),
+                "只读取本地 Codex 状态库、session_index、rollout 与 logs_2.sqlite".to_string(),
                 "不开放任意 shell".to_string(),
                 "不执行自动回复或隐藏桌面控制".to_string(),
             ],
             effective_constants: json!({
-                "thread_probe_uses_app_server_read": true,
+                "thread_probe_uses_local_read_model": true,
                 "delete_uses_existing_dry_run_confirm_flow": true,
                 "legacy_sentinel_cli_runtime": false,
                 "hidden_desktop_control": false,
@@ -232,11 +232,7 @@ impl ProbeRuntime {
             installed: self.config.probe.hooks.manage_stop_hook,
             managed: self.config.probe.hooks.manage_stop_hook,
             hook_command,
-            reload_app_server_after_install: self
-                .config
-                .probe
-                .hooks
-                .reload_app_server_after_install,
+            reload_app_server_after_install: false,
             supported_events: vec!["hook-stop".to_string(), "notify-completion".to_string()],
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_ttl_seconds: PROBE_EVENT_TTL_SECONDS,
@@ -303,19 +299,14 @@ impl ProbeRuntime {
                             .display()
                     ),
                     format!("Stop Hook 命令包含 `{}`", self.hook_command()),
-                    if self.config.probe.hooks.reload_app_server_after_install {
-                        format!("重载 {}", self.config.codex.app_server_service)
-                    } else {
-                        "不重载 app-server".to_string()
-                    },
+                    "不重载任何 app-server 服务".to_string(),
                 ],
                 payload: json!({
                     "codex_home": self.resolved_codex_paths().home,
                     "configured_codex_home": self.resolved_codex_paths().configured_codex_home,
                     "codex_home_source": self.resolved_codex_paths().codex_home_source,
-                    "app_server_service": self.config.codex.app_server_service,
                     "hook_command": self.hook_command(),
-                    "reload_app_server_after_install": self.config.probe.hooks.reload_app_server_after_install,
+                    "reload_app_server_after_install": false,
                 }),
                 requires_confirmation: true,
                 command: "nexushubd probe hooks-install".to_string(),

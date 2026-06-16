@@ -37,7 +37,7 @@
 ## Current Status
 
 **Active Phase**: Probe replacement released/deployed<br>
-**Active Task**: `v0.1.53` adds Codex path auto-discovery across Probe, system status, app-server bridge, uploads, and settings, with logs-db compact metadata and deploy/docs support for root/ubuntu Codex homes.
+**Active Task**: `v0.1.76` removes NexusHub's app-server runtime dependency, keeps Codex path auto-discovery across Probe, system status, uploads, and settings, and uses local state plus controlled jobs for Codex operations.
 **Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status

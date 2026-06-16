@@ -32,7 +32,7 @@ impl Default for ProviderRegistry {
                     id: AgentProviderId::Codex,
                     label: "Codex".to_string(),
                     status: "ready".to_string(),
-                    description: "Full NexusHub control surface backed by official Codex state DB, rollout files, and app-server bridge.".to_string(),
+                    description: "Full NexusHub control surface backed by official Codex state DB, session index, rollout files, logs_2.sqlite, and controlled jobs.".to_string(),
                     capabilities: vec![
                         "ready".to_string(),
                         "threads".to_string(),
@@ -42,7 +42,7 @@ impl Default for ProviderRegistry {
                         "updates".to_string(),
                         "doctor".to_string(),
                     ],
-                    safety: "uses existing Codex DB and bridge without mutating official schema".to_string(),
+                    safety: "uses existing Codex local state and controlled jobs without mutating official schema".to_string(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::ClaudeCode,

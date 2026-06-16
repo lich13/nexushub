@@ -15,20 +15,14 @@ const settings: ProbeSettings = {
   codex: {
     home: "/root/.codex",
     workspace: "/home/ubuntu/codex-workspace",
-    app_server_service: "codex-app-server-root.service",
-    app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-    bridge_enabled: true,
-    bridge_transport: "websocket",
-    bridge_timeout_seconds: 20,
     host_label: "43.155.235.227"
-  },
+  } as ProbeSettings["codex"],
   probe: {
     enabled: true,
     poll_seconds: 15,
     recent_limit: 50,
     hooks: {
-      manage_stop_hook: true,
-      reload_app_server_after_install: true
+      manage_stop_hook: true
     },
     notifications: {
       enabled: true,
@@ -306,11 +300,6 @@ describe("Probe UI helpers", () => {
       codex: {
         home: "/root/.codex",
         workspace: "/home/ubuntu/codex-workspace",
-        app_server_service: "codex-app-server-root.service",
-        app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-        bridge_enabled: true,
-        bridge_transport: "websocket",
-        bridge_timeout_seconds: 20,
         host_label: "43.155.235.227"
       },
       probe: {
@@ -318,8 +307,7 @@ describe("Probe UI helpers", () => {
         poll_seconds: 15,
         recent_limit: 50,
         hooks: {
-          manage_stop_hook: true,
-          reload_app_server_after_install: true
+          manage_stop_hook: true
         },
         notifications: {
           enabled: true,
@@ -360,9 +348,8 @@ describe("Probe UI helpers", () => {
     const minimal: ProbeSettings = {
       codex: {
         home: "/root/.codex",
-        app_server_service: "codex-app-server-root.service",
         host_label: "cloud"
-      },
+      } as ProbeSettings["codex"],
       probe: {},
       notifications: {},
       logs_db: {}
@@ -417,30 +404,17 @@ describe("Probe UI helpers", () => {
     expect(buildProbeSettingsDraft(configuredSettings).codex.home).toBe("/srv/codex-home");
   });
 
-  test("uses configured app-server socket for the draft instead of the resolved socket", () => {
-    const autoResolvedSettings: ProbeSettings = {
-      ...settings,
-      codex: {
-        ...settings.codex,
-        app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-        configured_app_server_socket: null,
-        resolved_app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-        app_server_socket_source: "resolved_codex_home"
-      }
-    };
-    expect(buildProbeSettingsDraft(autoResolvedSettings).codex.app_server_socket).toBe("");
+  test("draft codex fields only expose local state paths and host metadata", () => {
+    const draft = buildProbeSettingsDraft(settings);
 
-    const configuredSettings: ProbeSettings = {
-      ...settings,
-      codex: {
-        ...settings.codex,
-        app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-        configured_app_server_socket: "/run/codex/custom.sock",
-        resolved_app_server_socket: "/root/.codex/app-server-control/app-server-control.sock",
-        app_server_socket_source: "configured"
-      }
-    };
-    expect(buildProbeSettingsDraft(configuredSettings).codex.app_server_socket).toBe("/run/codex/custom.sock");
+    expect(draft.codex).toEqual({
+      home: "/root/.codex",
+      workspace: "/home/ubuntu/codex-workspace",
+      host_label: "43.155.235.227"
+    });
+    expect(draft.codex).not.toHaveProperty("app_server_socket");
+    expect(draft.codex).not.toHaveProperty("app_server_service");
+    expect(draft.codex).not.toHaveProperty("bridge_enabled");
   });
 
   test("allows blank or auto Codex Home and serializes it as automatic discovery", () => {

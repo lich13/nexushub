@@ -34,7 +34,7 @@
 
 ## High-Severity Risks
 
-Codex compatibility is the core product risk. The current Codex chain depends on official DB reads, rollout parsing, and app-server bridge behavior. New provider work must wrap this behavior rather than replacing it.
+Codex compatibility is the core product risk. The current Codex chain depends on official DB reads, `session_index.jsonl`, rollout parsing, and `logs_2.sqlite` activity. New provider work must wrap this local read model rather than replacing it or reintroducing a root app-server dependency.
 
 Deployment safety is the second core risk. `/opt/nexushub` is now the canonical Linux layout, while install/update scripts intentionally keep legacy `codex-cloud-panel` replacement tables. Those legacy strings are compatibility inputs, not stale branding.
 

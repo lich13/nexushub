@@ -183,7 +183,7 @@ export type SystemStatus = {
   configured_app_server_socket?: string | null;
   resolved_app_server_socket?: string | null;
   app_server_socket_source?: string | null;
-  app_server_service: {
+  app_server_service?: {
     active: boolean;
     active_state?: string | null;
     sub_state?: string | null;
@@ -451,7 +451,7 @@ export type ProbeSettings = {
     logs_db_source?: string | null;
     discovery_warnings?: string[] | null;
     workspace?: string | null;
-    app_server_service: string;
+    app_server_service?: string | null;
     app_server_socket?: string | null;
     configured_app_server_socket?: string | null;
     resolved_app_server_socket?: string | null;

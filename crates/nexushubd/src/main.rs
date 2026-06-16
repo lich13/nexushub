@@ -6,7 +6,6 @@ mod turnstile;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
-    app_server::AppServerBridge,
     codex::{
         list_threads, resolve_codex_paths, rollout_completion_last_agent_message,
         rollout_latest_assistant_message,
@@ -32,7 +31,6 @@ use std::{
     io::{self, IsTerminal, Read},
     net::SocketAddr,
     path::{Path, PathBuf},
-    process::Command as StdCommand,
 };
 use tokio::{net::TcpListener, time};
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -51,7 +49,7 @@ static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::cons
 #[command(
     name = "nexushubd",
     version,
-    about = "Headless Web panel for cloud Codex app-server"
+    about = "Headless Web panel for local Codex state and controlled jobs"
 )]
 struct Cli {
     #[arg(long, env = "NEXUSHUB_CONFIG", default_value = DEFAULT_CONFIG)]
@@ -178,15 +176,7 @@ async fn main() -> Result<()> {
             println!("codex_home_source={}", resolved.codex_home_source);
             println!("listen={}", config.server.listen);
             println!("admin_count={}", db.admin_count()?);
-            let bridge = AppServerBridge::new(config.clone());
-            if bridge.enabled() {
-                match bridge.health_check().await {
-                    Ok(()) => println!("app_server_bridge=ok"),
-                    Err(err) => println!("app_server_bridge=error: {err}"),
-                }
-            } else {
-                println!("app_server_bridge=disabled");
-            }
+            println!("codex_read_model=local_state_rollout_logs");
             let status = nexushub_core::system::system_status(&config).await?;
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
@@ -661,11 +651,6 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
         fs::write(&codex_config_path, codex_config_after)
             .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
     }
-    let reload_result = if !dry_run && config.probe.hooks.reload_app_server_after_install {
-        Some(reload_app_server(&config.codex.app_server_service))
-    } else {
-        None
-    };
     let changed = hooks_json_changed || codex_config_changed;
     Ok(json!({
         "ok": true,
@@ -682,8 +667,7 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
         "backup_path": if hooks_path.exists() { Some(backup_path) } else { None },
         "codex_config_backup_path": if codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
         "hook_command": hook_command,
-        "reload_app_server_after_install": config.probe.hooks.reload_app_server_after_install,
-        "reload_result": reload_result,
+        "reload_result": Value::Null,
     }))
 }
 
@@ -718,35 +702,6 @@ fn ensure_codex_hooks_feature(text: &str) -> Result<String> {
     }
     features.insert("hooks".to_string(), toml::Value::Boolean(true));
     toml::to_string_pretty(&value).context("serialize Codex config.toml")
-}
-
-fn reload_app_server(service_name: &str) -> Value {
-    let service_name = service_name.trim();
-    if service_name.is_empty() {
-        return json!({
-            "attempted": false,
-            "status": "skipped",
-            "reason": "empty_service_name",
-        });
-    }
-    match StdCommand::new("systemctl")
-        .arg("reload-or-restart")
-        .arg(service_name)
-        .status()
-    {
-        Ok(status) => json!({
-            "attempted": true,
-            "service": service_name,
-            "success": status.success(),
-            "code": status.code(),
-        }),
-        Err(err) => json!({
-            "attempted": true,
-            "service": service_name,
-            "success": false,
-            "error": err.to_string(),
-        }),
-    }
 }
 
 fn read_hooks_json(path: &Path) -> Result<Value> {
@@ -977,8 +932,9 @@ fn hook_stop_cli_output(result: &HookStopResult) -> Result<(String, String)> {
 async fn record_probe_event_with_bark(
     config: &Config,
     db: &PanelDb,
-    event: nexushub_core::probe::ProbeBuiltEvent,
+    mut event: nexushub_core::probe::ProbeBuiltEvent,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    normalize_probe_event_dedupe_key(&mut event);
     let claimed = db.claim_probe_dedupe(
         &event.dedupe_namespace,
         &event.dedupe_key,
@@ -989,6 +945,10 @@ async fn record_probe_event_with_bark(
     if claimed {
         let mut payload = event.payload.clone();
         merge_bark_outcome_payload(&mut payload, &bark)?;
+        if payload["bark"]["chunk_count"].is_null() {
+            let chunk_count = bark_body_chunks(&event.bark_body, PROBE_BARK_BODY_CHUNK_BYTES).len();
+            payload["bark"]["chunk_count"] = json!(chunk_count);
+        }
         payload["dedupe"] = json!({
             "namespace": &event.dedupe_namespace,
             "key": &event.dedupe_key,
@@ -1013,6 +973,56 @@ async fn record_probe_event_with_bark(
     }
 
     Ok((outcome, bark))
+}
+
+fn normalize_probe_event_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
+    if event.kind != "reply-needed" {
+        return;
+    }
+    if event.payload.get("body_source").and_then(Value::as_str) != Some("proposed_plan") {
+        return;
+    }
+    let thread_id = event
+        .thread_id
+        .as_deref()
+        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+    let turn_id = event
+        .turn_id
+        .as_deref()
+        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "turn_id:"))
+        .unwrap_or("unknown")
+        .to_string();
+    let item_or_call_id = event
+        .payload
+        .get("item_id")
+        .and_then(Value::as_str)
+        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
+        .or_else(|| prefixed_body_value(&event.bark_body, "item_id:"))
+        .or_else(|| prefixed_body_value(&event.bark_body, "call_id:"))
+        .unwrap_or(turn_id.as_str())
+        .to_string();
+    let plan_hash = proposed_plan_hash_from_text(&event.bark_body).unwrap_or_else(|| {
+        event
+            .payload
+            .get("body_sha256")
+            .and_then(Value::as_str)
+            .and_then(|value| value.get(..16))
+            .unwrap_or("unknown")
+            .to_string()
+    });
+    event.dedupe_key = format!(
+        "{}:{}:{}:{}:{}",
+        dedupe_component(&event.kind),
+        dedupe_component(&thread_id),
+        dedupe_component(&turn_id),
+        dedupe_component(&item_or_call_id),
+        dedupe_component(&format!("plan_hash:{plan_hash}")),
+    );
+    event.payload["dedupe_plan_hash"] = json!(plan_hash);
+    event.payload["dedupe_item_or_call_id"] = json!(item_or_call_id);
 }
 
 fn merge_bark_outcome_payload(payload: &mut Value, bark: &ProbeBarkOutcome) -> Result<()> {
@@ -1289,19 +1299,7 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
     if trimmed.is_empty() || max_bytes == 0 {
         return vec![String::new()];
     }
-    if trimmed.len() <= max_bytes {
-        return vec![trimmed.to_string()];
-    }
-    let mut chunk_count = utf8_chunks(trimmed, max_bytes).len();
-    let raw_chunks = loop {
-        let prefix_budget = bark_chunk_prefix(chunk_count, chunk_count).len();
-        let content_budget = max_bytes.saturating_sub(prefix_budget).max(1);
-        let chunks = utf8_chunks(trimmed, content_budget);
-        if chunks.len() == chunk_count {
-            break chunks;
-        }
-        chunk_count = chunks.len();
-    };
+    let raw_chunks = utf8_chunks(trimmed, max_bytes);
     let chunk_count = raw_chunks.len();
     if chunk_count <= 1 {
         return raw_chunks;
@@ -1315,6 +1313,56 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
+}
+
+fn dedupe_component(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if normalized.is_empty() {
+        "unknown".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn prefixed_body_value<'a>(body: &'a str, prefix: &str) -> Option<&'a str> {
+    body.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+}
+
+fn proposed_plan_hash_from_text(value: &str) -> Option<String> {
+    let plan = nexushub_core::codex::extract_proposed_plan_text(value)
+        .or_else(|| {
+            value
+                .split_once("Plan 摘要:")
+                .map(|(_, plan)| plan.trim().to_string())
+                .filter(|plan| !plan.is_empty())
+        })
+        .or_else(|| {
+            value
+                .split_once("待回复内容：")
+                .map(|(_, plan)| plan.trim().to_string())
+                .filter(|plan| !plan.is_empty())
+        })?;
+    Some(stable_hash64_hex(plan.trim()))
+}
+
+fn stable_hash64_hex(value: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1889,24 +1937,8 @@ async fn probe_logs_db_compaction_due(db: &PanelDb, config: &Config) -> Result<b
             return Ok(false);
         }
     }
-    Ok(codex_app_server_is_inactive(&config.codex.app_server_service).await)
-}
-
-async fn codex_app_server_is_inactive(service_name: &str) -> bool {
-    let service_name = service_name.trim();
-    if service_name.is_empty() {
-        return true;
-    }
-    match tokio::process::Command::new("systemctl")
-        .arg("is-active")
-        .arg("--quiet")
-        .arg(service_name)
-        .status()
-        .await
-    {
-        Ok(status) => !status.success(),
-        Err(_) => false,
-    }
+    let _ = config;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -2713,7 +2745,8 @@ hooks = false
             let chunk = payload["body"].as_str().unwrap();
             let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
             assert!(chunk.starts_with(&prefix));
-            assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let combined = requests
@@ -2786,9 +2819,10 @@ hooks = false
                     )
                 );
                 let chunk = payload["body"].as_str().unwrap();
-                assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
                 let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
-                chunk.strip_prefix(&prefix).unwrap().to_string()
+                let body_part = chunk.strip_prefix(&prefix).unwrap();
+                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                body_part.to_string()
             })
             .collect::<String>();
         assert!(combined.contains("开头"));
@@ -2809,7 +2843,8 @@ hooks = false
         for (index, chunk) in chunks.iter().enumerate() {
             let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
             assert!(chunk.starts_with(&prefix));
-            assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let joined = chunks
@@ -2824,21 +2859,217 @@ hooks = false
     }
 
     #[test]
-    fn bark_body_chunks_recomputes_prefix_budget_when_chunk_count_grows() {
+    fn bark_body_chunks_keeps_body_budget_when_prefix_digit_count_grows() {
         let body = "a".repeat((PROBE_BARK_BODY_CHUNK_BYTES * 9) - 100);
         let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
 
-        assert_eq!(chunks.len(), 10);
+        assert_eq!(chunks.len(), 9);
         let joined = chunks
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                let body_part = chunk.strip_prefix(&prefix).unwrap();
+                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                body_part
+            })
+            .collect::<String>();
+        assert_eq!(joined, body);
+    }
+
+    #[test]
+    fn bark_body_chunks_match_lite_exact_2400_body_bytes_before_prefix() {
+        let body = "a".repeat(PROBE_BARK_BODY_CHUNK_BYTES * 2);
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert_eq!(chunks.len(), 2);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert_eq!(body_part.len(), PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(body_part.is_char_boundary(body_part.len()));
+        }
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
                 let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
         assert_eq!(joined, body);
+    }
+
+    #[tokio::test]
+    async fn record_probe_event_stores_body_metadata_but_not_full_bark_body_or_tokens() {
+        let server = TestHttpServer::start_n(
+            20,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"secret-device-token")
+            .unwrap();
+        let full_body = format!(
+            "开头\nAuthorization: Bearer secret-token\n{}\n<proposed_plan>不要存这个标签</proposed_plan>\n末尾唯一完整反馈",
+            "完整正文".repeat(900)
+        );
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-safe-store"),
+                Some("turn-safe-store"),
+                Some("thread-safe-store"),
+                None,
+                Some(&full_body),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("安全存储线程")),
+        );
+
+        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(bark.sent);
+        let _requests = server.requests(bark.request_count);
+
+        let stored = db.list_probe_events(10).unwrap();
+        assert_eq!(stored.len(), 1);
+        let payload = &stored[0].payload;
+        assert!(payload["body_summary"].as_str().unwrap().contains("开头"));
+        assert!(payload["body_sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
+        assert_eq!(payload["body_length"], full_body.len() as u64);
+        assert_eq!(payload["bark"]["body_length"], full_body.len() as u64);
+        assert_eq!(payload["bark"]["body_sha256"], payload["body_sha256"]);
+        assert!(payload["bark"]["chunk_count"].as_u64().is_some());
+        assert!(payload["bark"]["request_count"].as_u64().is_some());
+        assert!(payload["bark"].get("body").is_none());
+        assert!(payload.get("bark_body").is_none() || payload["bark_body"].is_null());
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(!stored_json.contains("secret-token"));
+        assert!(!stored_json.contains("secret-device-token"));
+        assert!(!stored_json.contains("<proposed_plan>"));
+        assert!(!stored_json.contains("</proposed_plan>"));
+        assert!(!stored_json.contains("/push"));
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_dedupe_key_includes_thread_turn_item_and_plan_hash() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
+        let body = format!(
+            "{}\nitem_id: item-plan-stable",
+            format_proposed_plan_reply_needed("thread-plan-stable", "turn-plan-stable", raw_plan)
+        );
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan-stable"),
+                Some("turn-plan-stable"),
+                Some("thread-plan-stable"),
+                None,
+                Some(&body),
+                "reply-needed",
+            )
+            .with_thread_title(Some("稳定计划线程"))
+            .with_body_source(Some("proposed_plan"))
+            .with_passive_scan_source(),
+        );
+
+        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(bark.sent);
+        let _raw = server.request();
+        let dedupe_key = outcome.dedupe_key;
+
+        assert!(dedupe_key.contains("thread-plan-stable"));
+        assert!(dedupe_key.contains("turn-plan-stable"));
+        assert!(dedupe_key.contains("item-plan-stable"));
+        assert!(dedupe_key.contains("plan_hash"));
+        assert_ne!(
+            dedupe_key,
+            "reply-needed:thread-plan-stable:turn-plan-stable:reply_needed:turn:turn-plan-stable"
+        );
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn passive_reply_needed_body_suppresses_plan_after_tool_output_assistant_or_turn_completed() {
+        for (name, tail) in [
+            (
+                "tool-output",
+                vec![
+                    json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"function_call_output","call_id":"call-plan","output":"完成选择"}}),
+                ],
+            ),
+            (
+                "assistant-progress",
+                vec![
+                    json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"继续执行计划。"}]}}),
+                ],
+            ),
+            (
+                "turn-completed",
+                vec![json!({"type":"turn_completed","turn_id":"turn-plan"})],
+            ),
+        ] {
+            let dir = temp_test_dir(&format!("nexushub-plan-suppressed-{name}"));
+            fs::create_dir_all(&dir).unwrap();
+            let rollout = dir.join("rollout.jsonl");
+            let mut lines = vec![
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}),
+            ];
+            lines.extend(tail);
+            fs::write(
+                &rollout,
+                lines
+                    .into_iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            let thread = nexushub_core::codex::ThreadSummary {
+                id: format!("thread-{name}"),
+                title: "计划应被抑制线程".to_string(),
+                status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+                updated_at: None,
+                archived_at: None,
+                message_count: 2,
+                latest_message: Some(
+                    "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+                ),
+                cwd: None,
+                model: None,
+                rollout_path: Some(rollout),
+                active_turn_id: Some("turn-plan".to_string()),
+                active_job_id: None,
+                pending_elicitation: None,
+                last_event_kind: None,
+            };
+
+            let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+
+            assert_eq!(body, None, "{name}");
+            assert_eq!(source, None, "{name}");
+            fs::remove_dir_all(&dir).unwrap();
+        }
     }
 
     #[tokio::test]
@@ -3080,12 +3311,7 @@ hooks = false
         seed_codex_logs_db(&logs_path, &[now - 300_000, now - 100]);
 
         let mut config = Config::default();
-        config.codex.home = PathBuf::from("auto");
-        config.codex.app_server_socket = Some(
-            codex_home
-                .join("app-server-control")
-                .join("app-server-control.sock"),
-        );
+        config.codex.home = codex_home.clone();
         config.probe.logs_db.retention_days = 2;
         config.probe.logs_db.delete_chunk_rows = 10;
         config.probe.logs_db.max_delete_rows_per_run = 10;
@@ -3105,13 +3331,16 @@ hooks = false
         assert_eq!(stored["target"], "codex_logs_2");
         assert_eq!(stored["deleted_rows"], 1);
         assert_eq!(stored["path"], logs_path.to_string_lossy().as_ref());
-        assert!(stored["configured_codex_home"].is_null());
+        assert_eq!(
+            stored["configured_codex_home"],
+            codex_home.to_string_lossy().as_ref()
+        );
         assert_eq!(
             stored["resolved_codex_home"],
             codex_home.to_string_lossy().as_ref()
         );
-        assert_eq!(stored["codex_home_source"], "socket");
-        assert_eq!(stored["logs_db_source"], "socket");
+        assert_eq!(stored["codex_home_source"], "configured");
+        assert_eq!(stored["logs_db_source"], "configured");
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -3235,12 +3464,7 @@ hooks = false
         }
 
         let mut config = Config::default();
-        config.codex.home = PathBuf::from("auto");
-        config.codex.app_server_socket = Some(
-            codex_home
-                .join("app-server-control")
-                .join("app-server-control.sock"),
-        );
+        config.codex.home = codex_home.clone();
         config.codex.app_server_service.clear();
         config.probe.logs_db.retention_days = 2;
         config.probe.logs_db.delete_chunk_rows = 10;
@@ -3259,10 +3483,13 @@ hooks = false
         assert!(result.vacuumed);
         assert_eq!(result.quick_check_before_vacuum.as_deref(), Some("ok"));
         assert_eq!(result.path, logs_path);
-        assert_eq!(result.configured_codex_home, None);
+        assert_eq!(
+            result.configured_codex_home.as_deref(),
+            Some(codex_home.to_string_lossy().as_ref())
+        );
         assert_eq!(result.resolved_codex_home, codex_home);
-        assert_eq!(result.codex_home_source, "socket");
-        assert_eq!(result.logs_db_source, "socket");
+        assert_eq!(result.codex_home_source, "configured");
+        assert_eq!(result.logs_db_source, "configured");
         assert!(result
             .checkpoint_result
             .as_deref()
