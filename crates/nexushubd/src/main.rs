@@ -1482,7 +1482,7 @@ fn import_legacy_sentinel_config_from_path(
         "config_path": config_path,
         "imported_bark_device_key": imported_secret,
         "mapped": {
-            "codex": ["home", "app_server_service", "host_label"],
+            "codex": ["home", "host_label"],
             "probe": ["enabled", "poll_seconds", "recent_limit", "notifications", "observability", "logs_db"],
         }
     }))
@@ -1500,7 +1500,6 @@ fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFil
                 .codex_home
                 .as_ref()
                 .map(|path| Some(path.to_string_lossy().to_string())),
-            app_server_service: nonempty(&legacy.server.app_server_service),
             host_label: nonempty(&legacy.server.host_label),
             ..Default::default()
         }),
@@ -2040,6 +2039,8 @@ log_max_bytes = 5242880
         assert!(updated.contains("hook_event_max_lines = 500"));
         assert!(updated.contains("log_max_bytes = 5242880"));
         assert!(!updated.contains("legacy-bark-secret"));
+        assert!(!updated.contains("app_server_service"));
+        assert!(!updated.contains("codex-app-server-root.service"));
         assert_eq!(
             db.get_secret_setting_bytes("probe_bark_device_key")
                 .unwrap()

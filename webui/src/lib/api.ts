@@ -1185,7 +1185,7 @@ function demoProbeStatus(): ProbeStatus {
       { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。" }
     ],
     reply_needed_threads: [
-      { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "<proposed_plan>等待确认</proposed_plan>" }
+      { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认" }
     ],
     recoverable_threads: [],
     lifecycle_status: "ok",
@@ -1246,7 +1246,7 @@ function demoProbeSettings(): ProbeSettings {
 function demoThreads(status: string, q: string): ThreadSummary[] {
   const threads: ThreadSummary[] = [
     { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", updated_at: new Date().toISOString(), cwd: "/srv/hermes" },
-    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "<proposed_plan>等待确认</proposed_plan>", updated_at: new Date().toISOString(), cwd: "/root/.codex" },
+    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认", updated_at: new Date().toISOString(), cwd: "/root/.codex" },
     { id: "019e5281-demo", title: "检查仓库状态", status: "Recent", message_count: 3, latest_message: "仓库状态干净。", updated_at: new Date().toISOString(), cwd: "/home/ubuntu/codex-workspace" },
     { id: "019e42aa-demo", title: "旧归档线程", status: "Archived", message_count: 2, latest_message: "已归档。", updated_at: new Date(Date.now() - 86400000).toISOString() }
   ];

@@ -153,11 +153,6 @@ pub struct CodexProbeConfigPatch {
     #[serde(default, deserialize_with = "deserialize_optional_string_field")]
     pub home: Option<Option<String>>,
     pub workspace: Option<String>,
-    pub app_server_service: Option<String>,
-    pub app_server_socket: Option<Option<String>>,
-    pub bridge_enabled: Option<bool>,
-    pub bridge_transport: Option<BridgeTransport>,
-    pub bridge_timeout_seconds: Option<u64>,
     pub host_label: Option<String>,
 }
 
@@ -721,6 +716,7 @@ fn non_auto_string(value: Option<&str>) -> Option<&str> {
 
 pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Result<String> {
     let mut editor = TomlPatchEditor::new(text);
+    remove_legacy_app_server_patch_keys(&mut editor);
     if let Some(codex) = patch.codex.as_ref() {
         if let Some(home) = codex.home.as_ref() {
             match non_auto_string(home.as_deref()) {
@@ -729,27 +725,6 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
             }
         }
         editor.set_string("codex", "workspace", codex.workspace.as_deref());
-        editor.set_string(
-            "codex",
-            "app_server_service",
-            codex.app_server_service.as_deref(),
-        );
-        if let Some(value) = codex.app_server_socket.as_ref() {
-            editor.set_string("codex", "app_server_socket", value.as_deref());
-        }
-        editor.set_bool("codex", "bridge_enabled", codex.bridge_enabled);
-        if let Some(value) = codex.bridge_transport.as_ref() {
-            editor.set_value(
-                "codex",
-                "bridge_transport",
-                Some(toml_string(&format!("{:?}", value).to_ascii_lowercase())),
-            );
-        }
-        editor.set_u64(
-            "codex",
-            "bridge_timeout_seconds",
-            codex.bridge_timeout_seconds,
-        );
         editor.set_string("codex", "host_label", codex.host_label.as_deref());
     }
     if let Some(probe) = patch.probe.as_ref() {
@@ -872,6 +847,19 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
         }
     }
     Ok(editor.finish())
+}
+
+fn remove_legacy_app_server_patch_keys(editor: &mut TomlPatchEditor) {
+    for key in [
+        "app_server_service",
+        "app_server_socket",
+        "bridge_enabled",
+        "bridge_transport",
+        "bridge_timeout_seconds",
+    ] {
+        editor.remove_key("codex", key);
+    }
+    editor.remove_key("probe.hooks", "reload_app_server_after_install");
 }
 
 struct TomlPatchEditor {
@@ -1113,11 +1101,19 @@ keep = "yes"
 [codex]
 home = "/root/.codex"
 app_server_service = "codex-app-server-root.service"
+app_server_socket = "/root/.codex/app-server.sock"
+bridge_enabled = true
+bridge_transport = "socket"
+bridge_timeout_seconds = 60
 host_label = "old-host"
 
 [probe]
 enabled = true
 poll_seconds = 15
+
+[probe.hooks]
+manage_stop_hook = true
+reload_app_server_after_install = true
 
 [probe.notifications]
 enabled = false
@@ -1126,7 +1122,6 @@ group = "old"
         let patch = ProbeConfigFilePatch {
             codex: Some(super::CodexProbeConfigPatch {
                 home: Some(Some("/srv/codex".into())),
-                app_server_service: Some("codex-app-server-root.service".into()),
                 host_label: Some("43.155.235.227".into()),
                 ..Default::default()
             }),
@@ -1155,6 +1150,12 @@ group = "old"
         assert!(output.contains("[custom]\nkeep = \"yes\""));
         assert!(output.contains("home = \"/srv/codex\""));
         assert!(output.contains("host_label = \"43.155.235.227\""));
+        assert!(!output.contains("app_server_service"));
+        assert!(!output.contains("app_server_socket"));
+        assert!(!output.contains("bridge_enabled"));
+        assert!(!output.contains("bridge_transport"));
+        assert!(!output.contains("bridge_timeout_seconds"));
+        assert!(!output.contains("reload_app_server_after_install"));
         assert!(output.contains("[probe]\nenabled = false\npoll_seconds = 30"));
         assert!(output.contains("recent_limit = 80"));
         assert!(output.contains("[probe.notifications]"));
@@ -1215,6 +1216,42 @@ workspace = "/home/ubuntu/codex-workspace"
 
         assert!(!output.contains("home = "));
         assert!(output.contains("workspace = \"/home/ubuntu/codex-workspace\""));
+    }
+
+    #[test]
+    fn probe_config_patch_cannot_reintroduce_legacy_app_server_bridge_keys() {
+        let input = r#"
+[codex]
+home = "/root/.codex"
+workspace = "/home/ubuntu/codex-workspace"
+host_label = "old"
+"#;
+        let patch: ProbeConfigFilePatch = serde_json::from_str(
+            r#"{
+                "codex": {
+                    "home": "/srv/codex",
+                    "workspace": "/srv/workspace",
+                    "host_label": "cloud",
+                    "app_server_service": "codex-app-server-root.service",
+                    "app_server_socket": "/root/.codex/app-server.sock",
+                    "bridge_enabled": true,
+                    "bridge_transport": "socket",
+                    "bridge_timeout_seconds": 99
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let output = super::patch_probe_config_toml(input, &patch).unwrap();
+
+        assert!(output.contains("home = \"/srv/codex\""));
+        assert!(output.contains("workspace = \"/srv/workspace\""));
+        assert!(output.contains("host_label = \"cloud\""));
+        assert!(!output.contains("app_server_service"));
+        assert!(!output.contains("app_server_socket"));
+        assert!(!output.contains("bridge_enabled"));
+        assert!(!output.contains("bridge_transport"));
+        assert!(!output.contains("bridge_timeout_seconds"));
     }
 
     #[test]

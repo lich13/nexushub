@@ -252,6 +252,20 @@ describe("archive delete API compatibility", () => {
     expect(JSON.stringify(result.data)).not.toContain("secret");
   });
 
+  test("demo probe and thread data do not expose raw proposed plan tags", async () => {
+    vi.resetModules();
+    const { getProbeStatus, listThreads } = await import("./api");
+
+    const status = await getProbeStatus();
+    const threads = await listThreads("reply-needed", "");
+
+    expect(status.available).toBe(true);
+    expect(JSON.stringify(status.data)).not.toContain("<proposed_plan>");
+    expect(JSON.stringify(threads)).not.toContain("<proposed_plan>");
+    expect(status.data?.reply_needed_threads?.[0]?.latest_message).toBe("等待确认");
+    expect(threads[0]?.latest_message).toBe("等待确认");
+  });
+
   test("demo jobs include probe job history entries", async () => {
     vi.resetModules();
     const { listJobs } = await import("./api");

@@ -1225,10 +1225,15 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
                     let (turn_id, item_id) = plan_marker_for_event(&current_plan_marker, &value)
                         .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
                     pending_action = Some(PendingAction::Plan { turn_id, item_id });
+                    scan.latest_message = Some(
+                        extract_proposed_plan_text(&text)
+                            .map(|plan| trim_text(&plan, 500))
+                            .unwrap_or_else(|| text.clone()),
+                    );
                 } else {
                     scan.recoverable = false;
+                    scan.latest_message = Some(text);
                 }
-                scan.latest_message = Some(text);
             }
         }
     }
@@ -4214,6 +4219,48 @@ mod tests {
         assert!(by_id.values().all(|title| {
             !title.contains("<proposed_plan>") && !title.contains("Assistant preview")
         }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_threads_sanitizes_proposed_plan_latest_message_but_keeps_reply_needed() {
+        let root = unique_temp_dir("thread-plan-latest-message");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        write_thread_fixture(
+            &conn,
+            &root,
+            "plan-thread",
+            "真实标题",
+            "",
+            &[
+                json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 修复计划\n- 处理标题\n</proposed_plan>"}]}}),
+            ],
+            1,
+        );
+
+        let rows = list_threads(&CodexPaths::new(&root), Some("reply-needed"), None, 10).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
+        let latest = rows[0].latest_message.as_deref().unwrap();
+        assert!(latest.contains("# 修复计划"));
+        assert!(!latest.contains("<proposed_plan>"));
+        assert!(!latest.contains("</proposed_plan>"));
         let _ = fs::remove_dir_all(root);
     }
 
