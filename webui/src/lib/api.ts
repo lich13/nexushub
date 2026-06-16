@@ -1209,7 +1209,10 @@ function demoProbeStatus(): ProbeStatus {
     resolved_codex_home: "/root/.codex",
     codex_home_source: "config",
     logs_db_source: "resolved_codex_home",
-    host_label: "43.155.235.227"
+    host_label: "43.155.235.227",
+    snapshot_age_seconds: 0,
+    is_refreshing: false,
+    snapshot_status: "cached"
   };
 }
 

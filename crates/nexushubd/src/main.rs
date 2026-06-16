@@ -1008,7 +1008,6 @@ fn normalize_proposed_plan_dedupe_key(event: &mut nexushub_core::probe::ProbeBui
         .turn_id
         .as_deref()
         .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "turn_id:"))
         .unwrap_or("unknown")
         .to_string();
     let item_or_call_id = event
@@ -1016,8 +1015,6 @@ fn normalize_proposed_plan_dedupe_key(event: &mut nexushub_core::probe::ProbeBui
         .get("item_id")
         .and_then(Value::as_str)
         .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "item_id:"))
-        .or_else(|| prefixed_body_value(&event.bark_body, "call_id:"))
         .unwrap_or(turn_id.as_str())
         .to_string();
     let plan_hash = proposed_plan_hash_from_text(&event.bark_body).unwrap_or_else(|| {
@@ -1052,7 +1049,6 @@ fn normalize_request_user_input_dedupe_key(event: &mut nexushub_core::probe::Pro
         .turn_id
         .as_deref()
         .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "Turn ID："))
         .unwrap_or("unknown")
         .to_string();
     let call_id = event
@@ -1060,7 +1056,6 @@ fn normalize_request_user_input_dedupe_key(event: &mut nexushub_core::probe::Pro
         .get("call_id")
         .and_then(Value::as_str)
         .or_else(|| event.payload.get("item_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "Call ID："))
         .unwrap_or(turn_id.as_str())
         .to_string();
     let input_hash = request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
@@ -1136,17 +1131,12 @@ fn passive_unresolved_action_marker_key(
         .turn_id
         .as_deref()
         .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "Turn ID："))
-        .or_else(|| prefixed_body_value(&event.bark_body, "turn_id:"))
         .unwrap_or("unknown");
     let action_id = event
         .payload
         .get("item_id")
         .and_then(Value::as_str)
         .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .or_else(|| prefixed_body_value(&event.bark_body, "Call ID："))
-        .or_else(|| prefixed_body_value(&event.bark_body, "item_id:"))
-        .or_else(|| prefixed_body_value(&event.bark_body, "call_id:"))
         .unwrap_or(turn_id);
     let content_key = if body_source == "proposed_plan" {
         proposed_plan_hash_from_text(&event.bark_body)
@@ -1469,7 +1459,7 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 }
 
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
-    format!("第 {index}/{chunk_count} 段\n")
+    format!("第 {index}/{chunk_count} 段\n\n")
 }
 
 fn dedupe_component(value: &str) -> String {
@@ -1488,12 +1478,6 @@ fn dedupe_component(value: &str) -> String {
     } else {
         normalized
     }
-}
-
-fn prefixed_body_value<'a>(body: &'a str, prefix: &str) -> Option<&'a str> {
-    body.lines()
-        .find_map(|line| line.trim().strip_prefix(prefix).map(str::trim))
-        .filter(|value| !value.is_empty())
 }
 
 fn proposed_plan_hash_from_text(value: &str) -> Option<String> {
@@ -1744,6 +1728,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let state = AppState::new(config.clone(), db);
     spawn_probe_logs_db_scheduler(state.clone());
     spawn_probe_thread_scan(state.clone());
+    api::spawn_probe_status_refresh(state.clone());
     let webui_dir = config.paths.webui_dir.clone();
     let app = api::router(state)
         .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
@@ -1925,6 +1910,12 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
             if let Some(active_turn_id) = thread.active_turn_id.as_deref() {
                 event.payload["turn_id"] = json!(active_turn_id);
             }
+            if let Some(elicitation) = &thread.pending_elicitation {
+                if let Some(item_id) = elicitation.item_id.as_deref() {
+                    event.payload["item_id"] = json!(item_id);
+                    event.payload["call_id"] = json!(item_id);
+                }
+            }
             match status {
                 "reply-needed" => {
                     event.payload["reason_label"] = json!("等待用户确认");
@@ -2092,19 +2083,11 @@ fn thread_rollout_still_request_user_input_needed(
 }
 
 fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
-    let call_id = elicitation.item_id.as_deref().unwrap_or("-");
-    let turn_id = elicitation.turn_id.as_deref().unwrap_or("-");
-    let mut lines = vec![
-        "等待用户选择：Plan Mode 已请求用户选择后继续。".to_string(),
-        String::new(),
-        format!("Call ID：{call_id}"),
-        format!("Turn ID：{turn_id}"),
-        format!("时间：{}", passive_scan_time_label()),
-        "状态说明：这一轮正在等待用户选择，不是异常停止。".to_string(),
-        String::new(),
-        "待选择内容：".to_string(),
-    ];
+    let mut lines = Vec::new();
     for (index, question) in elicitation.questions.iter().enumerate() {
+        if index > 0 {
+            lines.push(String::new());
+        }
         let number = index + 1;
         lines.push(format!("问题 {number}：{}", question.question.trim()));
         if let Some(header) = question
@@ -2128,26 +2111,17 @@ fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicita
             }
         }
     }
-    lines.join("\n")
+    if lines.is_empty() {
+        "Codex 请求用户输入。".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
-fn format_proposed_plan_reply_needed(thread_id: &str, turn_id: &str, raw: &str) -> String {
+fn format_proposed_plan_reply_needed(_thread_id: &str, _turn_id: &str, raw: &str) -> String {
     let plan_text = nexushub_core::codex::extract_proposed_plan_text(raw)
         .unwrap_or_else(|| raw.trim().to_string());
-    format!(
-        "等待用户回复：Plan 已完成，正在等待确认后继续。\n\nthread_id: {}\nturn_id: {}\n时间: {}\n状态说明: 这一轮已经写出 Plan 并等待用户确认，所以这是待回复，不是异常停止或普通完成。\n\nPlan 摘要:\n{}",
-        thread_id.trim(),
-        turn_id.trim(),
-        passive_scan_time_label(),
-        plan_text.trim()
-    )
-}
-
-fn passive_scan_time_label() -> String {
-    chrono::Utc::now()
-        .with_timezone(&chrono::FixedOffset::east_opt(8 * 60 * 60).expect("valid Beijing offset"))
-        .format("%Y-%m-%d %H:%M:%S 北京时间")
-        .to_string()
+    plan_text.trim().to_string()
 }
 
 fn add_probe_events_maintenance_fields(
@@ -2743,9 +2717,10 @@ hooks = false
 
         let body = body.expect("request_user_input body");
         assert_eq!(source.as_deref(), Some("request_user_input"));
-        assert!(body.contains("等待用户选择"));
-        assert!(body.contains("Call ID：call-question"));
-        assert!(body.contains("Turn ID：turn-question"));
+        assert!(!body.contains("等待用户选择"));
+        assert!(!body.contains("Call ID："));
+        assert!(!body.contains("Turn ID："));
+        assert!(!body.contains("待选择内容"));
         assert!(body.contains("问题 1：怎么继续？"));
         assert!(body.contains("选项 1：直接执行"));
         assert!(body.contains("说明：按当前计划继续"));
@@ -2764,14 +2739,9 @@ hooks = false
             .with_thread_title(Some("问题线程"))
             .with_body_source(source.as_deref()),
         );
-        let event_time = event.payload["beijing_time"].as_str().unwrap();
         assert_eq!(event.bark_title, "等待回复：问题线程");
-        assert_eq!(
-            event.bark_body,
-            format!(
-                "线程 ID：thread-question\n\n事件时间：{event_time}\n\n状态说明：Codex 正在等待用户回复或选择后继续。\n\n待回复内容：\n{body}"
-            )
-        );
+        assert_eq!(event.bark_body, body);
+        assert!(!event.bark_body.contains("thread-question"));
 
         let plan_thread = nexushub_core::codex::ThreadSummary {
             pending_elicitation: None,
@@ -2785,8 +2755,7 @@ hooks = false
 
         let body = body.expect("plan body");
         assert_eq!(source.as_deref(), Some("proposed_plan"));
-        assert!(body.contains("等待用户回复：Plan 已完成，正在等待确认后继续。"));
-        assert!(body.contains("# 修复计划\n- 等待确认"));
+        assert_eq!(body, "# 修复计划\n- 等待确认");
         assert!(!body.contains("<proposed_plan>"));
         assert!(!body.contains("</proposed_plan>"));
     }
@@ -3170,7 +3139,7 @@ hooks = false
                 )
             );
             let chunk = payload["body"].as_str().unwrap();
-            let prefix = format!("第 {}/{} 段\n", index + 1, result.chunk_count);
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
             assert!(chunk.starts_with(&prefix));
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
@@ -3185,7 +3154,7 @@ hooks = false
                     .as_str()
                     .unwrap()
                     .to_string();
-                let prefix = format!("第 {}/{} 段\n", index + 1, result.chunk_count);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
                 chunk.strip_prefix(&prefix).unwrap().to_string()
             })
             .collect::<String>();
@@ -3246,7 +3215,7 @@ hooks = false
                     )
                 );
                 let chunk = payload["body"].as_str().unwrap();
-                let prefix = format!("第 {}/{} 段\n", index + 1, bark.request_count);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
                 let body_part = chunk.strip_prefix(&prefix).unwrap();
                 assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
                 body_part.to_string()
@@ -3268,7 +3237,7 @@ hooks = false
 
         assert!(!chunks[0].contains("  完成"));
         for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
             assert!(chunk.starts_with(&prefix));
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
@@ -3278,7 +3247,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
@@ -3295,7 +3264,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
                 let body_part = chunk.strip_prefix(&prefix).unwrap();
                 assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
                 body_part
@@ -3311,7 +3280,7 @@ hooks = false
 
         assert_eq!(chunks.len(), 2);
         for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
             let body_part = chunk.strip_prefix(&prefix).unwrap();
             assert_eq!(body_part.len(), PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(body_part.is_char_boundary(body_part.len()));
@@ -3320,7 +3289,7 @@ hooks = false
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/{} 段\n", index + 1, chunks.len());
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
@@ -3399,10 +3368,8 @@ hooks = false
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
-        let body = format!(
-            "{}\nitem_id: item-plan-stable",
-            format_proposed_plan_reply_needed("thread-plan-stable", "turn-plan-stable", raw_plan)
-        );
+        let body =
+            format_proposed_plan_reply_needed("thread-plan-stable", "turn-plan-stable", raw_plan);
         let event = probe_runtime(&config).build_event(
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-plan-stable"),
@@ -3416,6 +3383,8 @@ hooks = false
             .with_body_source(Some("proposed_plan"))
             .with_passive_scan_source(),
         );
+        let mut event = event;
+        event.payload["item_id"] = json!("item-plan-stable");
 
         let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
             .await
@@ -4182,8 +4151,10 @@ hooks = false
         assert_eq!(events[0].payload["thread_title"], "stale reply");
         assert_eq!(events[0].payload["body_source"], "request_user_input");
         let body_summary = events[0].payload["body_summary"].as_str().unwrap();
-        assert!(body_summary.contains("等待用户选择"));
-        assert!(body_summary.contains("Turn ID：turn-stale"));
+        assert!(!body_summary.contains("等待用户选择"));
+        assert!(!body_summary.contains("Turn ID："));
+        assert!(!body_summary.contains("Call ID："));
+        assert!(!body_summary.contains("状态说明："));
         assert!(body_summary.contains("问题 1：Continue?"));
         assert!(body_summary.contains("选项 1：继续"));
         assert!(body_summary.contains("说明：按计划执行"));

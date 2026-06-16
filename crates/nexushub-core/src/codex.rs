@@ -1444,7 +1444,7 @@ fn clear_anonymous_pending_tools(pending_tool_turns: &mut HashMap<String, Option
 
 fn rollout_event_type(value: &Value) -> &str {
     let top_level = value.get("type").and_then(Value::as_str).unwrap_or("");
-    if top_level == "event_msg" {
+    let raw = if top_level == "event_msg" {
         value
             .pointer("/payload/type")
             .or_else(|| value.pointer("/payload/event_type"))
@@ -1454,6 +1454,13 @@ fn rollout_event_type(value: &Value) -> &str {
             .unwrap_or(top_level)
     } else {
         top_level
+    };
+    match raw {
+        "TurnStarted" => "task_started",
+        "TurnComplete" | "TurnCompleted" | "turn_complete" | "turn/complete" => "turn_completed",
+        "TurnAborted" => "turn_aborted",
+        "RequestUserInput" | "requestUserInput" => "request_user_input",
+        other => other,
     }
 }
 
@@ -2506,7 +2513,7 @@ fn parse_arguments_value(value: &Value) -> Option<Value> {
 fn update_turn_state(value: &Value, scan: &mut RolloutScan) {
     let event_type = rollout_event_type(value);
     let turn_id = event_turn_id(value);
-    if matches!(event_type, "turn_started" | "turn/started") {
+    if matches!(event_type, "task_started" | "turn_started" | "turn/started") {
         scan.active_turn_id = turn_id.clone();
         scan.running = true;
     }
@@ -3149,10 +3156,12 @@ fn looks_like_message(s: &str) -> bool {
 fn is_request_user_input(value: &Value) -> bool {
     let payload = value.get("payload").unwrap_or(value);
     [
+        value.get("type").and_then(Value::as_str),
         value.get("name").and_then(Value::as_str),
         value.get("toolName").and_then(Value::as_str),
         value.get("tool_name").and_then(Value::as_str),
         value.get("method").and_then(Value::as_str),
+        payload.get("type").and_then(Value::as_str),
         payload.get("name").and_then(Value::as_str),
         payload.get("toolName").and_then(Value::as_str),
         payload.get("tool_name").and_then(Value::as_str),
@@ -3163,7 +3172,10 @@ fn is_request_user_input(value: &Value) -> bool {
     .any(|name| {
         matches!(
             name,
-            "request_user_input" | "requestUserInput" | "item/tool/requestUserInput"
+            "RequestUserInput"
+                | "request_user_input"
+                | "requestUserInput"
+                | "item/tool/requestUserInput"
         )
     })
 }
@@ -3882,6 +3894,35 @@ mod tests {
         assert_eq!(block.status.as_deref(), Some("completed"));
         assert_eq!(block.resolved, Some(true));
         assert_eq!(block.text.as_deref(), Some("- inspect\n- patch\n- test"));
+    }
+
+    #[test]
+    fn scan_rollout_accepts_official_pascal_case_tui_protocol_aliases() {
+        let plan = scan_fixture(&[
+            json!({"type":"TurnStarted","turn_id":"turn-plan"}),
+            json!({"type":"PlanDelta","turn_id":"turn-plan","item_id":"plan-1","delta":"- 检查\n"}),
+            json!({"type":"response_item","turn_id":"turn-plan","item_id":"plan-1","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 计划\n- 检查\n</proposed_plan>"}]}}),
+            json!({"type":"TurnComplete","turn_id":"turn-plan","last_agent_message":null}),
+        ]);
+        assert!(plan.reply_needed);
+        assert!(!plan.running);
+        assert_eq!(plan.active_turn_id, None);
+
+        let question = scan_fixture(&[
+            json!({"type":"TurnStarted","turnId":"turn-choice"}),
+            json!({"type":"RequestUserInput","turnId":"turn-choice","itemId":"choice-1","questions":[{"id":"choice","question":"是否继续？","options":[{"label":"继续"}]}]}),
+        ]);
+        assert!(question.reply_needed);
+        assert!(question.pending_elicitation.is_some());
+        assert_eq!(question.active_turn_id.as_deref(), Some("turn-choice"));
+
+        let answered = scan_fixture(&[
+            json!({"type":"TurnStarted","turnId":"turn-choice"}),
+            json!({"type":"RequestUserInput","turnId":"turn-choice","itemId":"choice-1","questions":[{"id":"choice","question":"是否继续？","options":[{"label":"继续"}]}]}),
+            json!({"type":"UserInputAnswer","turnId":"turn-choice","itemId":"choice-1","answers":{"choice":["继续"]}}),
+        ]);
+        assert!(!answered.reply_needed);
+        assert!(answered.pending_elicitation.is_none());
     }
 
     #[test]

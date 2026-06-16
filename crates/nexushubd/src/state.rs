@@ -5,6 +5,7 @@ use nexushub_core::{
     jobs::JobRunner,
 };
 use reqwest::Client;
+use serde_json::Value;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -20,6 +21,7 @@ pub struct AppState {
     pub http: Client,
     pub login_limiter: Arc<Mutex<LoginLimiter>>,
     pub rollout_detail_cache: Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
+    pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
 }
 
 impl AppState {
@@ -33,6 +35,7 @@ impl AppState {
             http: Client::new(),
             login_limiter: Arc::new(Mutex::new(LoginLimiter::new(login_rate_limit))),
             rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),
+            probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
         }
     }
 
@@ -52,6 +55,18 @@ impl AppState {
     pub fn codex_paths(&self) -> CodexPaths {
         self.resolved_codex_paths().codex_paths()
     }
+}
+
+#[derive(Debug, Default)]
+pub struct ProbeStatusCache {
+    pub snapshot: Option<CachedProbeStatus>,
+    pub refreshing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedProbeStatus {
+    pub value: Value,
+    pub refreshed_at_unix: i64,
 }
 
 #[derive(Debug, Clone)]

@@ -571,7 +571,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const messageStore = useThreadMessageStoreController();
-  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000 });
+  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000, staleTime: 3000, placeholderData: (previous) => previous });
   const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
   const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
   const selectedThreadSummary = useMemo(
@@ -3024,7 +3024,7 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
 
 function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const goal = useQuery({ queryKey: ["codex-goal", threadId], queryFn: () => getGoalMode(threadId), refetchInterval: 8000 });
+  const goal = useQuery({ queryKey: ["codex-goal", threadId], queryFn: () => getGoalMode(threadId), refetchInterval: 8000, staleTime: 5000, placeholderData: (previous) => previous });
   const goalState = goal.data?.available ? goal.data.data : null;
   const [objective, setObjective] = useState(goalState?.objective ?? "");
   const [tokenBudget, setTokenBudget] = useState(goalState?.token_budget ? String(goalState.token_budget) : "");
@@ -3711,10 +3711,10 @@ function ClaudeWorkspace() {
 
 function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000 });
-  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000 });
-  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000 });
-  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000 });
+  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: (previous) => previous });
+  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
+  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
+  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000, staleTime: 10000, placeholderData: (previous) => previous });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -3734,6 +3734,8 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
   const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
   const statusTone = available && probeEnabled ? "success" : available ? "warning" : "danger";
+  const snapshotText = probeSnapshotStatusText(data, status.isFetching);
+  const snapshotTone = data?.is_refreshing || status.isFetching ? "warning" : "success";
   const probeJobs = (jobs.data ?? []).filter(isProbeJob).slice(0, 6);
   const probeJobMutation = useMutation({
     mutationFn: (action: ProbeJobAction) => startProbeJob(action, csrfToken),
@@ -3791,6 +3793,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
         <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
+        <Metric label="刷新" value={snapshotText} tone={snapshotTone} />
       </section>
       <section className="probe-control-grid" aria-label="探针线程状态">
         <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
@@ -3942,8 +3945,8 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
 function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000 });
-  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000 });
+  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: (previous) => previous });
+  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
@@ -5130,6 +5133,15 @@ export function formatGoalStatus(goal: { enabled?: boolean; status?: string | nu
     cleared: "已清除"
   };
   return labels[status] ?? status;
+}
+
+export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age_seconds" | "is_refreshing" | "snapshot_status"> | null, fetching = false): string {
+  const age = typeof status?.snapshot_age_seconds === "number" ? Math.max(0, Math.round(status.snapshot_age_seconds)) : null;
+  const prefix = status?.is_refreshing || fetching ? "后台刷新" : "已同步";
+  if (age === null) return prefix;
+  if (age < 60) return `${prefix} ${age}s`;
+  const minutes = Math.floor(age / 60);
+  return `${prefix} ${minutes}m`;
 }
 
 function cleanHostValue(value?: string | null): string | null {

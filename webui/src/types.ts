@@ -407,6 +407,9 @@ export type ProbeStatus = {
   logs_db_source?: string | null;
   discovery_warnings?: string[] | null;
   host_label?: string | null;
+  snapshot_age_seconds?: number | null;
+  is_refreshing?: boolean | null;
+  snapshot_status?: string | null;
 };
 
 export type ProbeEvent = {

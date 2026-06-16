@@ -3,7 +3,9 @@ use crate::{
         expired_session_cookie, expires_at, random_token, require_auth, require_csrf,
         session_cookie, verify_password, SESSION_COOKIE,
     },
-    state::{AppState, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature},
+    state::{
+        AppState, CachedProbeStatus, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature,
+    },
     turnstile::verify_turnstile,
 };
 use axum::{
@@ -274,9 +276,18 @@ async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     ]))
 }
 
-async fn get_probe_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+#[derive(Debug, Deserialize)]
+struct ProbeStatusQuery {
+    refresh: Option<bool>,
+}
+
+async fn get_probe_status(
+    State(state): State<AppState>,
+    Query(query): Query<ProbeStatusQuery>,
+    headers: HeaderMap,
+) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_status_value(state).await)
+    ok(probe_status_cached_value(state, query.refresh.unwrap_or(false)).await)
 }
 
 async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -727,7 +738,26 @@ fn probe_config_path() -> PathBuf {
         .unwrap_or_else(|| PlatformPaths::current().config_file)
 }
 
-async fn probe_status_value(state: AppState) -> Value {
+async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Value {
+    if force_refresh {
+        let value = probe_status_fresh_value(state.clone()).await;
+        store_probe_status_snapshot(&state, value.clone());
+        return with_probe_snapshot_metadata(value, 0, false, "fresh");
+    }
+
+    if let Some(snapshot) = current_probe_status_snapshot(&state) {
+        spawn_probe_status_refresh(state);
+        let now = chrono::Utc::now().timestamp();
+        let age = now.saturating_sub(snapshot.refreshed_at_unix).max(0);
+        return with_probe_snapshot_metadata(snapshot.value, age, true, "cached");
+    }
+
+    let value = probe_status_base_value(state.clone()).await;
+    spawn_probe_status_refresh(state);
+    with_probe_snapshot_metadata(value, 0, true, "initial")
+}
+
+async fn probe_status_fresh_value(state: AppState) -> Value {
     match probe_runtime(&state).status().await {
         Ok(mut status) => {
             if let Ok(events) = state
@@ -764,6 +794,68 @@ async fn probe_status_value(state: AppState) -> Value {
             "error": err.to_string(),
         }),
     }
+}
+
+async fn probe_status_base_value(state: AppState) -> Value {
+    match probe_runtime(&state).status().await {
+        Ok(status) => json!(status),
+        Err(err) => json!({
+            "label": "Probe",
+            "enabled": state.config().probe.enabled,
+            "available": false,
+            "flavor": "builtin",
+            "error": err.to_string(),
+        }),
+    }
+}
+
+fn current_probe_status_snapshot(state: &AppState) -> Option<CachedProbeStatus> {
+    state
+        .probe_status_cache
+        .lock()
+        .expect("probe status cache")
+        .snapshot
+        .clone()
+}
+
+fn store_probe_status_snapshot(state: &AppState, value: Value) {
+    let mut cache = state.probe_status_cache.lock().expect("probe status cache");
+    cache.snapshot = Some(CachedProbeStatus {
+        value,
+        refreshed_at_unix: chrono::Utc::now().timestamp(),
+    });
+    cache.refreshing = false;
+}
+
+pub(crate) fn spawn_probe_status_refresh(state: AppState) {
+    {
+        let mut cache = state.probe_status_cache.lock().expect("probe status cache");
+        if cache.refreshing {
+            return;
+        }
+        cache.refreshing = true;
+    }
+    tokio::spawn(async move {
+        let value = probe_status_fresh_value(state.clone()).await;
+        store_probe_status_snapshot(&state, value);
+    });
+}
+
+fn with_probe_snapshot_metadata(
+    mut value: Value,
+    snapshot_age_seconds: i64,
+    is_refreshing: bool,
+    snapshot_status: &str,
+) -> Value {
+    if let Value::Object(ref mut object) = value {
+        object.insert(
+            "snapshot_age_seconds".to_string(),
+            json!(snapshot_age_seconds),
+        );
+        object.insert("is_refreshing".to_string(), json!(is_refreshing));
+        object.insert("snapshot_status".to_string(), json!(snapshot_status));
+    }
+    value
 }
 
 fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
@@ -4840,6 +4932,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(alias.status(), StatusCode::NOT_FOUND);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_status_route_returns_lightweight_snapshot_immediately_and_refreshes_background()
+    {
+        let (state, session_token, _) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-probe-status-snapshot");
+        let codex_home = dir.join(".codex");
+        mark_codex_home(&codex_home);
+        let mut config = state.config();
+        config.codex.home = codex_home.clone();
+        state.replace_config(config);
+        let app = router(state.clone());
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let first_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(first_status["label"], "Probe");
+        assert_eq!(first_status["snapshot_status"], "initial");
+        assert_eq!(first_status["is_refreshing"], true);
+        assert_eq!(first_status["snapshot_age_seconds"], 0);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/probe/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let second_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(second_status["snapshot_status"], "cached");
+        assert!(second_status["snapshot_age_seconds"].as_i64().is_some());
+        assert!(second_status["running_threads"].as_array().is_some());
+        assert!(second_status["reply_needed_threads"].as_array().is_some());
+        assert!(second_status["recoverable_threads"].as_array().is_some());
         fs::remove_dir_all(dir).unwrap();
     }
 
