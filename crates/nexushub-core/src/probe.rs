@@ -1524,7 +1524,8 @@ fn is_probe_terminal_stop_error(text: &str) -> bool {
 
 fn is_probe_stop_hook_system_message(text: &str) -> bool {
     let trimmed = text.trim_start();
-    trimmed.starts_with("Codex Sentinel Lite ") || trimmed.starts_with("NexusHub Probe ")
+    trimmed.starts_with("Codex Sentinel Lite 检测到")
+        || trimmed.starts_with("NexusHub Probe 检测到")
 }
 
 fn is_probe_machine_control_payload(text: &str) -> bool {
@@ -1975,6 +1976,30 @@ mod tests {
     }
 
     #[test]
+    fn hook_stop_with_product_named_final_feedback_is_classified_as_completion() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-product-named"),
+            Some("turn-product-named"),
+            Some("thread-product-named"),
+            None,
+            Some("NexusHub Probe v0.1.66 smoke completion finished normally."),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.event_type, "completion");
+        assert_eq!(
+            event.payload["last_assistant_message"]["classification"],
+            "completion"
+        );
+    }
+
+    #[test]
     fn hook_stop_ignores_machine_control_payloads() {
         let runtime = ProbeRuntime::new(
             Config::default(),
@@ -1995,7 +2020,7 @@ mod tests {
     }
 
     #[test]
-    fn hook_stop_does_not_treat_own_system_message_as_completion_or_abnormal() {
+    fn hook_stop_does_not_treat_sentinel_system_message_as_completion_or_abnormal() {
         let runtime = ProbeRuntime::new(
             Config::default(),
             PlatformPaths::for_kind(PlatformKind::Linux),
@@ -2007,6 +2032,26 @@ mod tests {
             Some("thread-system"),
             None,
             Some("Codex Sentinel Lite 检测到「Rate limited」，只记录并推送异常信息，不自动恢复。"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "hook-stop");
+        assert_eq!(event.event_type, "hook_stop");
+    }
+
+    #[test]
+    fn hook_stop_does_not_treat_probe_system_message_as_completion_or_abnormal() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-probe-system"),
+            Some("turn-probe-system"),
+            Some("thread-probe-system"),
+            None,
+            Some("NexusHub Probe 检测到「Rate limited」，只记录并推送异常信息，不自动恢复。"),
             "hook-stop",
         ));
 
