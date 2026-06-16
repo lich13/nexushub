@@ -14,7 +14,9 @@ pub fn redact_output(input: &str) -> String {
             || lower.contains("token")
             || lower.contains("secret")
             || lower.contains("password")
-            || lower.contains("authorization:")
+            || lower.contains("authorization")
+            || lower.contains("cookie")
+            || lower.contains("device_key")
         {
             out.push("[redacted sensitive line]".to_string());
         } else {
@@ -33,6 +35,16 @@ mod tests {
         assert_eq!(
             redact_output("ok\nTOKEN=abc"),
             "ok\n[redacted sensitive line]"
+        );
+    }
+
+    #[test]
+    fn redacts_cookie_device_key_and_authorization_lines() {
+        assert_eq!(
+            redact_output(
+                "ok\nCookie: nexushub_session=abc\ndevice_key=secret\nAuthorization Bearer abc\nend"
+            ),
+            "ok\n[redacted sensitive line]\n[redacted sensitive line]\n[redacted sensitive line]\nend"
         );
     }
 }
