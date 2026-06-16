@@ -3348,6 +3348,7 @@ fn app_server_thread_summary(
         thread,
         fallback_has_pending_signal(fallback),
         fallback_has_running_signal(fallback) || app_thread_has_running_signal(thread),
+        false,
     );
     let active_turn_id = merged_active_turn_id(fallback, thread, &status);
     let title = thread_title(thread)
@@ -3410,8 +3411,15 @@ fn app_server_thread_summary(
         let running_signal = fallback_has_running_signal(Some(&summary))
             || (rollout_enriched && matches!(summary.status, ThreadStatus::Running))
             || app_thread_has_running_signal(thread);
-        summary.status =
-            merge_app_thread_status(Some(&summary), thread, pending_signal, running_signal);
+        let suppress_stale_running = rollout_enriched
+            && rollout_suppresses_app_running(Some(&summary), thread, running_signal);
+        summary.status = merge_app_thread_status(
+            Some(&summary),
+            thread,
+            pending_signal,
+            running_signal,
+            suppress_stale_running,
+        );
         summary.active_turn_id = merged_active_turn_id(Some(&summary), thread, &summary.status);
         if !matches!(
             summary.status,
@@ -3466,11 +3474,14 @@ fn apply_app_server_thread_detail(detail: &mut ThreadDetail, value: &Value) {
     let running_signal = detail_has_running_signal(detail)
         || (rollout_enriched && matches!(detail.summary.status, ThreadStatus::Running))
         || app_thread_has_running_signal(thread);
+    let suppress_stale_running = rollout_enriched
+        && rollout_suppresses_app_running(Some(&detail.summary), thread, running_signal);
     let status = merge_app_thread_status(
         Some(&detail.summary),
         thread,
         pending_signal,
         running_signal,
+        suppress_stale_running,
     );
     let active_turn_id = merged_active_turn_id(Some(&detail.summary), thread, &status)
         .or_else(|| detail_active_turn_id(detail))
@@ -3499,6 +3510,7 @@ fn merge_app_thread_status(
     thread: &Value,
     pending_signal: bool,
     running_signal: bool,
+    suppress_stale_running: bool,
 ) -> ThreadStatus {
     if fallback.is_some_and(|thread| matches!(thread.status, ThreadStatus::Archived))
         || thread_archived(thread)
@@ -3509,10 +3521,16 @@ fn merge_app_thread_status(
         return ThreadStatus::Recoverable;
     }
     match app_thread_state(thread) {
-        AppThreadState::Active => ThreadStatus::Running,
+        AppThreadState::Active => {
+            if suppress_stale_running && !pending_signal {
+                fallback_stable_status(fallback)
+            } else {
+                ThreadStatus::Running
+            }
+        }
         AppThreadState::Recoverable => ThreadStatus::Recoverable,
         AppThreadState::Idle => {
-            if running_signal {
+            if running_signal && !suppress_stale_running {
                 ThreadStatus::Running
             } else if pending_signal {
                 ThreadStatus::ReplyNeeded
@@ -3521,7 +3539,7 @@ fn merge_app_thread_status(
             }
         }
         AppThreadState::NotLoaded => {
-            if running_signal {
+            if running_signal && !suppress_stale_running {
                 ThreadStatus::Running
             } else if pending_signal {
                 ThreadStatus::ReplyNeeded
@@ -3565,6 +3583,33 @@ fn fallback_has_clearable_stale_status(summary: &ThreadSummary) -> bool {
         && summary.active_turn_id.is_none()
         && summary.active_job_id.is_none()
         && summary.pending_elicitation.is_none()
+}
+
+fn rollout_suppresses_app_running(
+    fallback: Option<&ThreadSummary>,
+    thread: &Value,
+    running_signal: bool,
+) -> bool {
+    if !running_signal {
+        return false;
+    }
+    let Some(summary) = fallback else {
+        return false;
+    };
+    if !matches!(summary.status, ThreadStatus::Recent)
+        || summary.active_turn_id.is_some()
+        || summary.active_job_id.is_some()
+        || summary.pending_elicitation.is_some()
+    {
+        return false;
+    }
+    let Some(path) = summary.rollout_path.as_deref() else {
+        return false;
+    };
+    let Some(active_turn_id) = app_thread_active_turn_id(thread) else {
+        return false;
+    };
+    codex::rollout_has_completed_turn(path, Some(active_turn_id.as_str())).unwrap_or(false)
 }
 
 fn merged_active_turn_id(
@@ -6258,6 +6303,159 @@ mod tests {
 
         assert_eq!(detail.summary.status, ThreadStatus::Recent);
         assert_eq!(detail.summary.active_turn_id, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_server_active_does_not_override_completed_rollout_wait_agent() {
+        let root = unique_temp_dir("paneld-active-completed-wait-agent");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-thread-a.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-main","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-main","last_agent_message":"主线程完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.rollout_path = Some(rollout.clone());
+
+        let rows = app_server_thread_summaries(
+            &json!({
+                "threads": [{
+                    "id": "thread-a",
+                    "name": "wanka",
+                    "status": { "type": "active" },
+                    "activeTurnId": "turn-main",
+                    "path": rollout.display().to_string()
+                }]
+            }),
+            &[fallback.clone()],
+        );
+        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+
+        assert_eq!(rows[0].status, ThreadStatus::Recent);
+        assert_eq!(rows[0].active_turn_id, None);
+        assert!(running.is_empty());
+
+        let mut detail = ThreadDetail {
+            summary: fallback,
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+        };
+        apply_app_server_thread_detail(
+            &mut detail,
+            &json!({
+                "thread": {
+                    "id": "thread-a",
+                    "name": "wanka",
+                    "status": { "type": "active" },
+                    "activeTurnId": "turn-main",
+                    "path": rollout.display().to_string()
+                }
+            }),
+        );
+
+        assert_eq!(detail.summary.status, ThreadStatus::Recent);
+        assert_eq!(detail.summary.active_turn_id, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_server_not_loaded_running_item_does_not_override_completed_rollout_wait_agent() {
+        let root = unique_temp_dir("paneld-notloaded-completed-wait-agent");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-thread-a.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-main","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-main","last_agent_message":"主线程完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.rollout_path = Some(rollout.clone());
+
+        let app_thread = json!({
+            "id": "thread-a",
+            "name": "wanka",
+            "status": { "type": "notLoaded" },
+            "path": rollout.display().to_string(),
+            "turns": [{
+                "id": "turn-main",
+                "items": [{ "type": "function_call", "name": "wait_agent", "status": { "type": "running" } }]
+            }]
+        });
+        let rows = app_server_thread_summaries(
+            &json!({ "threads": [app_thread.clone()] }),
+            &[fallback.clone()],
+        );
+        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+
+        assert_eq!(rows[0].status, ThreadStatus::Recent);
+        assert_eq!(rows[0].active_turn_id, None);
+        assert!(running.is_empty());
+
+        let mut detail = ThreadDetail {
+            summary: fallback,
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+        };
+        apply_app_server_thread_detail(&mut detail, &json!({ "thread": app_thread }));
+
+        assert_eq!(detail.summary.status, ThreadStatus::Recent);
+        assert_eq!(detail.summary.active_turn_id, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_server_newer_active_turn_overrides_completed_rollout_wait_agent() {
+        let root = unique_temp_dir("paneld-newer-active-after-completed-wait-agent");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-thread-a.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-main","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-main","last_agent_message":"主线程完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut fallback = fallback_summary("thread-a", "wanka");
+        fallback.rollout_path = Some(rollout.clone());
+
+        let rows = app_server_thread_summaries(
+            &json!({
+                "threads": [{
+                    "id": "thread-a",
+                    "name": "wanka",
+                    "status": { "type": "active" },
+                    "activeTurnId": "turn-new",
+                    "path": rollout.display().to_string()
+                }]
+            }),
+            &[fallback],
+        );
+
+        assert_eq!(rows[0].status, ThreadStatus::Running);
+        assert_eq!(rows[0].active_turn_id.as_deref(), Some("turn-new"));
         let _ = fs::remove_dir_all(root);
     }
 
