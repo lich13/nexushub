@@ -29,7 +29,7 @@ use nexushub_core::{
     },
     db::{JobRecord, NewSession, ThreadFollowUp},
     platform::PlatformPaths,
-    probe::ProbeRuntime,
+    probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     update,
     uploads::{
@@ -933,38 +933,8 @@ pub(crate) async fn load_probe_threads(
     ))
 }
 
-fn redact_probe_event(mut event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
-    redact_sensitive_json(&mut event.payload);
-    event
-}
-
-fn redact_sensitive_json(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map.iter_mut() {
-                let key = key.to_ascii_lowercase();
-                if key == "device_key_configured" {
-                    continue;
-                } else if key.contains("device_key")
-                    || key.contains("secret")
-                    || key.contains("token")
-                    || key.contains("password")
-                    || key.contains("authorization")
-                    || key == "request_url"
-                {
-                    *value = Value::String("[redacted]".to_string());
-                } else {
-                    redact_sensitive_json(value);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json(item);
-            }
-        }
-        _ => {}
-    }
+fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
+    redact_probe_event_for_output(event)
 }
 
 async fn upload_files(

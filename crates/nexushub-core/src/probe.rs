@@ -1,6 +1,7 @@
 use crate::{
     codex::{resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
     config::{Config, ProbeLogsDbConfig},
+    db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
     security::redact_output,
 };
@@ -22,6 +23,65 @@ pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
 const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
+
+pub fn redact_probe_event_for_output(mut event: ProbeEvent) -> ProbeEvent {
+    event.title = event.title.map(|value| redact_output(&value));
+    event.message = event.message.map(|value| redact_output(&value));
+    event.dedupe_key = event
+        .dedupe_key
+        .map(|value| redact_probe_event_string(&value));
+    event.source = redact_output(&event.source);
+    redact_probe_event_json(&mut event.payload);
+    event
+}
+
+fn redact_probe_event_string(value: &str) -> String {
+    let lowered = value.to_ascii_lowercase();
+    if lowered.contains("device_key")
+        || lowered.contains("secret")
+        || lowered.contains("token")
+        || lowered.contains("password")
+        || lowered.contains("authorization")
+        || lowered.contains("cookie")
+    {
+        "[redacted]".to_string()
+    } else {
+        redact_output(value)
+    }
+}
+
+fn redact_probe_event_json(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                let lower = key.to_ascii_lowercase();
+                if lower == "device_key_configured" {
+                    continue;
+                } else if lower.contains("device_key")
+                    || lower.contains("secret")
+                    || lower.contains("token")
+                    || lower.contains("password")
+                    || lower.contains("authorization")
+                    || lower.contains("cookie")
+                    || lower == "request_url"
+                {
+                    *value = Value::String("[redacted]".to_string());
+                } else {
+                    redact_probe_event_json(value);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_probe_event_json(item);
+            }
+        }
+        Value::String(text) => {
+            *text = redact_output(text);
+        }
+        _ => {}
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ProbeRuntime {
@@ -323,8 +383,8 @@ impl ProbeRuntime {
     }
 
     pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
-        let event_kind = input.event_kind();
         let event_type = probe_event_type(&input);
+        let event_kind = probe_event_kind(&input, &event_type);
         let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
         let thread_component = event_thread_id.as_deref().unwrap_or("unknown-thread");
         let turn_component = input.turn_id.as_deref().unwrap_or("unknown-turn");
@@ -373,6 +433,7 @@ impl ProbeRuntime {
             "nexushubd probe hook-stop".to_string()
         };
         let payload = json!({
+            "raw_kind": input.event_kind(),
             "turn_id": input.turn_id.clone(),
             "session_id": input.session_id.clone(),
             "transcript_path": input.transcript_path.clone(),
@@ -398,7 +459,7 @@ impl ProbeRuntime {
             }
         });
         ProbeBuiltEvent {
-            kind: event_kind.to_string(),
+            kind: event_kind,
             event_type: event_type.clone(),
             thread_id: event_thread_id,
             turn_id: input.turn_id.clone(),
@@ -792,6 +853,25 @@ impl ProbeEventInput {
             ProbeEventInputKind::NotifyCompletion => "completion",
         }
     }
+}
+
+fn hook_stop_event_type(input: &ProbeEventInput, raw_kind: &str) -> String {
+    let normalized_kind = raw_kind.trim().to_ascii_lowercase();
+    if matches!(normalized_kind.as_str(), "completion" | "notify-completion") {
+        return "completion".to_string();
+    }
+    if matches!(normalized_kind.as_str(), "reply-needed" | "reply_needed") {
+        return "reply_needed".to_string();
+    }
+    if normalized_kind == "recoverable" {
+        return "recoverable".to_string();
+    }
+    if let Some(message) = input.last_assistant_message.as_deref() {
+        if let Some((_, _, event_type)) = classify_hook_stop_event(message) {
+            return event_type.to_string();
+        }
+    }
+    "hook_stop".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1384,13 +1464,88 @@ fn now_ts() -> i64 {
 fn probe_event_type(input: &ProbeEventInput) -> String {
     match input.kind {
         ProbeEventInputKind::NotifyCompletion => "completion".to_string(),
-        ProbeEventInputKind::HookStop => match input.hook_kind.as_str() {
+        ProbeEventInputKind::HookStop => hook_stop_event_type(input, input.hook_kind.as_str()),
+    }
+}
+
+fn probe_event_kind(input: &ProbeEventInput, event_type: &str) -> String {
+    match input.kind {
+        ProbeEventInputKind::NotifyCompletion => "completion".to_string(),
+        ProbeEventInputKind::HookStop => match event_type {
             "completion" => "completion".to_string(),
-            "reply-needed" | "reply_needed" => "reply_needed".to_string(),
+            "reply_needed" => "reply-needed".to_string(),
             "recoverable" => "recoverable".to_string(),
-            _ => "hook_stop".to_string(),
+            _ => input.event_kind().to_string(),
         },
     }
+}
+
+fn classify_hook_stop_event(body: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    let trimmed = body.trim();
+    let normalized = trimmed.to_ascii_lowercase();
+    if normalized.is_empty()
+        || is_probe_stop_hook_system_message(trimmed)
+        || is_probe_machine_control_payload(trimmed)
+    {
+        return None;
+    }
+    if contains_probe_proposed_plan(trimmed)
+        || normalized.contains("等待用户回复")
+        || normalized.contains("等待用户选择")
+        || normalized.contains("request_user_input")
+    {
+        return Some(("reply_needed", "需要回复", "reply_needed"));
+    }
+    if is_probe_terminal_stop_error(trimmed) {
+        return Some(("recoverable", "可恢复任务", "recoverable"));
+    }
+    Some(("completion", "任务完成", "completion"))
+}
+
+fn contains_probe_proposed_plan(text: &str) -> bool {
+    text.contains("<proposed_plan>") && text.contains("</proposed_plan>")
+}
+
+fn is_probe_terminal_stop_error(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    lower.starts_with("turn error:")
+        || lower.starts_with("selected model is at capacity")
+        || lower.starts_with("stream disconnected")
+        || lower.starts_with("response_stream_disconnected")
+        || lower.starts_with("error decoding response body")
+        || lower.starts_with("exceeded retry limit")
+        || lower.starts_with("429 too many requests")
+        || lower.starts_with("this content was flagged for possible cybersecurity risk")
+        || lower.starts_with("codex app-server reported terminal thread status")
+        || lower.starts_with("codex app-server reported terminal turn status")
+        || lower.starts_with("codex app-server reported interrupted turn status")
+        || lower.starts_with("background turn supervisor failed")
+}
+
+fn is_probe_stop_hook_system_message(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("Codex Sentinel Lite ") || trimmed.starts_with("NexusHub Probe ")
+}
+
+fn is_probe_machine_control_payload(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
+        return false;
+    }
+
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+
+    object
+        .keys()
+        .all(|key| matches!(key.as_str(), "suggestions" | "exclude"))
+        && object
+            .keys()
+            .any(|key| matches!(key.as_str(), "suggestions" | "exclude"))
 }
 
 fn probe_event_text(event_type: &str) -> (String, String) {
@@ -1711,6 +1866,152 @@ mod tests {
         assert_eq!(completion.payload["bark"]["title"], completion.bark_title);
         assert_eq!(completion.payload["bark"]["body"], completion.bark_body);
         assert!(completion.payload["bark"].get("device_key").is_none());
+    }
+
+    #[test]
+    fn hook_stop_with_final_feedback_is_classified_as_completion() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-real"),
+            Some("turn-real"),
+            Some("thread-real"),
+            Some("/tmp/rollout-real.jsonl"),
+            Some("ok"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.event_type, "completion");
+        assert_eq!(event.title, "任务完成");
+        assert_eq!(event.payload["event_type"], "completion");
+        assert_eq!(
+            event.payload["last_assistant_message"]["classification"],
+            "completion"
+        );
+        assert_eq!(event.payload["body_summary"], "ok");
+        assert!(event.bark_title.starts_with("线程正常完成："));
+        assert!(event.bark_body.contains("最后反馈："));
+        assert!(
+            event.dedupe_key.starts_with("completion:"),
+            "dedupe key must use the classified event kind"
+        );
+    }
+
+    #[test]
+    fn hook_stop_with_plan_feedback_is_classified_as_reply_needed() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-plan"),
+            Some("turn-plan"),
+            Some("thread-plan"),
+            Some("/tmp/rollout-plan.jsonl"),
+            Some("<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert_eq!(
+            event.payload["last_assistant_message"]["classification"],
+            "reply_needed"
+        );
+        assert!(event.bark_body.contains("待回复内容"));
+    }
+
+    #[test]
+    fn hook_stop_with_terminal_error_is_classified_as_recoverable() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-error"),
+            Some("turn-error"),
+            Some("thread-error"),
+            None,
+            Some("stream disconnected before completion: Transport error"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "recoverable");
+        assert_eq!(event.event_type, "recoverable");
+        assert_eq!(
+            event.payload["last_assistant_message"]["classification"],
+            "recoverable"
+        );
+        assert!(event.bark_body.contains("最后异常信息"));
+    }
+
+    #[test]
+    fn hook_stop_with_normal_final_feedback_is_classified_as_completion() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-normal"),
+            Some("turn-normal"),
+            Some("thread-normal"),
+            None,
+            Some("一切已经处理完毕。"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.event_type, "completion");
+        assert_eq!(event.payload["raw_kind"], "hook-stop");
+        assert!(event.bark_body.contains("最后反馈："));
+        assert!(event.bark_body.contains("一切已经处理完毕"));
+    }
+
+    #[test]
+    fn hook_stop_ignores_machine_control_payloads() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-control"),
+            Some("turn-control"),
+            Some("thread-control"),
+            None,
+            Some(r#"{"suggestions":[{"title":"x","prompt":"y"}]}"#),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "hook-stop");
+        assert_eq!(event.event_type, "hook_stop");
+    }
+
+    #[test]
+    fn hook_stop_does_not_treat_own_system_message_as_completion_or_abnormal() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+
+        let event = runtime.build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-system"),
+            Some("turn-system"),
+            Some("thread-system"),
+            None,
+            Some("Codex Sentinel Lite 检测到「Rate limited」，只记录并推送异常信息，不自动恢复。"),
+            "hook-stop",
+        ));
+
+        assert_eq!(event.kind, "hook-stop");
+        assert_eq!(event.event_type, "hook_stop");
     }
 
     fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {

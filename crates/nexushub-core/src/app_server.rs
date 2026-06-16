@@ -476,7 +476,6 @@ fn turn_input_items(options: &BridgeTurnOptions) -> Value {
 }
 
 fn add_interactive_source_filter(params: &mut serde_json::Map<String, Value>) {
-    params.insert("sourceKinds".to_string(), json!(["cli", "vscode"]));
     params.insert("modelProviders".to_string(), json!([]));
 }
 
@@ -1087,9 +1086,12 @@ mod tests {
 
         add_interactive_source_filter(&mut params);
 
-        assert_eq!(params.get("sourceKinds"), Some(&json!(["cli", "vscode"])));
+        assert!(
+            params.get("sourceKinds").is_none(),
+            "thread/list must not filter out NexusHub or browser-created app-server threads"
+        );
         assert_eq!(params.get("modelProviders"), Some(&json!([])));
-        assert_eq!(params.len(), 2);
+        assert_eq!(params.len(), 1);
     }
 
     #[test]

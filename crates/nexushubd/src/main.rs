@@ -16,7 +16,8 @@ use nexushub_core::{
     db::{NewProbeEvent, PanelDb},
     platform::PlatformPaths,
     probe::{
-        ProbeEventInput, ProbeEventOutcome, ProbeLogsDbMaintenanceResult, ProbeRuntime,
+        redact_probe_event_for_output, ProbeEventInput, ProbeEventOutcome,
+        ProbeLogsDbMaintenanceResult, ProbeRuntime,
         DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS,
     },
 };
@@ -480,38 +481,8 @@ fn probe_runtime(config: &Config) -> ProbeRuntime {
     ProbeRuntime::new(config.clone(), PlatformPaths::current())
 }
 
-fn redact_probe_event(mut event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
-    redact_sensitive_json(&mut event.payload);
-    event
-}
-
-fn redact_sensitive_json(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map.iter_mut() {
-                let key = key.to_ascii_lowercase();
-                if key == "device_key_configured" {
-                    continue;
-                } else if key.contains("device_key")
-                    || key.contains("secret")
-                    || key.contains("token")
-                    || key.contains("password")
-                    || key.contains("authorization")
-                    || key == "request_url"
-                {
-                    *value = Value::String("[redacted]".to_string());
-                } else {
-                    redact_sensitive_json(value);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json(item);
-            }
-        }
-        _ => {}
-    }
+fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
+    redact_probe_event_for_output(event)
 }
 
 async fn probe_thread_snapshot(
@@ -1869,12 +1840,14 @@ hooks = false
         );
         assert_eq!(
             events[0].payload["last_assistant_message"]["classification"],
-            "hook_stop"
+            "completion"
         );
+        assert_eq!(events[0].payload["event_type"], "completion");
+        assert_eq!(events[0].payload["raw_kind"], "hook-stop");
         assert_eq!(events[0].payload["dedupe"]["namespace"], "probe_event");
         assert_eq!(events[0].payload["dedupe"]["claimed"], true);
         assert_eq!(events[0].payload["dedupe"]["duplicate"], false);
-        assert_eq!(events[0].kind, "hook-stop");
+        assert_eq!(events[0].kind, "completion");
     }
 
     #[tokio::test]
@@ -1912,6 +1885,10 @@ hooks = false
         assert_eq!(
             events[0].payload["last_assistant_message"]["summary"],
             "final answer"
+        );
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["classification"],
+            "completion"
         );
         assert_eq!(events[0].payload["body_summary"], "final answer");
         fs::remove_dir_all(dir).unwrap();
