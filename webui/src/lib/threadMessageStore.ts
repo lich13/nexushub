@@ -62,6 +62,13 @@ export function getThreadSlot(store: ThreadMessageStoreState, threadId: string):
   return slot;
 }
 
+export function clearThreadSlot(store: ThreadMessageStoreState, threadId: string): void {
+  store.slots.delete(threadId);
+  if (store.activeThreadId === threadId) {
+    store.activeThreadId = null;
+  }
+}
+
 export function applyThreadDetailToSlot(
   store: ThreadMessageStoreState,
   threadId: string,

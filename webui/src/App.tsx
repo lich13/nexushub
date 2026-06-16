@@ -107,6 +107,7 @@ import {
   applyThreadBlockPageToSlot,
   applyThreadDetailToSlot,
   applyThreadSummaryToSlot,
+  clearThreadSlot,
   createThreadMessageStoreState,
   getThreadSlot,
   setActiveThreadSlot,
@@ -582,6 +583,15 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const selectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
 
   useEffect(() => {
+    if (!resolvedSelected || selectedDetail?.summary.status !== "Archived") return;
+    removeThreadFromListCaches(qc, resolvedSelected);
+    messageStore.clear(resolvedSelected);
+    if (selectedId === resolvedSelected) {
+      setSelectedId(null);
+    }
+  }, [messageStore, qc, resolvedSelected, selectedDetail, selectedId]);
+
+  useEffect(() => {
     if (!resolvedSelected || !selectedThreadSummary) return;
     qc.setQueryData<ThreadDetail>(["thread", resolvedSelected], (current) => {
       if (!current) return current;
@@ -903,6 +913,14 @@ export function mergeThreadSummaryIntoListCache(
     return rows.map((thread) => thread.id === incoming.id ? merged : thread);
   }
   return [merged, ...rows];
+}
+
+export function removeThreadFromListCaches(qc: QueryClient, threadId: string): void {
+  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
+    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
+      rows ? rows.filter((thread) => thread.id !== threadId) : rows
+    );
+  }
 }
 
 function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
@@ -2034,6 +2052,7 @@ type ThreadMessageStoreController = {
   setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
   setHistoryExpanded: (threadId: string, expanded: boolean) => void;
   setHiddenActionKey: (threadId: string, key: string | null) => void;
+  clear: (threadId: string) => void;
 };
 
 function fallbackThreadSummary(threadId: string): ThreadSummary {
@@ -2101,6 +2120,11 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
     setThreadHiddenActionKey(storeRef.current, nextThreadId, key);
     notify(nextThreadId);
   }, [notify]);
+  const clearThread = useCallback((nextThreadId: string) => {
+    const wasActive = storeRef.current.activeThreadId === nextThreadId;
+    clearThreadSlot(storeRef.current, nextThreadId);
+    notify(wasActive ? null : nextThreadId);
+  }, [notify]);
 
   return useMemo(() => ({
     store: storeRef.current,
@@ -2116,7 +2140,8 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
     setFeedback: setFeedbackForThread,
     setLastResult: setLastResultForThread,
     setHistoryExpanded,
-    setHiddenActionKey: setHiddenActionKeyForThread
+    setHiddenActionKey: setHiddenActionKeyForThread,
+    clear: clearThread
   }), [
     setActive,
     getSlotForThread,
@@ -2130,7 +2155,8 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
     setFeedbackForThread,
     setLastResultForThread,
     setHistoryExpanded,
-    setHiddenActionKeyForThread
+    setHiddenActionKeyForThread,
+    clearThread
   ]);
 }
 
@@ -2388,8 +2414,16 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     },
     onSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
       messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", archivedThreadId] });
+      if (wasArchived) {
+        qc.invalidateQueries({ queryKey: ["threads"] });
+        qc.invalidateQueries({ queryKey: ["thread", archivedThreadId] });
+      } else {
+        removeThreadFromListCaches(qc, archivedThreadId);
+        qc.removeQueries({ queryKey: ["thread", archivedThreadId] });
+        messageStore.clear(archivedThreadId);
+        onSelect(null);
+        qc.invalidateQueries({ queryKey: ["threads"] });
+      }
     },
     onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });

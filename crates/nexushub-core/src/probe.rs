@@ -1818,16 +1818,16 @@ fn probe_event_dedupe_body_component(
 ) -> String {
     if event_type == "reply_needed" {
         if let Some(turn_id) = prefixed_body_value(body, "turn_id:") {
-            return format!("turn:{turn_id}");
+            return format!("turn:{turn_id}:body:{fallback_hash_component}");
         }
         if let Some(call_id) = prefixed_body_value(body, "call_id:") {
-            return format!("call:{call_id}");
+            return format!("call:{call_id}:body:{fallback_hash_component}");
         }
         if let Some(call_id) = prefixed_body_value(body, "Call ID：") {
-            return format!("call:{call_id}");
+            return format!("call:{call_id}:body:{fallback_hash_component}");
         }
         if let Some(turn_id) = prefixed_body_value(body, "Turn ID：") {
-            return format!("turn:{turn_id}");
+            return format!("turn:{turn_id}:body:{fallback_hash_component}");
         }
     }
     fallback_hash_component.to_string()

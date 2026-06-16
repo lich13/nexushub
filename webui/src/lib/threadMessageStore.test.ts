@@ -4,6 +4,7 @@ import {
   applyRealtimeBlocksToThreadSlot,
   applyThreadBlockPageToSlot,
   applyThreadDetailToSlot,
+  clearThreadSlot,
   createThreadMessageStoreState,
   setActiveThreadSlot,
   setThreadFeedback,
@@ -182,6 +183,19 @@ describe("thread message store", () => {
     expect(store.slots.get("thread-a")?.feedback).toBe("submitted");
     expect(store.slots.get("thread-b")?.lastResult).toBeNull();
     expect(store.slots.get("thread-b")?.feedback).toBeNull();
+  });
+
+  test("clears archived active slot without disturbing other thread slots", () => {
+    const store = createThreadMessageStoreState();
+    applyThreadDetailToSlot(store, "thread-a", detail("thread-a", [block("a1")]));
+    applyThreadDetailToSlot(store, "thread-b", detail("thread-b", [block("b1")]));
+    setActiveThreadSlot(store, "thread-a");
+
+    clearThreadSlot(store, "thread-a");
+
+    expect(store.activeThreadId).toBeNull();
+    expect(store.slots.get("thread-a")).toBeUndefined();
+    expect(store.slots.get("thread-b")?.blocks.map((item) => item.id)).toEqual(["b1"]);
   });
 
   test("tracks bottom-follow revisions only for message appends and explicit follow actions", () => {

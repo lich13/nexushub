@@ -1285,7 +1285,23 @@ fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 }
 
 fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    let raw_chunks = utf8_chunks(value.trim(), max_bytes);
+    let trimmed = value.trim();
+    if trimmed.is_empty() || max_bytes == 0 {
+        return vec![String::new()];
+    }
+    if trimmed.len() <= max_bytes {
+        return vec![trimmed.to_string()];
+    }
+    let mut chunk_count = utf8_chunks(trimmed, max_bytes).len();
+    let raw_chunks = loop {
+        let prefix_budget = bark_chunk_prefix(chunk_count, chunk_count).len();
+        let content_budget = max_bytes.saturating_sub(prefix_budget).max(1);
+        let chunks = utf8_chunks(trimmed, content_budget);
+        if chunks.len() == chunk_count {
+            break chunks;
+        }
+        chunk_count = chunks.len();
+    };
     let chunk_count = raw_chunks.len();
     if chunk_count <= 1 {
         return raw_chunks;
@@ -1293,8 +1309,12 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
     raw_chunks
         .into_iter()
         .enumerate()
-        .map(|(index, chunk)| format!("第 {}/{chunk_count} 段\n\n{chunk}", index + 1))
+        .map(|(index, chunk)| format!("{}{chunk}", bark_chunk_prefix(index + 1, chunk_count)))
         .collect()
+}
+
+fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
+    format!("第 {index}/{chunk_count} 段\n\n")
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1712,6 +1732,9 @@ fn probe_thread_notification_body(
             .as_deref()
             .filter(|value| value.contains("<proposed_plan>") && value.contains("</proposed_plan>"))
         {
+            if !thread_rollout_still_reply_needed(thread) {
+                return (None, None);
+            }
             return (
                 Some(format_proposed_plan_reply_needed(
                     &thread.id,
@@ -1753,6 +1776,29 @@ fn probe_thread_notification_body(
             .as_ref()
             .map(|_| "latest_message".to_string()),
     )
+}
+
+fn thread_rollout_still_reply_needed(thread: &nexushub_core::codex::ThreadSummary) -> bool {
+    if thread.rollout_path.is_none() {
+        return true;
+    }
+    let mut refreshed = thread.clone();
+    if nexushub_core::codex::enrich_thread_from_rollout(&mut refreshed).is_err() {
+        return true;
+    }
+    let reply_needed = matches!(
+        refreshed.status,
+        nexushub_core::codex::ThreadStatus::ReplyNeeded
+    );
+    let has_plan_message = refreshed.latest_message.as_deref().is_some_and(|value| {
+        value.contains("<proposed_plan>") && value.contains("</proposed_plan>")
+    });
+    let same_turn = refreshed
+        .active_turn_id
+        .as_deref()
+        .is_some_and(|turn_id| Some(turn_id) == thread.active_turn_id.as_deref())
+        || (thread.active_turn_id.is_none() && refreshed.active_turn_id.is_none());
+    reply_needed && has_plan_message && same_turn
 }
 
 fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
@@ -2469,6 +2515,113 @@ hooks = false
         assert!(!body.contains("</proposed_plan>"));
     }
 
+    #[test]
+    fn passive_reply_needed_body_suppresses_plan_after_later_reply_or_completion() {
+        let dir = temp_test_dir("nexushub-plan-suppressed-after-reply");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout-plan-replied.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"批准，继续。"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"正在执行计划。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"已完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-plan-replied".to_string(),
+            title: "计划已回复线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 4,
+            latest_message: Some(
+                "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: Some("turn-plan".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_dedupe_key_changes_with_plan_hash_and_no_ttl_resend() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let body_one = format_proposed_plan_reply_needed(
+            "thread-plan",
+            "turn-plan",
+            "<proposed_plan>\n# 第一版\n- A\n</proposed_plan>",
+        );
+        let body_two = format_proposed_plan_reply_needed(
+            "thread-plan",
+            "turn-plan",
+            "<proposed_plan>\n# 第二版\n- B\n</proposed_plan>",
+        );
+        let make_event = |body: &str| {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-plan"),
+                    Some("turn-plan"),
+                    Some("thread-plan"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("真实计划线程"))
+                .with_body_source(Some("proposed_plan"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first_event = make_event(&body_one);
+        let first_key = first_event.dedupe_key.clone();
+        let first = record_probe_event_with_bark(&config, &db, first_event)
+            .await
+            .unwrap();
+        let duplicate = record_probe_event_with_bark(&config, &db, make_event(&body_one))
+            .await
+            .unwrap();
+        let changed_event = make_event(&body_two);
+        let changed_key = changed_event.dedupe_key.clone();
+        let changed = record_probe_event_with_bark(&config, &db, changed_event)
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(duplicate.1.reason.as_deref(), Some("dedupe"));
+        assert!(!duplicate.0.recorded);
+        assert!(changed.0.recorded);
+        assert_ne!(first_key, changed_key);
+        assert!(first_key.contains("thread-plan"));
+        assert!(first_key.contains("turn-plan"));
+        assert_ne!(
+            first_key,
+            "reply-needed:thread-plan:turn-plan:reply_needed:turn:turn-plan"
+        );
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
     #[tokio::test]
     async fn send_bark_posts_lite_payload_and_reports_non_success_response_code() {
         let server = TestHttpServer::start_n(
@@ -2519,7 +2672,7 @@ hooks = false
     #[tokio::test]
     async fn send_bark_splits_long_body_on_utf8_boundaries_with_segment_prefix() {
         let server = TestHttpServer::start_n(
-            10,
+            20,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
         let mut config = Config::default();
@@ -2542,9 +2695,8 @@ hooks = false
 
         assert!(result.sent);
         assert_eq!(result.http_status, Some(200));
-        assert_eq!(result.chunk_count, 10);
-        let requests = server.requests(10);
-        assert_eq!(requests.len(), 10);
+        let requests = server.requests(result.chunk_count);
+        assert_eq!(requests.len(), result.chunk_count);
         for (index, raw) in requests.iter().enumerate() {
             assert!(raw.starts_with("POST /push "));
             let body = raw.split("\r\n\r\n").nth(1).unwrap();
@@ -2552,12 +2704,16 @@ hooks = false
             assert_eq!(payload["device_key"], "device-key");
             assert_eq!(
                 payload["title"],
-                format!("NexusHub Probe long body ({}/10)", index + 1)
+                format!(
+                    "NexusHub Probe long body ({}/{})",
+                    index + 1,
+                    result.chunk_count
+                )
             );
             let chunk = payload["body"].as_str().unwrap();
-            let prefix = format!("第 {}/10 段\n\n", index + 1);
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
             assert!(chunk.starts_with(&prefix));
-            assert!(chunk.strip_prefix(&prefix).unwrap().len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let combined = requests
@@ -2569,11 +2725,79 @@ hooks = false
                     .as_str()
                     .unwrap()
                     .to_string();
-                let prefix = format!("第 {}/10 段\n\n", index + 1);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
                 chunk.strip_prefix(&prefix).unwrap().to_string()
             })
             .collect::<String>();
         assert_eq!(combined, request.body);
+    }
+
+    #[tokio::test]
+    async fn bark_delivery_uses_full_event_body_not_truncated_summary() {
+        let server = TestHttpServer::start_n(
+            20,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
+            .unwrap();
+        let full_body = format!("开头\n{}\n末尾唯一完整反馈", "完整正文".repeat(900));
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-long"),
+                Some("turn-long"),
+                Some("thread-long"),
+                None,
+                Some(&full_body),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("真实长正文线程")),
+        );
+        assert_eq!(event.bark_title, "线程正常完成：真实长正文线程");
+        assert!(event.payload["body_truncated"].as_bool().unwrap());
+        assert!(!event.payload["body_summary"]
+            .as_str()
+            .unwrap()
+            .contains("末尾唯一完整反馈"));
+
+        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+
+        assert!(bark.sent);
+        let requests = server.requests(bark.request_count);
+        assert_eq!(requests.len(), bark.request_count);
+        let combined = requests
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                let body = raw.split("\r\n\r\n").nth(1).unwrap();
+                let payload: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(
+                    payload["title"],
+                    format!(
+                        "线程正常完成：真实长正文线程 ({}/{})",
+                        index + 1,
+                        bark.request_count
+                    )
+                );
+                let chunk = payload["body"].as_str().unwrap();
+                assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
+                chunk.strip_prefix(&prefix).unwrap().to_string()
+            })
+            .collect::<String>();
+        assert!(combined.contains("开头"));
+        assert!(combined.contains("末尾唯一完整反馈"));
+        assert!(combined.contains(&full_body));
+        let stored = db.list_probe_events(10).unwrap();
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(stored[0].payload["bark"].get("body").is_none());
     }
 
     #[test]
@@ -2581,23 +2805,97 @@ hooks = false
         let body = format!("  {}  \n", "完成".repeat(4_000));
         let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
 
-        assert_eq!(chunks.len(), 10);
         assert!(!chunks[0].contains("  完成"));
         for (index, chunk) in chunks.iter().enumerate() {
-            let prefix = format!("第 {}/10 段\n\n", index + 1);
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
             assert!(chunk.starts_with(&prefix));
-            assert!(chunk.strip_prefix(&prefix).unwrap().len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
             assert!(chunk.is_char_boundary(chunk.len()));
         }
         let joined = chunks
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = format!("第 {}/10 段\n\n", index + 1);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
                 chunk.strip_prefix(&prefix).unwrap()
             })
             .collect::<String>();
         assert_eq!(joined, body.trim());
+    }
+
+    #[test]
+    fn bark_body_chunks_recomputes_prefix_budget_when_chunk_count_grows() {
+        let body = "a".repeat((PROBE_BARK_BODY_CHUNK_BYTES * 9) - 100);
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert_eq!(chunks.len(), 10);
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                assert!(chunk.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                chunk.strip_prefix(&prefix).unwrap()
+            })
+            .collect::<String>();
+        assert_eq!(joined, body);
+    }
+
+    #[tokio::test]
+    async fn probe_thread_scan_does_not_resend_completed_old_plan_when_app_server_is_offline() {
+        let dir = temp_test_dir("nexushub-thread-scan-old-plan-offline");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let rollout = codex_home.join("sessions").join("rollout-old-plan.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"同意，继续。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"已完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                updated_at INTEGER,
+                archived_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            params![
+                "thread-old-plan",
+                "真实旧计划线程",
+                chrono::Utc::now().timestamp_millis(),
+                rollout.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.codex.app_server_socket = Some(dir.join("missing.sock"));
+        config.codex.bridge_enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        let state = AppState::new(config, db.clone());
+
+        let count = run_probe_thread_scan_if_due(state).await.unwrap();
+
+        assert_eq!(count, 0);
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

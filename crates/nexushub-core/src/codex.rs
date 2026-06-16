@@ -512,6 +512,48 @@ pub fn hidden_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
         .collect())
 }
 
+pub fn archived_thread_ids(paths: &CodexPaths) -> Result<HashSet<String>> {
+    let db = paths.state_db();
+    if !db.exists() {
+        return Ok(HashSet::new());
+    }
+    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
+    let has_threads = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='threads'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !has_threads {
+        return Ok(HashSet::new());
+    }
+
+    let columns = table_columns(&conn, "threads")?;
+    let archived_expr = first_existing(&columns, &["archived"])
+        .unwrap_or("0")
+        .to_string();
+    let archived_at_expr = first_existing(&columns, &["archived_at"])
+        .unwrap_or("NULL")
+        .to_string();
+    let sql = format!("SELECT id, {archived_expr}, {archived_at_expr} FROM threads");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let archived_flag: i64 = row.get(1).unwrap_or(0);
+        let archived_at: Option<ValueCell> = row.get(2).ok();
+        let archived =
+            archived_flag != 0 || archived_at.as_ref().and_then(format_cell_time).is_some();
+        Ok(archived.then_some(id))
+    })?;
+    Ok(rows
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
 pub fn thread_source_counts(paths: &CodexPaths) -> Result<HashMap<String, usize>> {
     let db = paths.state_db();
     if !db.exists() {
@@ -1091,6 +1133,7 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
             }
         }
         if event_type == "task_started" {
+            scan.recoverable = false;
             if let Some(turn_id) = event_turn_id(&value) {
                 scan.active_turn_id = Some(turn_id.clone());
                 if !active_tasks
@@ -1159,8 +1202,6 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
                     plan_marker_for_event(&current_plan_marker, &value)
                 {
                     pending_action = Some(PendingAction::Plan { turn_id, item_id });
-                } else {
-                    scan.recoverable = true;
                 }
             }
             if last_agent_message.is_some() {
@@ -1191,6 +1232,8 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
                     let (turn_id, item_id) = plan_marker_for_event(&current_plan_marker, &value)
                         .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
                     pending_action = Some(PendingAction::Plan { turn_id, item_id });
+                } else {
+                    scan.recoverable = false;
                 }
                 scan.latest_message = Some(text);
             }
@@ -1322,9 +1365,11 @@ fn clear_pending_tools_for_turn(
     turn_id: Option<&str>,
 ) {
     match turn_id {
-        Some(turn_id) => {
-            pending_tool_turns.retain(|_, pending_turn| pending_turn.as_deref() != Some(turn_id))
-        }
+        Some(turn_id) => pending_tool_turns.retain(|_, pending_turn| {
+            pending_turn
+                .as_deref()
+                .is_some_and(|value| value != turn_id)
+        }),
         None => pending_tool_turns.clear(),
     }
 }
@@ -1592,6 +1637,9 @@ impl MessageBlockBuilder {
         if event_type == "task_complete" || is_turn_terminal_event(event_type) {
             self.clear_pending_tools_for_turn(event_turn_id(value).as_deref());
         }
+        if event_type == "task_complete" && task_complete_has_last_agent_message(value) {
+            self.resolve_pending_plans();
+        }
 
         if is_plan_item_completed(value) {
             self.current_plan_marker = Some((event_turn_id(value), event_item_id(value)));
@@ -1671,6 +1719,9 @@ impl MessageBlockBuilder {
                 self.push_plan_block(block);
                 return;
             }
+            if matches!(block.role.as_str(), "user" | "assistant" | "tool") {
+                self.resolve_pending_plans();
+            }
             self.blocks.push(block);
         }
     }
@@ -1713,6 +1764,16 @@ impl MessageBlockBuilder {
         self.blocks.push(block);
     }
 
+    fn resolve_pending_plans(&mut self) {
+        for block in &mut self.blocks {
+            if block.kind == "plan" && block.resolved != Some(true) {
+                block.status = Some("completed".to_string());
+                block.plan_status = Some("completed".to_string());
+                block.resolved = Some(true);
+            }
+        }
+    }
+
     fn push_answer_block(&mut self, block: MessageBlock) {
         let key = block
             .call_id
@@ -1742,9 +1803,11 @@ impl MessageBlockBuilder {
 
     fn clear_pending_tools_for_turn(&mut self, turn_id: Option<&str>) {
         match turn_id {
-            Some(turn_id) => self
-                .pending_tools
-                .retain(|_, call| call.turn_id.as_deref() != Some(turn_id)),
+            Some(turn_id) => self.pending_tools.retain(|_, call| {
+                call.turn_id
+                    .as_deref()
+                    .is_some_and(|value| value != turn_id)
+            }),
             None => self.pending_tools.clear(),
         }
     }
@@ -3207,10 +3270,10 @@ pub fn db_integrity(paths: &CodexPaths) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        hidden_thread_ids, is_request_user_input, list_threads, parse_message_event,
-        resolve_codex_paths_with_options, scan_rollout, set_thread_title, thread_detail,
-        thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
-        ThreadStatus,
+        archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
+        parse_message_event, resolve_codex_paths_with_options, scan_rollout, set_thread_title,
+        thread_detail, thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions,
+        CodexPaths, ThreadStatus,
     };
     use rusqlite::Connection;
     use serde_json::json;
@@ -3493,7 +3556,7 @@ mod tests {
         ]);
 
         assert!(!scan.reply_needed);
-        assert!(scan.recoverable);
+        assert!(!scan.recoverable);
     }
 
     #[test]
@@ -3575,6 +3638,43 @@ mod tests {
             .text
             .as_deref()
             .is_some_and(|text| text.contains("<proposed_plan>")));
+    }
+
+    #[test]
+    fn old_proposed_plan_block_is_resolved_after_user_reply_and_assistant_progress() {
+        let detail = detail_fixture(&[
+            json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先做 A，再做 B。</proposed_plan>"}]}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"user","content":[{"text":"执行"}]}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"开始执行。"}]}}),
+        ]);
+
+        let plan = detail
+            .blocks
+            .iter()
+            .find(|block| block.kind == "plan")
+            .unwrap();
+        assert_eq!(plan.status.as_deref(), Some("completed"));
+        assert_eq!(plan.plan_status.as_deref(), Some("completed"));
+        assert_eq!(plan.resolved, Some(true));
+    }
+
+    #[test]
+    fn old_proposed_plan_block_is_resolved_after_successful_task_complete() {
+        let detail = detail_fixture(&[
+            json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先做 A，再做 B。</proposed_plan>"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"计划已处理。"}}),
+        ]);
+
+        let plan = detail
+            .blocks
+            .iter()
+            .find(|block| block.kind == "plan")
+            .unwrap();
+        assert_eq!(plan.status.as_deref(), Some("completed"));
+        assert_eq!(plan.plan_status.as_deref(), Some("completed"));
+        assert_eq!(plan.resolved, Some(true));
     }
 
     #[test]
@@ -3770,6 +3870,44 @@ mod tests {
                     )
                 })
         }));
+    }
+
+    #[test]
+    fn thread_detail_blocks_clear_anonymous_tool_after_task_complete_same_turn() {
+        let detail = detail_fixture(&[
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-main","last_agent_message":"主线程完成。"}}),
+        ]);
+
+        assert_eq!(detail.summary.status, ThreadStatus::Recent);
+        assert!(detail.summary.active_turn_id.is_none());
+        assert!(
+            !detail
+                .blocks
+                .iter()
+                .any(|block| block.call_id.as_deref() == Some("wait-agent-1")),
+            "anonymous same-turn wait_agent should not survive as a residual pending block"
+        );
+    }
+
+    #[test]
+    fn thread_detail_blocks_clear_custom_tool_after_turn_completed_same_turn() {
+        let detail = detail_fixture(&[
+            json!({"type":"turn_started","turn_id":"turn-main"}),
+            json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"custom-1","input":"*** Begin Patch"}}),
+            json!({"type":"turn_completed","turn_id":"turn-main"}),
+        ]);
+
+        assert_eq!(detail.summary.status, ThreadStatus::Recent);
+        assert!(detail.summary.active_turn_id.is_none());
+        assert!(
+            !detail
+                .blocks
+                .iter()
+                .any(|block| block.call_id.as_deref() == Some("custom-1")),
+            "anonymous same-turn custom_tool_call should not survive as a residual pending block"
+        );
     }
 
     #[test]
@@ -3972,6 +4110,46 @@ mod tests {
         assert!(hidden.contains("child-thread"));
         assert!(hidden.contains("child-source-json"));
         assert!(!hidden.contains("main-thread"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archived_thread_ids_exports_state_db_archived_status_for_injection_guards() {
+        let root = unique_temp_dir("db-archived-thread-ids");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                archived INTEGER,
+                archived_at INTEGER
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, archived, archived_at)
+             VALUES('recent-thread', 0, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, archived, archived_at)
+             VALUES('flag-archived', 1, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, archived, archived_at)
+             VALUES('time-archived', 0, 1710000000)",
+            [],
+        )
+        .unwrap();
+
+        let archived = archived_thread_ids(&CodexPaths::new(&root)).unwrap();
+
+        assert!(archived.contains("flag-archived"));
+        assert!(archived.contains("time-archived"));
+        assert!(!archived.contains("recent-thread"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4400,6 +4578,20 @@ mod tests {
     }
 
     #[test]
+    fn scan_rollout_later_active_turn_suppresses_old_null_completion_recoverable() {
+        let scan = scan_fixture(&[
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old"}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","status":"interrupted","last_agent_message":null}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+            json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"function_call","name":"exec_command","call_id":"call-live","arguments":{"cmd":"cargo test"}}}),
+        ]);
+
+        assert!(scan.running);
+        assert!(!scan.recoverable);
+        assert_eq!(scan.active_turn_id.as_deref(), Some("turn-live"));
+    }
+
+    #[test]
     fn scan_rollout_anonymous_task_complete_does_not_clear_explicit_active_turn() {
         let scan = scan_fixture(&[
             json!({"type":"turn_started","turn_id":"turn-live"}),
@@ -4534,10 +4726,35 @@ mod tests {
     }
 
     #[test]
+    fn scan_rollout_task_complete_clears_anonymous_wait_agent_pending_tool_for_same_turn() {
+        let scan = scan_fixture(&[
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-main","last_agent_message":"主线程完成。"}}),
+        ]);
+
+        assert!(!scan.running);
+        assert_eq!(scan.active_turn_id, None);
+        assert!(!scan.recoverable);
+    }
+
+    #[test]
     fn scan_rollout_turn_completed_clears_wait_agent_pending_tool_for_same_turn() {
         let scan = scan_fixture(&[
             json!({"type":"turn_started","turn_id":"turn-main"}),
             json!({"type":"response_item","turn_id":"turn-main","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}),
+            json!({"type":"turn_completed","turn_id":"turn-main"}),
+        ]);
+
+        assert!(!scan.running);
+        assert_eq!(scan.active_turn_id, None);
+    }
+
+    #[test]
+    fn scan_rollout_turn_completed_clears_anonymous_custom_tool_pending_for_same_turn() {
+        let scan = scan_fixture(&[
+            json!({"type":"turn_started","turn_id":"turn-main"}),
+            json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"custom-1","input":"*** Begin Patch"}}),
             json!({"type":"turn_completed","turn_id":"turn-main"}),
         ]);
 

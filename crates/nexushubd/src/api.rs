@@ -902,6 +902,10 @@ pub(crate) async fn load_probe_threads(
         tracing::warn!("failed to read hidden thread metadata for probe: {err}");
         HashSet::new()
     });
+    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
+        tracing::warn!("failed to read archived thread metadata for probe: {err}");
+        HashSet::new()
+    });
     let mut threads = codex::list_threads(&paths, None, None, local_fetch_limit)?;
     let bridge = state.bridge();
     if bridge.enabled() {
@@ -923,7 +927,7 @@ pub(crate) async fn load_probe_threads(
         }
     }
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    apply_running_jobs_to_threads(state, &mut threads)?;
+    apply_running_jobs_to_threads(state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     Ok(filter_thread_summaries(
         threads,
@@ -1344,6 +1348,10 @@ async fn list_threads(
         tracing::warn!("failed to read hidden thread metadata: {err}");
         HashSet::new()
     });
+    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
+        tracing::warn!("failed to read archived thread metadata: {err}");
+        HashSet::new()
+    });
     let mut threads = codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?;
     let bridge = state.bridge();
     if bridge.enabled() {
@@ -1367,7 +1375,7 @@ async fn list_threads(
         }
     }
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    apply_running_jobs_to_threads(&state, &mut threads)?;
+    apply_running_jobs_to_threads(&state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     submit_ready_followups_from_list(&state, &mut threads).await;
     threads = filter_thread_summaries(
@@ -1976,6 +1984,7 @@ async fn cancel_followup(
 fn apply_running_jobs_to_threads(
     state: &AppState,
     threads: &mut Vec<ThreadSummary>,
+    archived_thread_ids: &HashSet<String>,
 ) -> anyhow::Result<()> {
     let jobs = state.db.running_thread_jobs()?;
     let mut by_thread: HashMap<&str, &JobRecord> = HashMap::new();
@@ -1990,14 +1999,38 @@ fn apply_running_jobs_to_threads(
         }
     }
     for job in by_thread.values() {
-        let Some(thread_id) = job.thread_id.as_deref() else {
-            continue;
-        };
-        if !threads.iter().any(|thread| thread.id == thread_id) {
-            threads.push(thread_summary_from_running_job(job));
-        }
+        apply_running_job_to_thread_list(threads, job, None, archived_thread_ids);
     }
     Ok(())
+}
+
+fn apply_running_job_to_thread_list(
+    threads: &mut Vec<ThreadSummary>,
+    job: &JobRecord,
+    fallback: Option<&ThreadSummary>,
+    archived_thread_ids: &HashSet<String>,
+) {
+    let Some(thread_id) = job.thread_id.as_deref() else {
+        return;
+    };
+    if archived_thread_ids.contains(thread_id)
+        || fallback.is_some_and(|thread| matches!(thread.status, ThreadStatus::Archived))
+    {
+        return;
+    }
+    if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
+        apply_running_job_to_summary(thread, job);
+        return;
+    }
+    threads.push(
+        fallback
+            .cloned()
+            .map(|mut summary| {
+                apply_running_job_to_summary(&mut summary, job);
+                summary
+            })
+            .unwrap_or_else(|| thread_summary_from_running_job(job)),
+    );
 }
 
 fn apply_running_job_to_detail(state: &AppState, detail: &mut ThreadDetail) -> anyhow::Result<()> {
@@ -3252,6 +3285,10 @@ fn preserve_fallback_title(row: &mut ThreadSummary, fallback: &ThreadSummary) {
     if is_placeholder_thread_title(&row.title) && !is_placeholder_thread_title(&fallback.title) {
         row.title = fallback.title.clone();
     }
+    if matches!(fallback.status, ThreadStatus::Archived) {
+        row.status = ThreadStatus::Archived;
+        row.archived_at = fallback.archived_at.clone();
+    }
 }
 
 fn is_placeholder_thread_title(title: &str) -> bool {
@@ -4274,12 +4311,12 @@ mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        archived_filter, block_changed, effective_message, filter_thread_summaries,
-        fixed_probe_shell_command, followup_request, merge_thread_summaries,
-        normalize_goal_response, probe_config_path, prune_hidden_thread_summaries,
-        requested_thread_limit, router, seed_thread_event_blocks, thread_block_page,
-        thread_event_block_key, thread_list_fetch_limit, thread_title, turnstile_login_action,
-        SendMessageRequest, TurnstileLoginAction,
+        apply_running_job_to_thread_list, archived_filter, block_changed, effective_message,
+        filter_thread_summaries, fixed_probe_shell_command, followup_request,
+        merge_thread_summaries, normalize_goal_response, probe_config_path,
+        prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
+        thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
+        turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4293,6 +4330,7 @@ mod tests {
     };
     use rusqlite::{params, Connection};
     use serde_json::json;
+    use std::collections::HashSet;
     use std::{
         collections::HashMap,
         env, fs,
@@ -5917,6 +5955,20 @@ mod tests {
     }
 
     #[test]
+    fn app_server_threads_merge_keeps_archived_fallback_out_of_default_list() {
+        let mut archived = fallback_summary("thread-a", "archived");
+        archived.status = ThreadStatus::Archived;
+        archived.archived_at = Some("2026-06-16T00:00:00Z".to_string());
+        let mut app_thread = fallback_summary("thread-a", "app-server");
+        app_thread.status = ThreadStatus::Running;
+
+        let rows = merge_thread_summaries(vec![archived], vec![app_thread]);
+        let default_rows = filter_thread_summaries(rows, None, None, 10);
+
+        assert!(default_rows.is_empty());
+    }
+
+    #[test]
     fn hidden_state_db_thread_ids_prune_app_server_rows_after_merge() {
         let fallback = vec![fallback_summary("main-thread", "wanka")];
         let app_threads = vec![
@@ -6001,6 +6053,32 @@ mod tests {
         assert_eq!(summary.status, ThreadStatus::Running);
         assert_eq!(summary.active_job_id.as_deref(), Some("job-live"));
         assert_eq!(summary.last_event_kind, None);
+    }
+
+    #[test]
+    fn running_job_does_not_inject_archived_thread_missing_from_limited_local_list() {
+        let mut archived = fallback_summary("thread-archived", "old");
+        archived.status = ThreadStatus::Archived;
+        archived.archived_at = Some("2026-06-16T00:00:00Z".to_string());
+        let job = JobRecord {
+            id: "job-live".to_string(),
+            kind: "codex_chat".to_string(),
+            status: "running".to_string(),
+            title: "Codex resume archived".to_string(),
+            thread_id: Some("thread-archived".to_string()),
+            turn_id: Some("turn-live".to_string()),
+            started_at: 1,
+            finished_at: None,
+            exit_code: None,
+            output: String::new(),
+            error: None,
+        };
+        let mut rows = vec![fallback_summary("thread-visible", "visible")];
+
+        apply_running_job_to_thread_list(&mut rows, &job, Some(&archived), &HashSet::new());
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "thread-visible");
     }
 
     #[test]
