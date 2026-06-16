@@ -450,8 +450,12 @@ impl ProbeRuntime {
             .unwrap_or_else(|| hex::encode(Sha256::digest(message.as_bytes())));
         let body_truncated = body_summary.contains("[truncated]");
         let body_hash_component = body_sha256.get(..16).unwrap_or(body_sha256.as_str());
-        let dedupe_body_component =
-            probe_event_dedupe_body_component(&event_type, &redacted_body, body_hash_component);
+        let dedupe_body_component = probe_event_dedupe_body_component(
+            &event_type,
+            &body_source,
+            &redacted_body,
+            body_hash_component,
+        );
         let ttl_seconds = input.ttl_seconds.unwrap_or(PROBE_EVENT_TTL_SECONDS);
         let scan_source = input
             .scan_source
@@ -1813,24 +1817,40 @@ fn probe_event_bark_detail(event_type: &str, body_source: &str, redacted_body: &
 
 fn probe_event_dedupe_body_component(
     event_type: &str,
+    body_source: &str,
     body: &str,
     fallback_hash_component: &str,
 ) -> String {
+    let stable_hash_component = if event_type == "reply_needed" && body_source == "proposed_plan" {
+        stable_proposed_plan_dedupe_hash(body).unwrap_or(fallback_hash_component.to_string())
+    } else {
+        fallback_hash_component.to_string()
+    };
     if event_type == "reply_needed" {
         if let Some(turn_id) = prefixed_body_value(body, "turn_id:") {
-            return format!("turn:{turn_id}:body:{fallback_hash_component}");
+            return format!("turn:{turn_id}:body:{stable_hash_component}");
         }
         if let Some(call_id) = prefixed_body_value(body, "call_id:") {
-            return format!("call:{call_id}:body:{fallback_hash_component}");
+            return format!("call:{call_id}:body:{stable_hash_component}");
         }
         if let Some(call_id) = prefixed_body_value(body, "Call ID：") {
-            return format!("call:{call_id}:body:{fallback_hash_component}");
+            return format!("call:{call_id}:body:{stable_hash_component}");
         }
         if let Some(turn_id) = prefixed_body_value(body, "Turn ID：") {
-            return format!("turn:{turn_id}:body:{fallback_hash_component}");
+            return format!("turn:{turn_id}:body:{stable_hash_component}");
         }
     }
-    fallback_hash_component.to_string()
+    stable_hash_component
+}
+
+fn stable_proposed_plan_dedupe_hash(body: &str) -> Option<String> {
+    let plan = extract_proposed_plan_text(body).or_else(|| {
+        body.split_once("Plan 摘要:")
+            .map(|(_, plan)| plan.trim().to_string())
+            .filter(|plan| !plan.is_empty())
+    })?;
+    let digest = hex::encode(Sha256::digest(plan.trim().as_bytes()));
+    Some(digest.get(..16).unwrap_or(digest.as_str()).to_string())
 }
 
 fn prefixed_body_value(body: &str, prefix: &str) -> Option<String> {
@@ -2368,6 +2388,42 @@ mod tests {
         assert_eq!(hook.ttl_seconds, PROBE_EVENT_TTL_SECONDS);
         assert_eq!(hook.payload["dedupe_ttl_seconds"], PROBE_EVENT_TTL_SECONDS);
         assert_eq!(hook.payload["scan_source"], "hook-stop");
+    }
+
+    #[test]
+    fn passive_scan_plan_dedupe_ignores_generated_time_but_tracks_plan_text() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body_at_t1 = "等待用户回复：Plan 已完成，正在等待确认后继续。\n\nthread_id: thread-plan\ntime: ignored\nturn_id: turn-plan\n时间: 2026-06-16 21:03:40 北京时间\n状态说明: 这一轮已经写出 Plan 并等待用户确认，所以这是待回复，不是异常停止或普通完成。\n\nPlan 摘要:\n# 修复计划\n- 等待确认";
+        let body_at_t2 = body_at_t1.replace("21:03:40", "21:05:42");
+        let changed_plan = body_at_t1.replace("- 等待确认", "- 等待确认\n- 增加验证");
+        let build = |body: &str| {
+            runtime.build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-plan"),
+                    Some("turn-plan"),
+                    Some("thread-plan"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_body_source(Some("proposed_plan"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = build(body_at_t1);
+        let same_plan_later = build(&body_at_t2);
+        let changed = build(&changed_plan);
+
+        assert_ne!(
+            first.payload["body_sha256"],
+            same_plan_later.payload["body_sha256"]
+        );
+        assert_eq!(first.dedupe_key, same_plan_later.dedupe_key);
+        assert_ne!(first.dedupe_key, changed.dedupe_key);
     }
 
     #[test]
