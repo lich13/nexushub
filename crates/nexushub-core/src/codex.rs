@@ -346,7 +346,11 @@ pub fn list_threads(
         if row.summary.rollout_path.is_none() {
             row.summary.rollout_path = find_rollout_path(paths, &row.summary.id);
         }
-        if !is_usable_thread_title(&row.summary.title) {
+        if should_repair_thread_title_from_local_metadata(
+            row.db_title.as_deref(),
+            row.first_user_message.as_deref(),
+            index_entry,
+        ) {
             row.summary.title = index_entry
                 .and_then(SessionIndexEntry::title_candidate)
                 .or_else(|| {
@@ -777,6 +781,7 @@ pub fn message_blocks_from_events<'a>(
 
 struct LocalThreadRow {
     summary: ThreadSummary,
+    db_title: Option<String>,
     first_user_message: Option<String>,
 }
 
@@ -909,6 +914,7 @@ fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>> {
                 pending_elicitation: None,
                 last_event_kind: None,
             },
+            db_title: title,
             first_user_message,
         }))
     })?;
@@ -2792,6 +2798,32 @@ fn choose_initial_thread_title(title: Option<&str>, first_user_message: Option<&
         .unwrap_or_else(|| "未命名线程".to_string())
 }
 
+fn should_repair_thread_title_from_local_metadata(
+    db_title: Option<&str>,
+    first_user_message: Option<&str>,
+    index_entry: Option<&SessionIndexEntry>,
+) -> bool {
+    if db_title.and_then(thread_title_candidate).is_none() {
+        return true;
+    }
+    if index_entry
+        .and_then(SessionIndexEntry::title_candidate)
+        .is_none()
+    {
+        return false;
+    }
+    let Some(db_title) = db_title.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let Some(first_user_message) = first_user_message
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    db_title == first_user_message
+}
+
 fn thread_title_candidate(text: &str) -> Option<String> {
     let value = trim_text(text, 80);
     (is_usable_thread_title(&value) && text.trim().chars().count() <= 120).then_some(value)
@@ -4436,6 +4468,48 @@ mod tests {
             "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, first_user_message, preview)
              VALUES('thread-name-thread', '', 1, 1, 'codex', '/tmp', 'Untitled', '请根据上面的计划修复所有线上问题，并完整验收。', '')",
             [],
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            json!({"id":"thread-name-thread","thread_name":"更新"}).to_string(),
+        )
+        .unwrap();
+
+        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|thread| thread.id == "thread-name-thread")
+            .unwrap();
+
+        assert_eq!(row.title, "更新");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_thread_name_repairs_db_title_copied_from_first_user_message() {
+        let root = unique_temp_dir("session-index-thread-name-repairs-copied-title");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                first_user_message TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        let copied_title = "接手这个线程的工作 019e5a08-b993-7d90-850e-000fe1485ab7，梳理一下现在项目内所有脚本的职能和完整的工作机制，有没有和hermes agent对话的skill部分";
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, first_user_message, preview)
+             VALUES('thread-name-thread', '', 1, 1, 'codex', '/tmp', ?1, ?1, '')",
+            [copied_title],
         )
         .unwrap();
         fs::write(
