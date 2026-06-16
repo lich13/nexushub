@@ -134,6 +134,115 @@ if main_body.find('install_codex_home_write_paths') > main_body.find('install_sy
 print("install_systemd restart behavior: ok")
 PY
 
+python3 - "${UPDATE_SH}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+if 'SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"' not in text:
+    raise SystemExit("update.sh must know the installed systemd unit path")
+if 'install_systemd_unit' not in text:
+    raise SystemExit("update.sh must refresh the installed systemd unit from release payloads")
+
+match = re.search(r"install_systemd_unit\(\) \{\n(?P<body>.*?)\n\}", text, re.S)
+if not match:
+    raise SystemExit("install_systemd_unit function not found")
+body = match.group("body")
+for needle in [
+    '${ROOT}/deploy/systemd.service',
+    'install -m 0644 -o root -g root',
+    '"${SYSTEMD_UNIT}"',
+    'systemctl daemon-reload',
+]:
+    if needle not in body:
+        raise SystemExit(f"install_systemd_unit missing {needle}")
+
+main_match = re.search(r"main\(\) \{\n(?P<body>.*?)\n\}", text, re.S)
+if not main_match:
+    raise SystemExit("update.sh main function not found")
+main_body = main_match.group("body")
+if 'install_systemd_unit' not in main_body:
+    raise SystemExit("update.sh main must refresh systemd before restarting NexusHub")
+if main_body.find('install_systemd_unit') > main_body.find('systemctl restart "${SERVICE_NAME}"'):
+    raise SystemExit("update.sh must refresh systemd before restarting NexusHub")
+
+print("update.sh systemd unit refresh behavior: ok")
+PY
+
+python3 - "${UPDATE_SH}" "${SYSTEMD_SERVICE}" <<'PY'
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import tempfile
+
+update_path = Path(sys.argv[1])
+systemd_service = Path(sys.argv[2])
+function_text = update_path.read_text()
+start = function_text.find("install_systemd_unit() {")
+if start == -1:
+    raise SystemExit("install_systemd_unit function not found")
+end = function_text.find("\n}\n\nmain()", start)
+if end == -1:
+    raise SystemExit("install_systemd_unit function end not found")
+function_text = function_text[start : end + 3]
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp_path = Path(tmp)
+    root = tmp_path / "payload" / "nexushub"
+    deploy = root / "deploy"
+    deploy.mkdir(parents=True)
+    (deploy / "systemd.service").write_text(systemd_service.read_text())
+
+    installed_unit = tmp_path / "nexushub.service"
+    installed_unit.write_text(
+        "[Unit]\n"
+        "Description=NexusHub\n"
+        "After=network-online.target codex-app-server-root.service\n"
+        "Wants=network-online.target\n"
+    )
+    daemon_reload_marker = tmp_path / "daemon-reload"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "systemctl").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -Eeuo pipefail\n"
+        "if [[ \"$1\" == \"daemon-reload\" ]]; then\n"
+        f"  touch {shlex.quote(str(daemon_reload_marker))}\n"
+        "fi\n"
+    )
+    (fake_bin / "systemctl").chmod(0o755)
+    (fake_bin / "install").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -Eeuo pipefail\n"
+        "args=(\"$@\")\n"
+        "src=\"${args[$((${#args[@]} - 2))]}\"\n"
+        "dst=\"${args[$((${#args[@]} - 1))]}\"\n"
+        "cp \"$src\" \"$dst\"\n"
+    )
+    (fake_bin / "install").chmod(0o755)
+
+    script = "\n".join(
+        [
+            "set -Eeuo pipefail",
+            f"PATH={shlex.quote(str(fake_bin))}:$PATH",
+            f"ROOT={shlex.quote(str(root))}",
+            f"SYSTEMD_UNIT={shlex.quote(str(installed_unit))}",
+            function_text,
+            "install_systemd_unit",
+        ]
+    )
+    subprocess.run(["bash", "-c", script], check=True)
+    updated_unit = installed_unit.read_text()
+    if "codex-app-server-root.service" in updated_unit:
+        raise SystemExit("update.sh systemd refresh should remove legacy app-server dependency")
+    if not daemon_reload_marker.exists():
+        raise SystemExit("update.sh systemd refresh should daemon-reload after replacing unit")
+
+print("update.sh systemd unit removes legacy app-server dependency: ok")
+PY
+
 python3 - "${INSTALL_SH}" <<'PY'
 from pathlib import Path
 import itertools

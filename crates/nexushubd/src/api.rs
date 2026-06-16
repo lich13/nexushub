@@ -243,7 +243,7 @@ async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiR
             "label": "Codex",
             "status": "ready",
             "kind": "builtin",
-            "description": "Codex app-server 会话、线程和受控操作",
+            "description": "Codex 本地状态、线程和受控 job 操作",
             "invocation_template": "@Codex "
         },
         {
@@ -5450,6 +5450,12 @@ mod tests {
         let plugins: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let rows = plugins.as_array().unwrap();
 
+        assert!(rows.iter().any(|plugin| {
+            plugin["id"] == "codex"
+                && plugin["description"].as_str().is_some_and(|value| {
+                    value.contains("Codex 本地状态") && !value.contains("app-server")
+                })
+        }));
         assert!(rows.iter().any(|plugin| {
             plugin["id"] == "probe"
                 && plugin["description"]

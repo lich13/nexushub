@@ -16,6 +16,7 @@ INSTALL_BIN="${INSTALL_DIR}/bin/nexushubd"
 WEBUI_DIR="${INSTALL_DIR}/webui"
 BACKUP_DIR="${INSTALL_DIR}/backups/release-updates"
 SERVICE_NAME="${APP_NAME}"
+SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 CONFIG_FILE="${NEXUSHUB_CONFIG:-${INSTALL_DIR}/config.toml}"
 UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
 CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
@@ -527,6 +528,13 @@ if changed:
 PY
 }
 
+install_systemd_unit() {
+  local unit_source="${ROOT}/deploy/systemd.service"
+  [[ -f "${unit_source}" ]] || return 0
+  install -m 0644 -o root -g root "${unit_source}" "${SYSTEMD_UNIT}"
+  systemctl daemon-reload
+}
+
 main() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -572,6 +580,7 @@ main() {
   mkdir -p "${BACKUP}"
   [[ -f "${INSTALL_BIN}" ]] && cp "${INSTALL_BIN}" "${BACKUP}/nexushubd"
   [[ -d "${WEBUI_DIR}" ]] && cp -a "${WEBUI_DIR}" "${BACKUP}/webui"
+  [[ -f "${SYSTEMD_UNIT}" ]] && cp "${SYSTEMD_UNIT}" "${BACKUP}/systemd.service"
 
   install -m 0755 -o root -g root "${ROOT}/bin/nexushubd" "${INSTALL_BIN}"
   rm -rf "${WEBUI_DIR}"
@@ -584,6 +593,7 @@ main() {
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-update" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
     [[ -f "${ROOT}/deploy/${APP_NAME}-codex-prune" ]] && install -m 0755 -o root -g root "${ROOT}/deploy/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
   fi
+  install_systemd_unit
   migrate_codex_update_config
 
   systemctl restart "${SERVICE_NAME}"
@@ -601,6 +611,10 @@ main() {
   if [[ -d "${BACKUP}/webui" ]]; then
     rm -rf "${WEBUI_DIR}"
     cp -a "${BACKUP}/webui" "${WEBUI_DIR}"
+  fi
+  if [[ -f "${BACKUP}/systemd.service" ]]; then
+    install -m 0644 -o root -g root "${BACKUP}/systemd.service" "${SYSTEMD_UNIT}"
+    systemctl daemon-reload || true
   fi
   systemctl restart "${SERVICE_NAME}" || true
   die "update failed"
