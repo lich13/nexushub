@@ -52,6 +52,13 @@ type AppExports = typeof import("./App") & {
   threadSettingsMetricLabels?: () => string[];
   threadResumeCommand?: (threadId?: string | null) => string | null;
   probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
+  probeAvailabilityView?: (input: {
+    available?: boolean;
+    probeEnabled?: boolean;
+    loading?: boolean;
+    fetching?: boolean;
+    hasData?: boolean;
+  }) => { headline: string; metric: string; tone: "success" | "warning" | "danger" };
   probeEventSummary?: (event: ProbeEvent) => string;
   probeEventCard?: (event: ProbeEvent) => { headline: string; summary: string; details: Array<{ label: string; value: string }> };
   shouldAutoScrollProbeFeed?: (
@@ -533,6 +540,26 @@ describe("conversation helpers", () => {
 
     expect(rows.map((thread) => thread.status)).toEqual(["Running", "ReplyNeeded", "Recoverable"]);
     expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
+  });
+
+  test("probe availability copy treats initial snapshot fetch as loading instead of unavailable", async () => {
+    const app = await loadApp();
+
+    expect(app.probeAvailabilityView?.({ loading: true, fetching: true, hasData: false })).toEqual({
+      headline: "正在读取 Probe 快照",
+      metric: "读取中",
+      tone: "warning"
+    });
+    expect(app.probeAvailabilityView?.({ available: false, loading: false, fetching: false, hasData: false })).toEqual({
+      headline: "Probe 端点不可用",
+      metric: "不可用",
+      tone: "danger"
+    });
+    expect(app.probeAvailabilityView?.({ available: true, probeEnabled: true, hasData: true })).toEqual({
+      headline: "Probe 正在接管云机观测",
+      metric: "运行中",
+      tone: "success"
+    });
   });
 
   test("probe event summary shows context without leaking payload secrets", async () => {

@@ -3733,7 +3733,14 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const probeThreads = probeThreadsByStatus(data);
   const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
   const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
-  const statusTone = available && probeEnabled ? "success" : available ? "warning" : "danger";
+  const availability = probeAvailabilityView({
+    available,
+    probeEnabled,
+    loading: status.isLoading,
+    fetching: status.isFetching,
+    hasData: Boolean(data)
+  });
+  const statusTone = availability.tone;
   const snapshotText = probeSnapshotStatusText(data, status.isFetching);
   const snapshotTone = data?.is_refreshing || status.isFetching ? "warning" : "success";
   const probeJobs = (jobs.data ?? []).filter(isProbeJob).slice(0, 6);
@@ -3785,7 +3792,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const overviewSection = (
     <>
       <section className="probe-core-metrics" aria-label="探针核心指标">
-        <Metric label="Codex APP" value={probeEnabled ? "运行中" : available ? "停用" : "不可用"} tone={statusTone === "danger" ? "danger" : statusTone} />
+        <Metric label="Codex APP" value={availability.metric} tone={statusTone} />
         <Metric label="运行中" value={String(data?.running_count ?? 0)} tone={(data?.running_count ?? 0) > 0 ? "success" : undefined} />
         <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
@@ -3913,7 +3920,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
       <section className={`probe-status-banner tone-${statusTone}`}>
         <div>
-          <strong>{available ? probeEnabled ? "Probe 正在接管云机观测" : "Probe 已停用" : "Probe 端点不可用"}</strong>
+          <strong>{availability.headline}</strong>
           <span>{serviceText} · {data?.host_label ?? currentSettings?.codex.host_label ?? "未知主机"}</span>
         </div>
         <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(logsDbStatusText)}</span>
@@ -3934,7 +3941,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
       {activeSectionContent}
 
-      {!available && (
+      {availability.tone === "danger" && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
           <div className="muted-row">探针端点不可用</div>
         </Panel>
@@ -5142,6 +5149,32 @@ export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age
   if (age < 60) return `${prefix} ${age}s`;
   const minutes = Math.floor(age / 60);
   return `${prefix} ${minutes}m`;
+}
+
+export function probeAvailabilityView(input: {
+  available?: boolean;
+  probeEnabled?: boolean;
+  loading?: boolean;
+  fetching?: boolean;
+  hasData?: boolean;
+}): { headline: string; metric: string; tone: "success" | "warning" | "danger" } {
+  if (!input.hasData && (input.loading || input.fetching)) {
+    return {
+      headline: "正在读取 Probe 快照",
+      metric: "读取中",
+      tone: "warning"
+    };
+  }
+  if (input.available) {
+    return input.probeEnabled
+      ? { headline: "Probe 正在接管云机观测", metric: "运行中", tone: "success" }
+      : { headline: "Probe 已停用", metric: "停用", tone: "warning" };
+  }
+  return {
+    headline: "Probe 端点不可用",
+    metric: "不可用",
+    tone: "danger"
+  };
 }
 
 function cleanHostValue(value?: string | null): string | null {
