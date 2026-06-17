@@ -7,6 +7,7 @@ UPDATE_SH="${ROOT}/deploy/nexushub/update.sh"
 MACOS_README="${ROOT}/deploy/nexushub/macos/README.md"
 MACOS_PACKAGE_SH="${ROOT}/scripts/package-darwin-arm64.sh"
 RELEASE_WORKFLOW="${ROOT}/.github/workflows/release.yml"
+CI_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
 DEPLOY_CLOUD_SH="${ROOT}/scripts/deploy-cloud.sh"
 CONFIG_EXAMPLE="${ROOT}/deploy/nexushub/config.example.toml"
 NGINX_LOCATION="${ROOT}/deploy/nexushub/nginx-location.conf"
@@ -14,6 +15,62 @@ SYSTEMD_SERVICE="${ROOT}/deploy/nexushub/systemd.service"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
+python3 - "${CI_WORKFLOW}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+ci = Path(sys.argv[1]).read_text()
+
+job_matches = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", ci))
+jobs = {}
+for index, match in enumerate(job_matches):
+    name = match.group(1)
+    start = match.start()
+    end = job_matches[index + 1].start() if index + 1 < len(job_matches) else len(ci)
+    jobs[name] = ci[start:end]
+
+linux_job = jobs.get("test")
+if not linux_job:
+    raise SystemExit("CI workflow must keep the Linux test job")
+if "runs-on: ubuntu-24.04" not in linux_job:
+    raise SystemExit("CI Linux test job must run on ubuntu-24.04")
+for forbidden in [
+    "src-tauri/Cargo.toml",
+    "--dir desktop-ui",
+]:
+    if forbidden in linux_job:
+        raise SystemExit(f"CI Linux test job must not run macOS Tauri checks: {forbidden}")
+for required in [
+    "cargo fmt --all -- --check",
+    "cargo test --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "corepack pnpm@11.0.8 --dir webui install",
+    "corepack pnpm@11.0.8 --dir webui test",
+    "corepack pnpm@11.0.8 --dir webui build",
+    "bash scripts/test-install-script.sh",
+]:
+    if required not in linux_job:
+        raise SystemExit(f"CI Linux test job must keep {required}")
+
+macos_jobs = [body for body in jobs.values() if "runs-on: macos-14" in body]
+if len(macos_jobs) != 1:
+    raise SystemExit("CI workflow must define one macos-14 job for Tauri and desktop-ui checks")
+macos_job = macos_jobs[0]
+for required in [
+    "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "cargo test --manifest-path src-tauri/Cargo.toml",
+    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "corepack pnpm@11.0.8 --dir desktop-ui install",
+    "corepack pnpm@11.0.8 --dir desktop-ui test",
+    "corepack pnpm@11.0.8 --dir desktop-ui build",
+]:
+    if required not in macos_job:
+        raise SystemExit(f"CI macOS Tauri job must run {required}")
+
+print("CI Linux/macOS Tauri job split: ok")
+PY
+
 python3 - "${CONFIG_EXAMPLE}" "${NGINX_LOCATION}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" <<'PY'
 from pathlib import Path
 import sys
