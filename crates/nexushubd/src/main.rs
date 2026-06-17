@@ -411,6 +411,9 @@ async fn handle_hook_stop_command(
     let payload_transcript_path = stdin_payload
         .as_ref()
         .and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
+    let payload_thread_title = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]));
     let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
     });
@@ -423,6 +426,11 @@ async fn handle_hook_stop_command(
         .or(payload_thread_id.clone())
         .or(payload_session_id.clone());
     let event_turn_id = turn_id.or(payload_turn_id.clone());
+    let thread_title = payload_thread_title.or_else(|| {
+        event_thread_id
+            .as_deref()
+            .and_then(|thread_id| local_thread_title(config, thread_id).ok().flatten())
+    });
     let event_kind = stdin_payload
         .as_ref()
         .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
@@ -441,7 +449,8 @@ async fn handle_hook_stop_command(
         resolved_last_assistant_message
             .as_ref()
             .map(|(_, source)| source.as_str()),
-    );
+    )
+    .with_thread_title(thread_title.as_deref());
     let event = probe_runtime(config).build_event(event_input);
     handle_built_probe_event(config, db, event).await
 }
@@ -595,6 +604,12 @@ fn notify_completion_thread_summary(
             .into_iter()
             .find(|thread| thread.id == thread_id),
     )
+}
+
+fn local_thread_title(config: &Config, thread_id: &str) -> Result<Option<String>> {
+    Ok(notify_completion_thread_summary(config, thread_id)?
+        .map(|thread| thread.title)
+        .filter(|title| !title.trim().is_empty() && title.trim() != "未命名线程"))
 }
 
 fn probe_runtime(config: &Config) -> ProbeRuntime {
@@ -2504,6 +2519,80 @@ hooks = false
             "completion"
         );
         assert_eq!(events[0].payload["body_summary"], "final answer");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_local_thread_title_for_bark_title_when_payload_omits_title() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-hook-local-title");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let transcript = codex_home.join("sessions").join("rollout-title.jsonl");
+        fs::write(
+            &transcript,
+            json!({"type":"response_item","turn_id":"turn-title","payload":{"type":"message","role":"assistant","content":[{"text":"完整最终回复"}]}})
+                .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                updated_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            params![
+                "thread-title",
+                "真实 HookStop 标题",
+                chrono::Utc::now().timestamp_millis(),
+                transcript.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        config.codex.home = codex_home;
+
+        let (message, source) = hook_stop_last_assistant_message(
+            Some(transcript.to_string_lossy().as_ref()),
+            Some("turn-title"),
+            None,
+        )
+        .unwrap();
+        let event_input = ProbeEventInput::hook_stop_with_context(
+            Some("thread-title"),
+            Some("turn-title"),
+            Some("thread-title"),
+            Some(transcript.to_string_lossy().as_ref()),
+            Some(&message),
+            "hook-stop",
+        )
+        .with_body_source(Some(&source))
+        .with_thread_title(
+            local_thread_title(&config, "thread-title")
+                .unwrap()
+                .as_deref(),
+        );
+        let event = probe_runtime(&config).build_event(event_input);
+
+        handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events[0].title.as_deref(), Some("真实 HookStop 标题"));
+        assert_eq!(events[0].payload["thread_title"], "真实 HookStop 标题");
+        assert_eq!(
+            events[0].payload["bark"]["title"],
+            "线程正常完成：真实 HookStop 标题"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
