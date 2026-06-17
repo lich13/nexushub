@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
         list_threads, resolve_codex_paths, rollout_completion_last_agent_message,
-        rollout_latest_assistant_message,
+        rollout_completion_last_agent_message_with_source, rollout_hook_stop_message_with_source,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -414,18 +414,11 @@ async fn handle_hook_stop_command(
     let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
     });
-    let transcript_last_assistant_message = payload_last_assistant_message
-        .is_none()
-        .then(|| {
-            payload_transcript_path
-                .as_deref()
-                .map(Path::new)
-                .and_then(|path| rollout_latest_assistant_message(path).ok().flatten())
-        })
-        .flatten();
-    let last_assistant_message = payload_last_assistant_message
-        .as_deref()
-        .or(transcript_last_assistant_message.as_deref());
+    let resolved_last_assistant_message = hook_stop_last_assistant_message(
+        payload_transcript_path.as_deref(),
+        payload_turn_id.as_deref(),
+        payload_last_assistant_message.as_deref(),
+    );
     let event_thread_id = thread_id
         .or(payload_thread_id.clone())
         .or(payload_session_id.clone());
@@ -434,15 +427,54 @@ async fn handle_hook_stop_command(
         .as_ref()
         .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
         .unwrap_or(kind);
-    let event = probe_runtime(config).build_event(ProbeEventInput::hook_stop_with_context(
+    let event_input = ProbeEventInput::hook_stop_with_context(
         event_thread_id.as_deref(),
         event_turn_id.as_deref(),
         payload_session_id.as_deref(),
         payload_transcript_path.as_deref(),
-        last_assistant_message,
+        resolved_last_assistant_message
+            .as_ref()
+            .map(|(message, _)| message.as_str()),
         &event_kind,
-    ));
+    )
+    .with_body_source(
+        resolved_last_assistant_message
+            .as_ref()
+            .map(|(_, source)| source.as_str()),
+    );
+    let event = probe_runtime(config).build_event(event_input);
     handle_built_probe_event(config, db, event).await
+}
+
+fn hook_stop_last_assistant_message(
+    transcript_path: Option<&str>,
+    turn_id: Option<&str>,
+    stdin_message: Option<&str>,
+) -> Option<(String, String)> {
+    transcript_path
+        .map(Path::new)
+        .and_then(|path| {
+            rollout_hook_stop_message_with_source(path, turn_id)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    turn_id?;
+                    rollout_hook_stop_message_with_source(path, None)
+                        .ok()
+                        .flatten()
+                })
+        })
+        .or_else(|| {
+            stdin_message.map(|message| {
+                let source = if nexushub_core::codex::extract_proposed_plan_text(message).is_some()
+                {
+                    "proposed_plan"
+                } else {
+                    "last_assistant_message"
+                };
+                (message.to_string(), source.to_string())
+            })
+        })
 }
 
 fn read_optional_stdin_json() -> Result<Option<Value>> {
@@ -527,11 +559,11 @@ fn notify_completion_context(
     let (message, body_source) = if let Some(message) = explicit_message {
         (Some(message), Some("stdin.last_agent_message".to_string()))
     } else if let Some(path) = resolved_transcript_path.as_deref() {
-        match rollout_completion_last_agent_message(Path::new(path), turn_id.as_deref())? {
-            Some(message) => (
-                Some(message),
-                Some("task_complete.last_agent_message".to_string()),
-            ),
+        match rollout_completion_last_agent_message_with_source(
+            Path::new(path),
+            turn_id.as_deref(),
+        )? {
+            Some((message, source)) => (Some(message), Some(source)),
             None => (None, None),
         }
     } else if let Some(message) = resolved_thread
@@ -2442,16 +2474,23 @@ hooks = false
         )
         .unwrap();
 
-        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
-            Some("thread-transcript"),
-            Some("turn-transcript"),
-            Some("session-transcript"),
+        let (message, source) = hook_stop_last_assistant_message(
             Some(transcript.to_string_lossy().as_ref()),
-            rollout_latest_assistant_message(&transcript)
-                .unwrap()
-                .as_deref(),
-            "hook-stop",
-        ));
+            Some("turn-transcript"),
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-transcript"),
+                Some("turn-transcript"),
+                Some("session-transcript"),
+                Some(transcript.to_string_lossy().as_ref()),
+                Some(&message),
+                "hook-stop",
+            )
+            .with_body_source(Some(&source)),
+        );
 
         handle_built_probe_event(&config, &db, event).await.unwrap();
 
@@ -2672,6 +2711,108 @@ hooks = false
             event.payload["body_sha256"]
         );
         assert!(stored[0].payload["bark"].get("body").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_uses_full_raw_assistant_message_when_task_complete_body_is_missing()
+    {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-notify-completion-raw-assistant");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let final_message = format!(
+            "助手完整回复开头\n{}\n助手完整回复末尾唯一标记",
+            "没有完成字段也不能截断".repeat(900)
+        );
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":final_message}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.payload["body_source"], "last_assistant_message");
+        assert!(event.bark_body.contains("助手完整回复开头"));
+        assert!(event.bark_body.contains("助手完整回复末尾唯一标记"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(event.payload["body_length"].as_u64().unwrap() > 4000);
+        let stored = db.list_probe_events(10).unwrap();
+        assert!(!serde_json::to_string(&stored[0])
+            .unwrap()
+            .contains("助手完整回复末尾唯一标记"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_prefers_full_rollout_plan_over_short_stdin_summary() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let dir = temp_test_dir("nexushub-hook-stop-full-plan");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let full_plan = format!("# 完整计划\n{}\n末尾唯一完整计划", "计划正文".repeat(1200));
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"item_completed","thread_id":"thread-plan","turn_id":"turn-plan","item":{"type":"Plan","id":"plan-1","text":full_plan}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n短摘要\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let (resolved_message, resolved_source) = hook_stop_last_assistant_message(
+            transcript.to_str(),
+            Some("turn-plan"),
+            Some("<proposed_plan>\n短摘要\n</proposed_plan>"),
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan"),
+                Some("turn-plan"),
+                Some("thread-plan"),
+                transcript.to_str(),
+                Some(&resolved_message),
+                "hook-stop",
+            )
+            .with_body_source(Some(&resolved_source)),
+        );
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert!(event.bark_body.contains("# 完整计划"));
+        assert!(event.bark_body.contains("末尾唯一完整计划"));
+        assert!(!event.bark_body.contains("短摘要"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(event.payload["body_length"].as_u64().unwrap() > 4000);
+        assert_eq!(event.payload["body_source"], "proposed_plan");
 
         fs::remove_dir_all(dir).unwrap();
     }

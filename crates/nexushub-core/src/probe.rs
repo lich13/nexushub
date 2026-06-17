@@ -1003,6 +1003,9 @@ fn hook_stop_event_type(input: &ProbeEventInput, raw_kind: &str) -> String {
     if normalized_kind == "recoverable" {
         return "recoverable".to_string();
     }
+    if input.body_source.as_deref() == Some("proposed_plan") {
+        return "reply_needed".to_string();
+    }
     if let Some(message) = input.last_assistant_message.as_deref() {
         if let Some((_, _, event_type)) = classify_hook_stop_event(message) {
             return event_type.to_string();

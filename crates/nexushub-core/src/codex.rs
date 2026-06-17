@@ -1329,10 +1329,77 @@ pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
     Ok(scan.latest_message)
 }
 
+pub fn rollout_hook_stop_message(path: &Path, turn_id: Option<&str>) -> Result<Option<String>> {
+    Ok(rollout_hook_stop_message_with_source(path, turn_id)?.map(|(message, _)| message))
+}
+
+pub fn rollout_hook_stop_message_with_source(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
+    let mut latest_assistant = None;
+    let mut latest_plan = None;
+    let mut latest_task_complete = None;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(expected_turn_id) = turn_id {
+            if event_turn_id(&value).as_deref() != Some(expected_turn_id) {
+                continue;
+            }
+        }
+        if let Some(plan) = plan_text_from_event(&value) {
+            latest_plan = Some((plan, "proposed_plan".to_string()));
+        }
+        if let Some(message) = parse_raw_message_event(&value) {
+            if message.role == "assistant" && !message.text.trim().is_empty() {
+                let source = if extract_proposed_plan_text(&message.text).is_some() {
+                    "proposed_plan"
+                } else {
+                    "last_assistant_message"
+                };
+                latest_assistant = Some((message.text, source.to_string()));
+            }
+        }
+        if rollout_event_type(&value) != "task_complete" {
+            continue;
+        }
+        let payload = value.get("payload").unwrap_or(&value);
+        let last_agent_message = value
+            .get("last_agent_message")
+            .or_else(|| payload.get("last_agent_message"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(str::to_string);
+        if last_agent_message.is_some() {
+            latest_task_complete = last_agent_message
+                .map(|message| (message, "task_complete.last_agent_message".to_string()));
+        }
+    }
+    Ok(latest_task_complete.or(latest_plan).or(latest_assistant))
+}
+
 pub fn rollout_completion_last_agent_message(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<String>> {
+    Ok(
+        rollout_completion_last_agent_message_with_source(path, turn_id)?
+            .map(|(message, _)| message),
+    )
+}
+
+pub fn rollout_completion_last_agent_message_with_source(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<(String, String)>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     let mut latest_assistant = None;
@@ -1344,9 +1411,9 @@ pub fn rollout_completion_last_agent_message(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(message) = parse_message_event(&value) {
+        if let Some(message) = parse_raw_message_event(&value) {
             if message.role == "assistant" && !message.text.trim().is_empty() {
-                latest_assistant = Some(message.text);
+                latest_assistant = Some((message.text, "last_assistant_message".to_string()));
             }
         }
         if rollout_event_type(&value) != "task_complete" {
@@ -1367,7 +1434,8 @@ pub fn rollout_completion_last_agent_message(
             .filter(|message| !message.is_empty())
             .map(str::to_string);
         if last_agent_message.is_some() {
-            latest_task_complete = last_agent_message;
+            latest_task_complete = last_agent_message
+                .map(|message| (message, "task_complete.last_agent_message".to_string()));
         }
     }
     Ok(latest_task_complete.or(latest_assistant))
@@ -1624,6 +1692,12 @@ fn event_call_id(value: &Value) -> Option<String> {
 }
 
 fn parse_message_event(value: &Value) -> Option<CodexMessage> {
+    let mut message = parse_raw_message_event(value)?;
+    message.text = trim_text(&message.text, 4000);
+    Some(message)
+}
+
+fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     let payload = value
         .get("payload")
@@ -1648,7 +1722,7 @@ fn parse_message_event(value: &Value) -> Option<CodexMessage> {
 
     let mut text = String::new();
     collect_text(value, &mut text);
-    let text = trim_text(&text, 4000);
+    let text = trim_text(&text, usize::MAX);
     if text.is_empty() {
         return None;
     }
@@ -1668,6 +1742,35 @@ fn parse_message_event(value: &Value) -> Option<CodexMessage> {
             .and_then(Value::as_str)
             .map(str::to_string),
     })
+}
+
+fn plan_text_from_event(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) == Some("item_completed")
+        && value
+            .get("item")
+            .and_then(|item| item.get("type"))
+            .and_then(Value::as_str)
+            == Some("Plan")
+    {
+        return structured_text_raw(value.get("item")?)
+            .map(|text| trim_text(&text, usize::MAX))
+            .filter(|text| !text.is_empty());
+    }
+    let payload = value
+        .get("payload")
+        .or_else(|| value.get("item"))
+        .unwrap_or(value);
+    let payload_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("type").and_then(Value::as_str));
+    if !matches!(payload_type, Some("Plan" | "plan")) {
+        return None;
+    }
+    structured_text_raw(payload)
+        .or_else(|| structured_text_raw(value))
+        .map(|text| trim_text(&text, usize::MAX))
+        .filter(|text| !text.is_empty())
 }
 
 const MESSAGE_TEXT_LIMIT: usize = 12_000;
@@ -4206,6 +4309,40 @@ mod tests {
                 .as_deref(),
             Some("final answer")
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rollout_hook_stop_message_prefers_full_plan_over_null_completion_and_short_summary() {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-hook-stop-full-plan-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        let full_plan = format!("# 完整计划\n{}\n末尾唯一完整计划", "计划正文".repeat(1200));
+        let events = [
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n短摘要\n</proposed_plan>"}]}}),
+            json!({"type":"item_completed","thread_id":"thread-a","turn_id":"turn-plan","item":{"type":"Plan","id":"plan-1","text":full_plan}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}),
+        ];
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let message = super::rollout_hook_stop_message(&path, Some("turn-plan"))
+            .unwrap()
+            .unwrap();
+
+        assert!(message.contains("# 完整计划"));
+        assert!(message.contains("末尾唯一完整计划"));
+        assert!(!message.contains("[truncated]"));
+        assert!(message.len() > 4000);
         let _ = fs::remove_file(path);
     }
 
