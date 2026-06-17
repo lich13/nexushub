@@ -1337,6 +1337,17 @@ pub fn rollout_hook_stop_message_with_source(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<(String, String)>> {
+    let result = rollout_hook_stop_message_with_source_inner(path, turn_id)?;
+    if result.is_some() || turn_id.is_none() {
+        return Ok(result);
+    }
+    rollout_hook_stop_message_with_source_inner(path, None)
+}
+
+fn rollout_hook_stop_message_with_source_inner(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<(String, String)>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     let mut latest_assistant = None;
@@ -1711,6 +1722,12 @@ fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
         .unwrap_or(event_type);
+    if !matches!(
+        payload_type,
+        "message" | "agent_message" | "user_message" | "assistant_message"
+    ) {
+        return None;
+    }
 
     let role = payload
         .and_then(|p| p.get("role"))
@@ -1724,9 +1741,12 @@ fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
             }
         });
 
-    let mut text = String::new();
-    collect_text(value, &mut text);
-    let text = trim_text(&text, usize::MAX);
+    let text = structured_text_raw(payload.unwrap_or(value)).unwrap_or_else(|| {
+        let mut text = String::new();
+        collect_text(value, &mut text);
+        text
+    });
+    let text = trim_preserving_indentation(&text, usize::MAX).0;
     if text.is_empty() {
         return None;
     }
@@ -3796,6 +3816,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_message_event_ignores_turn_context_summary() {
+        let value = json!({
+            "type": "turn_context",
+            "payload": {
+                "turn_id": "turn-live",
+                "summary": "auto",
+                "cwd": "/tmp",
+            }
+        });
+
+        assert!(parse_message_event(&value).is_none());
+    }
+
+    #[test]
     fn clears_old_plan_pending_after_later_user_and_assistant_progress() {
         let scan = scan_fixture(&[
             json!({"type":"item_completed","turn_id":"turn-1","item":{"type":"Plan"}}),
@@ -4381,6 +4415,76 @@ mod tests {
         assert_eq!(source, "proposed_plan");
         assert!(message.contains(plan));
         assert!(!message.contains("我会按刚才的计划执行系统清理"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rollout_hook_stop_message_uses_final_response_when_turn_context_has_auto_summary() {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-hook-stop-final-response-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        let final_answer = "已按计划执行完。\n\n验证结果：全部通过。\n末尾唯一完整反馈";
+        let events = [
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+            json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":final_answer}],"phase":"final_answer"}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":final_answer}}),
+        ];
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-live"))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(source, "task_complete.last_agent_message");
+        assert_eq!(message, final_answer);
+        assert!(!message.contains("auto"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rollout_hook_stop_message_falls_back_to_unscoped_final_response_before_task_complete_flush()
+    {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-hook-stop-final-response-race-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        let final_answer = "最终回复开头\n\n完整正文完整正文\n末尾唯一完整反馈";
+        let events = [
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+            json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":final_answer}],"phase":"final_answer"}}),
+        ];
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-live"))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(source, "last_assistant_message");
+        assert_eq!(message, final_answer);
+        assert!(!message.contains("auto"));
         let _ = fs::remove_file(path);
     }
 

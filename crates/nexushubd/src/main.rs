@@ -474,16 +474,23 @@ fn hook_stop_last_assistant_message(
                 })
         })
         .or_else(|| {
-            stdin_message.map(|message| {
-                let source = if nexushub_core::codex::extract_proposed_plan_text(message).is_some()
-                {
-                    "proposed_plan"
-                } else {
-                    "last_assistant_message"
-                };
-                (message.to_string(), source.to_string())
-            })
+            stdin_message
+                .filter(|message| !is_unreliable_hook_stop_stdin_message(message))
+                .map(|message| {
+                    let source =
+                        if nexushub_core::codex::extract_proposed_plan_text(message).is_some() {
+                            "proposed_plan"
+                        } else {
+                            "last_assistant_message"
+                        };
+                    (message.to_string(), source.to_string())
+                })
         })
+}
+
+fn is_unreliable_hook_stop_stdin_message(message: &str) -> bool {
+    let message = message.trim();
+    message.is_empty() || matches!(message, "auto" | "none" | "null" | "summary")
 }
 
 fn read_optional_stdin_json() -> Result<Option<Value>> {

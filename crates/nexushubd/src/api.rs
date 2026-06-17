@@ -54,6 +54,7 @@ type ApiResponse = Result<Response, ApiError>;
 const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
+const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 
 pub struct ApiError(Box<Response>);
 
@@ -985,12 +986,43 @@ pub(crate) async fn load_probe_threads(
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     apply_running_jobs_to_threads(state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    if status == "reply-needed" {
+        threads.retain(probe_reply_needed_thread_is_fresh);
+    }
     Ok(filter_thread_summaries(
         threads,
         Some(status),
         None,
         limit.clamp(1, 200),
     ))
+}
+
+fn probe_reply_needed_thread_is_fresh(thread: &ThreadSummary) -> bool {
+    if !matches!(thread.status, ThreadStatus::ReplyNeeded) {
+        return false;
+    }
+    if !thread_updated_within(thread, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS) {
+        return false;
+    }
+    thread.pending_elicitation.is_some()
+        || thread.latest_message.as_deref().is_some_and(|value| {
+            value.contains("<proposed_plan>")
+                || value.contains("</proposed_plan>")
+                || !value.trim().is_empty()
+        })
+}
+
+fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
+    let Some(updated_at) = thread.updated_at.as_deref() else {
+        return false;
+    };
+    let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
+        return false;
+    };
+    let age_seconds = chrono::Utc::now()
+        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
+        .num_seconds();
+    (0..=max_age_seconds).contains(&age_seconds)
 }
 
 fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
@@ -4151,6 +4183,7 @@ mod tests {
         prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
         thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
         turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
+        PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4987,6 +5020,67 @@ mod tests {
         assert!(second_status["running_threads"].as_array().is_some());
         assert!(second_status["reply_needed_threads"].as_array().is_some());
         assert!(second_status["recoverable_threads"].as_array().is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_reply_needed_bucket_only_includes_fresh_pending_actions() {
+        let (state, _, _) = authenticated_test_state();
+        let dir = temp_test_dir("nexushub-probe-reply-needed-fresh");
+        let codex_home = dir.join(".codex");
+        mark_codex_home(&codex_home);
+        let now = chrono::Utc::now().timestamp();
+        let old_updated = now - PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS - 60;
+        let fresh_updated = now - 30;
+        let old_rollout = codex_home.join("old-plan.jsonl");
+        let fresh_rollout = codex_home.join("fresh-plan.jsonl");
+        let plan_events = |thread_id: &str, turn_id: &str| {
+            [
+                json!({"session_meta":{"payload":{"id":thread_id}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"item_completed","thread_id":thread_id,"turn_id":turn_id,"item":{"type":"Plan","id":format!("{turn_id}-plan"),"text":"# 计划\n- 等待确认"}}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 计划\n- 等待确认\n</proposed_plan>"}],"phase":"final_answer"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":turn_id,"last_agent_message":null}}).to_string(),
+            ]
+            .join("\n")
+        };
+        fs::write(&old_rollout, plan_events("old-thread", "turn-old")).unwrap();
+        fs::write(&fresh_rollout, plan_events("fresh-thread", "turn-fresh")).unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('old-thread', ?1, ?2, ?2, 'codex', '/tmp', '旧计划', '')",
+            params![old_rollout.display().to_string(), old_updated],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('fresh-thread', ?1, ?2, ?2, 'codex', '/tmp', '新计划', '')",
+            params![fresh_rollout.display().to_string(), fresh_updated],
+        )
+        .unwrap();
+        let mut config = state.config();
+        config.codex.home = codex_home;
+        state.replace_config(config);
+
+        let rows = load_probe_threads(&state, "reply-needed", 20)
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "fresh-thread");
         fs::remove_dir_all(dir).unwrap();
     }
 
