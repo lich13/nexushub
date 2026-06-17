@@ -1029,11 +1029,11 @@ fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, SessionIndex
                 .or_else(|| session_index_string_field(&value, "firstUserMessage")),
         };
         if let Some(existing) = map.get_mut(id) {
+            if entry.title.is_some() {
+                existing.title = entry.title.take();
+            }
             if existing.path.is_none() {
                 existing.path = entry.path.take();
-            }
-            if existing.title.is_none() {
-                existing.title = entry.title.take();
             }
             if existing.first_user_message.is_none() {
                 existing.first_user_message = entry.first_user_message.take();
@@ -4620,6 +4620,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(row.title, "更新");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_index_uses_latest_thread_name_for_repeated_thread_records() {
+        let root = unique_temp_dir("session-index-latest-thread-name");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                first_user_message TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        let copied_title = "接手这个线程的工作 019e52ad-1873-7752-80d8-82b1668dfcd2，梳理一下现在项目内所有脚本的职能和完整的工作机制，我打算继续处理线上问题";
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, first_user_message, preview)
+             VALUES('thread-name-thread', '', 1, 1, 'codex', '/tmp', ?1, ?1, '')",
+            [copied_title],
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            [
+                json!({"id":"thread-name-thread","thread_name":"梳理脚本"}).to_string(),
+                json!({"id":"thread-name-thread","thread_name":"xianbao"}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let row = list_threads(&CodexPaths::new(&root), None, None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|thread| thread.id == "thread-name-thread")
+            .unwrap();
+
+        assert_eq!(row.title, "xianbao");
         let _ = fs::remove_dir_all(root);
     }
 
