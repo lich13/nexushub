@@ -1492,6 +1492,7 @@ pub fn rollout_completion_last_agent_message_with_source(
 ) -> Result<Option<(String, String)>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
+    let mut latest_unresolved_action: Option<PendingHookStopAction> = None;
     let mut latest_assistant = None;
     let mut latest_task_complete = None;
     for line in text.lines() {
@@ -1501,19 +1502,66 @@ pub fn rollout_completion_last_agent_message_with_source(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        let matches_turn_scope = turn_id
+            .map(|expected_turn_id| event_turn_id(&value).as_deref() == Some(expected_turn_id))
+            .unwrap_or(true);
+        if !matches_turn_scope {
+            continue;
+        }
+        if let Some(plan) = plan_text_from_event(&value) {
+            let (action_turn_id, action_item_id) = plan_marker_for_event(&None, &value)
+                .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
+            latest_unresolved_action = Some(PendingHookStopAction {
+                action: PendingAction::Plan {
+                    turn_id: action_turn_id,
+                    item_id: action_item_id,
+                },
+                message: plan,
+                source: "proposed_plan",
+            });
+        }
+        if let Some(elicitation) = parse_pending_elicitation(&value) {
+            latest_unresolved_action = Some(PendingHookStopAction {
+                action: PendingAction::Elicitation {
+                    turn_id: elicitation.turn_id.clone(),
+                    item_id: elicitation.item_id.clone(),
+                    call_id: event_call_id(&value),
+                    elicitation,
+                },
+                message: request_user_input_hook_message(&value),
+                source: "request_user_input",
+            });
+        }
         if let Some(message) = parse_raw_message_event(&value) {
             if message.role == "assistant" && !message.text.trim().is_empty() {
-                latest_assistant = Some((message.text, "last_assistant_message".to_string()));
+                if extract_proposed_plan_text(&message.text).is_some() {
+                    let pending_plan = PendingHookStopAction {
+                        action: PendingAction::Plan {
+                            turn_id: event_turn_id(&value),
+                            item_id: event_item_id(&value),
+                        },
+                        message: extract_proposed_plan_text(&message.text).unwrap_or(message.text),
+                        source: "proposed_plan",
+                    };
+                    if should_replace_pending_hook_stop_action(
+                        latest_unresolved_action.as_ref(),
+                        &pending_plan,
+                    ) {
+                        latest_unresolved_action = Some(pending_plan);
+                    }
+                } else {
+                    latest_assistant = Some((message.text, "last_assistant_message".to_string()));
+                }
             }
+        }
+        if latest_unresolved_action
+            .as_ref()
+            .is_some_and(|pending| clears_pending_action(&value, Some(&pending.action)))
+        {
+            latest_unresolved_action = None;
         }
         if rollout_event_type(&value) != "task_complete" {
             continue;
-        }
-        if let Some(expected_turn_id) = turn_id {
-            let event_turn = event_turn_id(&value);
-            if event_turn.as_deref() != Some(expected_turn_id) {
-                continue;
-            }
         }
         let payload = value.get("payload").unwrap_or(&value);
         let last_agent_message = value
@@ -1528,7 +1576,10 @@ pub fn rollout_completion_last_agent_message_with_source(
                 .map(|message| (message, "task_complete.last_agent_message".to_string()));
         }
     }
-    Ok(latest_task_complete.or(latest_assistant))
+    Ok(latest_unresolved_action
+        .map(|pending| (pending.message, pending.source.to_string()))
+        .or(latest_task_complete)
+        .or(latest_assistant))
 }
 
 pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<bool> {
@@ -1707,17 +1758,12 @@ fn user_input_answer_matches(value: &Value, pending: &PendingAction) -> bool {
             call_id: Some(expected),
             ..
         } => event_call_id(value).as_deref() == Some(expected),
-        PendingAction::Elicitation {
-            turn_id, item_id, ..
-        }
-        | PendingAction::Plan { turn_id, item_id } => {
-            turn_id
-                .as_deref()
-                .is_some_and(|expected| event_turn_id(value).as_deref() == Some(expected))
-                || item_id
-                    .as_deref()
-                    .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected))
-        }
+        PendingAction::Elicitation { item_id, .. } => item_id
+            .as_deref()
+            .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected)),
+        PendingAction::Plan { item_id, .. } => item_id
+            .as_deref()
+            .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected)),
     }
 }
 
@@ -1739,17 +1785,12 @@ fn function_output_matches(value: &Value, pending: &PendingAction) -> bool {
             call_id: Some(expected),
             ..
         } => call_id == Some(expected),
-        PendingAction::Elicitation {
-            turn_id, item_id, ..
-        }
-        | PendingAction::Plan { turn_id, item_id } => {
-            turn_id
-                .as_deref()
-                .is_some_and(|expected| event_turn_id(value).as_deref() == Some(expected))
-                || item_id
-                    .as_deref()
-                    .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected))
-        }
+        PendingAction::Elicitation { item_id, .. } => item_id
+            .as_deref()
+            .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected)),
+        PendingAction::Plan { item_id, .. } => item_id
+            .as_deref()
+            .is_some_and(|expected| event_item_id(value).as_deref() == Some(expected)),
     }
 }
 
@@ -1919,7 +1960,7 @@ impl MessageBlockBuilder {
             self.clear_pending_tools_for_turn(event_turn_id(value).as_deref());
         }
         if event_type == "task_complete" && task_complete_has_last_agent_message(value) {
-            self.resolve_pending_plans();
+            self.resolve_pending_plans_for_external_progress(event_turn_id(value).as_deref());
         }
 
         if is_plan_item_completed(value) {
@@ -2048,6 +2089,25 @@ impl MessageBlockBuilder {
     fn resolve_pending_plans(&mut self) {
         for block in &mut self.blocks {
             if block.kind == "plan" && block.resolved != Some(true) {
+                block.status = Some("completed".to_string());
+                block.plan_status = Some("completed".to_string());
+                block.resolved = Some(true);
+            }
+        }
+    }
+
+    fn resolve_pending_plans_for_external_progress(&mut self, progress_turn_id: Option<&str>) {
+        let Some(progress_turn_id) = progress_turn_id else {
+            return;
+        };
+        for block in &mut self.blocks {
+            if block.kind == "plan"
+                && block.resolved != Some(true)
+                && block
+                    .turn_id
+                    .as_deref()
+                    .is_some_and(|turn_id| turn_id != progress_turn_id)
+            {
                 block.status = Some("completed".to_string());
                 block.plan_status = Some("completed".to_string());
                 block.resolved = Some(true);
@@ -2425,17 +2485,19 @@ fn request_user_input_hook_message(value: &Value) -> String {
     elicitation
         .questions
         .iter()
-        .map(|question| {
-            let mut text = question.question.clone();
-            if !question.options.is_empty() {
-                let options = question
-                    .options
-                    .iter()
-                    .map(|option| option.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                text.push_str("\nOptions: ");
-                text.push_str(&options);
+        .enumerate()
+        .map(|(question_index, question)| {
+            let mut text = format!("问题 {}：{}", question_index + 1, question.question);
+            for (option_index, option) in question.options.iter().enumerate() {
+                text.push('\n');
+                text.push_str(&format!("选项 {}：{}", option_index + 1, option.label));
+                if let Some(description) = option.description.as_deref() {
+                    if !description.trim().is_empty() {
+                        text.push('\n');
+                        text.push_str("说明：");
+                        text.push_str(description.trim());
+                    }
+                }
             }
             text
         })
@@ -4029,6 +4091,37 @@ mod tests {
     }
 
     #[test]
+    fn same_turn_unrelated_function_output_does_not_clear_current_proposed_plan() {
+        let scan = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-plan"}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先检查，再修复。</proposed_plan>"}]}}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"function_call_output","call_id":"unrelated-call","output":"{}"}}),
+        ]);
+
+        assert!(scan.reply_needed);
+        assert!(scan.pending_elicitation.is_none());
+    }
+
+    #[test]
+    fn same_turn_unrelated_answer_and_function_output_do_not_clear_request_user_input() {
+        let answered_elsewhere = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-choice"}),
+            json!({"type":"RequestUserInput","turn_id":"turn-choice","item_id":"choice-live","questions":[{"id":"choice","question":"继续吗？","options":[{"label":"继续"}]}]}),
+            json!({"type":"UserInputAnswer","turn_id":"turn-choice","item_id":"choice-other","answers":{"choice":["继续"]}}),
+        ]);
+        assert!(answered_elsewhere.reply_needed);
+        assert!(answered_elsewhere.pending_elicitation.is_some());
+
+        let output_elsewhere = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-choice"}),
+            json!({"type":"RequestUserInput","turn_id":"turn-choice","item_id":"choice-live","questions":[{"id":"choice","question":"继续吗？","options":[{"label":"继续"}]}]}),
+            json!({"type":"response_item","turn_id":"turn-choice","item_id":"choice-other","payload":{"type":"function_call_output","output":"{}"}}),
+        ]);
+        assert!(output_elsewhere.reply_needed);
+        assert!(output_elsewhere.pending_elicitation.is_some());
+    }
+
+    #[test]
     fn official_turn_started_alias_marks_thread_running() {
         let scan = scan_fixture(&[
             json!({"type":"thread.started","thread_id":"thread-running"}),
@@ -4202,6 +4295,41 @@ mod tests {
     }
 
     #[test]
+    fn same_turn_task_complete_last_agent_message_keeps_current_plan_pending_block() {
+        let detail = detail_fixture(&[
+            json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先检查，再修复。</proposed_plan>"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"我会按这个计划继续。"}}),
+        ]);
+
+        let plan = detail
+            .blocks
+            .iter()
+            .find(|block| block.kind == "plan")
+            .unwrap();
+        assert_eq!(plan.status.as_deref(), Some("pending"));
+        assert_eq!(plan.plan_status.as_deref(), Some("pending"));
+        assert_eq!(plan.resolved, Some(false));
+    }
+
+    #[test]
+    fn same_turn_task_complete_last_agent_message_keeps_unidentified_current_plan_pending_block() {
+        let detail = detail_fixture(&[
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先检查，再修复。</proposed_plan>"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"我会按这个计划继续。"}}),
+        ]);
+
+        let plan = detail
+            .blocks
+            .iter()
+            .find(|block| block.kind == "plan")
+            .unwrap();
+        assert_eq!(plan.status.as_deref(), Some("pending"));
+        assert_eq!(plan.plan_status.as_deref(), Some("pending"));
+        assert_eq!(plan.resolved, Some(false));
+    }
+
+    #[test]
     fn old_proposed_plan_block_is_resolved_after_user_reply_and_assistant_progress() {
         let detail = detail_fixture(&[
             json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
@@ -4225,7 +4353,7 @@ mod tests {
         let detail = detail_fixture(&[
             json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}),
             json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>先做 A，再做 B。</proposed_plan>"}]}}),
-            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"计划已处理。"}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"计划已处理。"}}),
         ]);
 
         let plan = detail

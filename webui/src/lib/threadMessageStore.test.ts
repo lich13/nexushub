@@ -274,10 +274,10 @@ describe("thread message store", () => {
 
     applyThreadDetailToSlot(store, "thread-a", {
       ...detail("thread-a", [block("a2")]),
-      summary: { ...summary("thread-a"), title: "Goal UI 修复" }
+      summary: { ...summary("thread-a"), title: "计划确认修复" }
     });
 
-    expect(store.slots.get("thread-a")?.summary?.title).toBe("Goal UI 修复");
+    expect(store.slots.get("thread-a")?.summary?.title).toBe("计划确认修复");
 
     applyThreadDetailToSlot(store, "thread-a", {
       ...detail("thread-a", [block("a3")]),
@@ -287,6 +287,6 @@ describe("thread message store", () => {
       }
     });
 
-    expect(store.slots.get("thread-a")?.summary?.title).toBe("Goal UI 修复");
+    expect(store.slots.get("thread-a")?.summary?.title).toBe("计划确认修复");
   });
 });

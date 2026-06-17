@@ -131,48 +131,6 @@ describe("archive delete API compatibility", () => {
     expect(deleteOptions.headers.get("x-csrf-token")).toBe("csrf-token");
   });
 
-  test("goal resume posts a controlled csrf-protected API request", async () => {
-    const { resumeGoalMode } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      enabled: true,
-      objective: "ship the fix",
-      token_budget: 123,
-      status: "active"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await resumeGoalMode("thread-a", "csrf-token");
-
-    expect(result).toMatchObject({ available: true, data: { status: "active" } });
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(path).toBe("/api/codex/goal/resume");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(options.body)).toEqual({ thread_id: "thread-a" });
-  });
-
-  test("goal endpoints preserve explicit local-read unavailable responses", async () => {
-    const { getGoalMode } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      available: false,
-      reason: "Codex state database is missing"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await getGoalMode("thread-a");
-
-    expect(result).toEqual({
-      available: false,
-      reason: "Codex state database is missing"
-    });
-  });
-
   test("stop thread posts stop payload with csrf", async () => {
     const { stopThread } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {
@@ -823,7 +781,7 @@ describe("archive delete API compatibility", () => {
       model: "gpt-5.5",
       service_tier: "priority",
       reasoning_effort: "xhigh",
-      cwd: "/home/ubuntu/codex-workspace"
+      cwd: "/tmp/nexushub-workspace"
     };
     const result = await steerThread("thread-a", payload, "csrf-token");
 
@@ -909,9 +867,9 @@ describe("archive delete API compatibility", () => {
     const app = await import("../App");
 
     expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal");
-    expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal resume");
     expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal clear");
     expect(app.slashCommandSuggestions("/goal r", 7)).toEqual([]);
+    expect(app.slashCommands.some((item: { command: string }) => item.command.startsWith("/goal"))).toBe(false);
   });
 
   test("Plan Mode persists after successful send until explicit user change", async () => {
@@ -929,10 +887,31 @@ describe("archive delete API compatibility", () => {
 
   test("bridge action copy hides fallback implementation wording", async () => {
     const app = await import("../App");
+    const implementationCopy = ["started", "codex", "exec", "fallback", "job"].join(" ");
 
-    expect(app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: "started codex exec fallback job" })).toBe("已提交给 Codex");
+    expect(app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: implementationCopy })).toBe("已提交给 Codex");
     expect(app.actionMessage({ bridge: false, fallback: true, message: "已提交给 Codex" })).toBe("已提交给 Codex");
     expect(app.actionMessage({ bridge: false, fallback: false, turn_id: "turn-12345678" })).toBe("已提交给 Codex");
+    expect([
+      app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: implementationCopy }),
+      app.actionMessage({ bridge: false, fallback: false, turn_id: "turn-12345678" })
+    ].join(" ")).not.toContain(implementationCopy);
+  });
+
+  test("demo send helpers hide fallback transport wording", async () => {
+    vi.resetModules();
+    const { createThread, sendMessage, steerThread } = await import("./api");
+
+    const results = await Promise.all([
+      createThread({ message: "new" }),
+      sendMessage("thread-a", { message: "next" }),
+      steerThread("thread-a", { message: "follow up" })
+    ]);
+    const serialized = JSON.stringify(results);
+
+    expect(serialized).not.toContain("controlled Codex job queued");
+    expect(serialized).not.toContain("follow-up queued for the active Codex turn");
+    expect(results.map((result) => result.message)).toEqual(["已提交给 Codex", "已提交给 Codex", "已提交给 Codex"]);
   });
 
   test("plugin mention helpers expose @ as the web plugin trigger instead of dollar", async () => {
@@ -1056,6 +1035,19 @@ describe("archive delete API compatibility", () => {
     expect(app.threadListItemPreviewText({ ...thread, latest_message: "" })).toBe("");
     expect(app.isThreadListItemRunning(thread)).toBe(true);
     expect(app.isThreadListItemRunning({ ...thread, status: "Recent", active_turn_id: undefined })).toBe(false);
+  });
+
+  test("demo thread list does not expose cwd or runtime workspace paths", async () => {
+    vi.resetModules();
+    const { listThreads } = await import("./api");
+
+    const threads = await listThreads("all", "");
+    const serialized = JSON.stringify(threads);
+
+    expect(threads.every((thread) => !("cwd" in thread))).toBe(true);
+    expect(serialized).not.toContain("/srv/hermes");
+    expect(serialized).not.toContain("/root/.codex");
+    expect(serialized).not.toContain("/home/ubuntu/codex-workspace");
   });
 
   test("thread list cache helper inserts and removes rows for running filter", async () => {
@@ -1582,10 +1574,14 @@ describe("archive delete API compatibility", () => {
     const app = await import("../App");
 
     expect(app.currentPlanActionOptions().map((option) => option.label)).toEqual([
-      "是，实施此计划",
-      "否，请告知 Codex 如何调整",
+      "接受计划",
+      "修改计划",
       "保持计划模式"
     ]);
+    expect(app.renderCurrentActionCardSnapshot({ kind: "plan" })).toMatchObject({
+      buttons: ["接受计划", "修改计划", "保持计划模式"],
+      supplementalInput: false
+    });
     expect(app.planActionSubmission(0, "")).toEqual({ action: "accept" });
     expect(app.planActionSubmission(1, "")).toBeNull();
     expect(app.planActionSubmission(1, "  增加验收步骤  ")).toEqual({
@@ -1618,6 +1614,10 @@ describe("archive delete API compatibility", () => {
     expect(app.questionAnswerPayload(questions, { q1: "A", q2: ["大"] })).toEqual({
       q1: ["A"],
       q2: ["大"]
+    });
+    expect(app.renderCurrentActionCardSnapshot({ kind: "question", questions })).toMatchObject({
+      buttons: ["A", "B", "小", "大"],
+      supplementalInput: true
     });
     expect(app.hiddenThreadDeleteStats(hiddenPlan)).toEqual({
       hidden: 2,

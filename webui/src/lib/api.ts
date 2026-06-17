@@ -6,8 +6,6 @@ import type {
   CodexModel,
   FollowUpQueueItem,
   FollowUpQueueState,
-  GoalModeState,
-  GoalModeUpdate,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
@@ -544,7 +542,7 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
             kind: "reply-needed",
             thread_id: "019e95a0-demo",
             title: "Raw reply event",
-            message: "Raw fallback message",
+            message: "Probe 事件已记录",
             dedupe_key: "reply-needed:019e95a0-demo:turn-plan-demo",
             source: "nexushubd probe passive-scan",
             payload: {
@@ -808,7 +806,7 @@ export async function deleteUpload(id: string, csrfToken?: string | null): Promi
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "controlled Codex job queued" };
+  if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
   return apiFetch<BridgeActionResult>("/api/threads", {
     method: "POST",
     csrfToken,
@@ -817,7 +815,7 @@ export async function createThread(payload: ThreadSendPayload, csrfToken?: strin
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "controlled Codex job queued" };
+  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/messages`, {
     method: "POST",
     csrfToken,
@@ -826,7 +824,7 @@ export async function sendMessage(threadId: string, payload: ThreadSendPayload, 
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "follow-up queued for the active Codex turn" };
+  if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/steer`, {
     method: "POST",
     csrfToken,
@@ -943,54 +941,6 @@ export async function changePassword(current_password: string, new_password: str
     method: "POST",
     csrfToken,
     body: JSON.stringify({ current_password, new_password })
-  });
-}
-
-export async function getGoalMode(threadId?: string | null): Promise<OptionalResult<GoalModeState>> {
-  if (USE_DEMO) {
-    return {
-      available: true,
-      data: { enabled: false, objective: null, token_budget: null, status: "idle" }
-    };
-  }
-  const suffix = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
-  return optionalApiFetch<GoalModeState>(`/api/codex/goal${suffix}`);
-}
-
-export async function setGoalMode(payload: GoalModeUpdate, threadId?: string | null, csrfToken?: string | null): Promise<OptionalResult<GoalModeState>> {
-  if (USE_DEMO) {
-    return { available: true, data: { enabled: Boolean(payload.enabled ?? payload.objective), objective: payload.objective, token_budget: payload.token_budget, status: "active" } };
-  }
-  return optionalApiFetch<GoalModeState>("/api/codex/goal", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ ...payload, thread_id: threadId ?? undefined })
-  });
-}
-
-export async function clearGoalMode(threadId?: string | null, csrfToken?: string | null): Promise<OptionalResult<GoalModeState>> {
-  if (USE_DEMO) {
-    return { available: true, data: { enabled: false, objective: null, token_budget: null, status: "cleared" } };
-  }
-  const payload = JSON.stringify({ thread_id: threadId ?? undefined });
-  return optionalApiFetchFirst<GoalModeState>([
-    "/api/codex/goal/clear",
-    "/api/codex/goal"
-  ], {
-    method: "POST",
-    csrfToken,
-    body: payload
-  });
-}
-
-export async function resumeGoalMode(threadId?: string | null, csrfToken?: string | null): Promise<OptionalResult<GoalModeState>> {
-  if (USE_DEMO) {
-    return { available: true, data: { enabled: true, objective: null, token_budget: null, status: "active" } };
-  }
-  return optionalApiFetch<GoalModeState>("/api/codex/goal/resume", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ thread_id: threadId ?? undefined })
   });
 }
 
@@ -1260,9 +1210,9 @@ function demoProbeSettings(): ProbeSettings {
 
 function demoThreads(status: string, q: string): ThreadSummary[] {
   const threads: ThreadSummary[] = [
-    { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", updated_at: new Date().toISOString(), cwd: "/srv/hermes" },
-    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认", updated_at: new Date().toISOString(), cwd: "/root/.codex" },
-    { id: "019e5281-demo", title: "检查仓库状态", status: "Recent", message_count: 3, latest_message: "仓库状态干净。", updated_at: new Date().toISOString(), cwd: "/home/ubuntu/codex-workspace" },
+    { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", updated_at: new Date().toISOString() },
+    { id: "019e95a0-demo", title: "Plan Mode 修复", status: "ReplyNeeded", message_count: 7, latest_message: "等待确认", updated_at: new Date().toISOString() },
+    { id: "019e5281-demo", title: "检查仓库状态", status: "Recent", message_count: 3, latest_message: "仓库状态干净。", updated_at: new Date().toISOString() },
     { id: "019e42aa-demo", title: "旧归档线程", status: "Archived", message_count: 2, latest_message: "已归档。", updated_at: new Date(Date.now() - 86400000).toISOString() }
   ];
   return threads.filter((thread) => (status === "all" || status === threadStatusParam(thread.status)) && (!q || `${thread.title} ${thread.id}`.toLowerCase().includes(q.toLowerCase())));

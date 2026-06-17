@@ -38,7 +38,7 @@ NexusHub is a dense remote-operations console for cloud Codex local state and co
 - Desktop: 240px left navigation can collapse to maximize the conversation pane; thread list remains 320px when visible.
 - Operations and security pages use compact panels in a two-column grid.
 - Mobile under 768px: no sidebar; use top bar, bottom tab nav, full-screen content, and a thread drawer.
-- Composer remains stable at the bottom of the conversation area and uses compact Codex-style controls for Plan Mode, permissions, model, reasoning, service tier, and working-directory context.
+- Composer remains stable at the bottom of the conversation area and uses compact Codex-style controls for Plan Mode, permissions, model, reasoning, and service tier.
 - Thread detail uses a centered message rail with a maximum readable width. The inspector is secondary and visually quieter than the conversation.
 
 ## Components
@@ -50,9 +50,10 @@ NexusHub is a dense remote-operations console for cloud Codex local state and co
 - Destructive actions use danger styling and button confirmation; archive cleanup does not require typed text.
 - Tool output and job logs use monospace `pre` blocks with wrapping and no horizontal overflow.
 - In thread detail, completed tools are grouped or folded by default. Current running/error tools stay visible as compact activity rows with expandable details.
-- Proposed Plan cells live in the message history and show the plan body plus `实施计划` / `修改计划` actions only when still current. Historical plans are read-only.
+- Proposed Plan cells live in the message history and show the plan body plus `接受计划` / `修改计划` / `保持计划模式` actions only when still current. Historical plans are read-only.
 - Questions cells live in the message history and show option buttons, selected state, submit state, and answered history. Old answered questions must not appear as pending.
 - Historical chat/tool volume is collapsed behind `显示全部历史`; expanding must not move the composer or create horizontal overflow.
+- Rendered WebUI release acceptance uses Chrome 插件验收 for current logged-in flows.
 
 ## Mobile Rules
 

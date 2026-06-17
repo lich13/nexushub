@@ -3,7 +3,7 @@ use crate::{
     config::{Config, ProbeLogsDbConfig},
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
-    security::redact_output,
+    security::{is_sensitive_output_line, redact_output},
 };
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
@@ -1769,8 +1769,8 @@ fn probe_event_bark_body(
     redacted_body: &str,
 ) -> String {
     let body = match event_type {
-        "reply_needed" if body_source == "proposed_plan" => extract_probe_plan_body(raw_body)
-            .or_else(|| extract_probe_plan_body(redacted_body))
+        "reply_needed" if body_source == "proposed_plan" => extract_probe_plan_body(redacted_body)
+            .or_else(|| extract_probe_plan_body(raw_body))
             .unwrap_or_else(|| redacted_body.to_string()),
         "reply_needed" if body_source == "request_user_input" => {
             extract_request_user_input_body(redacted_body)
@@ -1834,6 +1834,7 @@ fn sanitize_probe_bark_body(body: &str) -> String {
             }
             let lower = trimmed.to_ascii_lowercase();
             if trimmed == "[redacted sensitive line]"
+                || is_sensitive_output_line(trimmed)
                 || lower.starts_with("thread_id:")
                 || lower.starts_with("turn_id:")
                 || lower.starts_with("time:")
@@ -2441,6 +2442,84 @@ mod tests {
     }
 
     #[test]
+    fn reply_needed_plan_event_keeps_bark_body_safe_and_persists_only_body_metadata() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body = "\
+线程 ID：thread-secret\n\
+状态说明：等待用户确认。\n\
+<proposed_plan>\n\
+# 安全计划\n\
+- 检查状态\n\
+- 不展示 https://example.com/path?token=secret-token\n\
+Authorization: Bearer secret-token\n\
+</proposed_plan>";
+
+        let event = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-secret"),
+                Some("turn-secret"),
+                Some("session-secret"),
+                None,
+                Some(body),
+                "reply-needed",
+            )
+            .with_body_source(Some("proposed_plan")),
+        );
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.bark_body, "# 安全计划\n- 检查状态");
+        assert_probe_bark_body_is_safe(&event.bark_body);
+        assert!(event.payload["bark"].get("body").is_none());
+        assert!(event.payload["bark_body"].is_null());
+        assert!(event.payload["bark"]["body_summary"].is_null());
+        assert!(event.payload["bark"]["body_sha256"].is_string());
+        assert!(event.payload["bark"]["body_length"].is_u64());
+        assert!(event.payload["bark"]["chunk_count"].is_u64());
+        assert!(event.payload["bark"]["request_count"].is_u64());
+
+        let stored = serde_json::to_string(&event.payload).unwrap();
+        assert!(!stored.contains("https://example.com"));
+        assert!(!stored.contains("secret-token"));
+        assert!(!stored.contains("Authorization"));
+        assert!(!stored.contains("<proposed_plan>"));
+        assert!(!stored.contains("</proposed_plan>"));
+    }
+
+    #[test]
+    fn bark_body_and_summary_redact_common_api_key_lines() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body = "\
+最终反馈：\n\
+部署完成。\n\
+OPENAI_API_KEY=sk-secret-value\n\
+PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n\
+Authorization: Bearer secret-token\n\
+末尾可见。";
+
+        let event = runtime.build_event(ProbeEventInput::notify_completion_with_context(
+            Some("thread-secret"),
+            Some("turn-secret"),
+            None,
+            None,
+            Some(body),
+            Some("task_complete.last_agent_message"),
+        ));
+
+        assert_eq!(event.bark_body, "部署完成。\n末尾可见。");
+        assert_eq!(event.payload["body_summary"], "部署完成。\n末尾可见。");
+        let stored = serde_json::to_string(&event.payload).unwrap();
+        assert!(!stored.contains("sk-secret-value"));
+        assert!(!stored.contains("PRIVATE_KEY"));
+        assert!(!stored.contains("Bearer"));
+    }
+
+    #[test]
     fn long_bark_chunks_reassemble_to_original_body_after_prefix_removal() {
         let original = format!(
             "{}中间🙂{}尾段",
@@ -2816,6 +2895,10 @@ Authorization: Bearer secret-token";
             "https://",
             "secret-token",
             "Authorization",
+            "API_KEY",
+            "PRIVATE_KEY",
+            "Bearer",
+            "sk-",
             "[redacted sensitive line]",
         ] {
             assert!(

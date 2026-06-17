@@ -2417,19 +2417,23 @@ fn elicitation_answer_resume_message(answers: &HashMap<String, Vec<String>>) -> 
         .join("\n")
 }
 
-fn start_codex_resume_job(
-    state: &AppState,
-    thread_id: &str,
-    message: String,
-) -> Result<CodexActionResult, ApiError> {
-    let args = vec![
+fn codex_resume_args(thread_id: &str) -> Vec<String> {
+    vec![
         "exec".to_string(),
         "resume".to_string(),
         "--all".to_string(),
         "--json".to_string(),
         thread_id.to_string(),
         "-".to_string(),
-    ];
+    ]
+}
+
+fn start_codex_resume_job(
+    state: &AppState,
+    thread_id: &str,
+    message: String,
+) -> Result<CodexActionResult, ApiError> {
+    let args = codex_resume_args(thread_id);
     let resolved = state.resolved_codex_paths();
     let job_id = state
         .jobs
@@ -4186,14 +4190,14 @@ mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        apply_running_job_to_thread_list, archived_filter, block_changed, effective_message,
-        elicitation_answer_resume_message, filter_thread_summaries, fixed_probe_shell_command,
-        followup_request, load_probe_threads, merge_thread_summaries, normalize_goal_response,
-        plan_accept_resume_message, plan_revise_resume_message, probe_config_path,
-        prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
-        thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
-        turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
-        PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+        apply_running_job_to_thread_list, archived_filter, block_changed, codex_resume_args,
+        effective_message, elicitation_answer_resume_message, filter_thread_summaries,
+        fixed_probe_shell_command, followup_request, load_probe_threads, merge_thread_summaries,
+        normalize_goal_response, plan_accept_resume_message, plan_revise_resume_message,
+        probe_config_path, prune_hidden_thread_summaries, requested_thread_limit, router,
+        seed_thread_event_blocks, thread_block_page, thread_event_block_key,
+        thread_list_fetch_limit, thread_title, turnstile_login_action, SendMessageRequest,
+        TurnstileLoginAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4682,6 +4686,7 @@ mod tests {
             assert_eq!(value["message"], "已提交给 Codex", "{uri}");
             let message = value["message"].as_str().unwrap_or_default();
             assert!(!message.contains("fallback"), "{uri}");
+            assert!(!message.contains("bridge"), "{uri}");
             assert!(!message.contains("codex exec"), "{uri}");
             assert!(!message.contains("job"), "{uri}");
             assert!(
@@ -4725,11 +4730,18 @@ mod tests {
         assert_eq!(plan_accept_resume_message(), "是，实施此计划");
 
         let revise = plan_revise_resume_message("  补充灰度验证  ");
-        assert!(revise.contains("否，请告知 Codex 如何调整"));
-        assert!(revise.contains("补充灰度验证"));
-        assert!(revise.contains("Plan Mode"));
-        assert!(revise.contains("重新给出计划"));
-        assert!(revise.contains("不要开始实施"));
+        assert_eq!(
+            revise,
+            "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n补充灰度验证"
+        );
+    }
+
+    #[test]
+    fn plan_and_elicitation_resume_args_use_controlled_json_stdin_semantics() {
+        assert_eq!(
+            codex_resume_args("thread-a"),
+            vec!["exec", "resume", "--all", "--json", "thread-a", "-"]
+        );
     }
 
     #[test]

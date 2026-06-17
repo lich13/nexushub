@@ -12,7 +12,7 @@ Current scope:
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
 - Split Panel update and Codex update jobs. Panel updates use `/usr/local/bin/nexushub-update`; Codex updates keep the existing `/home/ubuntu/codex-admin/bin` wrappers.
 - Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
-- Plan Mode, model, reasoning, working directory context, and a compact Codex APP-style permission menu for the conversation workspace.
+- Plan Mode, model, reasoning, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
 - Provider preview framework for Codex, Claude Code, future Cursor CLI, and future Gemini CLI. Codex is the only full-control provider in this release.
 - Claude Code preview is read-only: it discovers `~/.claude/projects`, session JSONL files, and redacted settings. It does not launch, resume, send, stop, or write Claude configuration.
@@ -115,7 +115,7 @@ curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```
 
-Then log in and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
+Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 

@@ -16,7 +16,7 @@
 - [x] **Task 4.2**: Keep Codex chat non-regressed
   - Priority: P0
   - Effort: L
-  - Test Expectation: Existing WebUI tests and future manual browser smoke.
+  - Test Expectation: Existing WebUI tests and Chrome 插件验收 for logged-in flows.
   - Memory Impact: None.
   - Acceptance: Thread list, detail, SSE, Plan/Questions, upload, stop/follow-up remain available.
   - Notes: Existing chat route remains the primary workspace.

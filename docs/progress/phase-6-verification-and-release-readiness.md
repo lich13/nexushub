@@ -11,7 +11,7 @@
   - Test Expectation: Full Rust/WebUI/script commands.
   - Memory Impact: Progress telemetry updated.
   - Acceptance: Formatting, tests, clippy, WebUI test/build, install-script test pass or failures are documented.
-  - Notes: Passed `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `corepack pnpm@11.0.8 --dir webui test`, `corepack pnpm@11.0.8 --dir webui build`, and `bash scripts/test-install-script.sh`. Rendered browser smoke was attempted but blocked because no in-app Browser target was available.
+  - Notes: Passed `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `corepack pnpm@11.0.8 --dir webui test`, `corepack pnpm@11.0.8 --dir webui build`, and `bash scripts/test-install-script.sh`. Current logged-in rendered acceptance uses Chrome 插件验收.
 
 - [x] **Task 6.2**: Document release/deploy state
   - Priority: P0

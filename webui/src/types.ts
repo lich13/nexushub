@@ -571,19 +571,6 @@ export type SentinelStatus = ProbeStatus;
 
 export type ClaudeCodeJobAction = "version-check" | "update-precheck" | "update-start" | "smoke" | "cache-status";
 
-export type GoalModeState = {
-  enabled: boolean;
-  objective?: string | null;
-  token_budget?: number | null;
-  status?: string | null;
-};
-
-export type GoalModeUpdate = {
-  enabled?: boolean;
-  objective?: string | null;
-  token_budget?: number | null;
-};
-
 export type CodexModel = {
   id: string;
   label?: string | null;

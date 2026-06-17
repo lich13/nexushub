@@ -88,7 +88,7 @@
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
 | 4.1 | Extend navigation for Claude, Probe, plugins, ops previews | P0 | M | 3.1 | A | S, R | WebUI tests, typecheck/build | None | Desktop and mobile nav can reach all preview pages |
-| 4.2 | Keep Codex chat non-regressed | P0 | L | 4.1 | A | U, R | Existing WebUI tests and manual browser smoke in future | None | Thread list, detail, SSE, Plan/Questions, upload, stop/follow-up remain available |
+| 4.2 | Keep Codex chat non-regressed | P0 | L | 4.1 | A | U, R | Existing WebUI tests and Chrome 插件验收 for logged-in flows | None | Thread list, detail, SSE, Plan/Questions, upload, stop/follow-up remain available |
 | 4.3 | Add preview pages for files/Git/terminal as disabled/planned entries | P2 | S | 4.1 | B | P, R | Typecheck/build | None | UI shows planned provider tooling without exposing shell jobs |
 
 ### Parallel Lanes

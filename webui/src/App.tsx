@@ -223,6 +223,10 @@ const defaultCwd = "/home/ubuntu/codex-workspace";
 const defaultSessionTtlDays = 365;
 const secondsPerDay = 86400;
 
+export function preservePreviousQueryData<T>(previous: T | undefined): T | undefined {
+  return previous;
+}
+
 type SlashCommand = {
   command: string;
   description: string;
@@ -562,7 +566,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const messageStore = useThreadMessageStoreController();
-  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000, staleTime: 3000, placeholderData: (previous) => previous });
+  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000, staleTime: 3000, placeholderData: preservePreviousQueryData });
   const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
   const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
   const selectedThreadSummary = useMemo(
@@ -576,7 +580,8 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
     refetchInterval: (query) => {
       const current = query.state.data as ThreadDetail | undefined;
       return threadDetailRefetchInterval(current, selectedThreadSummary);
-    }
+    },
+    placeholderData: preservePreviousQueryData
   });
   const rawSelectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
   const selectedDetail = shouldHydrateThreadDetail(resolvedSelected, rawSelectedDetail) ? rawSelectedDetail : null;
@@ -735,9 +740,9 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
 }
 
 function useCodexRunOptions() {
-  const models = useQuery({ queryKey: ["codex-models"], queryFn: listModels, staleTime: 60000 });
-  const profiles = useQuery({ queryKey: ["codex-permission-profiles"], queryFn: listPermissionProfiles, staleTime: 60000 });
-  const config = useQuery({ queryKey: ["codex-config"], queryFn: getCodexConfig, staleTime: 60000 });
+  const models = useQuery({ queryKey: ["codex-models"], queryFn: listModels, staleTime: 60000, placeholderData: preservePreviousQueryData });
+  const profiles = useQuery({ queryKey: ["codex-permission-profiles"], queryFn: listPermissionProfiles, staleTime: 60000, placeholderData: preservePreviousQueryData });
+  const config = useQuery({ queryKey: ["codex-config"], queryFn: getCodexConfig, staleTime: 60000, placeholderData: preservePreviousQueryData });
   return {
     models: models.data?.available ? models.data.data ?? [] : [],
     profiles: profiles.data?.available ? profiles.data.data ?? [] : [],
@@ -844,6 +849,11 @@ export function cleanThreadPreviewText(value?: string | null): string {
 
 export function conversationTitleText(thread: ThreadTitleLike): string {
   return thread.title?.trim() || "未命名线程";
+}
+
+export function renderConversationHeaderHtml(summary: ThreadSummary): string {
+  const title = conversationTitleText(summary);
+  return `<div class="conversation-title-copy"><h2 class="conversation-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h2></div>`;
 }
 
 function isPlaceholderThreadTitle(title?: string | null): boolean {
@@ -1118,10 +1128,10 @@ export type InternalReferenceSegment = {
   type: "text" | "internal_reference";
   text: string;
   copyText?: string;
-  kind?: "path" | "thread" | "turn" | "job" | "goal";
+  kind?: "path" | "thread" | "turn" | "job";
 };
 
-const internalReferencePattern = /((?:\/(?:Users|Volumes|home|root|tmp|var|opt|srv|etc|run|private)\/[^\s,，。；;）)]+)|\b(?:thread|turn|job|goal)[\s:=#-]+[A-Za-z0-9._:-]{3,})/gi;
+const internalReferencePattern = /((?:\/(?:Users|Volumes|home|root|tmp|var|opt|srv|etc|run|private)\/[^\s,，。；;）)]+)|\b(?:thread|turn|job)[\s:=#-]+[A-Za-z0-9._:-]{3,})/gi;
 
 export function segmentInternalReferences(text: string): InternalReferenceSegment[] {
   const segments: InternalReferenceSegment[] = [];
@@ -1151,8 +1161,7 @@ function internalReferenceKind(value: string): InternalReferenceSegment["kind"] 
   if (lower.startsWith("/")) return "path";
   if (lower.startsWith("thread")) return "thread";
   if (lower.startsWith("turn")) return "turn";
-  if (lower.startsWith("job")) return "job";
-  return "goal";
+  return "job";
 }
 
 type SlashQuery = {
@@ -1513,6 +1522,10 @@ export function threadSettingsMetricLabels(): string[] {
 export function threadResumeCommand(threadId?: string | null): string | null {
   const id = threadId?.trim();
   return id ? `codex resume ${id}` : null;
+}
+
+export function threadCopyId(threadId?: string | null): string | null {
+  return threadId?.trim() || null;
 }
 
 export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ThreadSummary[] {
@@ -1906,8 +1919,8 @@ export function moveActionSelection(current: number, total: number, delta: numbe
 
 export function currentPlanActionOptions(): { label: string; description: string }[] {
   return [
-    { label: "是，实施此计划", description: "按聊天记录里的 Proposed Plan 继续执行" },
-    { label: "否，请告知 Codex 如何调整", description: "补充修改要求后重新生成计划" },
+    { label: "接受计划", description: "按聊天记录里的 Proposed Plan 继续执行" },
+    { label: "修改计划", description: "补充修改要求后重新生成计划" },
     { label: "保持计划模式", description: "不提交回复，继续让本线程使用 Plan Mode" }
   ];
 }
@@ -1927,11 +1940,40 @@ export function questionAnswersReady(questions: CurrentActionQuestion[], answers
   });
 }
 
+function combinedQuestionAnswers(
+  questions: CurrentActionQuestion[],
+  answers: Record<string, string | string[] | undefined>,
+  notes: Record<string, string>
+): Record<string, string[]> {
+  return Object.fromEntries(questions.map((question) => {
+    const answer = answers[question.id];
+    const selected = Array.isArray(answer) ? answer : answer ? [answer] : [];
+    const note = notes[question.id]?.trim();
+    return [question.id, note ? [...selected, note] : selected];
+  }));
+}
+
 export function questionAnswerPayload(questions: CurrentActionQuestion[], answers: Record<string, string | string[] | undefined>): Record<string, string[]> {
   return Object.fromEntries(questions.map((question) => {
     const value = answers[question.id];
     return [question.id, Array.isArray(value) ? value : value ? [value] : []];
   }));
+}
+
+export function renderCurrentActionCardSnapshot(input: {
+  kind: CurrentActionKind;
+  questions?: CurrentActionQuestion[];
+}): { buttons: string[]; supplementalInput: boolean } {
+  if (input.kind === "plan") {
+    return {
+      buttons: currentPlanActionOptions().map((option) => option.label),
+      supplementalInput: false
+    };
+  }
+  return {
+    buttons: (input.questions ?? []).flatMap((question) => question.options.map((option) => option.label)),
+    supplementalInput: true
+  };
 }
 
 export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, status?: Pick<SystemStatus, "hidden_thread_count" | "state_db_integrity">): { hidden: number; visible: number; sourceCounts: string; integrity: string } {
@@ -2198,7 +2240,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const [explicitBottomFollowRevision, setExplicitBottomFollowRevision] = useState(0);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
-  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
+  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000, placeholderData: preservePreviousQueryData });
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
   const [renameValue, setRenameValue] = useState(detail.summary.title);
   const [renameDirty, setRenameDirty] = useState(false);
@@ -2316,7 +2358,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const followUps = useQuery({
     queryKey: ["thread-followups", summary.id],
     queryFn: () => listFollowUps(summary.id),
-    refetchInterval: running ? 3000 : 8000
+    refetchInterval: running ? 3000 : 8000,
+    placeholderData: preservePreviousQueryData
   });
   const followUpItems = followUps.data?.items ?? [];
   const payloadRunConfig = useMemo(
@@ -2402,7 +2445,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         attachments.clearUploads();
         setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       }
-      messageStore.setFeedback(resultThreadId, result.fallback ? (result.message ?? "已加入跟进队列") : "已跟进当前 turn");
+      messageStore.setFeedback(resultThreadId, actionMessage(result));
       qc.invalidateQueries({ queryKey: ["thread-followups", resultThreadId] });
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
@@ -2688,7 +2731,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       <div className="conversation-main">
         <header className="conversation-header">
           <div className="conversation-title-copy">
-            <span className="eyebrow">{summary.cwd || "/root/.codex"}</span>
             <h2 className="conversation-title" title={conversationTitle}>{conversationTitle}</h2>
           </div>
           <div className="header-actions">
@@ -2843,25 +2885,14 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             <button
               className="secondary-button"
               onClick={() => {
-                const command = threadResumeCommand(summary.id);
-                if (!command) return;
-                navigator.clipboard?.writeText(command);
-                setActiveFeedback("已复制恢复命令");
+                const id = threadCopyId(summary.id);
+                if (!id) return;
+                navigator.clipboard?.writeText(id);
+                setActiveFeedback("已复制线程 ID");
               }}
-              disabled={!threadResumeCommand(summary.id)}
+              disabled={!threadCopyId(summary.id)}
             >
               <Copy size={17} />复制 ID
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => {
-                if (!summary.rollout_path) return;
-                navigator.clipboard?.writeText(summary.rollout_path);
-                setActiveFeedback("已复制线程文件绝对路径");
-              }}
-              disabled={!summary.rollout_path}
-            >
-              <Copy size={17} />复制路径
             </button>
             <button className="secondary-button" onClick={() => forkMutation.mutate({ threadId: summary.id })} disabled={forkPending}><GitFork size={17} />Fork</button>
           </div>
@@ -3030,7 +3061,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
-  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000 });
+  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000, placeholderData: preservePreviousQueryData });
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig());
   const [result, setResult] = useState<BridgeActionResult | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -3363,11 +3394,12 @@ function CurrentActionCard({
   const [selected, setSelected] = useState(0);
   const [revision, setRevision] = useState("");
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[] | undefined>>({});
+  const [questionNotes, setQuestionNotes] = useState<Record<string, string>>({});
   const options = isPlan ? currentPlanActionOptions() : questions[0]?.options ?? [];
   const selectedPlanRequiresRevision = isPlan && selected === 1;
   const ready = isPlan
     ? Boolean(plan && planActionSubmission(selected, revision))
-    : questionAnswersReady(questions, questionAnswers);
+    : questionAnswersReady(questions, combinedQuestionAnswers(questions, questionAnswers, questionNotes));
 
   function submitAction() {
     if (busy || !ready) return;
@@ -3383,7 +3415,7 @@ function CurrentActionCard({
       }
       return;
     }
-    if (pending) onSubmitQuestion(questionAnswerPayload(questions, questionAnswers));
+    if (pending) onSubmitQuestion(questionAnswerPayload(questions, combinedQuestionAnswers(questions, questionAnswers, questionNotes)));
   }
 
   useEffect(() => {
@@ -3396,6 +3428,7 @@ function CurrentActionCard({
       }
       return initial;
     });
+    setQuestionNotes({});
   }, [plan?.id, pending?.turn_id, pending?.item_id, questionSignature]);
 
   useEffect(() => {
@@ -3430,7 +3463,7 @@ function CurrentActionCard({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, isPlan, onDismiss, options.length, questions, ready, revision, selected, questionAnswers]);
+  }, [busy, isPlan, onDismiss, options.length, questions, ready, revision, selected, questionAnswers, questionNotes]);
 
   const chooseQuestionOption = (questionId: string, label: string, index: number) => {
     setSelected(index);
@@ -3477,6 +3510,12 @@ function CurrentActionCard({
                 </div>
               </button>
             ))}
+            <textarea
+              className="current-action-textarea"
+              value={questionNotes[question.id] ?? ""}
+              onChange={(event) => setQuestionNotes((current) => ({ ...current, [question.id]: event.target.value }))}
+              placeholder="补充输入"
+            />
           </div>
         ))}
       </div>
@@ -3521,9 +3560,9 @@ function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onD
 }
 
 function ClaudeWorkspace() {
-  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000 });
-  const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000 });
-  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000 });
+  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
+  const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
+  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
   const provider = providerById(providers.data, "claude_code") ?? providerById(providers.data, "claude-code");
   const data = overview.data?.data;
   const available = overview.data?.available ?? false;
@@ -3612,11 +3651,11 @@ function ClaudeWorkspace() {
 
 function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: (previous) => previous });
-  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
-  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
-  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000, staleTime: 10000, placeholderData: (previous) => previous });
-  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
+  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
+  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
+  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
+  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
+  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionStatus, setActionStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -3853,9 +3892,9 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
 function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: (previous) => previous });
-  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000, staleTime: 15000, placeholderData: (previous) => previous });
-  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000 });
+  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
+  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
+  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
@@ -4188,7 +4227,6 @@ function ProbeRuntimeSettingsCard({
       </div>
       <div className="form-grid compact-three">
         <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>
-        <label className="field-label">工作目录<input value={draft.codex.workspace} placeholder="/home/ubuntu/codex-workspace" onChange={(event) => setCodex({ workspace: event.target.value })} /></label>
         <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
         <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>

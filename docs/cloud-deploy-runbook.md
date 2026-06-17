@@ -52,7 +52,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/api/sentinel/status
 ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
 ```
 
-Then log in and verify:
+Then log in through Chrome 插件验收 and verify:
 
 - thread list loads;
 - system status shows resolved Codex state paths without requiring `codex-app-server-root.service`;

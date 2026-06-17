@@ -70,6 +70,9 @@ type AppExports = typeof import("./App") & {
   codexVisibleCopy?: () => Record<string, string>;
   failureCategoryLabel?: (category: string) => string;
   optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
+  renderConversationHeaderHtml?: (summary: ThreadSummary) => string;
+  preservePreviousQueryData?: <T>(previous: T | undefined) => T | undefined;
+  threadCopyId?: (threadId?: string | null) => string | null;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -103,6 +106,7 @@ describe("conversation helpers", () => {
         copyText: "turn turn-live"
       })
     ]));
+    expect(app.segmentInternalReferences?.("goal abc123")).toEqual([{ type: "text", text: "goal abc123" }]);
   });
 
   test("slash command catalog covers Codex TUI commands with Chinese descriptions and usage hints", async () => {
@@ -126,12 +130,14 @@ describe("conversation helpers", () => {
 
   test("slash command helpers filter full catalog and keep thread commands visible for new threads", async () => {
     const app = await loadApp();
+    const removedGoalResume = ["/goal", "resume"].join(" ");
 
     expect(app.slashCommandSuggestions?.("/", 1).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
     expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([]);
     expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([]);
     expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([]);
-    expect(app.slashCommandSuggestions?.("/goal resume", "/goal resume".length, false)).toEqual([]);
+    expect(app.slashCommandSuggestions?.(removedGoalResume, removedGoalResume.length, false)).toEqual([]);
+    expect(app.renderSlashCommandMenuHtml?.("/", 1, false)).not.toContain(removedGoalResume);
     expect(app.slashCommandSuggestions?.("/theme", 6)).toEqual([
       expect.objectContaining({ command: "/theme", description: expect.stringContaining("主题") })
     ]);
@@ -159,9 +165,9 @@ describe("conversation helpers", () => {
     expect(app.slashCommandKeyAction?.({ key: "Escape", selected: 0, suggestions })).toEqual({ action: "dismiss" });
     expect(app.slashCommandKeyAction?.({ key: "Enter", selected: 2, suggestions })).toEqual({ action: "insert", command: suggestions[2].command });
     expect(app.slashCommandKeyAction?.({ key: "Enter", shiftKey: true, selected: 2, suggestions })).toEqual({ action: "none" });
-    expect(app.applySlashCommandSelection?.("继续 /go", 6, "/goal resume")).toEqual({
-      value: "继续 /goal resume ",
-      cursor: "继续 /goal resume ".length
+    expect(app.applySlashCommandSelection?.("继续 /pl", 6, "/plan")).toEqual({
+      value: "继续 /plan ",
+      cursor: "继续 /plan ".length
     });
   });
 
@@ -498,7 +504,7 @@ describe("conversation helpers", () => {
     expect(app.composerFileInputAcceptValue?.()).toBeUndefined();
   });
 
-  test("thread settings hides internal metrics and copies a resume command from the ID button", async () => {
+  test("thread settings hides internal metrics and copies only the thread id", async () => {
     const app = await loadApp();
 
     expect(app.threadSettingsMetricLabels?.()).not.toEqual(expect.arrayContaining([
@@ -512,6 +518,11 @@ describe("conversation helpers", () => {
     expect(app.threadResumeCommand?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
       "codex resume 019ec943-0b86-7e22-86e9-4dc0c919b09d"
     );
+    expect(app.threadCopyId?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
+      "019ec943-0b86-7e22-86e9-4dc0c919b09d"
+    );
+    expect(app.threadCopyId?.("  ")).toBeNull();
+    expect(app.threadCopyId?.(null)).toBeNull();
     expect(app.threadResumeCommand?.("  ")).toBeNull();
     expect(app.threadResumeCommand?.(null)).toBeNull();
   });
@@ -632,6 +643,34 @@ describe("conversation helpers", () => {
 
     expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 710, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(true);
     expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 620, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(false);
+  });
+
+  test("conversation header renders title without cwd or runtime paths", async () => {
+    const app = await loadApp();
+    const html = app.renderConversationHeaderHtml?.({
+      id: "thread-a",
+      title: "部署检查",
+      status: "Recent",
+      message_count: 1,
+      cwd: "/root/.codex"
+    });
+
+    expect(html).toContain("部署检查");
+    expect(html).not.toContain("/root/.codex");
+    expect(html).not.toContain("cwd");
+    expect(html).not.toContain("工作目录");
+  });
+
+  test("query placeholder helper keeps prior successful data during view switches", async () => {
+    const app = await loadApp();
+    const previousThreads: ThreadSummary[] = [
+      { id: "thread-a", title: "A", status: "Recent", message_count: 1 }
+    ];
+    const previousProbe = { available: true, data: { label: "Probe" } };
+
+    expect(app.preservePreviousQueryData?.(previousThreads)).toBe(previousThreads);
+    expect(app.preservePreviousQueryData?.(previousProbe)).toBe(previousProbe);
+    expect(app.preservePreviousQueryData?.(undefined)).toBeUndefined();
   });
 
 });

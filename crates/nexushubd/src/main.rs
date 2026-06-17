@@ -590,6 +590,21 @@ fn notify_completion_context(
     } else {
         (None, None)
     };
+    if body_source
+        .as_deref()
+        .is_some_and(|source| matches!(source, "proposed_plan" | "request_user_input"))
+    {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            resolved_transcript_path.as_deref(),
+            message.as_deref(),
+            "reply-needed",
+        )
+        .with_body_source(body_source.as_deref())
+        .with_thread_title(thread_title.as_deref()));
+    }
     Ok(ProbeEventInput::notify_completion_with_context(
         thread_id.as_deref().or(session_id.as_deref()),
         turn_id.as_deref(),
@@ -2865,6 +2880,82 @@ hooks = false
     }
 
     #[tokio::test]
+    async fn notify_completion_context_keeps_unresolved_plan_as_reply_needed() {
+        let config = Config::default();
+        let dir = temp_test_dir("nexushub-notify-completion-plan-pending");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 待确认计划\n- 检查\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"计划等待确认。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-plan",
+                "turn_id": "turn-plan",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert_eq!(event.payload["body_source"], "proposed_plan");
+        assert_eq!(event.bark_body, "# 待确认计划\n- 检查");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_context_keeps_unresolved_question_as_reply_needed() {
+        let config = Config::default();
+        let dir = temp_test_dir("nexushub-notify-completion-question-pending");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"RequestUserInput","turn_id":"turn-choice","item_id":"choice-1","questions":[{"id":"choice","question":"继续吗？","options":[{"label":"继续"},{"label":"停止"}]}]}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-choice","last_agent_message":"问题等待选择。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-choice",
+                "turn_id": "turn-choice",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert_eq!(event.payload["body_source"], "request_user_input");
+        assert!(event.bark_body.contains("问题 1：继续吗？"));
+        assert!(event.bark_body.contains("选项 1：继续"));
+        assert!(event.bark_body.contains("选项 2：停止"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn hook_stop_prefers_full_rollout_plan_over_short_stdin_summary() {
         let mut config = Config::default();
         config.probe.notifications.enabled = false;
@@ -3760,10 +3851,10 @@ hooks = false
             .join("\n"),
         )
         .unwrap();
-        let fallback = rollout_completion_last_agent_message(&rollout, Some("turn-plan"))
-            .unwrap()
-            .expect("fallback plan");
-        assert!(fallback.contains("<proposed_plan>"));
+        assert_eq!(
+            rollout_completion_last_agent_message(&rollout, Some("turn-plan")).unwrap(),
+            None
+        );
         let thread = nexushub_core::codex::ThreadSummary {
             id: "thread-fallback-empty-complete".to_string(),
             title: "fallback 空完成线程".to_string(),
