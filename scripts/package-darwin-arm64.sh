@@ -6,9 +6,9 @@ cd "${ROOT}"
 
 DIST="${ROOT}/dist"
 TAURI_DIR="${TAURI_DIR:-${ROOT}/src-tauri}"
-DESKTOP_UI_DIR="${DESKTOP_UI_DIR:-${ROOT}/desktop-ui}"
+WEBUI_DIR="${WEBUI_DIR:-${ROOT}/webui}"
 TAURI_TARGET_DIR="${TAURI_TARGET_DIR:-${TAURI_DIR}/target}"
-TAURI_CLI="${TAURI_CLI:-${DESKTOP_UI_DIR}/node_modules/.bin/tauri}"
+TAURI_CLI="${TAURI_CLI:-${WEBUI_DIR}/node_modules/.bin/tauri}"
 
 cargo_package_version() {
   cargo pkgid --package nexushubd --manifest-path "${ROOT}/Cargo.toml" |
@@ -68,12 +68,16 @@ TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
 DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
 
 [[ -d "${TAURI_DIR}" ]] || die "missing Tauri project directory: ${TAURI_DIR}"
-[[ -d "${DESKTOP_UI_DIR}" ]] || die "missing desktop UI project directory: ${DESKTOP_UI_DIR}"
+[[ -d "${WEBUI_DIR}" ]] || die "missing WebUI project directory: ${WEBUI_DIR}"
 
 mkdir -p "${DIST}"
 
-if [[ "${SKIP_DESKTOP_UI_INSTALL:-0}" != "1" ]]; then
-  corepack pnpm@11.0.8 --dir "${DESKTOP_UI_DIR}" install
+if [[ "${SKIP_WEBUI_INSTALL:-0}" != "1" ]]; then
+  corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" install
+fi
+
+if [[ "${SKIP_WEBUI_BUILD:-0}" != "1" ]]; then
+  corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" build:tauri
 fi
 
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"

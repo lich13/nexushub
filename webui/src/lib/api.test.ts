@@ -7,12 +7,21 @@ async function loadRealApi() {
   return import("./api");
 }
 
+async function loadDesktopApi() {
+  vi.stubEnv("VITE_USE_REAL_API", "1");
+  vi.resetModules();
+  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  return import("./api");
+}
+
 describe("archive delete API compatibility", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
+    delete globalThis.__NEXUSHUB_TEST_INVOKE__;
     vi.resetModules();
   });
 
@@ -750,6 +759,128 @@ describe("archive delete API compatibility", () => {
     const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/auth/login");
     expect(path).not.toContain("/nexushub/api");
+  });
+
+  test("desktop auth helpers never call Web auth endpoints", async () => {
+    const { getPublicSettings, login, logout, me } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => null);
+
+    expect(await getPublicSettings()).toMatchObject({
+      site_name: "NexusHub",
+      admin_configured: true,
+      turnstile_enabled: false
+    });
+    expect(await me()).toMatchObject({
+      username: "desktop",
+      csrf_token: null
+    });
+    await login("admin", "password", "ignored-token");
+    await logout("ignored-csrf");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
+  });
+
+  test("desktop thread, probe, upload, job and goal helpers route through Tauri invoke commands", async () => {
+    const {
+      listThreads,
+      getThread,
+      dryRunArchiveDelete,
+      startArchiveDelete,
+      dryRunHiddenThreadDelete,
+      startHiddenThreadDelete,
+      getProbeSettings,
+      saveProbeSettings,
+      startProbeJob,
+      uploadFiles,
+      deleteUpload,
+      listJobs,
+      getJob,
+      getCodexGoal,
+      saveCodexGoal,
+      clearCodexGoal,
+      pauseCodexGoal,
+      resumeCodexGoal
+    } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      if (command !== "desktop_api_command") {
+        throw new Error(`unexpected command ${command}`);
+      }
+      const request = (args as { request?: { path?: string; method?: string; body?: unknown } } | undefined)?.request;
+      if (request?.path === "/api/threads?q=needle&limit=120") return [];
+      if (request?.path === "/api/threads/thread-a") {
+        return { summary: { id: "thread-a", title: "A", status: "Recent", message_count: 1 }, messages: [], blocks: [], raw_event_count: 0 };
+      }
+      if (request?.path === "/api/archives/delete/dry-run") return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
+      if (request?.path === "/api/archives/delete/execute") return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
+      if (request?.path === "/api/hidden-threads/delete/dry-run") return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
+      if (request?.path === "/api/hidden-threads/delete/execute") return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
+      if (request?.path === "/api/probe/settings" && request.method === "GET") return { probe: { enabled: true }, notifications: {}, logs_db: {} };
+      if (request?.path === "/api/probe/settings" && request.method === "PATCH") return { probe: { enabled: false }, notifications: {}, logs_db: {} };
+      if (request?.path === "/api/probe/bark/test") return { job_id: "probe-bark-job" };
+      if (request?.path === "/api/probe/logs-db/maintain") return { job_id: "probe-logs-job" };
+      if (request?.path === "/api/uploads/upload-a") return { ok: true, deleted: true };
+      if (request?.path === "/api/jobs?limit=30") return [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 }];
+      if (request?.path === "/api/jobs/job-a") return { id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 };
+      if (request?.path === "/api/codex/goal?thread_id=thread-a") return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "idle" };
+      if (request?.path === "/api/codex/goal") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
+      if (request?.path === "/api/codex/goal/clear") return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "cleared" };
+      if (request?.path === "/api/codex/goal/pause") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "paused" };
+      if (request?.path === "/api/codex/goal/resume") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
+      throw new Error(`unexpected desktop API request ${JSON.stringify(request)}`);
+    });
+
+    await listThreads("all", "needle");
+    await getThread("thread-a");
+    await dryRunArchiveDelete("ignored-csrf");
+    await startArchiveDelete("ignored-csrf");
+    await dryRunHiddenThreadDelete("ignored-csrf");
+    await startHiddenThreadDelete("ignored-csrf");
+    await getProbeSettings();
+    await saveProbeSettings({ probe: { enabled: false } }, "ignored-csrf");
+    await startProbeJob("bark-test", "ignored-csrf");
+    await startProbeJob("logs-db-dry-run", "ignored-csrf");
+    await deleteUpload("upload-a", "ignored-csrf");
+    await listJobs();
+    await getJob("job-a");
+    await getCodexGoal("thread-a");
+    await saveCodexGoal("thread-a", { objective: "ship", token_budget: 5000 }, "ignored-csrf");
+    await clearCodexGoal("thread-a", "ignored-csrf");
+    await pauseCodexGoal("thread-a", "ignored-csrf");
+    await resumeCodexGoal("thread-a", "ignored-csrf");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      ["desktop_api_command", { request: { path: "/api/threads?q=needle&limit=120", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/threads/thread-a", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/archives/delete/dry-run", method: "POST" } }],
+      ["desktop_api_command", { request: { path: "/api/archives/delete/execute", method: "POST", body: { confirmed: true } } }],
+      ["desktop_api_command", { request: { path: "/api/hidden-threads/delete/dry-run", method: "POST" } }],
+      ["desktop_api_command", { request: { path: "/api/hidden-threads/delete/execute", method: "POST", body: { confirmed: true } } }],
+      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "PATCH", body: { probe: { enabled: false } } } }],
+      ["desktop_api_command", { request: { path: "/api/probe/bark/test", method: "POST" } }],
+      ["desktop_api_command", { request: { path: "/api/probe/logs-db/maintain", method: "POST", body: { dry_run: true } } }],
+      ["desktop_api_command", { request: { path: "/api/uploads/upload-a", method: "DELETE" } }],
+      ["desktop_api_command", { request: { path: "/api/jobs?limit=30", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/jobs/job-a", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/codex/goal?thread_id=thread-a", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/codex/goal", method: "POST", body: { thread_id: "thread-a", objective: "ship", token_budget: 5000 } } }],
+      ["desktop_api_command", { request: { path: "/api/codex/goal/clear", method: "POST", body: { thread_id: "thread-a" } } }],
+      ["desktop_api_command", { request: { path: "/api/codex/goal/pause", method: "POST", body: { thread_id: "thread-a" } } }],
+      ["desktop_api_command", { request: { path: "/api/codex/goal/resume", method: "POST", body: { thread_id: "thread-a" } } }]
+    ]);
+    const file = new File(["# hello"], "note.md", { type: "text/markdown" });
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      expect(command).toBe("desktop_upload_files_command");
+      expect(args).toMatchObject({ files: [{ name: "note.md", mime: "text/markdown" }] });
+      return { files: [{ id: "upload-a", name: "note.md", mime: "text/markdown", size: 7, sha256: "x", kind: "markdown", status: "ready" }] };
+    });
+    await uploadFiles([file], "ignored-csrf");
   });
 
   test("uses an explicit API base override when the WebUI is served from a subpath", async () => {

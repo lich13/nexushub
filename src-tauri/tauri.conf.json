@@ -1,14 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NexusHub",
-  "version": "0.1.98",
+  "version": "0.1.99",
   "identifier": "com.lich13.nexushub",
   "mainBinaryName": "nexushub",
   "build": {
-    "frontendDist": "../desktop-ui/dist",
-    "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "corepack pnpm@11.0.8 --dir desktop-ui dev --host 127.0.0.1",
-    "beforeBuildCommand": "corepack pnpm@11.0.8 --dir desktop-ui build"
+    "frontendDist": "../webui/dist",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
+    "beforeBuildCommand": "corepack pnpm@11.0.8 --dir webui build:tauri"
   },
   "app": {
     "windows": [

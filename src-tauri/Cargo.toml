@@ -1,6 +1,6 @@
 [package]
 name = "nexushub-desktop"
-version = "0.1.98"
+version = "0.1.99"
 description = "NexusHub macOS desktop console"
 authors = ["NexusHub contributors"]
 license = "MIT"
@@ -26,6 +26,7 @@ tauri-build = { version = "2.4.0", features = [] }
 
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4"
 dirs = "5.0"
 nexushub-core = { path = "../crates/nexushub-core" }
 opener = "0.7"
@@ -34,6 +35,8 @@ serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2.8.2", features = [] }
 tauri-plugin-opener = "2"
 tokio = { version = "1.37", features = ["rt-multi-thread"] }
+toml = "0.8"
+urlencoding = "2.1"
 
 [dev-dependencies]
 tempfile = "3"

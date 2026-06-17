@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. Tencent Cloud Linux keeps the browser WebUI at `https://661313.xyz/nexushub/`; macOS uses the native Tauri App entry instead of a browser WebUI or LaunchAgent Web service. It should feel closer to a Linear/Raycast developer tool than a marketing page.
+NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. Tencent Cloud Linux keeps the browser WebUI at `https://661313.xyz/nexushub/`; macOS uses the native Tauri App entry instead of a browser WebUI or LaunchAgent Web service. The macOS shell wraps the same main `webui` interface in a CC Switch style Tauri bundle, so native packaging alignment does not create a separate product surface. It should feel closer to a Linear/Raycast developer tool than a marketing page.
 
 ## Visual Direction
 

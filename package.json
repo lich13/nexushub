@@ -1,14 +1,14 @@
 {
   "name": "nexushub",
   "private": true,
-  "version": "0.1.98",
+  "version": "0.1.99",
   "scripts": {
-    "build:ui": "pnpm --dir webui build",
-    "desktop:dev": "corepack pnpm@11.0.8 --dir desktop-ui dev",
-    "desktop:typecheck": "corepack pnpm@11.0.8 --dir desktop-ui typecheck",
-    "desktop:build": "corepack pnpm@11.0.8 --dir desktop-ui build",
-    "tauri:dev": "./desktop-ui/node_modules/.bin/tauri dev --config src-tauri/tauri.conf.json",
-    "tauri:build": "./desktop-ui/node_modules/.bin/tauri build --config src-tauri/tauri.conf.json",
+    "build:ui": "corepack pnpm@11.0.8 --dir webui build",
+    "desktop:dev": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
+    "desktop:typecheck": "corepack pnpm@11.0.8 --dir webui typecheck",
+    "desktop:build": "corepack pnpm@11.0.8 --dir webui build:tauri",
+    "tauri:dev": "./webui/node_modules/.bin/tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "./webui/node_modules/.bin/tauri build --config src-tauri/tauri.conf.json",
     "test:install": "bash scripts/test-install-script.sh",
     "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@11.0.8 --dir webui test && corepack pnpm@11.0.8 --dir webui build && npm run test:install"
   }

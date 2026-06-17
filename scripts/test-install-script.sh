@@ -15,6 +15,10 @@ SYSTEMD_SERVICE="${ROOT}/deploy/nexushub/systemd.service"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
+if [[ -e "${ROOT}/desktop-ui" ]]; then
+  echo "desktop-ui must stay removed; macOS Tauri uses the shared webui interface" >&2
+  exit 1
+fi
 python3 - "${CI_WORKFLOW}" <<'PY'
 from pathlib import Path
 import re
@@ -55,18 +59,20 @@ for required in [
 
 macos_jobs = [body for body in jobs.values() if "runs-on: macos-14" in body]
 if len(macos_jobs) != 1:
-    raise SystemExit("CI workflow must define one macos-14 job for Tauri and desktop-ui checks")
+    raise SystemExit("CI workflow must define one macos-14 job for Tauri and WebUI checks")
 macos_job = macos_jobs[0]
 for required in [
     "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
     "cargo test --manifest-path src-tauri/Cargo.toml",
     "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
-    "corepack pnpm@11.0.8 --dir desktop-ui install",
-    "corepack pnpm@11.0.8 --dir desktop-ui test",
-    "corepack pnpm@11.0.8 --dir desktop-ui build",
+    "corepack pnpm@11.0.8 --dir webui install",
+    "corepack pnpm@11.0.8 --dir webui test",
+    "corepack pnpm@11.0.8 --dir webui build:tauri",
 ]:
     if required not in macos_job:
         raise SystemExit(f"CI macOS Tauri job must run {required}")
+if "--dir desktop-ui" in macos_job:
+    raise SystemExit("CI macOS Tauri job must not depend on desktop-ui")
 
 print("CI Linux/macOS Tauri job split: ok")
 PY
@@ -176,13 +182,13 @@ checks = {
     "runbook macOS boundary": ("docs/cloud-deploy-runbook.md", "macOS ARM64 Boundary"),
     "runbook macOS Tauri": ("docs/cloud-deploy-runbook.md", "Tauri App"),
     "runbook root API proxy": ("docs/cloud-deploy-runbook.md", "root `/api/`"),
-    "master v0.1.98": ("docs/progress/MASTER.md", "v0.1.98"),
-    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.98 Acceptance Matrix"),
+    "master v0.1.99": ("docs/progress/MASTER.md", "v0.1.99"),
+    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.99 Acceptance Matrix"),
     "master Turnstile retained": ("docs/progress/MASTER.md", "Cloudflare Turnstile login verification"),
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
-    raise SystemExit("v0.1.98 docs/static acceptance missing: " + ", ".join(missing))
+    raise SystemExit("v0.1.99 docs/static acceptance missing: " + ", ".join(missing))
 
 for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/progress/MASTER.md"]:
     text = texts[doc_name]
@@ -230,7 +236,7 @@ for doc_name, text in texts.items():
         if needle in text:
             raise SystemExit(f"{doc_name} must not contain live Cloudflare tokens or generated tunnel URLs: {needle}")
 
-print("v0.1.98 Linux WebUI/macOS Tauri docs: ok")
+print("v0.1.99 Linux WebUI/macOS Tauri docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -1343,8 +1349,6 @@ if "dist/nexushub-darwin-arm64.tar.gz" in workflow:
     if "dist/nexushub-darwin-arm64.tar.gz.sha256" not in workflow:
         raise SystemExit("release workflow must upload macOS tarball checksum when tarball is retained")
 for forbidden in [
-    "--dir webui",
-    "webui/dist",
     "Install.command",
     "Uninstall.command",
     "com.nexushub.nexushub.plist",
@@ -1362,7 +1366,9 @@ package_checks = {
     "cargo version parser": "awk -F# '{print $NF}'",
     "version default": 'VERSION="${VERSION:-$(cargo_package_version)}"',
     "Tauri project path": 'TAURI_DIR="${TAURI_DIR:-${ROOT}/src-tauri}"',
-    "Tauri CLI path": 'TAURI_CLI="${TAURI_CLI:-${DESKTOP_UI_DIR}/node_modules/.bin/tauri}"',
+    "WebUI project path": 'WEBUI_DIR="${WEBUI_DIR:-${ROOT}/webui}"',
+    "Tauri CLI path": 'TAURI_CLI="${TAURI_CLI:-${WEBUI_DIR}/node_modules/.bin/tauri}"',
+    "WebUI Tauri build command": 'corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" build:tauri',
     "runs from repo root": 'cd "${ROOT}"',
     "Tauri build command": '"${TAURI_CLI}" build',
     "Tauri app/dmg bundles": "--bundles app,dmg",
@@ -1393,8 +1399,8 @@ texts = {
 for name, text in texts.items():
     lowered = text.lower()
     for forbidden in [
-        "webui",
-        "webui/dist",
+        "desktop-ui",
+        "desktop-ui/dist",
         "launchagent",
         "launchagents",
         "launchctl",

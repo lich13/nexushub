@@ -99,6 +99,10 @@ type AppExports = typeof import("./App") & {
     current: import("./types").ArchiveDeletePlan | null,
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
+  desktopRuntimeVisibleCopy?: () => string[];
+  navigationLabelsForRuntime?: (desktop?: boolean) => string[];
+  shouldShowLogoutForRuntime?: (desktop?: boolean) => boolean;
+  initialSessionForRuntime?: (desktop?: boolean) => import("./types").SessionUser | null;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -116,6 +120,19 @@ function extractThreadListSource(): string {
 }
 
 describe("conversation helpers", () => {
+  test("desktop runtime hides Web-only auth and security navigation", async () => {
+    const app = await loadApp();
+
+    expect(app.navigationLabelsForRuntime?.(false)).toContain("安全");
+    expect(app.navigationLabelsForRuntime?.(true)).toEqual(["Codex", "Claude Code", "探针", "运维"]);
+    expect(app.shouldShowLogoutForRuntime?.(false)).toBe(true);
+    expect(app.shouldShowLogoutForRuntime?.(true)).toBe(false);
+    expect(app.initialSessionForRuntime?.(true)).toMatchObject({
+      username: "desktop",
+      csrf_token: null
+    });
+  });
+
   test("segments internal paths and Codex ids as copyable references", async () => {
     const app = await loadApp();
     const segments = app.segmentInternalReferences?.(
@@ -906,6 +923,23 @@ describe("conversation helpers", () => {
     expect(visibleCopy).not.toContain(retiredClaudePanel);
     expect(visibleCopy).not.toContain(retiredReadyCopy);
     expect(visibleCopy).not.toContain(retiredMissingCopy);
+  });
+
+  test("desktop runtime copy hides login and security setup while preserving core Codex controls", async () => {
+    const app = await loadApp();
+    const copy = app.desktopRuntimeVisibleCopy?.().join("\n") ?? "";
+
+    expect(copy).toContain("Codex 本地线程");
+    expect(copy).toContain("Goal");
+    expect(copy).toContain("Plan Mode");
+    expect(copy).toContain("名称与归档");
+    expect(copy).toContain("线程标题");
+    expect(copy).toContain("重命名");
+    expect(copy).toContain("归档");
+    expect(copy).not.toContain("管理员");
+    expect(copy).not.toContain("登录");
+    expect(copy).not.toContain("Turnstile");
+    expect(copy).not.toContain("CSRF");
   });
 
   test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {

@@ -8,11 +8,26 @@ runtime under `/opt/nexushub`. Do not mix these Linux paths with the macOS ARM64
 Tauri App layout. macOS no longer provides a browser WebUI, LaunchAgent Web
 service, or Cloudflare Tunnel entry.
 
+The Linux chain remains the hosted WebUI deployment chain. The macOS Tauri build
+now consumes the same `webui` source as the main interface, but packages it as an
+App-only native bundle; it does not add any macOS browser service.
+
 ## Build Release Artifact
 
 ```bash
 bash scripts/package-linux.sh
 sha256sum dist/nexushub-linux-x86_64.tar.gz
+```
+
+The release workflow also produces:
+
+```text
+dist/nexushub-linux-x86_64.tar.gz
+dist/nexushub-linux-x86_64.tar.gz.sha256
+dist/nexushub-darwin-arm64.tar.gz
+dist/nexushub-darwin-arm64.tar.gz.sha256
+dist/NexusHub-<version>-darwin-arm64.dmg
+dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 
 ## Deploy

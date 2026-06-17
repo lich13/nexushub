@@ -2,6 +2,8 @@
 
 `nexushub` is a Rust + React web panel for cloud Codex local state plus a macOS Tauri desktop app. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS ARM64 the supported user entry is the Tauri App; NexusHub no longer provides a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel path on macOS.
 
+The macOS app follows the CC Switch native packaging model: Tauri wraps the main `webui` interface directly and produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, and `nexushub-darwin-arm64.tar.gz`. This is a shared-interface packaging alignment, not a platform split. The Linux release chain still builds the same `webui` into `/opt/nexushub/webui/` and publishes the hosted browser entry at `https://661313.xyz/nexushub/`.
+
 Current scope:
 
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
@@ -79,9 +81,11 @@ corepack pnpm@11.0.8 --dir webui install
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/package-linux.sh
+bash scripts/package-darwin-arm64.sh
 ```
 
 `scripts/package-linux.sh` intentionally refuses to produce the Linux release asset on non-Linux hosts. Use the GitHub Actions release workflow for the canonical Linux x86_64 tarball.
+`scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files.
 `ALLOW_HOST_MISMATCH=1` is only for local smoke archives and is not a canonical release path.
 
 ## Server Install

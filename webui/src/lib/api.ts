@@ -34,6 +34,14 @@ import type {
   ThreadSummary,
   UploadOutcome
 } from "../types";
+import {
+  RuntimeUnavailableError,
+  buildRuntimeApiPath,
+  desktopSessionUser,
+  isDesktopRuntime,
+  runtimeRpc,
+  type DesktopApiUpload
+} from "./runtime";
 
 type RequestOptions = RequestInit & {
   csrfToken?: string | null;
@@ -62,15 +70,11 @@ export class ApiError extends Error {
 }
 
 function isMissingEndpoint(error: unknown): boolean {
-  return error instanceof ApiError && [404, 405, 501].includes(error.status);
+  return error instanceof RuntimeUnavailableError || error instanceof ApiError && [404, 405, 501].includes(error.status);
 }
 
 export function buildApiPath(path: string): string {
-  if (/^https?:\/\//i.test(path)) {
-    return path;
-  }
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return API_BASE ? `${API_BASE}${normalizedPath}` : normalizedPath;
+  return buildRuntimeApiPath(path);
 }
 
 async function parse<T>(response: Response): Promise<T> {
@@ -86,6 +90,13 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if (isDesktopRuntime()) {
+    const method = options.method ?? (options.body ? "POST" : "GET");
+    const body = typeof options.body === "string"
+      ? JSON.parse(options.body)
+      : undefined;
+    return runtimeRpc<T>("desktopApi", { request: { path, method, body } });
+  }
   const headers = new Headers(options.headers);
   if (!options.skipContentType && !headers.has("content-type") && options.body) {
     headers.set("content-type", "application/json");
@@ -152,6 +163,9 @@ function normalizeOptionalResult<T>(payload: T): OptionalResult<T> {
 }
 
 export async function getPublicSettings(): Promise<PublicSettings> {
+  if (isDesktopRuntime()) {
+    return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
+  }
   if (USE_DEMO) {
     return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
   }
@@ -159,6 +173,9 @@ export async function getPublicSettings(): Promise<PublicSettings> {
 }
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
+  if (isDesktopRuntime()) {
+    return desktopSessionUser();
+  }
   if (USE_DEMO) {
     return { id: "dev", username, csrf_token: "dev-csrf" };
   }
@@ -173,11 +190,13 @@ export async function login(username: string, password: string, turnstileToken?:
 }
 
 export async function logout(csrfToken?: string | null): Promise<void> {
+  if (isDesktopRuntime()) return;
   if (USE_DEMO) return;
   await apiFetch("/api/auth/logout", { method: "POST", csrfToken });
 }
 
 export async function me(): Promise<SessionUser> {
+  if (isDesktopRuntime()) return desktopSessionUser();
   if (USE_DEMO) return { id: "dev", username: "admin", csrf_token: "dev-csrf" };
   return apiFetch<SessionUser>("/api/auth/me");
 }
@@ -712,6 +731,9 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
     throw new ApiError(`Unsupported update target: ${String(target)}`, 400);
   }
   if (USE_DEMO) return { job_id: `panel-${action}-demo` };
+  if (isDesktopRuntime()) {
+    throw new ApiError("macOS App 不提供 Linux 面板更新任务，请使用 DMG 或 Release 资产更新。", 501);
+  }
   return apiFetch<{ job_id: string }>(panelUpdateRoutes[action], { method: "POST", csrfToken });
 }
 
@@ -759,6 +781,14 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
         status: "ready"
       }))
     };
+  }
+  if (isDesktopRuntime()) {
+    const uploads: DesktopApiUpload[] = await Promise.all(files.map(async (file) => ({
+      name: file.name,
+      mime: file.type || "application/octet-stream",
+      bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
+    })));
+    return runtimeRpc<UploadOutcome>("desktopUploadFiles", { files: uploads });
   }
   const form = new FormData();
   for (const file of files) {
@@ -1053,6 +1083,7 @@ export function subscribeThreadEvents(
   threadId: string,
   handlers: { onBlock?: (block: MessageBlock, threadId: string) => void; onBlocks?: (blocks: MessageBlock[], threadId: string) => void; onSummary?: (summary: ThreadSummary, threadId: string) => void; onError?: (message: string, threadId: string) => void }
 ): () => void {
+  if (isDesktopRuntime()) return () => {};
   if (USE_DEMO) return () => {};
   const source = new EventSource(buildApiPath(`/api/threads/${threadId}/events`), { withCredentials: true });
   let pendingBlocks: MessageBlock[] = [];

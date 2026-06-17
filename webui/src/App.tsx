@@ -120,6 +120,7 @@ import {
   type ThreadMessageSlot,
   type ThreadMessageStoreState
 } from "./lib/threadMessageStore";
+import { desktopSessionUser, isDesktopRuntime } from "./lib/runtime";
 import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
@@ -212,6 +213,19 @@ const codexLocalCopy = {
   loginSubtitle: "Codex 本地状态控制台",
   threadListEyebrow: "Codex 本地线程"
 };
+
+export function desktopRuntimeVisibleCopy(): string[] {
+  return [
+    codexLocalCopy.threadListEyebrow,
+    "Goal",
+    "Plan Mode",
+    "名称与归档",
+    "线程标题",
+    "重命名",
+    "归档",
+    "恢复"
+  ];
+}
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
   model: string;
@@ -270,6 +284,24 @@ export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }
   { id: "ops", label: "运维", icon: <HardDrive /> },
   { id: "security", label: "安全", icon: <ShieldCheck /> }
 ];
+
+function runtimeNavigationItems(desktop = isDesktopRuntime()) {
+  return desktop
+    ? navigationItems.filter((item) => item.id !== "security")
+    : navigationItems;
+}
+
+export function navigationLabelsForRuntime(desktop = isDesktopRuntime()): string[] {
+  return runtimeNavigationItems(desktop).map((item) => item.label);
+}
+
+export function shouldShowLogoutForRuntime(desktop = isDesktopRuntime()): boolean {
+  return !desktop;
+}
+
+export function initialSessionForRuntime(desktop = isDesktopRuntime()): SessionUser | null {
+  return desktop ? desktopSessionUser() : loadSession();
+}
 
 const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
 const permissionPresets: Array<{ id: PermissionPresetId; label: string; description: string; icon: ReactNode }> = [
@@ -373,7 +405,8 @@ declare global {
 }
 
 export default function App() {
-  const [session, setSession] = useState<SessionUser | null>(() => loadSession());
+  const desktopRuntime = isDesktopRuntime();
+  const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(desktopRuntime));
   const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
@@ -386,12 +419,13 @@ export default function App() {
     });
   };
 
-  if (!session) {
+  if (!session && !desktopRuntime) {
     return <LoginScreen onLogin={(user) => {
       saveSession(user);
       setSession(user);
     }} />;
   }
+  if (!session) return null;
 
   return (
     <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
@@ -399,9 +433,11 @@ export default function App() {
         <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
       ) : (
         <SideNav view={view} setView={setView} onCollapse={toggleNavCollapsed} onLogout={async () => {
-          await logout(session.csrf_token);
-          clearSession();
-          setSession(null);
+          if (!desktopRuntime) {
+            await logout(session.csrf_token);
+            clearSession();
+            setSession(null);
+          }
         }} />
       )}
       <main className="main-workspace">
@@ -417,7 +453,7 @@ export default function App() {
         {view === "claude" && <ClaudeWorkspace />}
         {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} />}
         {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} />}
-        {view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+        {!desktopRuntime && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
       </main>
     </div>
   );
@@ -565,6 +601,8 @@ function ensureTurnstileScript(): Promise<void> {
 }
 
 function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView: (view: View) => void; onCollapse: () => void; onLogout: () => void }) {
+  const desktopRuntime = isDesktopRuntime();
+  const items = runtimeNavigationItems(desktopRuntime);
   return (
     <aside className="side-nav">
       <div className="nav-brand">
@@ -576,13 +614,15 @@ function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView:
         <button className="icon-button nav-collapse-button" onClick={onCollapse} title="隐藏导航"><PanelLeftClose size={17} /></button>
       </div>
       <nav>
-        {navigationItems.map((item) => (
+        {items.map((item) => (
           <NavButton key={item.id} icon={item.icon} active={view === item.id} onClick={() => setView(item.id)}>
             {item.label}
           </NavButton>
         ))}
       </nav>
-      <button className="ghost-button nav-logout" onClick={onLogout}><LogOut size={17} />退出</button>
+      {shouldShowLogoutForRuntime(desktopRuntime) && (
+        <button className="ghost-button nav-logout" onClick={onLogout}><LogOut size={17} />退出</button>
+      )}
     </aside>
   );
 }
@@ -592,7 +632,8 @@ function NavButton({ icon, active, onClick, children }: { icon: ReactNode; activ
 }
 
 function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => void; view: View; setView: (view: View) => void }) {
-  const current = navigationItems.find((item) => item.id === view);
+  const items = runtimeNavigationItems();
+  const current = items.find((item) => item.id === view);
   return (
     <>
       <div className="mobile-topbar">
@@ -603,7 +644,7 @@ function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => v
         <div className="topbar-dot" />
       </div>
       <div className="mobile-tabs">
-        {navigationItems.map((item) => (
+        {items.map((item) => (
           <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
             {item.icon}
             {item.label}

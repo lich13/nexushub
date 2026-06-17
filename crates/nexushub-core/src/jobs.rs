@@ -271,10 +271,8 @@ async fn run_codex_command(
     job_id: &str,
     command: CodexJobCommand,
 ) -> Result<()> {
-    let mut child = Command::new("sudo")
-        .args(["-n", "env"])
-        .arg(format!("CODEX_HOME={}", command.codex_home.display()))
-        .arg("codex")
+    let mut process = codex_command_builder(&command.codex_home);
+    let mut child = process
         .args(command.args)
         .current_dir(command.cwd)
         .stdin(Stdio::piped())
@@ -331,6 +329,43 @@ async fn run_codex_command(
     Ok(())
 }
 
+fn codex_command_builder(codex_home: &Path) -> Command {
+    if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        let mut command_builder = Command::new("codex");
+        command_builder.env("CODEX_HOME", codex_home);
+        command_builder
+    } else {
+        let mut command_builder = Command::new("sudo");
+        command_builder
+            .args(["-n", "env"])
+            .arg(format!("CODEX_HOME={}", codex_home.display()))
+            .arg("codex");
+        command_builder
+    }
+}
+
+#[cfg(test)]
+fn codex_command_shape(codex_home: &Path) -> (String, Vec<String>, Option<String>) {
+    if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        (
+            "codex".to_string(),
+            Vec::new(),
+            Some(codex_home.display().to_string()),
+        )
+    } else {
+        (
+            "sudo".to_string(),
+            vec![
+                "-n".to_string(),
+                "env".to_string(),
+                format!("CODEX_HOME={}", codex_home.display()),
+                "codex".to_string(),
+            ],
+            None,
+        )
+    }
+}
+
 fn stream_reader<R>(
     db: PanelDb,
     tx: broadcast::Sender<JobEvent>,
@@ -363,8 +398,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::JobRunner;
+    use super::{codex_command_shape, JobRunner};
     use crate::db::PanelDb;
+    use std::path::Path;
     use std::time::Duration;
 
     #[tokio::test]
@@ -404,5 +440,23 @@ mod tests {
             "panel_update",
         );
         assert!(third.is_ok());
+    }
+
+    #[test]
+    fn desktop_codex_jobs_do_not_require_sudo() {
+        let (program, args, codex_home_env) =
+            codex_command_shape(Path::new("/Users/example/.codex"));
+
+        if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+            assert_eq!(program, "codex");
+            assert!(args.is_empty());
+            assert_eq!(codex_home_env.as_deref(), Some("/Users/example/.codex"));
+        } else {
+            assert_eq!(program, "sudo");
+            assert_eq!(args.first().map(String::as_str), Some("-n"));
+            assert!(args
+                .iter()
+                .any(|arg| arg == "CODEX_HOME=/Users/example/.codex"));
+        }
     }
 }

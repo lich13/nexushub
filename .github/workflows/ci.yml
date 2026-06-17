@@ -39,6 +39,6 @@ jobs:
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: corepack pnpm@11.0.8 --dir desktop-ui install
-      - run: corepack pnpm@11.0.8 --dir desktop-ui test
-      - run: corepack pnpm@11.0.8 --dir desktop-ui build
+      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: corepack pnpm@11.0.8 --dir webui test
+      - run: corepack pnpm@11.0.8 --dir webui build:tauri
