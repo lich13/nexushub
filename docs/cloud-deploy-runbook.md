@@ -63,10 +63,10 @@ Then log in through Chrome 插件验收 and verify:
 - Turnstile Site Key / Secret Key can be saved, action is `login`, expected hostname is `661313.xyz`, session TTL is 365 days, and token replay protection is active;
 - archive delete dry-run returns counts and `integrity=ok`;
 - archive delete execute uses button confirmation only, with no typed confirmation text;
-- panel update and Codex update are separate cards;
+- panel update remains the only WebUI-exposed update card;
 - failed update jobs show structured explanation and suggested next actions;
 - panel prune removes old NexusHub release-update backups while keeping the latest three;
-- Codex update / prune buttons start only the configured fixed wrappers.
+- retired local maintenance routes stay unavailable from the WebUI and HTTP API.
 
 Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`.
 

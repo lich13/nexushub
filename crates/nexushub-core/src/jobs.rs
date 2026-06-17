@@ -374,34 +374,34 @@ mod tests {
 
         let first = runner
             .start_exclusive_shell_job(
-                "codex_update_start",
-                "Codex update",
+                "panel_update_start",
+                "Panel update",
                 "sleep 0.2".to_string(),
-                "codex_update",
+                "panel_update",
             )
             .unwrap();
         assert!(!first.is_empty());
 
         let second = runner.start_exclusive_shell_job(
-            "codex_update_prune",
-            "Codex prune",
+            "panel_update_prune",
+            "Panel prune",
             "true".to_string(),
-            "codex_update",
+            "panel_update",
         );
         assert!(second.is_err());
 
         for _ in 0..20 {
-            if runner.exclusive_group_job("codex_update").is_none() {
+            if runner.exclusive_group_job("panel_update").is_none() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         let third = runner.start_exclusive_shell_job(
-            "codex_update_prune",
-            "Codex prune",
+            "panel_update_prune",
+            "Panel prune",
             "true".to_string(),
-            "codex_update",
+            "panel_update",
         );
         assert!(third.is_ok());
     }

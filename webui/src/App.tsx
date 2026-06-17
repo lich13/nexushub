@@ -75,7 +75,6 @@ import {
   saveSecurity,
   saveCodexGoal,
   sendMessage,
-  startClaudeCodeJob,
   startArchiveDelete,
   startHiddenThreadDelete,
   startProbeJob,
@@ -123,6 +122,7 @@ import {
 } from "./lib/threadMessageStore";
 import type {
   ArchiveDeletePlan,
+  ArchiveDeleteResult,
   AgentProviderInfo,
   BridgeActionResult,
   ClaudeOverview,
@@ -132,6 +132,7 @@ import type {
   CodexModel,
   FollowUpQueueItem,
   HiddenThreadDeletePlan,
+  HiddenThreadDeleteResult,
   JobRecord,
   MessageBlock,
   PendingElicitation,
@@ -155,6 +156,57 @@ import type {
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
+
+const OPS_PANEL_TITLES = {
+  system: "系统状态",
+  panelUpdate: "面板更新",
+  archivedCleanup: "归档线程清理",
+  hiddenCleanup: "隐藏线程清理",
+  jobs: "Job History"
+} as const;
+
+export function opsWorkspacePanelTitles(): string[] {
+  return [
+    OPS_PANEL_TITLES.system,
+    OPS_PANEL_TITLES.panelUpdate,
+    OPS_PANEL_TITLES.archivedCleanup,
+    OPS_PANEL_TITLES.hiddenCleanup,
+    OPS_PANEL_TITLES.jobs
+  ];
+}
+
+export function opsWorkspaceVisibleCopy(): string[] {
+  return [
+    ...opsWorkspacePanelTitles(),
+    "Hostname",
+    "Public endpoint",
+    "state DB",
+    "Codex Home",
+    "State DB",
+    "Hidden threads",
+    "Sources",
+    "Current",
+    "Latest",
+    "Update",
+    "Precheck",
+    "Prune",
+    "Dry-run",
+    "清理归档",
+    "确认清理归档",
+    "扫描隐藏线程",
+    "清理隐藏线程",
+    "确认清理隐藏",
+    "active",
+    "archived",
+    "integrity",
+    "session index",
+    "rollout 文件",
+    "visible",
+    "hidden",
+    "sources",
+    "rollout 删除结果"
+  ];
+}
 
 const codexLocalCopy = {
   loginSubtitle: "Codex 本地状态控制台",
@@ -2163,6 +2215,32 @@ export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, sta
 
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
   return (plan?.hidden_threads ?? 0) > 0;
+}
+
+export function archivePlanAfterExecute(current: ArchiveDeletePlan | null, result: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">): ArchiveDeletePlan | null {
+  if (!current) return current;
+  return {
+    ...current,
+    total_threads: result.after_total_threads,
+    active_threads: result.after_active_threads,
+    archived_threads: result.after_archived_threads,
+    archived_ids: [],
+    integrity: result.after_integrity
+  };
+}
+
+function cleanupStageLabel(input: { hasPlan: boolean; dryRunPending: boolean; armed: boolean; executePending: boolean; executableCount: number }): { label: string; tone?: "success" | "warning" | "danger" } {
+  if (input.executePending) return { label: "执行中", tone: "warning" };
+  if (input.armed) return { label: "等待确认", tone: "danger" };
+  if (input.dryRunPending) return { label: "扫描中", tone: "warning" };
+  if (!input.hasPlan) return { label: "待 dry-run" };
+  if (input.executableCount > 0) return { label: "可清理", tone: "warning" };
+  return { label: "无可清理", tone: "success" };
+}
+
+function hiddenRolloutDeleteResultText(result?: Pick<HiddenThreadDeleteResult, "deleted_rollout_files"> | null): string {
+  if (!result) return "等待执行";
+  return String(result.deleted_rollout_files ?? 0);
 }
 
 function currentActionKindFromBlocks(
@@ -4302,20 +4380,29 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
+  const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
-  const jobMutation = useMutation({ mutationFn: ({ target, action }: { target: "panel" | "codex"; action: "precheck" | "start" | "prune" }) => startUpdateJob(target, action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
-  const claudeJobMutation = useMutation({ mutationFn: (action: Parameters<typeof startClaudeCodeJob>[0]) => startClaudeCodeJob(action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
-  const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: setPlan });
-  const executeDelete = useMutation({ mutationFn: () => startArchiveDelete(csrfToken), onSuccess: () => {
+  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "precheck" | "start" | "prune" }) => startUpdateJob("panel", action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
+  const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: (nextPlan) => {
+    setPlan(nextPlan);
     setDeleteArmed(false);
+  } });
+  const executeDelete = useMutation({ mutationFn: () => startArchiveDelete(csrfToken), onSuccess: (result) => {
+    setDeleteArmed(false);
+    setPlan((current) => archivePlanAfterExecute(current, result));
     qc.invalidateQueries({ queryKey: ["jobs"] });
     qc.invalidateQueries({ queryKey: ["system-status"] });
     qc.invalidateQueries({ queryKey: ["threads"] });
   } });
-  const hiddenDryRun = useMutation({ mutationFn: () => dryRunHiddenThreadDelete(csrfToken), onSuccess: setHiddenPlan });
+  const hiddenDryRun = useMutation({ mutationFn: () => dryRunHiddenThreadDelete(csrfToken), onSuccess: (nextPlan) => {
+    setHiddenPlan(nextPlan);
+    setHiddenDeleteResult(null);
+    setHiddenDeleteArmed(false);
+  } });
   const executeHiddenDelete = useMutation({ mutationFn: () => startHiddenThreadDelete(csrfToken), onSuccess: (result) => {
     setHiddenDeleteArmed(false);
+    setHiddenDeleteResult(result);
     setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
     qc.invalidateQueries({ queryKey: ["jobs"] });
     qc.invalidateQueries({ queryKey: ["system-status"] });
@@ -4324,91 +4411,91 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const publicEndpoint = cleanHostValue(status.data?.public_endpoint);
   const hostname = cleanHostValue(status.data?.hostname) ?? "读取中";
   const hiddenStats = hiddenThreadDeleteStats(hiddenPlan, status.data);
+  const archivedCleanupStage = cleanupStageLabel({
+    hasPlan: Boolean(plan),
+    dryRunPending: dryRun.isPending,
+    armed: deleteArmed,
+    executePending: executeDelete.isPending,
+    executableCount: plan?.archived_threads ?? 0
+  });
+  const hiddenCleanupStage = cleanupStageLabel({
+    hasPlan: Boolean(hiddenPlan),
+    dryRunPending: hiddenDryRun.isPending,
+    armed: hiddenDeleteArmed,
+    executePending: executeHiddenDelete.isPending,
+    executableCount: hiddenStats.hidden
+  });
 
   return (
     <div className="ops-grid">
-      <Panel title="系统状态" icon={<HardDrive size={18} />}>
-        <Metric label="Hostname" value={hostname} />
-        <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
-        <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
-        <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} />
-        <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
-        <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
-        <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
+      <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
+        <div className="ops-status-overview">
+          <Metric label="Hostname" value={hostname} />
+          <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
+          <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
+          <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} />
+          <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
+          <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
+          <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
+        </div>
       </Panel>
-      <Panel title="面板更新" icon={<RefreshCw size={18} />}>
+      <Panel title={OPS_PANEL_TITLES.panelUpdate} icon={<RefreshCw size={18} />}>
         <PanelVersionMetrics version={version.data} />
-        <div className="button-row">
-          <button className="secondary-button" onClick={() => jobMutation.mutate({ target: "panel", action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
-          <button className="primary-button" onClick={() => jobMutation.mutate({ target: "panel", action: "start" })}><Play size={17} />Update</button>
-          <button className="danger-button soft" onClick={() => jobMutation.mutate({ target: "panel", action: "prune" })}><Trash2 size={17} />Prune</button>
+        <div className="button-row ops-action-row">
+          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
+          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "start" })}><Play size={17} />Update</button>
+          <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>
         </div>
       </Panel>
-      <Panel title="Codex 更新" icon={<Bot size={18} />}>
-        <CodexVersionMetrics version={version.data} />
-        <div className="button-row">
-          <button className="secondary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
-          <button className="primary-button" onClick={() => jobMutation.mutate({ target: "codex", action: "start" })}><Play size={17} />一键更新</button>
-          <button className="danger-button soft" onClick={() => jobMutation.mutate({ target: "codex", action: "prune" })}><Trash2 size={17} />单独清理旧版本</button>
+      <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
+        <div className="cleanup-panel-head">
+          <span>删除 archived 线程与 rollout</span>
+          <span className={`status-chip ${archivedCleanupStage.tone ? `tone-${archivedCleanupStage.tone}` : "tone-muted"}`}>{archivedCleanupStage.label}</span>
+        </div>
+        <div className="archive-plan">
+          <Metric label="active" value={plan ? String(plan.active_threads) : "dry-run 未执行"} />
+          <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
+          <Metric label="integrity" value={plan?.integrity ?? status.data?.state_db_integrity ?? "unknown"} tone={(plan?.integrity ?? status.data?.state_db_integrity) === "ok" ? "success" : "danger"} />
+          <Metric label="session index" value={plan ? String(plan.session_index_lines) : "dry-run 未执行"} />
+          <Metric label="rollout 文件" value={plan ? String(plan.rollout_files) : "dry-run 未执行"} />
+        </div>
+        <div className="button-row ops-action-row cleanup-actions">
+          <button className="secondary-button" disabled={dryRun.isPending || executeDelete.isPending} onClick={() => dryRun.mutate()}><Database size={17} />Dry-run</button>
+          {!deleteArmed ? (
+            <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0 || dryRun.isPending || executeDelete.isPending} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
+          ) : (
+            <>
+              <button className="danger-button" onClick={() => executeDelete.mutate()} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
+              <button className="secondary-button" onClick={() => setDeleteArmed(false)} disabled={executeDelete.isPending}>取消</button>
+            </>
+          )}
         </div>
       </Panel>
-      <Panel title="Claude Code 维护" icon={<Bot size={18} />}>
-        <div className="button-row">
-          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("version-check")}><CheckCircle2 size={17} />版本检查</button>
-          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("update-precheck")}><ClipboardCheck size={17} />更新预检</button>
-          <button className="primary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("update-start")}><Play size={17} />开始更新</button>
-          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("smoke")}><TerminalSquare size={17} />Smoke</button>
-          <button className="secondary-button" disabled={claudeJobMutation.isPending} onClick={() => claudeJobMutation.mutate("cache-status")}><Database size={17} />缓存状态</button>
+      <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
+        <div className="cleanup-panel-head">
+          <span>删除 non-archived subagent/internal</span>
+          <span className={`status-chip ${hiddenCleanupStage.tone ? `tone-${hiddenCleanupStage.tone}` : "tone-muted"}`}>{hiddenCleanupStage.label}</span>
+        </div>
+        <div className="archive-plan">
+          <Metric label="visible" value={hiddenPlan ? String(hiddenStats.visible) : "dry-run 未执行"} />
+          <Metric label="hidden" value={String(hiddenStats.hidden)} tone={hiddenStats.hidden > 0 ? "warning" : undefined} />
+          <Metric label="sources" value={hiddenStats.sourceCounts} />
+          <Metric label="integrity" value={hiddenStats.integrity} tone={hiddenStats.integrity === "ok" ? "success" : "danger"} />
+          <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
+        </div>
+        <div className="button-row ops-action-row cleanup-actions">
+          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => hiddenDryRun.mutate()}><Database size={17} />扫描隐藏线程</button>
+          {!hiddenDeleteArmed ? (
+            <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
+          ) : (
+            <>
+              <button className="danger-button" onClick={() => executeHiddenDelete.mutate()} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
+              <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)} disabled={executeHiddenDelete.isPending}>取消</button>
+            </>
+          )}
         </div>
       </Panel>
-      <Panel title="归档清理" icon={<Archive size={18} />}>
-        <div className="button-row">
-          <button className="secondary-button" onClick={() => dryRun.mutate()}><Database size={17} />Dry-run</button>
-          <button className="secondary-button" onClick={() => hiddenDryRun.mutate()}><Database size={17} />扫描隐藏线程</button>
-        </div>
-        <div className="archive-cleanup-grid">
-          <div className="archive-plan cleanup-section">
-            <div className="cleanup-section-title">
-              <strong>归档线程</strong>
-              <span>删除 archived 线程与 rollout</span>
-            </div>
-            <Metric label="active" value={String(plan?.active_threads ?? "dry-run 未执行")} />
-            <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
-            <Metric label="integrity" value={plan?.integrity ?? status.data?.state_db_integrity ?? "unknown"} tone={(plan?.integrity ?? status.data?.state_db_integrity) === "ok" ? "success" : "danger"} />
-            <div className="button-row">
-              {!deleteArmed ? (
-                <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
-              ) : (
-                <>
-                  <button className="danger-button" onClick={() => executeDelete.mutate()} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理</button>
-                  <button className="secondary-button" onClick={() => setDeleteArmed(false)}>取消</button>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="archive-plan cleanup-section">
-            <div className="cleanup-section-title">
-              <strong>隐藏线程</strong>
-              <span>删除 non-archived subagent/internal</span>
-            </div>
-            <Metric label="visible" value={hiddenPlan ? String(hiddenStats.visible) : "dry-run 未执行"} />
-            <Metric label="hidden" value={String(hiddenStats.hidden)} tone={hiddenStats.hidden > 0 ? "warning" : undefined} />
-            <Metric label="sources" value={hiddenStats.sourceCounts} />
-            <Metric label="integrity" value={hiddenStats.integrity} tone={hiddenStats.integrity === "ok" ? "success" : "danger"} />
-            <div className="button-row">
-              {!hiddenDeleteArmed ? (
-                <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan)} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
-              ) : (
-                <>
-                  <button className="danger-button" onClick={() => executeHiddenDelete.mutate()} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
-                  <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)}>取消</button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </Panel>
-      <Panel title="Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
+      <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
         <JobList jobs={jobs.data ?? []} />
       </Panel>
     </div>
@@ -4425,19 +4512,6 @@ function PanelVersionMetrics({ version }: { version?: SystemVersion }) {
         tone={version?.panel_update_available ? "warning" : "success"}
       />
       <Metric label="Update" value={version?.panel_update_available ? "available" : "current"} tone={version?.panel_update_available ? "warning" : "success"} />
-    </div>
-  );
-}
-
-function CodexVersionMetrics({ version }: { version?: SystemVersion }) {
-  const updateState = codexUpdateState(version);
-  return (
-    <div className="version-grid">
-      <Metric label="Current" value={version?.codex_current ?? version?.codex_root ?? "读取中"} />
-      <Metric label="Latest" value={version?.codex_latest ?? "unknown"} tone={updateState.tone} />
-      <Metric label="Update" value={updateState.label} tone={updateState.tone} />
-      <Metric label="root codex" value={version?.codex_root ?? "unknown"} />
-      <Metric label="user codex" value={version?.codex_user ?? "unknown"} />
     </div>
   );
 }
@@ -5065,16 +5139,6 @@ function sourceCountsText(counts?: Record<string, number> | null): string {
 
 function permissionLabel(preset: PermissionPresetId): string {
   return permissionPresets.find((item) => item.id === preset)?.label ?? "完全访问权限";
-}
-
-export function codexUpdateState(version?: Pick<SystemVersion, "codex_update_available">): { label: string; tone: "success" | "warning" | "danger" } {
-  if (version?.codex_update_available === true) {
-    return { label: "可更新", tone: "warning" };
-  }
-  if (version?.codex_update_available === false) {
-    return { label: "已是最新", tone: "success" };
-  }
-  return { label: "未知", tone: "warning" };
 }
 
 export function actionMessage(result: BridgeActionResult): string {

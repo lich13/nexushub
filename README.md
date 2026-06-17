@@ -10,7 +10,7 @@ Current scope:
 - Thread read model from the resolved Codex home, Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`.
 - Running / reply-needed / recoverable / archived status cards.
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
-- Split Panel update and Codex update jobs. Panel updates use `/usr/local/bin/nexushub-update`; Codex updates keep the existing `/home/ubuntu/codex-admin/bin` wrappers.
+- Panel update jobs through `/usr/local/bin/nexushub-update`; retired local maintenance actions are not exposed from the WebUI or HTTP API.
 - Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
 - Plan Mode, model, reasoning, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
@@ -99,10 +99,10 @@ Turnstile is configured after login in `安全 / Security`. The cloud defaults m
 sudo /usr/local/bin/nexushub-update --repo lich13/nexushub --version latest
 ```
 
-Use the WebUI Ops page for split updates:
+Use the WebUI Ops page for panel updates and cleanup:
 
 - `面板更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`; its prune action removes old `/opt/nexushub/backups/release-updates` backups while keeping the latest three.
-- `Codex 更新` runs the existing cloud Codex wrapper chain for precheck / update / prune.
+- Archive cleanup is split into archived-thread cleanup and hidden-thread cleanup, each with a dry-run and confirmation step.
 
 The configured commands run fixed wrappers only, redact sensitive output, and attach a structured explanation when a job fails.
 
@@ -115,7 +115,7 @@ curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```
 
-Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
+Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 

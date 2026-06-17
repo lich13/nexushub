@@ -59,7 +59,6 @@ impl Default for ProviderRegistry {
                         "mcp_summary".to_string(),
                         "install_health".to_string(),
                         "cache_log_status".to_string(),
-                        "fixed_maintenance_commands".to_string(),
                     ],
                     safety: "read-only filesystem inspection only; no ~/.claude writes and no launch, resume, send, or stop controls".to_string(),
                 },

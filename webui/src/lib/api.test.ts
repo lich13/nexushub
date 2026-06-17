@@ -297,9 +297,14 @@ describe("archive delete API compatibility", () => {
     const { listJobs } = await import("./api");
 
     const jobs = await listJobs();
+    const serialized = JSON.stringify(jobs);
+    const retiredCodexJobTitle = ["Codex", "update", "precheck"].join(" ");
+    const retiredClaudeJobTitle = ["Claude Code", "update"].join(" ");
 
     expect(jobs.some((job) => job.kind.startsWith("probe_"))).toBe(true);
     expect(jobs.some((job) => job.title.includes("Bark"))).toBe(true);
+    expect(serialized).not.toContain(retiredCodexJobTitle);
+    expect(serialized).not.toContain(retiredClaudeJobTitle);
   });
 
   test("thread block page request uses lightweight blocks endpoint", async () => {
@@ -341,26 +346,19 @@ describe("archive delete API compatibility", () => {
     expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
   });
 
-  test("routes codex updates to codex-specific endpoints before legacy fallback", async () => {
+  test("rejects legacy codex update targets without calling codex update routes", async () => {
     const { startUpdateJob } = await loadRealApi();
-    const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(
-      String(path).includes("/api/system/codex/update/precheck")
-        ? JSON.stringify({ job_id: "codex-job" })
-        : JSON.stringify({ error: "wrong route" }),
-      {
-        status: String(path).includes("/api/system/codex/update/precheck") ? 200 : 404,
-        headers: { "content-type": "application/json" }
-      }
-    ));
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await startUpdateJob("codex", "precheck", "csrf-token");
+    await expect((startUpdateJob as (target: string, action: "precheck", csrfToken?: string | null) => Promise<{ job_id: string }>)("codex", "precheck", "csrf-token")).rejects.toMatchObject({
+      status: 400
+    });
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers }];
-    expect(result).toEqual({ job_id: "codex-job" });
-    expect(path).toBe("/api/system/codex/update/precheck");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("provider framework endpoints use the NexusHub read-only API surface", async () => {
@@ -477,6 +475,7 @@ describe("archive delete API compatibility", () => {
         cache_status: { cache_exists: true, log_exists: true }
       }
     });
+    expect(result.data).not.toHaveProperty(["maintenance", "commands"].join("_"));
     expect(result.data?.recent_sessions?.[0]).toMatchObject({ id: "session-a", project_display_name: "/Users/gosu/demo" });
   });
 
@@ -682,30 +681,17 @@ describe("archive delete API compatibility", () => {
     expect(body.probe.logs_db).toEqual({ enabled: true, retention_days: 2 });
   });
 
-  test("fixed Claude maintenance jobs use canonical API routes", async () => {
-    const { startClaudeCodeJob } = await loadRealApi();
-    const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => {
-      const segments = String(path).split("/");
-      return new Response(JSON.stringify({ job_id: `${segments[segments.length - 1]}-job` }), {
+  test("retired provider job helper is no longer exported", async () => {
+    const api = await loadRealApi() as Record<string, unknown>;
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
       status: 200,
       headers: { "content-type": "application/json" }
-      });
-    });
+    }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(startClaudeCodeJob("version-check", "csrf-token")).resolves.toEqual({ job_id: "version-check-job" });
-    await expect(startClaudeCodeJob("update-precheck", "csrf-token")).resolves.toEqual({ job_id: "precheck-job" });
-    await expect(startClaudeCodeJob("update-start", "csrf-token")).resolves.toEqual({ job_id: "start-job" });
-    await expect(startClaudeCodeJob("smoke", "csrf-token")).resolves.toEqual({ job_id: "smoke-job" });
-    await expect(startClaudeCodeJob("cache-status", "csrf-token")).resolves.toEqual({ job_id: "cache-status-job" });
-
-    expect(fetchMock.mock.calls.map(([path, options]) => [path, (options as RequestInit).method, ((options as RequestInit).headers as Headers).get("x-csrf-token")])).toEqual([
-      ["/api/providers/claude-code/jobs/version-check", "POST", "csrf-token"],
-      ["/api/providers/claude-code/jobs/update/precheck", "POST", "csrf-token"],
-      ["/api/providers/claude-code/jobs/update/start", "POST", "csrf-token"],
-      ["/api/providers/claude-code/jobs/smoke", "POST", "csrf-token"],
-      ["/api/providers/claude-code/jobs/cache-status", "POST", "csrf-token"]
-    ]);
+    expect(api[["startClaude", "CodeJob"].join("")]).toBeUndefined();
+    expect(api[["claudeCode", "JobRoutes"].join("")]).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("Job History labels read-only filesystem failures in Chinese", async () => {
@@ -2011,27 +1997,6 @@ describe("archive delete API compatibility", () => {
 
     expect(app.extractPlanText("<proposed_plan>\n# Summary\n- Fix it\n</proposed_plan>")).toBe("# Summary\n- Fix it");
     expect(app.extractPlanText("")).toBe("Plan 内容等待 Codex 写入。");
-  });
-
-  test("codex update state helper exposes available, current, and unknown states", async () => {
-    const app = await import("../App");
-
-    expect(app.codexUpdateState({ codex_update_available: true })).toEqual({
-      label: "可更新",
-      tone: "warning"
-    });
-    expect(app.codexUpdateState({ codex_update_available: false })).toEqual({
-      label: "已是最新",
-      tone: "success"
-    });
-    expect(app.codexUpdateState({ codex_update_available: null })).toEqual({
-      label: "未知",
-      tone: "warning"
-    });
-    expect(app.codexUpdateState({})).toEqual({
-      label: "未知",
-      tone: "warning"
-    });
   });
 
   test("message stream only follows when already near the bottom", async () => {

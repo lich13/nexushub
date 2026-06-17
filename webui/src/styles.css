@@ -1305,6 +1305,55 @@ button { cursor: pointer; }
   overflow-wrap: anywhere;
 }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.ops-status-panel {
+  background: rgba(9,20,34,0.82);
+}
+.ops-status-overview {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+.ops-status-overview .metric {
+  min-height: 74px;
+  border: 1px solid rgba(29,56,82,0.78);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.025);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: center;
+  gap: 6px;
+}
+.ops-status-overview .metric strong {
+  text-align: left;
+  font-size: 13px;
+}
+.ops-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+.ops-action-row button {
+  min-width: 0;
+  width: 100%;
+  white-space: nowrap;
+}
+.cleanup-panel-head {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.cleanup-panel-head > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cleanup-actions {
+  margin-top: 12px;
+}
 .archive-plan { margin-top: 12px; display: grid; gap: 8px; }
 .archive-cleanup-grid {
   display: grid;
@@ -1862,6 +1911,9 @@ button { cursor: pointer; }
   .composer-grid {
     grid-template-columns: minmax(0, 1fr) minmax(118px, 0.42fr);
   }
+  .ops-status-overview {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @container (min-width: 760px) {
@@ -1880,6 +1932,9 @@ button { cursor: pointer; }
   }
   .conversation-shell {
     grid-template-columns: minmax(0, 1fr) 264px;
+  }
+  .ops-status-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2000,6 +2055,7 @@ button { cursor: pointer; }
   .drawer-close { position: absolute; right: 10px; top: 10px; z-index: 2; }
   .thread-list { padding-top: 58px; }
   .ops-grid, .security-layout { grid-template-columns: 1fr; padding: 12px; }
+  .ops-status-overview, .ops-action-row { grid-template-columns: 1fr; }
   .provider-grid, .form-grid.three, .probe-toggle-grid { grid-template-columns: 1fr; }
   .probe-layout { padding: 14px; }
   .probe-header { align-items: stretch; flex-direction: column; }

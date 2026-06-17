@@ -92,6 +92,12 @@ type AppExports = typeof import("./App") & {
   renderConversationHeaderHtml?: (summary: ThreadSummary) => string;
   preservePreviousQueryData?: <T>(previous: T | undefined) => T | undefined;
   threadCopyId?: (threadId?: string | null) => string | null;
+  opsWorkspacePanelTitles?: () => string[];
+  opsWorkspaceVisibleCopy?: () => string[];
+  archivePlanAfterExecute?: (
+    current: import("./types").ArchiveDeletePlan | null,
+    result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
+  ) => import("./types").ArchiveDeletePlan | null;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -832,6 +838,76 @@ describe("conversation helpers", () => {
     expect(app.preservePreviousQueryData?.(previousThreads)).toBe(previousThreads);
     expect(app.preservePreviousQueryData?.(previousProbe)).toBe(previousProbe);
     expect(app.preservePreviousQueryData?.(undefined)).toBeUndefined();
+  });
+
+  test("ops workspace exposes only the current operations panels", async () => {
+    const app = await loadApp();
+    const retiredCodexPanel = ["Codex", "更新"].join(" ");
+    const retiredClaudePanel = ["Claude Code", "维护"].join(" ");
+    const retiredReadyCopy = ["CSRF", "已就绪"].join(" ");
+    const retiredMissingCopy = ["CSRF", "未恢复"].join(" ");
+
+    expect(app.opsWorkspacePanelTitles?.()).toEqual([
+      "系统状态",
+      "面板更新",
+      "归档线程清理",
+      "隐藏线程清理",
+      "Job History"
+    ]);
+    expect(app.opsWorkspacePanelTitles?.()).toEqual(expect.arrayContaining([
+      "归档线程清理",
+      "隐藏线程清理"
+    ]));
+    expect(app.opsWorkspacePanelTitles?.()).not.toEqual(expect.arrayContaining([
+      retiredCodexPanel,
+      retiredClaudePanel,
+      "归档清理"
+    ]));
+    const visibleCopy = app.opsWorkspaceVisibleCopy?.().join("\n") ?? "";
+    expect(visibleCopy).toContain("归档线程清理");
+    expect(visibleCopy).toContain("隐藏线程清理");
+    expect(visibleCopy).not.toContain(retiredCodexPanel);
+    expect(visibleCopy).not.toContain(retiredClaudePanel);
+    expect(visibleCopy).not.toContain(retiredReadyCopy);
+    expect(visibleCopy).not.toContain(retiredMissingCopy);
+  });
+
+  test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {
+    const app = await loadApp();
+    const current = {
+      total_threads: 12,
+      active_threads: 8,
+      archived_threads: 4,
+      session_index_lines: 15,
+      rollout_files: 6,
+      archived_ids: ["archived-a", "archived-b"],
+      integrity: "ok"
+    };
+
+    expect(app.archivePlanAfterExecute?.(current, {
+      after_total_threads: 8,
+      after_active_threads: 8,
+      after_archived_threads: 0,
+      after_integrity: "ok"
+    })).toEqual({
+      ...current,
+      total_threads: 8,
+      active_threads: 8,
+      archived_threads: 0,
+      archived_ids: [],
+      integrity: "ok"
+    });
+    expect(app.canStartHiddenThreadDelete?.({
+      total_threads: 10,
+      visible_threads: 7,
+      hidden_threads: 3,
+      archived_threads: 0,
+      session_index_lines: 10,
+      rollout_files: 2,
+      hidden_ids: ["hidden-a"],
+      hidden_source_counts: { subagent: 3 },
+      integrity: "ok"
+    })).toBe(true);
   });
 
 });

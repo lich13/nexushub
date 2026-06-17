@@ -288,7 +288,7 @@ fn analysis_for(category: JobFailureCategory) -> JobFailureAnalysis {
         JobFailureCategory::ReadOnlyFileSystem => (
             "The update tried to write to a read-only filesystem, commonly the Codex home or install lock path.",
             vec![
-                "Run the Codex update through the panel Codex wrapper so it executes in a separate root systemd unit.",
+                "Run the configured update wrapper from a separate root systemd unit.",
                 "Check that /root/.codex and the Codex admin paths are writable from the transient unit.",
             ],
         ),

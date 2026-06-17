@@ -1,7 +1,5 @@
 use nexushub_core::{
-    claude_code::{
-        claude_maintenance_commands, claude_overview, discover_claude_projects, ClaudePaths,
-    },
+    claude_code::{claude_overview, discover_claude_projects, ClaudePaths},
     config::Config,
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
@@ -71,10 +69,10 @@ fn provider_registry_exposes_codex_and_claude_preview() {
         .capabilities
         .iter()
         .any(|capability| capability == "readonly"));
-    assert!(claude
+    assert!(!claude
         .capabilities
         .iter()
-        .any(|capability| capability == "fixed_maintenance_commands"));
+        .any(|capability| capability.contains("maintenance")));
     assert!(claude.safety.contains("read-only"));
 
     assert!(providers
@@ -659,25 +657,6 @@ fn claude_code_overview_reports_recent_sessions_install_and_cache_status() {
     assert_eq!(overview.cache_status.log_file_count, 1);
 
     fs::remove_dir_all(overview.installation.claude_home).unwrap();
-}
-
-#[test]
-fn claude_maintenance_commands_are_fixed_shell_commands() {
-    let commands = claude_maintenance_commands();
-
-    assert_eq!(commands.version_check.name, "version_check");
-    assert_eq!(commands.version_check.command, "claude --version");
-    assert!(commands
-        .update_precheck
-        .command
-        .contains("command -v claude"));
-    assert!(commands
-        .update_start
-        .command
-        .contains("npm install -g @anthropic-ai/claude-code"));
-    assert!(commands.smoke.command.contains("claude -p"));
-    assert!(commands.cache_log_status.command.contains("$HOME/.claude"));
-    assert!(!commands.update_start.command.contains("{}"));
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

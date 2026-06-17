@@ -1,5 +1,6 @@
 import type {
   ArchiveDeletePlan,
+  ArchiveDeleteResult,
   AgentProviderInfo,
   ClaudeOverview,
   CodexConfig,
@@ -397,13 +398,6 @@ export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOver
           log_exists: true,
           log_file_count: 2,
           log_total_bytes: 2048
-        },
-        maintenance_commands: {
-          version_check: { name: "version_check", title: "Claude Code version", command: "claude --version", description: "Print the installed Claude Code CLI version." },
-          update_precheck: { name: "update_precheck", title: "Claude Code update precheck", command: "command -v claude && claude --version && npm view @anthropic-ai/claude-code version", description: "Check current and latest versions." },
-          update_start: { name: "update_start", title: "Claude Code update", command: "npm install -g @anthropic-ai/claude-code@latest && claude --version", description: "Install the latest package." },
-          smoke: { name: "smoke", title: "Claude Code smoke test", command: "claude -p 'Respond with OK for NexusHub smoke check.' --max-turns 1", description: "Run a bounded prompt smoke test." },
-          cache_log_status: { name: "cache_log_status", title: "Claude Code cache and log status", command: "find ~/.claude -maxdepth 2 -type f | wc -l", description: "Print cache and log counts." }
         }
       }
     };
@@ -641,8 +635,8 @@ export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<Ar
   return apiFetch<ArchiveDeletePlan>("/api/archives/delete/dry-run", { method: "POST", csrfToken });
 }
 
-export async function startArchiveDelete(csrfToken?: string | null) {
-  return apiFetch("/api/archives/delete/execute", {
+export async function startArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeleteResult> {
+  return apiFetch<ArchiveDeleteResult>("/api/archives/delete/execute", {
     method: "POST",
     csrfToken,
     body: JSON.stringify({ confirmed: true })
@@ -704,29 +698,21 @@ export async function startJob(path: string, csrfToken?: string | null): Promise
   return apiFetch<{ job_id: string }>(path, { method: "POST", csrfToken });
 }
 
-export type UpdateTarget = "panel" | "codex";
+export type UpdateTarget = "panel";
 export type UpdateAction = "precheck" | "start" | "prune";
 
-const updateRouteCandidates: Record<UpdateTarget, Record<UpdateAction, string[]>> = {
-  panel: {
-    precheck: ["/api/system/panel/update/precheck", "/api/panel/update/precheck"],
-    start: ["/api/system/panel/update/start", "/api/panel/update/start"],
-    prune: ["/api/system/panel/update/prune", "/api/panel/update/prune"]
-  },
-  codex: {
-    precheck: ["/api/system/codex/update/precheck", "/api/codex/update/precheck", "/api/system/update/precheck"],
-    start: ["/api/system/codex/update/start", "/api/codex/update/start", "/api/system/update/start"],
-    prune: ["/api/system/codex/update/prune", "/api/codex/update/prune", "/api/system/update/prune"]
-  }
+const panelUpdateRoutes: Record<UpdateAction, string> = {
+  precheck: "/api/system/panel/update/precheck",
+  start: "/api/system/panel/update/start",
+  prune: "/api/system/panel/update/prune"
 };
 
 export async function startUpdateJob(target: UpdateTarget, action: UpdateAction, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (USE_DEMO) return { job_id: `${target}-${action}-demo` };
-  return apiFetchFirst<{ job_id: string }>(
-    updateRouteCandidates[target][action],
-    { method: "POST", csrfToken },
-    `${target} ${action}`
-  );
+  if (target !== "panel") {
+    throw new ApiError(`Unsupported update target: ${String(target)}`, 400);
+  }
+  if (USE_DEMO) return { job_id: `panel-${action}-demo` };
+  return apiFetch<{ job_id: string }>(panelUpdateRoutes[action], { method: "POST", csrfToken });
 }
 
 const probeJobRoutes: Record<ProbeJobAction, { path: string; body?: Record<string, unknown> }> = {
@@ -744,19 +730,6 @@ export async function startProbeJob(action: ProbeJobAction, csrfToken?: string |
     csrfToken,
     body: route.body ? JSON.stringify(route.body) : undefined
   });
-}
-
-const claudeCodeJobRoutes = {
-  "version-check": "/api/providers/claude-code/jobs/version-check",
-  "update-precheck": "/api/providers/claude-code/jobs/update/precheck",
-  "update-start": "/api/providers/claude-code/jobs/update/start",
-  smoke: "/api/providers/claude-code/jobs/smoke",
-  "cache-status": "/api/providers/claude-code/jobs/cache-status"
-} as const;
-
-export async function startClaudeCodeJob(action: keyof typeof claudeCodeJobRoutes, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (USE_DEMO) return { job_id: `claude-code-${action}-demo` };
-  return apiFetch<{ job_id: string }>(claudeCodeJobRoutes[action], { method: "POST", csrfToken });
 }
 
 export type ThreadSendPayload = {
@@ -1118,7 +1091,7 @@ export async function listJobs(): Promise<JobRecord[]> {
     return [
       { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "Probe Bark 测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "POST https://api.day.app\nHTTP 200\nBark push accepted" },
       { id: "probe-logs-demo", kind: "probe_logs_db_maintain", status: "succeeded", title: "Probe logs-db dry-run", started_at: 1780731666, finished_at: 1780731672, exit_code: 0, output: "dry_run=true\nwould_delete_probe_events=42\ncompact=false" },
-      { id: "job-demo", kind: "update_precheck", status: "succeeded", title: "Codex update precheck", started_at: 1780731606, output: "codex-cli 0.137.0\nintegrity_check: ok" },
+      { id: "job-demo", kind: "panel_update_precheck", status: "succeeded", title: "Panel update precheck", started_at: 1780731606, output: "panel version check\nintegrity_check: ok" },
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }

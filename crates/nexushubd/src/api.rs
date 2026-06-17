@@ -103,26 +103,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
         .route("/api/probe/logs-db/maintain", post(probe_logs_db_maintain))
         .route("/api/probe/bark/test", post(probe_bark_test))
-        .route(
-            "/api/providers/claude-code/jobs/version-check",
-            post(claude_code_version_check),
-        )
-        .route(
-            "/api/providers/claude-code/jobs/update/precheck",
-            post(claude_code_update_precheck),
-        )
-        .route(
-            "/api/providers/claude-code/jobs/update/start",
-            post(claude_code_update_start),
-        )
-        .route(
-            "/api/providers/claude-code/jobs/smoke",
-            post(claude_code_smoke),
-        )
-        .route(
-            "/api/providers/claude-code/jobs/cache-status",
-            post(claude_code_cache_status),
-        )
         .route("/api/threads", get(list_threads).post(create_thread))
         .route("/api/threads/:id", get(thread_detail))
         .route("/api/threads/:id/blocks", get(thread_blocks))
@@ -159,15 +139,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/system/panel/update/start", post(panel_update_start))
         .route("/api/system/panel/update/prune", post(panel_update_prune))
-        .route(
-            "/api/system/codex/update/precheck",
-            post(codex_update_precheck),
-        )
-        .route("/api/system/codex/update/start", post(codex_update_start))
-        .route("/api/system/codex/update/prune", post(codex_update_prune))
-        .route("/api/system/update/precheck", post(codex_update_precheck))
-        .route("/api/system/update/start", post(codex_update_start))
-        .route("/api/system/update/prune", post(codex_update_prune))
         .route("/api/codex/models", get(codex_models))
         .route(
             "/api/codex/permission-profiles",
@@ -630,103 +601,6 @@ async fn start_probe_fixed_job(
     let id = state
         .jobs
         .start_exclusive_shell_job(kind, title, command, group)
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
-    ok(json!({"job_id": id}))
-}
-
-async fn claude_code_version_check(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    start_claude_code_fixed_job(
-        state,
-        headers,
-        "claude_code_version_check",
-        "Claude Code version check",
-        "command -v claude && claude --version",
-        "claude_code_version_check",
-    )
-    .await
-}
-
-async fn claude_code_update_precheck(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    start_claude_code_fixed_job(
-        state,
-        headers,
-        "claude_code_update_precheck",
-        "Claude Code update precheck",
-        "command -v claude && claude --version && npm view @anthropic-ai/claude-code version",
-        "claude_code_update_precheck",
-    )
-    .await
-}
-
-async fn claude_code_update_start(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    start_claude_code_fixed_job(
-        state,
-        headers,
-        "claude_code_update_start",
-        "Claude Code update",
-        "npm install -g @anthropic-ai/claude-code@latest && claude --version",
-        "claude_code_update_start",
-    )
-    .await
-}
-
-async fn claude_code_smoke(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_claude_code_fixed_job(
-        state,
-        headers,
-        "claude_code_smoke",
-        "Claude Code smoke",
-        "claude -p 'ping' --output-format json",
-        "claude_code_smoke",
-    )
-    .await
-}
-
-async fn claude_code_cache_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    start_claude_code_fixed_job(
-        state,
-        headers,
-        "claude_code_cache_status",
-        "Claude Code cache/log status",
-        "printf 'Claude home: '; printf '%s\\n' \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"; du -sh \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" 2>/dev/null || true; find \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\" -maxdepth 2 -type f 2>/dev/null | wc -l",
-        "claude_code_status",
-    )
-    .await
-}
-
-async fn start_claude_code_fixed_job(
-    state: AppState,
-    headers: HeaderMap,
-    kind: &str,
-    title: &str,
-    command: &str,
-    group: &str,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        &format!("{kind}.started"),
-        Some("claude_code"),
-        Some(title),
-        None,
-        json!({}),
-    )?;
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(kind, title, command.to_string(), group)
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
@@ -2785,67 +2659,6 @@ async fn panel_update_prune(State(state): State<AppState>, headers: HeaderMap) -
         "Panel backup prune",
         update::panel_prune_command(),
     )?;
-    ok(json!({"job_id": id}))
-}
-
-async fn codex_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(
-            "codex_update_precheck",
-            "Codex update precheck",
-            state.config().update.precheck_command.clone(),
-            "codex_update",
-        )
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
-    ok(json!({"job_id": id}))
-}
-
-async fn codex_update_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "system.update.started",
-        Some("system"),
-        Some("codex"),
-        None,
-        json!({}),
-    )?;
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(
-            "codex_update_start",
-            "Codex update + prune + doctor",
-            state.config().update.update_command.clone(),
-            "codex_update",
-        )
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
-    ok(json!({"job_id": id}))
-}
-
-async fn codex_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "system.update.prune_started",
-        Some("system"),
-        Some("codex"),
-        None,
-        json!({}),
-    )?;
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(
-            "codex_update_prune",
-            "Codex release prune",
-            state.config().update.prune_command.clone(),
-            "codex_update",
-        )
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
 
@@ -5046,45 +4859,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn panel_prune_route_requires_csrf_and_starts_fixed_panel_job() {
+    async fn panel_update_routes_require_auth_and_csrf_and_start_fixed_panel_jobs() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
-        let missing_csrf = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/system/panel/update/prune")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+        for (uri, kind, title) in [
+            (
+                "/api/system/panel/update/precheck",
+                "panel_update_precheck",
+                "Panel update precheck",
+            ),
+            (
+                "/api/system/panel/update/start",
+                "panel_update_start",
+                "Panel update latest",
+            ),
+            (
+                "/api/system/panel/update/prune",
+                "panel_update_prune",
+                "Panel backup prune",
+            ),
+        ] {
+            let unauthorized = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED, "{uri}");
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/system/panel/update/prune")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            let missing_csrf = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN, "{uri}");
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let job_id = payload["job_id"].as_str().unwrap();
-        let job = state.db.job(job_id).unwrap().unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(job.kind, "panel_update_prune");
-        assert_eq!(job.title, "Panel backup prune");
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let job_id = payload["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+
+            assert_eq!(job.kind, kind, "{uri}");
+            assert_eq!(job.title, title, "{uri}");
+        }
     }
 
     #[tokio::test]
@@ -6014,71 +5859,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_code_fixed_job_routes_require_csrf_and_start_known_jobs() {
+    async fn obsolete_codex_and_claude_code_job_routes_return_404() {
         let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state.clone());
+        let app = router(state);
 
-        let missing_csrf = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/providers/claude-code/jobs/smoke")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+        let obsolete_uris = [
+            "/api/system/codex/update/precheck",
+            "/api/system/codex/update/start",
+            "/api/system/codex/update/prune",
+            "/api/system/update/precheck",
+            "/api/system/update/start",
+            "/api/system/update/prune",
+            "/api/providers/claude-code/jobs/version-check",
+            "/api/providers/claude-code/jobs/update/precheck",
+            "/api/providers/claude-code/jobs/update/start",
+            "/api/providers/claude-code/jobs/smoke",
+            "/api/providers/claude-code/jobs/cache-status",
+        ];
 
-        for (uri, kind, title) in [
-            (
-                "/api/providers/claude-code/jobs/version-check",
-                "claude_code_version_check",
-                "Claude Code version check",
-            ),
-            (
-                "/api/providers/claude-code/jobs/update/precheck",
-                "claude_code_update_precheck",
-                "Claude Code update precheck",
-            ),
-            (
-                "/api/providers/claude-code/jobs/update/start",
-                "claude_code_update_start",
-                "Claude Code update",
-            ),
-            (
-                "/api/providers/claude-code/jobs/smoke",
-                "claude_code_smoke",
-                "Claude Code smoke",
-            ),
-            (
-                "/api/providers/claude-code/jobs/cache-status",
-                "claude_code_cache_status",
-                "Claude Code cache/log status",
-            ),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            let job_id = payload["job_id"].as_str().unwrap();
-            let job = state.db.job(job_id).unwrap().unwrap();
-            assert_eq!(job.kind, kind);
-            assert_eq!(job.title, title);
+        for method in ["POST", "GET"] {
+            for uri in obsolete_uris {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(uri)
+                            .header("cookie", format!("nexushub_session={session_token}"))
+                            .header("x-csrf-token", csrf_token.as_str())
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
+            }
         }
     }
 

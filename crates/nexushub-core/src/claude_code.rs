@@ -126,23 +126,6 @@ pub struct ClaudeCacheLogStatus {
     pub log_total_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ClaudeMaintenanceCommand {
-    pub name: String,
-    pub title: String,
-    pub command: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ClaudeMaintenanceCommands {
-    pub version_check: ClaudeMaintenanceCommand,
-    pub update_precheck: ClaudeMaintenanceCommand,
-    pub update_start: ClaudeMaintenanceCommand,
-    pub smoke: ClaudeMaintenanceCommand,
-    pub cache_log_status: ClaudeMaintenanceCommand,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeOverview {
     pub home: PathBuf,
@@ -153,7 +136,6 @@ pub struct ClaudeOverview {
     pub mcp: ClaudeMcpSummary,
     pub installation: ClaudeInstallationSummary,
     pub cache_status: ClaudeCacheLogStatus,
-    pub maintenance_commands: ClaudeMaintenanceCommands,
 }
 
 pub fn claude_overview(paths: &ClaudePaths) -> Result<ClaudeOverview> {
@@ -168,58 +150,8 @@ pub fn claude_overview(paths: &ClaudePaths) -> Result<ClaudeOverview> {
         mcp: read_mcp_summary(paths, settings_preview.as_ref()),
         installation: read_installation_summary(paths),
         cache_status: read_cache_log_status(paths),
-        maintenance_commands: claude_maintenance_commands(),
         projects,
     })
-}
-
-pub fn claude_maintenance_commands() -> ClaudeMaintenanceCommands {
-    ClaudeMaintenanceCommands {
-        version_check: fixed_command(
-            "version_check",
-            "Claude Code version",
-            "claude --version",
-            "Print the installed Claude Code CLI version.",
-        ),
-        update_precheck: fixed_command(
-            "update_precheck",
-            "Claude Code update precheck",
-            "command -v claude && claude --version && npm view @anthropic-ai/claude-code version",
-            "Check the current CLI path/version and the latest npm package version.",
-        ),
-        update_start: fixed_command(
-            "update_start",
-            "Claude Code update",
-            "npm install -g @anthropic-ai/claude-code@latest && claude --version",
-            "Install the latest Claude Code npm package and print the resulting version.",
-        ),
-        smoke: fixed_command(
-            "smoke",
-            "Claude Code smoke test",
-            "claude -p 'Respond with OK for NexusHub smoke check.' --max-turns 1",
-            "Run a bounded read-only prompt smoke test.",
-        ),
-        cache_log_status: fixed_command(
-            "cache_log_status",
-            "Claude Code cache and log status",
-            "CLAUDE_HOME=\"${CLAUDE_HOME:-$HOME/.claude}\"; printf 'CLAUDE_HOME=%s\\n' \"$CLAUDE_HOME\"; test -d \"$CLAUDE_HOME/cache\" && find \"$CLAUDE_HOME/cache\" -type f | wc -l || true; test -d \"$CLAUDE_HOME/logs\" && find \"$CLAUDE_HOME/logs\" -type f | wc -l || true",
-            "Print cache and log file counts for the configured Claude home.",
-        ),
-    }
-}
-
-fn fixed_command(
-    name: &str,
-    title: &str,
-    command: &str,
-    description: &str,
-) -> ClaudeMaintenanceCommand {
-    ClaudeMaintenanceCommand {
-        name: name.to_string(),
-        title: title.to_string(),
-        command: command.to_string(),
-        description: description.to_string(),
-    }
 }
 
 pub fn discover_claude_projects(paths: &ClaudePaths) -> Result<Vec<ClaudeProject>> {

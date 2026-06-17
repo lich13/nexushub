@@ -237,6 +237,15 @@ export type ArchiveDeletePlan = {
   integrity: string;
 };
 
+export type ArchiveDeleteResult = {
+  before: ArchiveDeletePlan;
+  after_total_threads: number;
+  after_active_threads: number;
+  after_archived_threads: number;
+  after_integrity: string;
+  deleted_rollout_files: number;
+};
+
 export type HiddenThreadDeletePlan = {
   total_threads: number;
   visible_threads: number;
@@ -339,13 +348,6 @@ export type ClaudeCacheLogStatus = {
   log_total_bytes: number;
 };
 
-export type ClaudeMaintenanceCommand = {
-  name: string;
-  title: string;
-  command: string;
-  description: string;
-};
-
 export type ClaudeOverview = {
   home: string;
   settings_exists: boolean;
@@ -355,7 +357,6 @@ export type ClaudeOverview = {
   mcp?: ClaudeMcpSummary;
   installation?: ClaudeInstallationSummary;
   cache_status?: ClaudeCacheLogStatus;
-  maintenance_commands?: Record<string, ClaudeMaintenanceCommand>;
 };
 
 export type PlatformOverview = {
@@ -568,8 +569,6 @@ export type ProbeLogsDbStatus = {
 };
 
 export type SentinelStatus = ProbeStatus;
-
-export type ClaudeCodeJobAction = "version-check" | "update-precheck" | "update-start" | "smoke" | "cache-status";
 
 export type CodexModel = {
   id: string;
