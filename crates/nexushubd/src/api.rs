@@ -16,7 +16,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{delete, get, post},
+    routing::{any, delete, get, post},
     Json, Router,
 };
 use nexushub_core::{
@@ -166,11 +166,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/:id", get(job_detail))
         .route("/api/jobs/:id/events", get(job_events))
+        .route("/api/*path", any(api_not_found))
         .with_state(state)
 }
 
 async fn healthz() -> ApiResponse {
     ok(json!({"ok": true}))
+}
+
+async fn api_not_found() -> ApiResponse {
+    Err(api_error(StatusCode::NOT_FOUND, "not found"))
 }
 
 async fn public_settings(State(state): State<AppState>) -> ApiResponse {
@@ -5894,6 +5899,23 @@ mod tests {
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
             }
+        }
+
+        for method in ["POST", "GET"] {
+            let uri = "/api/no-such-route";
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
         }
     }
 
