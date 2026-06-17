@@ -2,11 +2,54 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
+cd "${ROOT}"
+
 DIST="${ROOT}/dist"
+TAURI_DIR="${TAURI_DIR:-${ROOT}/src-tauri}"
+DESKTOP_UI_DIR="${DESKTOP_UI_DIR:-${ROOT}/desktop-ui}"
+TAURI_TARGET_DIR="${TAURI_TARGET_DIR:-${TAURI_DIR}/target}"
+TAURI_CLI="${TAURI_CLI:-${DESKTOP_UI_DIR}/node_modules/.bin/tauri}"
 
 cargo_package_version() {
   cargo pkgid --package nexushubd --manifest-path "${ROOT}/Cargo.toml" |
     awk -F# '{print $NF}'
+}
+
+die() {
+  echo "package-darwin-arm64.sh: $*" >&2
+  exit 1
+}
+
+find_tauri_artifact() {
+  local pattern="$1"
+  local root
+  local found=""
+
+  for root in \
+    "${TAURI_TARGET_DIR}/release/bundle" \
+    "${TAURI_TARGET_DIR}/aarch64-apple-darwin/release/bundle"
+  do
+    [[ -d "${root}" ]] || continue
+    found="$(find "${root}" -name "${pattern}" -print 2>/dev/null | sort | tail -n 1)"
+    [[ -n "${found}" ]] && break
+  done
+
+  [[ -n "${found}" ]] || die "missing Tauri artifact matching ${pattern}"
+  printf '%s\n' "${found}"
+}
+
+assert_app_only_archive() {
+  local root="$1"
+  local entries=()
+
+  [[ -d "${root}/NexusHub.app" ]] || die "archive root must contain NexusHub.app"
+  while IFS= read -r entry; do
+    entries+=("${entry}")
+  done < <(find "${root}" -mindepth 1 -maxdepth 1 -print | sort)
+
+  if [[ "${#entries[@]}" -ne 1 || "${entries[0]}" != "${root}/NexusHub.app" ]]; then
+    die "archive root must contain only NexusHub.app"
+  fi
 }
 
 OS="$(uname -s)"
@@ -24,91 +67,40 @@ VERSION="${VERSION:-$(cargo_package_version)}"
 TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
 DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
 
+[[ -d "${TAURI_DIR}" ]] || die "missing Tauri project directory: ${TAURI_DIR}"
+[[ -d "${DESKTOP_UI_DIR}" ]] || die "missing desktop UI project directory: ${DESKTOP_UI_DIR}"
+
 mkdir -p "${DIST}"
 
-if [[ "${SKIP_WEBUI_BUILD:-0}" != "1" ]]; then
-  corepack pnpm@11.0.8 --dir "${ROOT}/webui" install
-  VITE_BASE="${VITE_BASE:-/nexushub/}" corepack pnpm@11.0.8 --dir "${ROOT}/webui" build
+if [[ "${SKIP_DESKTOP_UI_INSTALL:-0}" != "1" ]]; then
+  corepack pnpm@11.0.8 --dir "${DESKTOP_UI_DIR}" install
 fi
 
-cargo build --release --package nexushubd
+[[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
+
+if [[ "${SKIP_TAURI_BUILD:-0}" != "1" ]]; then
+  "${TAURI_CLI}" build --config "${TAURI_DIR}/tauri.conf.json" --bundles app,dmg
+fi
+
+APP_BUNDLE="$(find_tauri_artifact "NexusHub.app")"
+TAURI_DMG="$(find_tauri_artifact "*.dmg")"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
-PAYLOAD="${TMP}/NexusHub"
-mkdir -p "${PAYLOAD}/bin" "${PAYLOAD}/webui/dist"
-cp "${ROOT}/target/release/nexushubd" "${PAYLOAD}/bin/"
-cp -a "${ROOT}/webui/dist/." "${PAYLOAD}/webui/dist/"
-cp "${ROOT}/deploy/nexushub/macos/install.sh" "${PAYLOAD}/"
-cp "${ROOT}/deploy/nexushub/macos/uninstall.sh" "${PAYLOAD}/"
-cp "${ROOT}/deploy/nexushub/macos/com.nexushub.nexushub.plist" "${PAYLOAD}/"
-cp "${ROOT}/deploy/nexushub/macos/README.md" "${PAYLOAD}/"
-chmod +x "${PAYLOAD}/install.sh" "${PAYLOAD}/uninstall.sh" "${PAYLOAD}/bin/nexushubd"
-
-tar -C "${TMP}" -czf "${DIST}/${TARBALL_ASSET}" NexusHub
-
-DMG_SRC="${TMP}/dmg"
-mkdir -p "${DMG_SRC}"
-cp -a "${PAYLOAD}" "${DMG_SRC}/NexusHub"
-cat > "${DMG_SRC}/Install.command" <<'COMMAND'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-exec "${DIR}/NexusHub/install.sh"
-COMMAND
-cat > "${DMG_SRC}/Uninstall.command" <<'COMMAND'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-exec "${DIR}/NexusHub/uninstall.sh"
-COMMAND
-chmod +x "${DMG_SRC}/Install.command" "${DMG_SRC}/Uninstall.command"
-
-APP_DIR="${DMG_SRC}/NexusHub.app"
-mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
-cat > "${APP_DIR}/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>NexusHub</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.nexushub.launcher</string>
-  <key>CFBundleName</key>
-  <string>NexusHub</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>__VERSION__</string>
-  <key>CFBundleVersion</key>
-  <string>__VERSION__</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-</dict>
-</plist>
-PLIST
-sed -i '' "s#__VERSION__#${VERSION}#g" "${APP_DIR}/Contents/Info.plist"
-cat > "${APP_DIR}/Contents/MacOS/NexusHub" <<'APP'
-#!/usr/bin/env bash
-open "http://127.0.0.1:15742/nexushub/"
-APP
-chmod +x "${APP_DIR}/Contents/MacOS/NexusHub"
-ln -s /Applications "${DMG_SRC}/Applications"
-
-hdiutil create \
-  -volname "NexusHub ${VERSION}" \
-  -srcfolder "${DMG_SRC}" \
-  -ov \
-  -format UDZO \
-  "${DIST}/${DMG_ASSET}"
+APP_ARCHIVE_ROOT="${TMP}/app-archive"
+mkdir -p "${APP_ARCHIVE_ROOT}"
+cp -a "${APP_BUNDLE}" "${APP_ARCHIVE_ROOT}/NexusHub.app"
 
 if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
-  codesign --force --sign "${MACOS_CODESIGN_IDENTITY}" "${DIST}/${DMG_ASSET}"
+  codesign --force --deep --sign "${MACOS_CODESIGN_IDENTITY}" "${APP_ARCHIVE_ROOT}/NexusHub.app"
+  codesign --verify --deep --strict "${APP_ARCHIVE_ROOT}/NexusHub.app"
 fi
+
+assert_app_only_archive "${APP_ARCHIVE_ROOT}"
+tar -C "${APP_ARCHIVE_ROOT}" -czf "${DIST}/${TARBALL_ASSET}" NexusHub.app
+
+cp "${TAURI_DMG}" "${DIST}/${DMG_ASSET}"
 
 (
   cd "${DIST}"

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NexusHub",
+  "version": "0.1.98",
+  "identifier": "com.lich13.nexushub",
+  "mainBinaryName": "nexushub",
+  "build": {
+    "frontendDist": "../desktop-ui/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "corepack pnpm@11.0.8 --dir desktop-ui dev --host 127.0.0.1",
+    "beforeBuildCommand": "corepack pnpm@11.0.8 --dir desktop-ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NexusHub",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1000,
+        "minHeight": 680,
+        "maximized": true,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

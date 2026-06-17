@@ -429,8 +429,8 @@ fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> Stri
             "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"
         ),
         PlatformKind::Macos => format!(
-            "launchctl print gui/$(id -u)/{} >/dev/null && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz",
-            platform.service_name
+            "test -d {}",
+            shell_quote(&platform.data_dir.display().to_string())
         ),
         PlatformKind::Windows => format!("curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"),
     }
@@ -1032,17 +1032,33 @@ fn toml_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Config, ProbeConfigFilePatch, ProbeSettingsPatch};
+    use crate::platform::PlatformKind;
     use std::{fs, time::SystemTime};
 
     #[test]
-    fn default_config_uses_loopback_panel_port() {
-        let config = Config::default();
+    fn linux_config_uses_loopback_panel_port() {
+        let config = Config::for_platform_kind(PlatformKind::Linux);
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         assert!(config
             .update
             .panel_precheck_command
             .contains("http://127.0.0.1:15742/healthz"));
         assert_eq!(config.codex.home.to_string_lossy(), "auto");
+    }
+
+    #[test]
+    fn macos_config_uses_tauri_app_precheck() {
+        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
+
+        assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
+        assert_eq!(
+            config.update.panel_precheck_command,
+            "test -d '/Users/example/Library/Application Support/NexusHub'"
+        );
+        assert!(!config
+            .update
+            .panel_precheck_command
+            .contains("http://127.0.0.1:15742/healthz"));
     }
 
     #[test]
@@ -1360,10 +1376,19 @@ host_label = "old"
         assert_eq!(config.security.session_ttl_seconds, 31_536_000);
         assert_eq!(config.codex.host_label, "43.155.235.227");
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
-        assert!(config
-            .update
-            .panel_precheck_command
-            .contains("http://127.0.0.1:15742/healthz"));
+        match super::current_platform_kind() {
+            PlatformKind::Linux | PlatformKind::Windows => assert!(config
+                .update
+                .panel_precheck_command
+                .contains("http://127.0.0.1:15742/healthz")),
+            PlatformKind::Macos => {
+                assert!(config.update.panel_precheck_command.starts_with("test -d "));
+                assert!(!config
+                    .update
+                    .panel_precheck_command
+                    .contains("http://127.0.0.1:15742/healthz"));
+            }
+        }
         assert_eq!(
             config.security.turnstile_expected_action.as_deref(),
             Some("login")

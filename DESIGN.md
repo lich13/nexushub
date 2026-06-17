@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. It should feel closer to a Linear/Raycast developer tool than a marketing page.
+NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. Tencent Cloud Linux keeps the browser WebUI at `https://661313.xyz/nexushub/`; macOS uses the native Tauri App entry instead of a browser WebUI or LaunchAgent Web service. It should feel closer to a Linear/Raycast developer tool than a marketing page.
 
 ## Visual Direction
 
@@ -53,7 +53,7 @@ NexusHub is a dense remote-operations console for cloud Codex local state and co
 - Proposed Plan cells live in the message history and show the plan body plus `接受计划` / `修改计划` / `保持计划模式` actions only when still current. Historical plans are read-only.
 - Questions cells live in the message history and show option buttons, selected state, submit state, and answered history. Old answered questions must not appear as pending.
 - Historical chat/tool volume is collapsed behind `显示全部历史`; expanding must not move the composer or create horizontal overflow.
-- Rendered WebUI release acceptance uses Chrome 插件验收 for current logged-in flows.
+- Rendered Linux WebUI release acceptance uses Chrome 插件验收 for current logged-in flows; macOS acceptance uses the native Tauri App.
 
 ## Mobile Rules
 

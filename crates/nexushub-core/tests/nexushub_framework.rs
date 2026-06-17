@@ -1,6 +1,9 @@
 use nexushub_core::{
     claude_code::{claude_overview, discover_claude_projects, ClaudePaths},
     config::Config,
+    local::{
+        default_codex_models, default_permission_profiles, local_codex_config, local_plugin_catalog,
+    },
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
@@ -55,7 +58,7 @@ fn linux_default_config_values_stay_cloud_compatible() {
 }
 
 #[test]
-fn macos_default_config_uses_application_support_and_launchctl() {
+fn macos_default_config_uses_application_support_and_tauri_app_paths() {
     let home = temp_dir("nexushub-macos-default-home");
     fs::create_dir_all(&home).unwrap();
     let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
@@ -70,7 +73,7 @@ fn macos_default_config_uses_application_support_and_launchctl() {
     );
     assert_eq!(
         config.paths.webui_dir,
-        home.join("Library/Application Support/NexusHub/webui")
+        home.join("Library/Application Support/NexusHub/desktop-assets")
     );
     assert_eq!(config.paths.log_dir, home.join("Library/Logs/NexusHub"));
     assert_eq!(config.codex.home.to_string_lossy(), "auto");
@@ -81,11 +84,16 @@ fn macos_default_config_uses_application_support_and_launchctl() {
         .to_string_lossy()
         .contains("/home/ubuntu"));
     assert!(!config.update.doctor_command.contains("/home/ubuntu"));
-    assert!(config.update.panel_precheck_command.contains("launchctl"));
     assert!(config
         .update
         .panel_precheck_command
-        .contains("http://127.0.0.1:15742/healthz"));
+        .contains("Library/Application Support/NexusHub"));
+    assert!(config.update.panel_precheck_command.contains("test -d"));
+    assert!(!config.update.panel_precheck_command.contains("launchctl"));
+    assert!(!config
+        .update
+        .panel_precheck_command
+        .contains("http://127.0.0.1:15742"));
     assert!(!config.update.panel_precheck_command.contains("systemctl"));
     assert!(!toml::to_string(&config).unwrap().contains("/opt/nexushub"));
     assert!(!toml::to_string(&config).unwrap().contains("/home/ubuntu"));
@@ -113,15 +121,12 @@ fn platform_paths_cover_linux_macos_and_windows() {
     );
     assert_eq!(
         macos.webui_dir,
-        mac_home.join("Library/Application Support/NexusHub/webui")
+        mac_home.join("Library/Application Support/NexusHub/desktop-assets")
     );
     assert_eq!(macos.log_dir, mac_home.join("Library/Logs/NexusHub"));
-    assert_eq!(
-        macos.service_file,
-        Some(mac_home.join("Library/LaunchAgents/com.nexushub.nexushub.plist"))
-    );
-    assert_eq!(macos.service_name, "com.nexushub.nexushub");
-    assert_eq!(macos.service_kind, "launchd");
+    assert_eq!(macos.service_file, None);
+    assert_eq!(macos.service_name, "NexusHub.app");
+    assert_eq!(macos.service_kind, "tauri");
     assert_eq!(
         PlatformPaths::for_kind(PlatformKind::Windows).data_dir,
         PathBuf::from(r"%ProgramData%\NexusHub")
@@ -165,6 +170,71 @@ fn provider_registry_exposes_codex_and_claude_preview() {
     assert!(providers
         .iter()
         .any(|provider| provider.id == AgentProviderId::Gemini));
+}
+
+#[test]
+fn local_plugin_catalog_matches_existing_builtin_surface() {
+    let plugins = local_plugin_catalog();
+    let plugin_json = serde_json::to_value(&plugins).unwrap();
+
+    assert_eq!(plugin_json.as_array().unwrap().len(), 4);
+    assert_eq!(plugin_json[0]["id"], "codex");
+    assert_eq!(plugin_json[0]["status"], "ready");
+    assert_eq!(plugin_json[0]["kind"], "builtin");
+    assert_eq!(plugin_json[0]["invocation_template"], "@Codex ");
+    assert_eq!(plugin_json[1]["id"], "probe");
+    assert_eq!(plugin_json[2]["id"], "claude_code");
+    assert_eq!(plugin_json[2]["status"], "preview");
+    assert_eq!(
+        plugin_json[2]["unavailable_reason"],
+        "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code"
+    );
+    assert_eq!(plugin_json[3]["id"], "system_ops");
+}
+
+#[test]
+fn local_codex_helpers_are_serializable_for_desktop_commands() {
+    let models = serde_json::to_value(default_codex_models()).unwrap();
+    assert_eq!(models[0]["id"], "gpt-5.5");
+    assert_eq!(models[0]["default"], true);
+    assert!(models.as_array().unwrap().len() >= 5);
+
+    let profiles = serde_json::to_value(default_permission_profiles()).unwrap();
+    assert_eq!(profiles[0]["id"], "danger-full-access");
+    assert_eq!(profiles[0]["sandbox_mode"], "danger-full-access");
+    assert_eq!(profiles[0]["approval_policy"], "never");
+    assert_eq!(profiles[0]["network_access"], true);
+    assert_eq!(profiles[1]["id"], "workspace-write");
+    assert_eq!(profiles[2]["id"], "read-only");
+    assert_eq!(profiles[2]["network_access"], false);
+}
+
+#[test]
+fn local_codex_config_uses_trimmed_cwd_or_workspace_without_side_effects() {
+    let home = temp_dir("nexushub-local-config-home");
+    fs::create_dir_all(&home).unwrap();
+    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+    config.codex.workspace = home.join("workspace");
+
+    let default_response = serde_json::to_value(local_codex_config(&config, Some("   "))).unwrap();
+    assert_eq!(
+        default_response["cwd"].as_str().unwrap(),
+        home.join("workspace").to_string_lossy()
+    );
+    assert_eq!(default_response["permission_profile"], "danger-full-access");
+    assert_eq!(default_response["approval_policy"], "never");
+    assert_eq!(default_response["sandbox_mode"], "danger-full-access");
+    assert_eq!(default_response["network_access"], true);
+    assert_eq!(default_response["raw"]["source"], "local");
+    assert_eq!(default_response["raw"]["available"], true);
+    assert!(default_response["model"].is_null());
+    assert!(default_response["reasoning_effort"].is_null());
+
+    let cwd_response =
+        serde_json::to_value(local_codex_config(&config, Some("  /tmp/nexushub  "))).unwrap();
+    assert_eq!(cwd_response["cwd"], "/tmp/nexushub");
+
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test]
@@ -362,7 +432,7 @@ fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() 
 }
 
 #[tokio::test]
-async fn macos_system_status_exposes_launchd_overview() {
+async fn macos_system_status_exposes_tauri_app_overview() {
     let home = temp_dir("nexushub-macos-system-home");
     let codex_home = home.join(".codex");
     fs::create_dir_all(&codex_home).unwrap();
@@ -373,8 +443,8 @@ async fn macos_system_status_exposes_launchd_overview() {
     let status = system_status_with_paths(&config, &paths).await.unwrap();
 
     assert_eq!(status.platform, PlatformKind::Macos);
-    assert_eq!(status.service_kind, "launchd");
-    assert_eq!(status.service_name, "com.nexushub.nexushub");
+    assert_eq!(status.service_kind, "tauri");
+    assert_eq!(status.service_name, "NexusHub.app");
     assert_eq!(
         status.config_path,
         home.join("Library/Application Support/NexusHub/config.toml")
@@ -383,15 +453,11 @@ async fn macos_system_status_exposes_launchd_overview() {
     );
     assert_eq!(
         status.webui_dir,
-        home.join("Library/Application Support/NexusHub/webui")
+        home.join("Library/Application Support/NexusHub/desktop-assets")
             .display()
             .to_string()
     );
-    let launch_agent = home
-        .join("Library/LaunchAgents/com.nexushub.nexushub.plist")
-        .display()
-        .to_string();
-    assert_eq!(status.service_file.as_deref(), Some(launch_agent.as_str()));
+    assert_eq!(status.service_file.as_deref(), None);
 
     fs::remove_dir_all(home).unwrap();
 }

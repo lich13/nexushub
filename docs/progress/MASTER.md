@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-17
-> **Mode**: V0.1.97_MACOS_BASE_PATH_PATCH
+> **Mode**: V0.1.98_MAC_TAURI_PLATFORM_SPLIT
 
 ## References
 
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.97 macOS base path patch<br>
-**Active Task**: `v0.1.97` fixes the released `v0.1.96` macOS loopback `/nexushub/` 404 by serving WebUI assets from both `/` and `/nexushub/`, keeps Tencent Cloud Linux acceptance unchanged, and removes hard-coded macOS DMG version names from the release workflow by deriving the DMG version from Cargo metadata.
-**Blockers**: None. Current rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA.
+**Active Phase**: v0.1.98 Mac Tauri platform split<br>
+**Active Task**: `v0.1.98` keeps Tencent Cloud Linux as the WebUI deployment at `https://661313.xyz/nexushub/`, changes macOS ARM64 documentation to the Tauri App entry, and removes Cloudflare Tunnel, browser local WebUI, and LaunchAgent Web service from the documented macOS capability surface.
+**Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation.
 
 ## Governance Status
 
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.97_MACOS_BASE_PATH_PATCH
+  mode: V0.1.98_MAC_TAURI_PLATFORM_SPLIT
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -109,6 +109,7 @@ adaptive:
 | 2026-06-15 | Task C deploy/docs auto-discovery | S | P/R pass | 0 | Deploy config omits fixed `codex.home`, systemd grants `/root/.codex` and `/home/ubuntu/.codex`, and docs cover no-new-backup compact plus post-health backup cleanup. |
 | 2026-06-17 | v0.1.96 dual-entry docs | S | P/R pass | 0 | Documented macOS ARM64 DMG local acceptance, preserved Tencent Cloud Linux `/opt/nexushub` systemd acceptance, and added optional Cloudflare Tunnel guidance with no token storage in repo/logs/assets/WebUI. |
 | 2026-06-17 | v0.1.97 macOS base path patch | S | P/R pending | 0 | Bumped workspace/package versions to `0.1.97`, fixed local `/nexushub/` static WebUI routing, changed macOS DMG packaging to derive the default version from Cargo metadata, and changed release asset upload paths to version globs. |
+| 2026-06-17 | v0.1.98 Mac Tauri platform split | S | P/R pending | 0 | Bumped workspace/package versions to `0.1.98`, kept Linux WebUI public entry at `https://661313.xyz/nexushub/`, documented macOS as Tauri App only, and removed Cloudflare Tunnel from the project capability docs. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -131,17 +132,16 @@ bash scripts/test-install-script.sh
 
 1. Keep `origin` pointed at `https://github.com/lich13/nexushub`.
 2. For every future release, wait for CI and Release workflows, verify release assets, deploy to `43.155.235.227`, and smoke `https://661313.xyz/nexushub/`.
-3. For macOS ARM64, verify DMG install with `http://127.0.0.1:15742/nexushub/`, `healthz`, `launchctl print gui/$(id -u)/com.nexushub.nexushub`, and `~/Library/Logs/NexusHub`.
-4. Treat Cloudflare Tunnel as optional ingress only: production hostnames require a user-owned Cloudflare zone/hostname and local `127.0.0.1:15742` origin; Quick Tunnel remains temporary preview only.
-5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public panel surface under `/nexushub/`.
+3. For macOS ARM64, verify the Tauri App with `open -a NexusHub` and `~/Library/Logs/NexusHub`; do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry.
+4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
+5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.97 Acceptance Matrix
+## v0.1.98 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
 | Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` | `systemctl is-active`, loopback `healthz`, public HTTPS smoke, `nexushubd doctor`, retired paths `404` |
-| macOS ARM64 | `http://127.0.0.1:15742/nexushub/` | LaunchAgent `com.nexushub.nexushub` | `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub` | loopback `healthz`, browser local load, `launchctl print`, log tail |
-| Optional Cloudflare Tunnel | user-owned hostname mapped to `http://127.0.0.1:15742` | `cloudflared`, separate from NexusHub service | Cloudflare credentials outside repo | `cloudflared tunnel info`, hostname smoke after Access/auth policy, no tokens or generated URLs in repo/logs/assets/WebUI |
+| macOS ARM64 | Tauri App bundle | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, app login/workspace smoke, log tail |
 
 ## Session Log
 
@@ -162,3 +162,4 @@ bash scripts/test-install-script.sh
 | 2026-06-15 | task-c-deploy-docs-auto-discovery | Updated deploy/script/docs surfaces for omitted Codex home auto-discovery, root/ubuntu systemd write paths, no-new-backup compact guidance, and cleanup only after health verification. |
 | 2026-06-17 | v0.1.96-dual-entry-docs | Updated README, cloud runbook, Cloudflare Tunnel guide, optional helper script, and static install-script assertions for Linux/macOS/Tunnel acceptance boundaries. |
 | 2026-06-17 | v0.1.97-macos-base-path-patch | Bumped patch versions to `0.1.97`, fixed local `/nexushub/` static WebUI routing, removed concrete `NexusHub-0.1.96-darwin-arm64.dmg` release workflow paths, and covered Cargo-derived macOS DMG versioning with install-script assertions. |
+| 2026-06-17 | v0.1.98-mac-tauri-platform-split | Bumped patch versions to `0.1.98`, kept Tencent Cloud Linux WebUI as `https://661313.xyz/nexushub/`, moved macOS docs to Tauri App-only acceptance, deleted the Cloudflare Tunnel guide, and updated static docs checks to guard against Tunnel and macOS browser WebUI regressions. |

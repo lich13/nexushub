@@ -51,7 +51,7 @@ function normalizeApiBase(base: string | undefined): string {
   return `/${value.replace(/^\/+|\/+$/g, "")}`;
 }
 
-const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE ?? import.meta.env.BASE_URL);
+const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE);
 const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
 
 export class ApiError extends Error {

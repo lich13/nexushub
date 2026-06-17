@@ -30,6 +30,7 @@ use nexushub_core::{
     },
     db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
     jobs::CodexActionResult,
+    local,
     platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
@@ -218,41 +219,7 @@ async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) ->
 
 async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!([
-        {
-            "id": "codex",
-            "label": "Codex",
-            "status": "ready",
-            "kind": "builtin",
-            "description": "Codex 本地状态、线程和受控 job 操作",
-            "invocation_template": "@Codex "
-        },
-        {
-            "id": "probe",
-            "label": "Probe",
-            "status": "ready",
-            "kind": "builtin",
-            "description": "云机探针状态、Hook、Bark 和日志库维护",
-            "invocation_template": "@Probe "
-        },
-        {
-            "id": "claude_code",
-            "label": "Claude Code",
-            "status": "preview",
-            "kind": "builtin",
-            "description": "Claude Code 项目、会话和 MCP 只读预览",
-            "unavailable_reason": "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code",
-            "invocation_template": "@Claude Code "
-        },
-        {
-            "id": "system_ops",
-            "label": "System/Ops",
-            "status": "ready",
-            "kind": "builtin",
-            "description": "固定系统运维动作和发布更新任务",
-            "invocation_template": "@System/Ops "
-        }
-    ]))
+    ok(local::local_plugin_catalog())
 }
 
 #[derive(Debug, Deserialize)]
@@ -2413,7 +2380,7 @@ struct CwdQuery {
 
 async fn codex_models(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(default_codex_models())
+    ok(local::default_codex_models())
 }
 
 async fn codex_permission_profiles(
@@ -2423,7 +2390,7 @@ async fn codex_permission_profiles(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let _ = query.cwd;
-    ok(default_permission_profiles())
+    ok(local::default_permission_profiles())
 }
 
 async fn codex_config(
@@ -2432,66 +2399,10 @@ async fn codex_config(
     Query(query): Query<CwdQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local_codex_config_response(&state, query.cwd))
-}
-
-fn default_codex_models() -> Value {
-    json!([
-        {"id": "gpt-5.5", "label": "GPT-5.5", "default": true},
-        {"id": "gpt-5.5-codex", "label": "GPT-5.5 Codex"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini"},
-        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"}
-    ])
-}
-
-fn default_permission_profiles() -> Value {
-    json!([
-        {
-            "id": "danger-full-access",
-            "label": "Danger full access",
-            "sandbox_mode": "danger-full-access",
-            "approval_policy": "never",
-            "network_access": true,
-            "default": true
-        },
-        {
-            "id": "workspace-write",
-            "label": "Workspace write",
-            "sandbox_mode": "workspace-write",
-            "approval_policy": "on-request",
-            "network_access": true
-        },
-        {
-            "id": "read-only",
-            "label": "Read only",
-            "sandbox_mode": "read-only",
-            "approval_policy": "on-request",
-            "network_access": false
-        }
-    ])
-}
-
-fn local_codex_config_response(state: &AppState, cwd: Option<String>) -> Value {
-    let config = state.config();
-    json!({
-        "model": Value::Null,
-        "reasoning_effort": Value::Null,
-        "cwd": cwd
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| config.codex.workspace.to_str().unwrap_or(""))
-            .to_string(),
-        "permission_profile": "danger-full-access",
-        "approval_policy": "never",
-        "sandbox_mode": "danger-full-access",
-        "network_access": true,
-        "raw": {
-            "source": "local",
-            "available": true,
-        },
-    })
+    ok(local::local_codex_config(
+        &state.config(),
+        query.cwd.as_deref(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

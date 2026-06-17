@@ -2286,6 +2286,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "console.log('nexushub asset');");
 
+        let (status, body) = static_route_response(app.clone(), "/assets/app.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "console.log('nexushub asset');");
+
         let (status, body) = static_route_response(app.clone(), "/healthz").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "health-ok");

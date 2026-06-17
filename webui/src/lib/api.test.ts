@@ -725,6 +725,41 @@ describe("archive delete API compatibility", () => {
     });
   });
 
+  test("keeps API requests at root when the WebUI is served from a subpath", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    const { buildApiPath } = await loadRealApi();
+
+    expect(buildApiPath("/api/auth/login")).toBe("/api/auth/login");
+  });
+
+  test("login posts to root API when the WebUI is served from /nexushub/", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    const { login } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      id: "admin",
+      username: "admin",
+      csrf_token: "csrf"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await login("admin", "password");
+
+    const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/auth/login");
+    expect(path).not.toContain("/nexushub/api");
+  });
+
+  test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    vi.stubEnv("VITE_API_BASE", "/backend/");
+    const { buildApiPath } = await loadRealApi();
+
+    expect(buildApiPath("/api/auth/login")).toBe("/backend/api/auth/login");
+  });
+
   test("uses protocol endpoints for Plan and approval actions", async () => {
     const { acceptPlan, revisePlan, answerApproval } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({

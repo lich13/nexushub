@@ -5,8 +5,8 @@ Target host: `43.155.235.227`
 This runbook is for the Tencent Cloud Linux deployment only. It keeps the public
 service at `https://661313.xyz/nexushub/`, the systemd unit `nexushub`, and the
 runtime under `/opt/nexushub`. Do not mix these Linux paths with the macOS ARM64
-DMG layout, LaunchAgent, or optional Cloudflare Tunnel entry documented in
-[`cloudflare-tunnel.md`](cloudflare-tunnel.md).
+Tauri App layout. macOS no longer provides a browser WebUI, LaunchAgent Web
+service, or Cloudflare Tunnel entry.
 
 ## Build Release Artifact
 
@@ -38,7 +38,7 @@ host_label = "43.155.235.227"
 
 Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home and reads `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
 
-Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
+Nginx should proxy `/nexushub/` and root `/api/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -80,13 +80,11 @@ Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` 
 
 ## macOS ARM64 Boundary
 
-macOS acceptance is local and separate from this cloud runbook:
+macOS acceptance is app-local and separate from this cloud runbook:
 
 ```bash
-curl -fsS http://127.0.0.1:15742/healthz
-open http://127.0.0.1:15742/nexushub/
-launchctl print gui/$(id -u)/com.nexushub.nexushub
-tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
+open -a NexusHub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
 Expected macOS paths:
@@ -94,15 +92,11 @@ Expected macOS paths:
 ```text
 ~/Library/Application Support/NexusHub/
 ~/Library/Logs/NexusHub/
-~/Library/LaunchAgents/com.nexushub.nexushub.plist
 ```
 
-Cloudflare Tunnel is optional for either platform. A production tunnel requires
-a Cloudflare-owned zone/hostname and maps that hostname to
-`http://127.0.0.1:15742`. Quick Tunnel is only for temporary preview and is not a
-production service. Keep tunnel tokens, URL tokens, credentials JSON, API tokens,
-and generated preview URLs out of the repository, logs, release assets, and
-WebUI.
+Do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel as a
+macOS entry point. The Tencent Cloud Linux WebUI remains available only at
+`https://661313.xyz/nexushub/`.
 
 ## Cleanup
 

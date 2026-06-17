@@ -8,7 +8,8 @@ Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep Codex local-st
 
 ```mermaid
 flowchart TD
-    Browser[WebUI React/Vite] --> API[nexushubd Axum API]
+    LinuxBrowser[Linux WebUI React/Vite] --> API[nexushubd Axum API]
+    MacTauri[macOS Tauri App] --> API
     API --> Core[nexushub-core]
     Core --> CodexState[Codex state DB, session index, rollout files]
     Core --> Jobs[Controlled codex exec jobs]
@@ -30,7 +31,7 @@ The daemon listens on `127.0.0.1:15742` and is intended to be exposed only throu
 | Frontend | React 18, Vite, TanStack Query, lucide-react | Same visual shell with provider pages |
 | Build Tool | Cargo, pnpm 11.0.8, Vite | Same |
 | Database | NexusHub SQLite plus official Codex DB reads | Same; no Codex schema mutation |
-| Deployment | Linux systemd under `/opt/nexushub`, Nginx `/nexushub/` | Linux first; macOS launchd and Windows Service preview |
+| Deployment | Linux systemd under `/opt/nexushub`, Nginx `/nexushub/`; macOS Tauri App | Linux WebUI plus macOS native app; Windows Service remains preview |
 
 ## Entry Points
 
@@ -56,11 +57,11 @@ corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
 ```
 
-Canonical Linux packaging is `bash scripts/package-linux.sh` on Linux x86_64. Local macOS smoke archives require `ALLOW_HOST_MISMATCH=1` and are not release artifacts.
+Canonical Linux packaging is `bash scripts/package-linux.sh` on Linux x86_64. macOS packaging targets the native Tauri App entry, not a browser WebUI or LaunchAgent Web service.
 
 ## Testing Baseline
 
-Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers and message-store behavior plus a TypeScript/Vite build. The Linux release and cloud deploy path have been verified for `v0.1.43` under `/nexushub/`. Current gaps are end-to-end browser interaction tests, macOS launchd packaging, and Windows Service packaging.
+Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers and message-store behavior plus a TypeScript/Vite build. The Linux release and cloud deploy path have been verified for `v0.1.43` under `/nexushub/`. Current gaps are end-to-end Linux browser interaction tests, native macOS Tauri App verification, and Windows Service packaging.
 
 ## Project Governance Baseline
 

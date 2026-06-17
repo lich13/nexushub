@@ -1,6 +1,6 @@
 # NexusHub
 
-`nexushub` is a Rust + React web panel for cloud Codex local state. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS ARM64 the DMG install is validated locally through `127.0.0.1:15742` and a LaunchAgent.
+`nexushub` is a Rust + React web panel for cloud Codex local state plus a macOS Tauri desktop app. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS ARM64 the supported user entry is the Tauri App; NexusHub no longer provides a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel path on macOS.
 
 Current scope:
 
@@ -18,7 +18,7 @@ Current scope:
 - Claude Code preview is read-only: it discovers `~/.claude/projects`, session JSONL files, and redacted settings. It does not launch, resume, send, stop, or write Claude configuration.
 - Built-in Probe replaces the old `codex-sentinel-server` runtime path for cloud use: status, thread classification, Hook events, Bark testing, logs-db maintenance, and settings are handled inside NexusHub. It does not add hidden desktop control, automatic replies, Sentinel alias routes, or direct destructive deletion endpoints.
 - Desktop navigation can be hidden to give the conversation workspace more horizontal room.
-- System status, job history, and responsive sky-blue dark WebUI.
+- System status, job history, Linux WebUI, and macOS Tauri App shell.
 
 Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode state, and logs-db maintenance read or persist NexusHub state locally from the resolved Codex home plus the NexusHub panel DB: `state_5.sqlite`, `session_index.jsonl`, rollout files, `logs_2.sqlite`, and `nexushub.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, and approvals that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical goal/plan/choice/approval items are only surfaced when they are still the latest unresolved action.
 
@@ -38,17 +38,15 @@ Linux production layout:
 The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
 `/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`. The installer preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
 
-macOS ARM64 DMG layout:
+macOS ARM64 Tauri App layout:
 
 ```text
 ~/Library/Application Support/NexusHub/config.toml
 ~/Library/Application Support/NexusHub/nexushub.sqlite
-~/Library/Application Support/NexusHub/webui/
 ~/Library/Logs/NexusHub/
-~/Library/LaunchAgents/com.nexushub.nexushub.plist
 ```
 
-The macOS service name is `com.nexushub.nexushub`. It should also listen only on `127.0.0.1:15742`; validate it through `http://127.0.0.1:15742/nexushub/`, `/healthz`, `launchctl`, and `~/Library/Logs/NexusHub`.
+On macOS, open NexusHub from the installed Tauri App bundle. Do not document or ship a separate browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry for macOS.
 
 ## Codex State
 
@@ -61,7 +59,7 @@ host_label = "43.155.235.227"
 
 `codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
 
-The public site must expose only `/nexushub/` through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
+The public site exposes `/nexushub/` for the Linux WebUI and root `/api/` for WebUI requests through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
 
 ## Probe
 
@@ -111,28 +109,14 @@ Turnstile is configured after login in `安全 / Security`. The cloud defaults m
 
 ## macOS ARM64 Acceptance
 
-After installing the signed DMG, validate the local service before adding any public entry:
+After installing the DMG, validate the Tauri App directly:
 
 ```bash
-curl -fsS http://127.0.0.1:15742/healthz
-open http://127.0.0.1:15742/nexushub/
-launchctl print gui/$(id -u)/com.nexushub.nexushub
-tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
+open -a NexusHub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
-The browser should load the NexusHub login page from `http://127.0.0.1:15742/nexushub/`. The LaunchAgent should be loaded as `com.nexushub.nexushub`, and logs should remain under `~/Library/Logs/NexusHub`.
-
-## Optional Cloudflare Tunnel
-
-Cloudflare Tunnel is an optional ingress for a local NexusHub daemon. Production use requires a Cloudflare account with a zone/hostname you control and either a tunnel token from the dashboard-managed connector flow or a locally-managed named tunnel config. Map the hostname to `http://127.0.0.1:15742`.
-
-Quick Tunnel may be used for temporary preview:
-
-```bash
-cloudflared tunnel --url http://127.0.0.1:15742
-```
-
-Do not use Quick Tunnel as a production endpoint. Do not commit tunnel tokens, URL tokens, credentials JSON, Cloudflare API tokens, generated URLs, or secrets to the repo; do not include them in logs, release assets, screenshots, or the WebUI. Cloudflare Access is recommended for Internet-facing hostnames, but NexusHub does not require Access to run. See [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md).
+The app should open as a native macOS desktop experience. A local browser URL, LaunchAgent Web service, and Cloudflare Tunnel are not supported macOS entry points in this release.
 
 ## Update
 
@@ -161,10 +145,8 @@ sudo /opt/nexushub/bin/nexushubd doctor
 macOS ARM64:
 
 ```bash
-curl -fsS http://127.0.0.1:15742/healthz
-open http://127.0.0.1:15742/nexushub/
-launchctl print gui/$(id -u)/com.nexushub.nexushub
-tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
+open -a NexusHub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
 Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
