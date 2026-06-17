@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.91 documentation and version cleanup<br>
-**Active Task**: `v0.1.91` prepares current release metadata and docs while preserving `/nexushub/` as the only public panel path and keeping Codex operations on local state plus controlled jobs.
+**Active Phase**: v0.1.92 Plan Mode action-card patch<br>
+**Active Task**: `v0.1.92` patches the `v0.1.91` Chrome acceptance gap where a ReplyNeeded plan without an active turn did not surface the accept/revise/keep action card, while preserving `/nexushub/` as the only public panel path.
 **Blockers**: None. Current rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA.
 
 ## Governance Status

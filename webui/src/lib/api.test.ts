@@ -926,7 +926,7 @@ describe("archive delete API compatibility", () => {
     expect(app.activeComposerMenuKind("$p", 2, plugins)).toBeNull();
   });
 
-  test("does not surface stale pending blocks without reply-needed state or active turn", async () => {
+  test("does not surface pending blocks without reply-needed state or active turn", async () => {
     const app = await import("../App");
     const oldChoice = {
       id: "choice-old",
@@ -946,13 +946,66 @@ describe("archive delete API compatibility", () => {
 
     expect(app.pendingFromBlocks([oldChoice], "Recent", null)).toBeNull();
     expect(app.latestActionBlock([oldPlan], "Recent", null, app.isPlanBlock)).toBeNull();
-    expect(app.pendingFromBlocks([oldChoice], "ReplyNeeded", null)).toBeNull();
-    expect(app.latestActionBlock([oldPlan], "ReplyNeeded", null, app.isPlanBlock)).toBeNull();
     expect(app.pendingFromBlocks([oldChoice], "ReplyNeeded", "turn-old")?.questions[0].question).toBe("旧选择");
     expect(app.latestActionBlock([oldPlan], "ReplyNeeded", "turn-old", app.isPlanBlock)?.id).toBe("plan-old");
     expect(app.pendingFromBlocks([oldChoice], "Running", "turn-old")?.questions[0].question).toBe("旧选择");
     expect(app.latestActionBlock([oldPlan], "Running", "turn-old", app.isPlanBlock)?.id).toBe("plan-old");
     expect(app.latestActionBlock([oldPlan], "ReplyNeeded", "turn-new", app.isPlanBlock)).toBeNull();
+  });
+
+  test("reply-needed fallback surfaces the latest unresolved plan when active turn is missing", async () => {
+    const app = await import("../App");
+    const plan = {
+      id: "plan-live",
+      role: "assistant",
+      kind: "plan",
+      item_id: "plan-item",
+      status: "pending",
+      resolved: false,
+      text: "<proposed_plan>当前计划</proposed_plan>",
+      questions: []
+    } satisfies MessageBlock;
+
+    const current = app.latestActionBlock([plan], "ReplyNeeded", null, app.isPlanBlock);
+
+    expect(current?.id).toBe("plan-live");
+    expect(app.isActionablePlanBlock(plan, current)).toBe(true);
+    expect(app.currentActionKey(current, null)).toBe("plan:turn:plan-item");
+    expect(app.renderCurrentActionCardSnapshot({ kind: "plan" }).buttons).toEqual([
+      "接受计划",
+      "修改计划",
+      "保持计划模式"
+    ]);
+  });
+
+  test("reply-needed fallback does not revive resolved plans or plans followed by execution progress", async () => {
+    const app = await import("../App");
+    const plan = {
+      id: "plan-live",
+      role: "assistant",
+      kind: "plan",
+      item_id: "plan-item",
+      status: "pending",
+      resolved: false,
+      text: "<proposed_plan>当前计划</proposed_plan>",
+      questions: []
+    } satisfies MessageBlock;
+    const resolvedPlan = {
+      ...plan,
+      id: "plan-resolved",
+      status: "completed",
+      resolved: true
+    } satisfies MessageBlock;
+    const assistantProgress = {
+      id: "assistant-progress",
+      role: "assistant",
+      kind: "message",
+      text: "开始执行计划",
+      questions: []
+    } satisfies MessageBlock;
+
+    expect(app.latestActionBlock([resolvedPlan], "ReplyNeeded", null, app.isPlanBlock)).toBeNull();
+    expect(app.latestActionBlock([plan, assistantProgress], "ReplyNeeded", null, app.isPlanBlock)).toBeNull();
   });
 
   test("summary pending elicitation must belong to the active turn", async () => {

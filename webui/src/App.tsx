@@ -4701,11 +4701,20 @@ export function pendingFromBlocks(blocks: MessageBlock[], status: ThreadStatus, 
 }
 
 export function latestActionBlock(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined, predicate: (block: MessageBlock) => boolean): MessageBlock | null {
-  void status;
-  if (!activeTurnId) return null;
-  const matches = [...blocks].reverse().filter((block) => block.turn_id === activeTurnId && predicate(block) && !isResolvedActionBlock(block));
-  if (!matches.length) return null;
-  return matches[0];
+  const reversed = [...blocks].reverse();
+  if (activeTurnId) {
+    const active = reversed.find((block) => block.turn_id === activeTurnId && predicate(block) && !isResolvedActionBlock(block));
+    if (active) return active;
+    return null;
+  }
+  if (status !== "ReplyNeeded") return null;
+  if (!reversed.some((block) => predicate(block) && isPlanBlock(block))) return null;
+
+  for (const block of reversed) {
+    if (predicate(block) && isPlanBlock(block) && !isResolvedActionBlock(block)) return block;
+    if (isExternalProgressAfterPlan(block)) return null;
+  }
+  return null;
 }
 
 export function currentPendingElicitation(pending: PendingElicitation | null | undefined, activeTurnId: string | null | undefined): PendingElicitation | null {
@@ -4825,7 +4834,17 @@ export function blocksWithCurrentPending(blocks: MessageBlock[], pending: Pendin
 function sameActionBlock(left: MessageBlock, right: MessageBlock): boolean {
   const leftIds = [left.id, left.item_id, left.call_id].filter(Boolean);
   const rightIds = [right.id, right.item_id, right.call_id].filter(Boolean);
-  return left.turn_id === right.turn_id && leftIds.some((leftId) => rightIds.includes(leftId));
+  const sameId = leftIds.some((leftId) => rightIds.includes(leftId));
+  if (!sameId) return false;
+  if (left.turn_id && right.turn_id) return left.turn_id === right.turn_id;
+  return true;
+}
+
+function isExternalProgressAfterPlan(block: MessageBlock): boolean {
+  if (isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block) || isApprovalBlock(block)) return false;
+  if (isHistoryCollapsedBlock(block)) return false;
+  if (isToolBlock(block)) return true;
+  return shouldRenderConversationMessage(block);
 }
 
 function normalizedBlockKind(block: Pick<MessageBlock, "kind">): string {
