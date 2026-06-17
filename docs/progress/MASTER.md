@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.92 Plan Mode action-card patch<br>
-**Active Task**: `v0.1.92` patches the `v0.1.91` Chrome acceptance gap where a ReplyNeeded plan without an active turn did not surface the accept/revise/keep action card, while preserving `/nexushub/` as the only public panel path.
+**Active Phase**: v0.1.93 right-inspector and TUI Goal completion patch<br>
+**Active Task**: `v0.1.93` restores the right-inspector `名称与归档` and `Goal` panels, adds save/clear/pause/resume Goal controls, speeds up rename/archive with optimistic UI updates, and realigns the composer while preserving `/nexushub/` as the only public panel path.
 **Blockers**: None. Current rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA.
 
 ## Governance Status

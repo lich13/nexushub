@@ -1,4 +1,4 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   Bot,
@@ -41,11 +41,13 @@ import {
   archiveThread,
   cancelFollowUp,
   changePassword,
+  clearCodexGoal,
   createThread,
   deleteUpload,
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
   forkThread,
+  getCodexGoal,
   getCodexConfig,
   getPublicSettings,
   getProbeLogsDbStatus,
@@ -67,8 +69,11 @@ import {
   renameThread,
   revisePlan,
   restoreThread,
+  pauseCodexGoal,
+  resumeCodexGoal,
   saveProbeSettings,
   saveSecurity,
+  saveCodexGoal,
   sendMessage,
   startClaudeCodeJob,
   startArchiveDelete,
@@ -122,6 +127,8 @@ import type {
   BridgeActionResult,
   ClaudeOverview,
   CodexConfig,
+  CodexGoal,
+  CodexGoalSaveInput,
   CodexModel,
   FollowUpQueueItem,
   HiddenThreadDeletePlan,
@@ -941,6 +948,107 @@ export function clearArchivedThreadClientState(
   messageStore.clear(threadId);
 }
 
+type QueryCacheSnapshotEntry = {
+  queryKey: QueryKey;
+  existed: boolean;
+  data: unknown;
+};
+
+type ThreadCacheSnapshot = {
+  entries: QueryCacheSnapshotEntry[];
+};
+
+function snapshotQueryCache(qc: QueryClient, queryKey: QueryKey): QueryCacheSnapshotEntry {
+  return {
+    queryKey,
+    existed: Boolean(qc.getQueryCache().find({ queryKey, exact: true })),
+    data: qc.getQueryData(queryKey)
+  };
+}
+
+function snapshotThreadCaches(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
+  const entries = qc.getQueryCache().findAll({ queryKey: ["threads"] }).map((query) => snapshotQueryCache(qc, query.queryKey));
+  entries.push(snapshotQueryCache(qc, ["thread", threadId]));
+  return { entries };
+}
+
+function restoreQueryCacheSnapshot(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
+  if (!snapshot) return;
+  for (const entry of snapshot.entries) {
+    if (entry.existed) {
+      qc.setQueryData(entry.queryKey, entry.data);
+    } else {
+      qc.removeQueries({ queryKey: entry.queryKey, exact: true });
+    }
+  }
+}
+
+export function applyOptimisticThreadTitle(qc: QueryClient, threadId: string, title: string): ThreadCacheSnapshot {
+  const snapshot = snapshotThreadCaches(qc, threadId);
+  const nextTitle = title.trim();
+  if (nextTitle) {
+    updateSavedThreadTitleCaches(qc, threadId, nextTitle);
+  }
+  return snapshot;
+}
+
+export function rollbackOptimisticThreadTitle(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
+  restoreQueryCacheSnapshot(qc, snapshot);
+}
+
+export function applyOptimisticThreadArchive(
+  qc: QueryClient,
+  messageStore: Pick<ThreadMessageStoreController, "clear">,
+  threadId: string
+): ThreadCacheSnapshot {
+  const snapshot = snapshotThreadCaches(qc, threadId);
+  clearArchivedThreadClientState(qc, messageStore, threadId);
+  return snapshot;
+}
+
+export function rollbackOptimisticThreadArchive(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
+  restoreQueryCacheSnapshot(qc, snapshot);
+}
+
+export function applyOptimisticThreadRestore(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
+  const snapshot = snapshotThreadCaches(qc, threadId);
+  const cached = cachedThreadSummary(qc, threadId);
+  if (!cached) return snapshot;
+  const restored: ThreadSummary = {
+    ...cached,
+    status: "Recent",
+    archived_at: null
+  };
+  updateThreadListCaches(qc, restored);
+  qc.setQueryData<ThreadDetail>(["thread", threadId], (current) => {
+    if (!current) return current;
+    return {
+      ...current,
+      summary: {
+        ...mergeIncomingThreadSummary(current.summary, restored),
+        status: "Recent",
+        archived_at: null
+      } as ThreadSummary
+    };
+  });
+  return snapshot;
+}
+
+export function rollbackOptimisticThreadRestore(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
+  restoreQueryCacheSnapshot(qc, snapshot);
+}
+
+function cachedThreadSummary(qc: QueryClient, threadId: string): ThreadSummary | null {
+  const detail = qc.getQueryData<ThreadDetail>(["thread", threadId]);
+  if (detail?.summary.id === threadId) return detail.summary;
+  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
+    const rows = qc.getQueryData<ThreadSummary[]>(query.queryKey);
+    const match = rows?.find((thread) => thread.id === threadId);
+    if (match) return match;
+  }
+  return null;
+}
+
 export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
   const visible = filterVisibleThreadSummaries(threads);
   const removedIndex = visible.findIndex((thread) => thread.id === removedThreadId);
@@ -956,11 +1064,26 @@ export function shouldHydrateThreadDetail(threadId: string | null | undefined, d
 
 function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
   for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
-    const [, status = "all", q = ""] = query.queryKey as [string, string?, string?];
+    const { status, q } = threadListFilterFromQueryKey(query.queryKey);
     qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
       mergeThreadSummaryIntoListCache(rows, incoming, status, q)
     );
   }
+}
+
+function threadListFilterFromQueryKey(queryKey: QueryKey): { status: string; q: string } {
+  const [, statusOrFilter = "all", qValue = ""] = queryKey as [unknown, unknown?, unknown?];
+  if (typeof statusOrFilter === "object" && statusOrFilter) {
+    const filter = statusOrFilter as { status?: unknown; q?: unknown };
+    return {
+      status: typeof filter.status === "string" ? filter.status : "all",
+      q: typeof filter.q === "string" ? filter.q : ""
+    };
+  }
+  return {
+    status: typeof statusOrFilter === "string" ? statusOrFilter : "all",
+    q: typeof qValue === "string" ? qValue : ""
+  };
 }
 
 export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
@@ -1517,6 +1640,10 @@ export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string
 
 export function threadSettingsMetricLabels(): string[] {
   return [];
+}
+
+export function threadInspectorPanelTitles(): string[] {
+  return ["名称与归档", "Goal", "状态摘要"];
 }
 
 export function threadResumeCommand(threadId?: string | null): string | null {
@@ -2475,18 +2602,40 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       }
       return { threadId: requestThreadId, wasArchived };
     },
+    onMutate: async (variables) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ["threads"] }),
+        qc.cancelQueries({ queryKey: ["thread", variables.threadId] })
+      ]);
+      const wasArchived = variables.status === "Archived";
+      const snapshot = wasArchived
+        ? applyOptimisticThreadRestore(qc, variables.threadId)
+        : applyOptimisticThreadArchive(qc, messageStore, variables.threadId);
+      if (!wasArchived) {
+        onSelect(nextThreadAfterArchive);
+      }
+      return { snapshot, wasArchived };
+    },
     onSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
       messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
-      if (wasArchived) {
-        qc.invalidateQueries({ queryKey: ["threads"] });
-        qc.invalidateQueries({ queryKey: ["thread", archivedThreadId] });
-      } else {
-        clearArchivedThreadClientState(qc, messageStore, archivedThreadId);
-        onSelect(nextThreadAfterArchive);
-        qc.invalidateQueries({ queryKey: ["threads"] });
-      }
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+    onError: (err: Error, variables, context) => {
+      if (context?.wasArchived) {
+        rollbackOptimisticThreadRestore(qc, context.snapshot);
+      } else {
+        rollbackOptimisticThreadArchive(qc, context?.snapshot);
+        if (variables?.threadId) {
+          onSelect(variables.threadId);
+        }
+      }
+      messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
+    },
+    onSettled: (_data, _error, variables) => {
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      if (variables?.threadId) {
+        qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
+      }
+    }
   });
 
   const renameMutation = useMutation({
@@ -2495,18 +2644,42 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       await renameThread(requestThreadId, requestedTitle, csrfToken);
       return { threadId: requestThreadId, title };
     },
-    onSuccess: ({ threadId: renamedThreadId, title }) => {
-      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
+    onMutate: async (variables) => {
+      const title = variables.title.trim();
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ["threads"] }),
+        qc.cancelQueries({ queryKey: ["thread", variables.threadId] })
+      ]);
+      const snapshot = applyOptimisticThreadTitle(qc, variables.threadId, title);
       if (title) {
         setRenameValue(title);
         setRenameDirty(false);
-        messageStore.patchSummary(renamedThreadId, { title });
-        updateSavedThreadTitleCaches(qc, renamedThreadId, title);
+        messageStore.patchSummary(variables.threadId, { title });
       }
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", renamedThreadId] });
+      return { snapshot };
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+    onSuccess: ({ threadId: renamedThreadId, title }) => {
+      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
+      if (title) {
+        applyOptimisticThreadTitle(qc, renamedThreadId, title);
+      }
+    },
+    onError: (err: Error, variables, context) => {
+      rollbackOptimisticThreadTitle(qc, context?.snapshot);
+      const restoredTitle = cachedThreadSummary(qc, variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
+      if (variables?.threadId === summary.id && restoredTitle) {
+        setRenameValue(restoredTitle);
+        setRenameDirty(false);
+        messageStore.patchSummary(variables.threadId, { title: restoredTitle });
+      }
+      messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
+    },
+    onSettled: (_data, _error, variables) => {
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      if (variables?.threadId) {
+        qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
+      }
+    }
   });
 
   const forkMutation = useMutation({
@@ -2870,7 +3043,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             />
           )}
           <div className="composer-actions">
-            <span>{lastResult ? actionMessage(lastResult) : `CSRF ${csrfToken ? "已就绪" : "未恢复"}`}</span>
+            <span>{lastResult ? actionMessage(lastResult) : ""}</span>
             <button className="primary-button composer-action-button" disabled={actionMode === "disabled" || actionBusy} title={actionTitle}>
               {actionMode === "stop" ? <Square size={17} /> : actionMode === "followup" ? <MessageSquare size={17} /> : <Send size={17} />}
               {actionLabel}
@@ -2880,7 +3053,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       </div>
 
       <aside className="conversation-inspector">
-        <Panel title="线程设置" icon={<SlidersHorizontal size={18} />}>
+        <Panel title="名称与归档" icon={<SlidersHorizontal size={18} />}>
           <div className="copy-row">
             <button
               className="secondary-button"
@@ -2909,6 +3082,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           </div>
         </Panel>
 
+        <ThreadGoalPanel threadId={summary.id} csrfToken={csrfToken} onFeedback={setActiveFeedback} />
+
         <Panel title="状态摘要" icon={<HardDrive size={18} />}>
           <Metric label="状态" value={threadStatusLabel(summary.status)} />
           <Metric label="Turn" value={summary.active_turn_id || "无"} />
@@ -2919,6 +3094,182 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       </aside>
     </div>
   );
+}
+
+function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
+  threadId: string;
+  csrfToken?: string | null;
+  onFeedback: (message: string | null) => void;
+}) {
+  const qc = useQueryClient();
+  const goal = useQuery({
+    queryKey: ["thread-goal", threadId],
+    queryFn: () => getCodexGoal(threadId),
+    enabled: Boolean(threadId),
+    staleTime: 5000,
+    refetchInterval: 15000,
+    placeholderData: preservePreviousQueryData
+  });
+  const [objective, setObjective] = useState("");
+  const [tokenBudget, setTokenBudget] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currentGoal = goal.data;
+
+  useEffect(() => {
+    if (!currentGoal || dirty) return;
+    setObjective(currentGoal.objective ?? "");
+    setTokenBudget(currentGoal.token_budget === null || currentGoal.token_budget === undefined ? "" : String(currentGoal.token_budget));
+  }, [currentGoal, dirty]);
+
+  useEffect(() => {
+    setDirty(false);
+    setError(null);
+  }, [threadId]);
+
+  const setGoalCache = useCallback((next: CodexGoal) => {
+    qc.setQueryData<CodexGoal>(["thread-goal", threadId], next);
+  }, [qc, threadId]);
+
+  const afterGoalSuccess = useCallback((next: CodexGoal, message: string) => {
+    setGoalCache(next);
+    setDirty(false);
+    setObjective(next.objective ?? "");
+    setTokenBudget(next.token_budget === null || next.token_budget === undefined ? "" : String(next.token_budget));
+    setError(null);
+    onFeedback(message);
+    qc.invalidateQueries({ queryKey: ["thread-goal", threadId] });
+  }, [onFeedback, qc, setGoalCache, threadId]);
+
+  const onGoalError = useCallback((err: Error) => {
+    setError(err.message);
+    onFeedback(err.message);
+  }, [onFeedback]);
+
+  const saveGoalMutation = useMutation({
+    mutationFn: () => saveCodexGoal(threadId, goalSaveInput(objective, tokenBudget), csrfToken),
+    onSuccess: (next) => afterGoalSuccess(next, "Goal 已保存"),
+    onError: onGoalError
+  });
+  const clearGoalMutation = useMutation({
+    mutationFn: () => clearCodexGoal(threadId, csrfToken),
+    onSuccess: (next) => afterGoalSuccess(next, "Goal 已清除"),
+    onError: onGoalError
+  });
+  const pauseGoalMutation = useMutation({
+    mutationFn: () => pauseCodexGoal(threadId, csrfToken),
+    onSuccess: (next) => afterGoalSuccess(next, "Goal 已暂停"),
+    onError: onGoalError
+  });
+  const resumeGoalMutation = useMutation({
+    mutationFn: () => resumeCodexGoal(threadId, csrfToken),
+    onSuccess: (next) => afterGoalSuccess(next, "Goal 已恢复"),
+    onError: onGoalError
+  });
+
+  const busy = saveGoalMutation.isPending || clearGoalMutation.isPending || pauseGoalMutation.isPending || resumeGoalMutation.isPending;
+  const controls = goalControlState(currentGoal, { busy, objective, tokenBudget });
+  const unavailable = currentGoal?.available === false;
+
+  return (
+    <Panel title="Goal" icon={<ClipboardCheck size={18} />}>
+      <div className="settings-meta-grid">
+        <Metric label="状态" value={goalStatusLabel(currentGoal, goal.isLoading)} tone={goalStatusTone(currentGoal)} />
+        <Metric label="预算" value={currentGoal?.token_budget === null || currentGoal?.token_budget === undefined ? "无" : String(currentGoal.token_budget)} />
+        {currentGoal?.completed_at ? <Metric label="完成时间" value={formatGoalTimestamp(currentGoal.completed_at)} /> : null}
+        {currentGoal?.blocked_reason ? <Metric label="阻塞原因" value={currentGoal.blocked_reason} tone="danger" /> : null}
+      </div>
+      <label className="field-label">目标<input value={objective} onChange={(event) => {
+        setDirty(true);
+        setObjective(event.target.value);
+      }} placeholder={goal.isLoading ? "正在读取 Goal" : "输入当前线程目标"} /></label>
+      <label className="field-label">Token budget<input type="number" min={1} value={tokenBudget} onChange={(event) => {
+        setDirty(true);
+        setTokenBudget(event.target.value);
+      }} placeholder="可选" /></label>
+      <div className="button-row">
+        <button className="primary-button" disabled={controls.saveDisabled || unavailable} onClick={() => saveGoalMutation.mutate()}><CheckCircle2 size={17} />保存</button>
+        <button className="secondary-button" disabled={controls.clearDisabled || unavailable} onClick={() => clearGoalMutation.mutate()}><Trash2 size={17} />清除</button>
+        <button className="secondary-button" disabled={controls.pauseDisabled || unavailable} onClick={() => pauseGoalMutation.mutate()}><Square size={17} />暂停</button>
+        <button className="secondary-button" disabled={controls.resumeDisabled || unavailable} onClick={() => resumeGoalMutation.mutate()}><Play size={17} />恢复</button>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      {unavailable && <div className="muted-row">Goal 接口未接入</div>}
+    </Panel>
+  );
+}
+
+function goalSaveInput(objective: string, tokenBudget: string): CodexGoalSaveInput {
+  return {
+    objective: objective.trim(),
+    token_budget: goalTokenBudgetValue(tokenBudget)
+  };
+}
+
+function goalTokenBudgetValue(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function validGoalTokenBudget(value: string): boolean {
+  return !value.trim() || goalTokenBudgetValue(value) !== null;
+}
+
+export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): string {
+  if (!goal) return loading ? "读取中" : "未设置";
+  if (goal.available === false) return "未接入";
+  switch (goal.status) {
+    case "active":
+      return goal.enabled ? "进行中" : "已设置";
+    case "paused":
+      return "已暂停";
+    case "cleared":
+      return "已清除";
+    case "blocked":
+      return "阻塞";
+    case "complete":
+    case "completed":
+      return "完成";
+    case "idle":
+      return "未设置";
+    case "missing_thread":
+      return "缺少线程";
+    default:
+      return goal.status || "未设置";
+  }
+}
+
+export function goalStatusTone(goal: CodexGoal | undefined): "success" | "warning" | "danger" | undefined {
+  if (!goal) return undefined;
+  if (goal.available === false || goal.status === "blocked" || goal.status === "missing_thread") return "danger";
+  if (goal.status === "paused" || goal.status === "cleared" || goal.status === "idle") return "warning";
+  return "success";
+}
+
+export function goalControlState(
+  goal: CodexGoal | undefined,
+  options: { busy?: boolean; objective?: string; tokenBudget?: string } = {}
+): { saveDisabled: boolean; clearDisabled: boolean; pauseDisabled: boolean; resumeDisabled: boolean } {
+  const busy = Boolean(options.busy);
+  const objective = options.objective ?? goal?.objective ?? "";
+  const hasSavedObjective = Boolean(goal?.objective?.trim());
+  const status = goal?.status;
+  return {
+    saveDisabled: busy || !objective.trim() || !validGoalTokenBudget(options.tokenBudget ?? ""),
+    clearDisabled: busy || !hasSavedObjective,
+    pauseDisabled: busy || !hasSavedObjective || status === "paused" || status === "cleared" || status === "idle",
+    resumeDisabled: busy || !hasSavedObjective || status === "active"
+  };
+}
+
+export function formatGoalTimestamp(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) return "无";
+  const numeric = typeof value === "number" ? value : Number(value);
+  const millis = Number.isFinite(numeric) ? (numeric > 10_000_000_000 ? numeric : numeric * 1000) : Date.parse(String(value));
+  if (!Number.isFinite(millis)) return String(value);
+  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
 }
 
 function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false, threadStatus, hasPendingPlan = false, hasPendingQuestion = false }: {

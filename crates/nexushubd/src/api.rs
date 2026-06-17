@@ -180,6 +180,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/codex/config", get(codex_config))
         .route("/api/codex/goal", get(codex_goal_get).post(codex_goal_set))
         .route("/api/codex/goal/clear", post(codex_goal_clear))
+        .route("/api/codex/goal/pause", post(codex_goal_pause))
         .route("/api/codex/goal/resume", post(codex_goal_resume))
         .route("/api/archives/delete/dry-run", post(archive_delete_dry_run))
         .route("/api/archives/delete/execute", post(archive_delete_execute))
@@ -2690,6 +2691,30 @@ async fn codex_goal_clear(
     ok(local_goal_response(Some(&goal)))
 }
 
+async fn codex_goal_pause(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GoalUpdateRequest>,
+) -> ApiResponse {
+    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
+        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
+    };
+    let existing = state.db.get_thread_goal(thread_id)?;
+    let objective = existing.as_ref().and_then(|goal| goal.objective.as_deref());
+    let token_budget = existing.as_ref().and_then(|goal| goal.token_budget);
+    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
+        thread_id,
+        objective,
+        token_budget,
+        status: "paused",
+        completed_at: None,
+        blocked_reason: None,
+    })?;
+    ok(local_goal_response(Some(&goal)))
+}
+
 async fn codex_goal_resume(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4545,7 +4570,7 @@ mod tests {
             app.clone(),
             "POST",
             "/api/codex/goal",
-            r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345}"#,
+            r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345,"status":"paused","enabled":false}"#,
             &session_token,
             &csrf_token,
         )
@@ -4554,7 +4579,7 @@ mod tests {
         assert_eq!(set["enabled"], true);
         assert_eq!(set["objective"], "ship local goal");
         assert_eq!(set["token_budget"], 12345);
-        assert_eq!(set["status"], "active");
+        assert_eq!(set["status"], "paused");
 
         let get = request_goal(
             app.clone(),
@@ -4569,7 +4594,52 @@ mod tests {
         assert_eq!(get["enabled"], true);
         assert_eq!(get["objective"], "ship local goal");
         assert_eq!(get["token_budget"], 12345);
-        assert_eq!(get["status"], "active");
+        assert_eq!(get["status"], "paused");
+
+        let saved_active = request_goal(
+            app.clone(),
+            "POST",
+            "/api/codex/goal",
+            r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(saved_active["available"], true);
+        assert_eq!(saved_active["enabled"], true);
+        assert_eq!(saved_active["objective"], "ship local goal");
+        assert_eq!(saved_active["token_budget"], 12345);
+        assert_eq!(saved_active["status"], "active");
+
+        let paused = request_goal(
+            app.clone(),
+            "POST",
+            "/api/codex/goal/pause",
+            r#"{"thread_id":"thread-a"}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(paused["available"], true);
+        assert_eq!(paused["enabled"], true);
+        assert_eq!(paused["objective"], "ship local goal");
+        assert_eq!(paused["token_budget"], 12345);
+        assert_eq!(paused["status"], "paused");
+
+        let resumed = request_goal(
+            app.clone(),
+            "POST",
+            "/api/codex/goal/resume",
+            r#"{"thread_id":"thread-a"}"#,
+            &session_token,
+            &csrf_token,
+        )
+        .await;
+        assert_eq!(resumed["available"], true);
+        assert_eq!(resumed["enabled"], true);
+        assert_eq!(resumed["objective"], "ship local goal");
+        assert_eq!(resumed["token_budget"], 12345);
+        assert_eq!(resumed["status"], "active");
 
         let cleared = request_goal(
             app.clone(),
@@ -4586,7 +4656,7 @@ mod tests {
         assert_eq!(cleared["token_budget"], serde_json::Value::Null);
         assert_eq!(cleared["status"], "cleared");
 
-        let resumed = request_goal(
+        let resumed_after_clear = request_goal(
             app,
             "POST",
             "/api/codex/goal/resume",
@@ -4595,9 +4665,9 @@ mod tests {
             &csrf_token,
         )
         .await;
-        assert_eq!(resumed["available"], true);
-        assert_eq!(resumed["enabled"], true);
-        assert_eq!(resumed["status"], "active");
+        assert_eq!(resumed_after_clear["available"], true);
+        assert_eq!(resumed_after_clear["enabled"], true);
+        assert_eq!(resumed_after_clear["status"], "active");
         let _ = fs::remove_dir_all(home);
     }
 
@@ -4916,6 +4986,62 @@ mod tests {
         assert_eq!(payload["available"], true);
         assert_eq!(payload["enabled"], true);
         assert_eq!(payload["status"], "active");
+        assert_eq!(payload["raw"]["source"], "local");
+    }
+
+    #[tokio::test]
+    async fn goal_pause_route_requires_csrf_and_preserves_local_goal() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        state
+            .db
+            .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
+                thread_id: "thread-a",
+                objective: Some("ship paused goal"),
+                token_budget: Some(9876),
+                status: "active",
+                completed_at: None,
+                blocked_reason: None,
+            })
+            .unwrap();
+        let app = router(state.clone());
+
+        let missing_csrf = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/codex/goal/pause")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"thread_id":"thread-a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+        let app = router(state);
+        let paused = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/codex/goal/pause")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"thread_id":"thread-a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(paused.status(), StatusCode::OK);
+        let body = to_bytes(paused.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["available"], true);
+        assert_eq!(payload["enabled"], true);
+        assert_eq!(payload["objective"], "ship paused goal");
+        assert_eq!(payload["token_budget"], 9876);
+        assert_eq!(payload["status"], "paused");
         assert_eq!(payload["raw"]["source"], "local");
     }
 

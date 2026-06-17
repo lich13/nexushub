@@ -601,3 +601,21 @@ export type CodexConfig = {
   network_access?: boolean | null;
   collaboration_mode?: string | null;
 };
+
+export type CodexGoalStatus = "idle" | "active" | "paused" | "cleared" | "blocked" | "complete" | "completed" | "missing_thread" | "unavailable" | string;
+
+export type CodexGoal = {
+  available: boolean;
+  enabled: boolean;
+  objective: string | null;
+  token_budget: number | null;
+  status: CodexGoalStatus;
+  completed_at?: number | null;
+  blocked_reason?: string | null;
+  raw?: unknown;
+};
+
+export type CodexGoalSaveInput = {
+  objective: string;
+  token_budget?: number | null;
+};

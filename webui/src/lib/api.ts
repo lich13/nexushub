@@ -25,6 +25,8 @@ import type {
   SystemStatus,
   SystemVersion,
   BridgeActionResult,
+  CodexGoal,
+  CodexGoalSaveInput,
   MessageBlock,
   ThreadDetail,
   ThreadBlockPage,
@@ -1004,6 +1006,76 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
   return optionalApiFetch<CodexConfig>("/api/codex/config");
 }
 
+export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
+  if (USE_DEMO) return demoCodexGoal(threadId);
+  const params = new URLSearchParams({ thread_id: threadId });
+  return apiFetch<CodexGoal>(`/api/codex/goal?${params.toString()}`);
+}
+
+export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, csrfToken?: string | null): Promise<CodexGoal> {
+  if (USE_DEMO) {
+    return {
+      ...demoCodexGoal(threadId),
+      enabled: true,
+      objective: goal.objective.trim(),
+      token_budget: goal.token_budget ?? null,
+      status: "active"
+    };
+  }
+  return apiFetch<CodexGoal>("/api/codex/goal", {
+    method: "POST",
+    csrfToken,
+    body: JSON.stringify({
+      thread_id: threadId,
+      objective: goal.objective,
+      token_budget: goal.token_budget ?? null
+    })
+  });
+}
+
+export async function clearCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
+  if (USE_DEMO) {
+    return {
+      ...demoCodexGoal(threadId),
+      enabled: false,
+      objective: null,
+      token_budget: null,
+      status: "cleared"
+    };
+  }
+  return updateCodexGoalStatus("/api/codex/goal/clear", threadId, csrfToken);
+}
+
+export async function pauseCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
+  if (USE_DEMO) {
+    return {
+      ...demoCodexGoal(threadId),
+      enabled: true,
+      status: "paused"
+    };
+  }
+  return updateCodexGoalStatus("/api/codex/goal/pause", threadId, csrfToken);
+}
+
+export async function resumeCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
+  if (USE_DEMO) {
+    return {
+      ...demoCodexGoal(threadId),
+      enabled: true,
+      status: "active"
+    };
+  }
+  return updateCodexGoalStatus("/api/codex/goal/resume", threadId, csrfToken);
+}
+
+function updateCodexGoalStatus(path: string, threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
+  return apiFetch<CodexGoal>(path, {
+    method: "POST",
+    csrfToken,
+    body: JSON.stringify({ thread_id: threadId })
+  });
+}
+
 export function subscribeThreadEvents(
   threadId: string,
   handlers: { onBlock?: (block: MessageBlock, threadId: string) => void; onBlocks?: (blocks: MessageBlock[], threadId: string) => void; onSummary?: (summary: ThreadSummary, threadId: string) => void; onError?: (message: string, threadId: string) => void }
@@ -1205,6 +1277,17 @@ function demoProbeSettings(): ProbeSettings {
       compact_min_freelist_ratio_percent: 20,
       minimum_free_space_mb: 1024
     }
+  };
+}
+
+function demoCodexGoal(threadId: string): CodexGoal {
+  return {
+    available: true,
+    enabled: threadId === "019e95a0-demo",
+    objective: threadId === "019e95a0-demo" ? "修复 Plan Mode 右栏交互" : null,
+    token_budget: threadId === "019e95a0-demo" ? 18000 : null,
+    status: threadId === "019e95a0-demo" ? "active" : "idle",
+    raw: { source: "demo", thread_id: threadId }
   };
 }
 

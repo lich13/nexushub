@@ -282,6 +282,30 @@ button { cursor: pointer; }
   gap: 12px;
   overflow: auto;
 }
+.conversation-inspector .panel {
+  display: grid;
+  gap: 10px;
+}
+.conversation-inspector .panel header {
+  margin-bottom: 0;
+}
+.conversation-inspector .copy-row {
+  margin-top: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.conversation-inspector .button-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+}
+.conversation-inspector .button-row button,
+.conversation-inspector .copy-row button {
+  width: 100%;
+  min-width: 0;
+}
+.conversation-inspector .field-label {
+  margin: 0;
+}
 .conversation-header {
   min-height: 76px;
   padding: 18px 22px;
@@ -633,6 +657,11 @@ button { cursor: pointer; }
   flex: 0 0 auto;
   max-height: min(42vh, 360px);
   overflow: visible;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: end;
+  container-type: inline-size;
 }
 .composer textarea {
   width: 100%;
@@ -644,23 +673,57 @@ button { cursor: pointer; }
   color: var(--text);
   padding: 10px;
 }
-.composer-actions { margin-top: 8px; display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; gap: 12px; }
-.composer-actions span { overflow-wrap: anywhere; }
+.composer > .slash-composer,
+.composer > .attachment-list,
+.composer > .follow-up-queue {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.composer > .composer-config {
+  grid-column: 1;
+  min-width: 0;
+}
+.composer-actions {
+  grid-column: 2;
+  min-width: 0;
+  margin-top: 0;
+  display: grid;
+  grid-template-columns: auto;
+  justify-content: end;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  gap: 10px;
+  position: relative;
+}
+.composer-actions span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .composer-action-button {
   flex: 0 0 auto;
   min-width: 92px;
+  min-height: 34px;
 }
 .composer-grid {
   display: grid;
-  grid-template-columns: 160px 144px;
+  grid-template-columns: minmax(152px, 1fr) minmax(124px, 144px);
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 0;
+  align-items: end;
 }
 .composer-grid label {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   color: var(--muted);
   font-size: 11px;
+  min-width: 0;
 }
 .composer-grid input, .composer-grid select {
   min-height: 34px;
@@ -669,16 +732,26 @@ button { cursor: pointer; }
   background: #081524;
   color: var(--text);
   padding: 0 9px;
+  min-width: 0;
 }
-.composer-config { display: grid; gap: 8px; }
+.composer-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 7px 8px;
+  min-width: 0;
+}
 .composer-toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  min-width: 0;
 }
 .composer-chip {
-  min-height: 30px;
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-height: 34px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: #081524;
@@ -689,6 +762,7 @@ button { cursor: pointer; }
   gap: 6px;
   font-size: 12px;
   white-space: nowrap;
+  line-height: 1;
 }
 .composer-chip.active {
   border-color: rgba(56,189,248,0.72);
@@ -697,11 +771,20 @@ button { cursor: pointer; }
 }
 .composer-chip.muted {
   color: var(--muted);
+  flex: 0 1 154px;
+  min-width: 58px;
+  max-width: 154px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .composer-chip.icon-only {
-  width: 30px;
+  width: 34px;
+  flex-basis: 34px;
   justify-content: center;
   padding: 0;
+}
+.composer-chip svg {
+  flex: 0 0 auto;
 }
 .attachment-list {
   margin-top: 8px;
@@ -787,7 +870,8 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .permission-menu-trigger {
-  min-height: 30px;
+  flex: 0 1 214px;
+  min-height: 34px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: #081524;
@@ -797,14 +881,22 @@ button { cursor: pointer; }
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  min-width: 148px;
+  max-width: 214px;
+}
+.permission-menu-trigger svg {
+  flex: 0 0 auto;
 }
 .permission-menu-trigger select {
-  width: auto;
-  min-height: 28px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 32px;
   border: 0;
   background: transparent;
   color: inherit;
   padding: 0 2px;
+  min-width: 0;
+  max-width: 174px;
 }
 .permission-summary {
   border: 1px solid rgba(29,56,82,0.72);
@@ -824,6 +916,13 @@ button { cursor: pointer; }
 }
 .permission-summary strong { display: block; font-size: 12px; }
 .permission-summary span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.composer .permission-summary,
+.composer .config-note {
+  grid-column: 1 / -1;
+}
+.composer .permission-summary {
+  display: none;
+}
 .slash-composer { position: relative; overflow: visible; }
 .slash-menu {
   position: absolute;
@@ -987,18 +1086,28 @@ button { cursor: pointer; }
   gap: 8px;
   color: var(--primary-hover);
   margin-bottom: 12px;
+  min-width: 0;
+}
+.panel header svg {
+  flex: 0 0 auto;
+}
+.panel header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wide-panel { grid-column: 1 / -1; }
 .metric {
-  min-height: 42px;
+  min-height: 38px;
   border-top: 1px solid rgba(29,56,82,0.75);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(72px, 0.46fr) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-width: 0;
 }
-.metric span { color: var(--muted); font-size: 12px; }
+.metric span { min-width: 0; color: var(--muted); font-size: 12px; }
 .metric strong { min-width: 0; text-align: right; font-size: 13px; overflow-wrap: anywhere; }
 .tone-success { color: var(--success); }
 .tone-warning { color: var(--warning); }
@@ -1304,14 +1413,14 @@ button { cursor: pointer; }
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--muted);
   padding: 22px;
 }
 .new-thread-state strong { color: var(--text); }
 .new-thread-state > span { text-align: center; font-size: 13px; }
 .new-composer {
-  width: min(720px, 100%);
+  width: min(900px, 100%);
   border: 1px solid var(--hairline);
   border-radius: 8px;
 }
@@ -1343,7 +1452,9 @@ button { cursor: pointer; }
   font-size: 19px;
 }
 .conversation-inspector {
-  background: rgba(255,255,255,0.74);
+  background: rgba(248,250,252,0.82);
+  padding: 12px;
+  gap: 10px;
 }
 .conversation-shell .panel,
 .conversation-shell .metric,
@@ -1353,6 +1464,21 @@ button { cursor: pointer; }
   background: rgba(255,255,255,0.82);
   border-color: rgba(217,225,234,0.92);
   color: var(--chat-text);
+}
+.conversation-shell .panel {
+  padding: 12px;
+  box-shadow: none;
+}
+.conversation-shell .panel header {
+  color: #334155;
+}
+.conversation-shell .metric {
+  grid-template-columns: minmax(66px, 0.44fr) minmax(0, 1fr);
+  min-height: 36px;
+  border-top-color: rgba(217,225,234,0.86);
+}
+.conversation-shell .metric:first-of-type {
+  border-top: 0;
 }
 .conversation-shell .reply-banner,
 .conversation-shell .choice-card,
@@ -1639,7 +1765,8 @@ button { cursor: pointer; }
   padding: 8px clamp(16px, 4vw, 48px);
   background: rgba(255,255,255,0.94);
   backdrop-filter: blur(16px);
-  max-height: min(30vh, 220px);
+  max-height: min(36vh, 260px);
+  gap: 7px 10px;
 }
 .conversation-shell .composer textarea {
   min-height: 46px;
@@ -1649,13 +1776,10 @@ button { cursor: pointer; }
   box-shadow: 0 1px 2px rgba(15,23,42,0.04);
 }
 .conversation-shell .composer-grid {
-  margin-top: 6px;
+  margin-top: 0;
 }
 .conversation-shell .composer-actions {
-  margin-top: 6px;
-}
-.conversation-shell .permission-summary {
-  display: none;
+  margin-top: 0;
 }
 .conversation-shell .composer-grid input,
 .conversation-shell .composer-grid select,
@@ -1666,6 +1790,17 @@ button { cursor: pointer; }
   background: var(--chat-surface);
   color: var(--chat-text);
   border-color: var(--chat-border);
+}
+.conversation-shell .composer-grid input,
+.conversation-shell .composer-grid select,
+.conversation-shell .composer-chip,
+.conversation-shell .permission-menu-trigger {
+  min-height: 34px;
+  box-shadow: 0 1px 1px rgba(15,23,42,0.03);
+}
+.conversation-shell .composer-chip.muted {
+  background: var(--chat-surface-soft);
+  color: var(--chat-muted);
 }
 .conversation-shell .attachment-chip.uploading {
   border-color: rgba(202,138,4,0.36);
@@ -1695,6 +1830,12 @@ button { cursor: pointer; }
   background: var(--chat-surface-soft);
   border-color: var(--chat-border);
 }
+.conversation-shell .primary-button,
+.conversation-shell .secondary-button,
+.conversation-shell .danger-button {
+  min-height: 36px;
+  padding: 0 10px;
+}
 .conversation-shell .field-label input,
 .conversation-shell .field-label textarea,
 .conversation-shell .archive-plan input {
@@ -1712,6 +1853,34 @@ button { cursor: pointer; }
   color: #b91c1c;
   background: rgba(239,68,68,0.10);
   border-color: rgba(185,28,28,0.28);
+}
+
+@media (max-width: 1180px) {
+  .composer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .composer-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.42fr);
+  }
+}
+
+@container (min-width: 760px) {
+  .composer > .composer-config {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 304px);
+  }
+}
+
+@media (max-width: 980px) {
+  .composer > .composer-config,
+  .composer-actions {
+    grid-column: 1 / -1;
+  }
+  .composer-actions {
+    justify-content: end;
+  }
+  .conversation-shell {
+    grid-template-columns: minmax(0, 1fr) 264px;
+  }
 }
 
 @media (max-width: 767px) {
@@ -1773,11 +1942,40 @@ button { cursor: pointer; }
   .action-stack { padding: 10px 12px 0; max-height: min(34vh, 320px); }
   .message-stream { padding: 12px; }
   .message-card pre { max-height: 42vh; }
-  .composer { padding: 8px 12px; position: sticky; bottom: 58px; max-height: 28vh; }
+  .composer {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 8px 12px;
+    position: sticky;
+    bottom: 58px;
+    max-height: min(46vh, 380px);
+    overflow-y: auto;
+  }
+  .conversation-shell .composer {
+    max-height: min(46vh, 380px);
+  }
   .conversation-shell .composer textarea { min-height: 46px; max-height: 70px; }
-  .composer-grid { grid-template-columns: 1fr 1fr; }
-  .composer-actions { align-items: stretch; flex-direction: column; }
-  .composer-actions .primary-button { width: 100%; min-width: 96px; }
+  .composer > .composer-config,
+  .composer-actions {
+    grid-column: 1;
+  }
+  .composer-config,
+  .composer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .composer-toolbar {
+    gap: 6px;
+  }
+  .composer-chip.muted {
+    max-width: min(100%, 220px);
+  }
+  .permission-menu-trigger {
+    max-width: 100%;
+  }
+  .permission-menu-trigger select {
+    max-width: calc(100vw - 98px);
+  }
+  .composer-actions { justify-content: stretch; }
+  .composer-actions .primary-button { width: 100%; min-width: 96px; min-height: 44px; }
   .slash-menu {
     width: min(100%, calc(100vw - 16px));
     max-height: min(300px, 44vh);

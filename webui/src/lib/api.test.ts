@@ -148,6 +148,55 @@ describe("archive delete API compatibility", () => {
     expect(JSON.parse(options.body)).toEqual({ turn_id: "turn-live", job_id: "job-live" });
   });
 
+  test("codex goal helpers cover get save clear pause and resume endpoints", async () => {
+    const { getCodexGoal, saveCodexGoal, clearCodexGoal, pauseCodexGoal, resumeCodexGoal } = await loadRealApi();
+    const responses = [
+      { available: true, enabled: false, objective: null, token_budget: null, status: "idle" },
+      { available: true, enabled: true, objective: "ship local goal", token_budget: 12345, status: "active" },
+      { available: true, enabled: false, objective: null, token_budget: null, status: "cleared" },
+      { available: true, enabled: true, objective: "ship local goal", token_budget: 12345, status: "paused" },
+      { available: true, enabled: true, objective: "ship local goal", token_budget: 12345, status: "active" }
+    ];
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const initial = await getCodexGoal("thread-a");
+    const saved = await saveCodexGoal("thread-a", { objective: "ship local goal", token_budget: 12345 }, "csrf-token");
+    const cleared = await clearCodexGoal("thread-a", "csrf-token");
+    const paused = await pauseCodexGoal("thread-a", "csrf-token");
+    const resumed = await resumeCodexGoal("thread-a", "csrf-token");
+
+    expect(initial.status).toBe("idle");
+    expect(saved.status).toBe("active");
+    expect(cleared.status).toBe("cleared");
+    expect(paused.status).toBe("paused");
+    expect(resumed.status).toBe("active");
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/codex/goal?thread_id=thread-a",
+      "/api/codex/goal",
+      "/api/codex/goal/clear",
+      "/api/codex/goal/pause",
+      "/api/codex/goal/resume"
+    ]);
+    const [, saveOptions] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers; body: string }];
+    expect(saveOptions.method).toBe("POST");
+    expect(saveOptions.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(JSON.parse(saveOptions.body)).toEqual({
+      thread_id: "thread-a",
+      objective: "ship local goal",
+      token_budget: 12345
+    });
+    for (const index of [2, 3, 4]) {
+      const [, options] = fetchMock.mock.calls[index] as [string, RequestInit & { headers: Headers; body: string }];
+      expect(options.method).toBe("POST");
+      expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+      expect(JSON.parse(options.body)).toEqual({ thread_id: "thread-a" });
+    }
+  });
+
   test("demo plugin list mirrors composer mention metadata", async () => {
     vi.resetModules();
     const { listPlugins } = await import("./api");

@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
-import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
+import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
   buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
@@ -67,6 +67,22 @@ type AppExports = typeof import("./App") & {
   nextVisibleThreadIdAfterRemoval?: (threads: ThreadSummary[], removedThreadId: string) => string | null;
   shouldHydrateThreadDetail?: (threadId: string | null | undefined, detail?: { summary: ThreadSummary } | null) => boolean;
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
+  applyOptimisticThreadTitle?: (qc: QueryClient, threadId: string, title: string) => unknown;
+  rollbackOptimisticThreadTitle?: (qc: QueryClient, snapshot: unknown) => void;
+  applyOptimisticThreadArchive?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => unknown;
+  rollbackOptimisticThreadArchive?: (qc: QueryClient, snapshot: unknown) => void;
+  applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
+  rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
+  threadInspectorPanelTitles?: () => string[];
+  goalStatusLabel?: (goal: CodexGoal | undefined, loading: boolean) => string;
+  goalStatusTone?: (goal: CodexGoal | undefined) => "success" | "warning" | "danger" | undefined;
+  goalControlState?: (goal: CodexGoal | undefined, options?: { busy?: boolean; objective?: string; tokenBudget?: string }) => {
+    saveDisabled: boolean;
+    clearDisabled: boolean;
+    pauseDisabled: boolean;
+    resumeDisabled: boolean;
+  };
+  formatGoalTimestamp?: (value: number | string | null | undefined) => string;
   codexVisibleCopy?: () => Record<string, string>;
   failureCategoryLabel?: (category: string) => string;
   optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
@@ -411,15 +427,37 @@ describe("conversation helpers", () => {
 
   test("saved title updates thread list cache values without waiting for a refetch", async () => {
     const app = await loadApp();
+    const qc = new QueryClient();
     const threads: ThreadSummary[] = [
       { id: "thread-a", title: "旧标题", status: "Recent", message_count: 1 },
       { id: "thread-b", title: "其他", status: "Recent", message_count: 1 }
     ];
+    const detail = {
+      summary: threads[0],
+      messages: [],
+      blocks: [],
+      raw_event_count: 0
+    };
 
     expect(app.mergeSavedThreadTitle?.(threads, "thread-a", "新标题")).toEqual([
       { id: "thread-a", title: "新标题", status: "Recent", message_count: 1 },
       { id: "thread-b", title: "其他", status: "Recent", message_count: 1 }
     ]);
+
+    qc.setQueryData(["threads", "all", ""], threads);
+    qc.setQueryData(["threads", "running", ""], [threads[1]]);
+    qc.setQueryData(["thread", "thread-a"], detail);
+
+    const snapshot = app.applyOptimisticThreadTitle?.(qc, "thread-a", "即时标题");
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].title).toBe("即时标题");
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "running", ""])?.[0].title).toBe("其他");
+    expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.title).toBe("即时标题");
+
+    app.rollbackOptimisticThreadTitle?.(qc, snapshot);
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].title).toBe("旧标题");
+    expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.title).toBe("旧标题");
   });
 
   test("thread title merges keep real titles instead of assistant plan or body text", async () => {
@@ -476,6 +514,50 @@ describe("conversation helpers", () => {
     expect(cleared).toEqual(["thread-b"]);
   });
 
+  test("archive and restore optimistic cache changes can roll back without empty flashes", async () => {
+    const app = await loadApp();
+    const qc = new QueryClient();
+    const threads: ThreadSummary[] = [
+      { id: "thread-a", title: "A", status: "Recent", message_count: 1 },
+      { id: "thread-b", title: "B", status: "Recent", message_count: 1 }
+    ];
+    const detail = {
+      summary: threads[0],
+      messages: [],
+      blocks: [],
+      raw_event_count: 0
+    };
+    const cleared: string[] = [];
+
+    qc.setQueryData(["threads", "all", ""], threads);
+    qc.setQueryData(["thread", "thread-a"], detail);
+
+    const archiveSnapshot = app.applyOptimisticThreadArchive?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-a");
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-b"]);
+    expect(qc.getQueryData(["thread", "thread-a"])).toBeUndefined();
+    expect(cleared).toEqual(["thread-a"]);
+
+    app.rollbackOptimisticThreadArchive?.(qc, archiveSnapshot);
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-a", "thread-b"]);
+    expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Recent");
+
+    const archivedThread = { ...threads[0], status: "Archived" as const, archived_at: "2026-06-17T00:00:00Z" };
+    qc.setQueryData(["threads", "all", ""], [archivedThread, threads[1]]);
+    qc.setQueryData(["thread", "thread-a"], { ...detail, summary: archivedThread });
+
+    const restoreSnapshot = app.applyOptimisticThreadRestore?.(qc, "thread-a");
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].status).toBe("Recent");
+    expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Recent");
+
+    app.rollbackOptimisticThreadRestore?.(qc, restoreSnapshot);
+
+    expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].status).toBe("Archived");
+    expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Archived");
+  });
+
   test("archived detail responses are not hydrated back into the active thread view", async () => {
     const app = await loadApp();
     const recent: ThreadSummary = { id: "thread-a", title: "A", status: "Recent", message_count: 1 };
@@ -507,6 +589,7 @@ describe("conversation helpers", () => {
   test("thread settings hides internal metrics and copies only the thread id", async () => {
     const app = await loadApp();
 
+    expect(app.threadInspectorPanelTitles?.()).toEqual(["名称与归档", "Goal", "状态摘要"]);
     expect(app.threadSettingsMetricLabels?.()).not.toEqual(expect.arrayContaining([
       "Thread ID",
       "Active turn",
@@ -525,6 +608,63 @@ describe("conversation helpers", () => {
     expect(app.threadCopyId?.(null)).toBeNull();
     expect(app.threadResumeCommand?.("  ")).toBeNull();
     expect(app.threadResumeCommand?.(null)).toBeNull();
+  });
+
+  test("goal panel helpers cover TUI states and button rules", async () => {
+    const app = await loadApp();
+    const active: CodexGoal = {
+      available: true,
+      enabled: true,
+      objective: "补齐右栏",
+      token_budget: 12000,
+      status: "active"
+    };
+    const paused: CodexGoal = { ...active, status: "paused" };
+    const cleared: CodexGoal = {
+      available: true,
+      enabled: false,
+      objective: null,
+      token_budget: null,
+      status: "cleared"
+    };
+    const blocked: CodexGoal = { ...active, status: "blocked", blocked_reason: "等待确认" };
+
+    expect(app.goalStatusLabel?.(undefined, true)).toBe("读取中");
+    expect(app.goalStatusLabel?.({ ...active, status: "idle", enabled: false }, false)).toBe("未设置");
+    expect(app.goalStatusLabel?.(active, false)).toBe("进行中");
+    expect(app.goalStatusLabel?.(paused, false)).toBe("已暂停");
+    expect(app.goalStatusLabel?.(cleared, false)).toBe("已清除");
+    expect(app.goalStatusLabel?.(blocked, false)).toBe("阻塞");
+    expect(app.goalStatusLabel?.({ ...active, status: "complete" }, false)).toBe("完成");
+    expect(app.goalStatusTone?.(blocked)).toBe("danger");
+
+    expect(app.goalControlState?.(undefined, { objective: "", tokenBudget: "" })).toEqual({
+      saveDisabled: true,
+      clearDisabled: true,
+      pauseDisabled: true,
+      resumeDisabled: true
+    });
+    expect(app.goalControlState?.(active, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+      saveDisabled: false,
+      clearDisabled: false,
+      pauseDisabled: false,
+      resumeDisabled: true
+    });
+    expect(app.goalControlState?.(paused, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+      saveDisabled: false,
+      clearDisabled: false,
+      pauseDisabled: true,
+      resumeDisabled: false
+    });
+    expect(app.goalControlState?.(cleared, { objective: "", tokenBudget: "" })?.pauseDisabled).toBe(true);
+    expect(app.goalControlState?.(active, { objective: "补齐右栏", tokenBudget: "0" })?.saveDisabled).toBe(true);
+    expect(app.goalControlState?.(active, { busy: true, objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+      saveDisabled: true,
+      clearDisabled: true,
+      pauseDisabled: true,
+      resumeDisabled: true
+    });
+    expect(app.formatGoalTimestamp?.(0)).toContain("1970");
   });
 
   test("probe thread rows use canonical ThreadSummary status values", async () => {
