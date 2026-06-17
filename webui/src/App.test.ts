@@ -74,6 +74,9 @@ type AppExports = typeof import("./App") & {
   applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
   rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
   threadInspectorPanelTitles?: () => string[];
+  setLocalThreadTitleOverride?: (threadId: string, title: string, now?: number) => void;
+  clearLocalThreadTitleOverride?: (threadId: string) => void;
+  applyThreadTitleOverride?: <T extends Partial<ThreadSummary>>(summary: T, now?: number) => T;
   goalStatusLabel?: (goal: CodexGoal | undefined, loading: boolean) => string;
   goalStatusTone?: (goal: CodexGoal | undefined) => "success" | "warning" | "danger" | undefined;
   goalControlState?: (goal: CodexGoal | undefined, options?: { busy?: boolean; objective?: string; tokenBudget?: string }) => {
@@ -474,6 +477,24 @@ describe("conversation helpers", () => {
     }
 
     expect(app.mergeIncomingThreadSummary?.({ ...current, title: "读取中" }, { ...current, title: "真实新标题" }).title).toBe("真实新标题");
+  });
+
+  test("local title override prevents stale refetch from flashing back after rename", async () => {
+    const app = await loadApp();
+    const current: ThreadSummary = { id: "thread-a", title: "旧标题", status: "Recent", message_count: 1 };
+
+    app.setLocalThreadTitleOverride?.("thread-a", "即时标题");
+
+    expect(app.applyThreadTitleOverride?.({ ...current, title: "旧标题" }).title).toBe("即时标题");
+    expect(app.mergeIncomingThreadSummary?.(current, { ...current, title: "旧标题" }).title).toBe("即时标题");
+
+    app.setLocalThreadTitleOverride?.("thread-a", "短期标题", 1000);
+    expect(app.applyThreadTitleOverride?.({ ...current, title: "旧标题" }, 200_000).title).toBe("旧标题");
+
+    app.setLocalThreadTitleOverride?.("thread-a", "再次即时");
+    app.clearLocalThreadTitleOverride?.("thread-a");
+
+    expect(app.applyThreadTitleOverride?.({ ...current, title: "旧标题" }).title).toBe("旧标题");
   });
 
   test("archiving selects the next visible thread and clears every cached copy of the archived thread", async () => {

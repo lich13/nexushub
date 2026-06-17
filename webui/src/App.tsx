@@ -573,7 +573,13 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const messageStore = useThreadMessageStoreController();
-  const threads = useQuery({ queryKey: ["threads", status, q], queryFn: () => listThreads(status, q), refetchInterval: 5000, staleTime: 3000, placeholderData: preservePreviousQueryData });
+  const threads = useQuery({
+    queryKey: ["threads", status, q],
+    queryFn: async () => applyThreadTitleOverrides(await listThreads(status, q)),
+    refetchInterval: 5000,
+    staleTime: 3000,
+    placeholderData: preservePreviousQueryData
+  });
   const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
   const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
   const selectedThreadSummary = useMemo(
@@ -582,7 +588,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   );
   const detail = useQuery({
     queryKey: ["thread", resolvedSelected],
-    queryFn: () => getThread(resolvedSelected!),
+    queryFn: async () => applyThreadTitleOverrideToDetail(await getThread(resolvedSelected!)),
     enabled: Boolean(resolvedSelected),
     refetchInterval: (query) => {
       const current = query.state.data as ThreadDetail | undefined;
@@ -863,14 +869,56 @@ export function renderConversationHeaderHtml(summary: ThreadSummary): string {
   return `<div class="conversation-title-copy"><h2 class="conversation-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h2></div>`;
 }
 
+const threadTitleOverrides = new Map<string, { title: string; expiresAt: number }>();
+const threadTitleOverrideTtlMs = 120_000;
+
+export function setLocalThreadTitleOverride(threadId: string, title: string, now = Date.now()): void {
+  const cleanThreadId = threadId.trim();
+  const cleanTitle = title.trim();
+  if (!cleanThreadId || !cleanTitle) return;
+  threadTitleOverrides.set(cleanThreadId, {
+    title: cleanTitle,
+    expiresAt: now + threadTitleOverrideTtlMs
+  });
+}
+
+export function clearLocalThreadTitleOverride(threadId: string): void {
+  threadTitleOverrides.delete(threadId);
+}
+
+export function applyThreadTitleOverride<T extends Partial<ThreadSummary>>(summary: T, now = Date.now()): T {
+  const threadId = summary.id?.trim();
+  if (!threadId) return summary;
+  const override = threadTitleOverrides.get(threadId);
+  if (!override) return summary;
+  if (override.expiresAt <= now) {
+    threadTitleOverrides.delete(threadId);
+    return summary;
+  }
+  return {
+    ...summary,
+    title: override.title
+  };
+}
+
+function applyThreadTitleOverrides<T extends Partial<ThreadSummary>>(threads: T[]): T[] {
+  return threads.map((thread) => applyThreadTitleOverride(thread));
+}
+
+function applyThreadTitleOverrideToDetail(detail: ThreadDetail): ThreadDetail {
+  const summary = applyThreadTitleOverride(detail.summary);
+  return summary === detail.summary ? detail : { ...detail, summary: summary as ThreadSummary };
+}
+
 function isPlaceholderThreadTitle(title?: string | null): boolean {
   return isNoisyThreadTitle(title);
 }
 
 export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
-  const next = { ...current, ...incoming };
-  next.title = mergeThreadSummaryTitle(current.title, incoming.title);
-  if (!isUserVisibleLastEventKind(incoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
+  const effectiveIncoming = applyThreadTitleOverride(incoming);
+  const next = { ...current, ...effectiveIncoming };
+  next.title = mergeThreadSummaryTitle(current.title, effectiveIncoming.title);
+  if (!isUserVisibleLastEventKind(effectiveIncoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
     next.last_event_kind = current.last_event_kind;
   }
   return next;
@@ -2438,8 +2486,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         messageStore.applyRealtimeBlocks(eventThreadId, incomingBlocks);
       },
       onSummary: (next, eventThreadId) => {
-        messageStore.applySummary(eventThreadId, next);
-        updateThreadListCaches(qc, next);
+        const stableSummary = applyThreadTitleOverride(next);
+        messageStore.applySummary(eventThreadId, stableSummary as ThreadSummary);
+        updateThreadListCaches(qc, stableSummary as ThreadSummary);
         qc.invalidateQueries({ queryKey: ["threads"] });
       },
       onError: (message, eventThreadId) => {
@@ -2652,6 +2701,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       ]);
       const snapshot = applyOptimisticThreadTitle(qc, variables.threadId, title);
       if (title) {
+        setLocalThreadTitleOverride(variables.threadId, title);
         setRenameValue(title);
         setRenameDirty(false);
         messageStore.patchSummary(variables.threadId, { title });
@@ -2661,10 +2711,14 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     onSuccess: ({ threadId: renamedThreadId, title }) => {
       messageStore.setFeedback(renamedThreadId, "线程名称已更新");
       if (title) {
+        setLocalThreadTitleOverride(renamedThreadId, title);
         applyOptimisticThreadTitle(qc, renamedThreadId, title);
       }
     },
     onError: (err: Error, variables, context) => {
+      if (variables?.threadId) {
+        clearLocalThreadTitleOverride(variables.threadId);
+      }
       rollbackOptimisticThreadTitle(qc, context?.snapshot);
       const restoredTitle = cachedThreadSummary(qc, variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
       if (variables?.threadId === summary.id && restoredTitle) {
