@@ -675,10 +675,10 @@ pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
     if !matches!(row.status, ThreadStatus::Archived) {
         if scan.recoverable {
             row.status = ThreadStatus::Recoverable;
-        } else if scan.running {
-            row.status = ThreadStatus::Running;
         } else if scan.reply_needed {
             row.status = ThreadStatus::ReplyNeeded;
+        } else if scan.running {
+            row.status = ThreadStatus::Running;
         } else if matches!(
             row.status,
             ThreadStatus::Running | ThreadStatus::ReplyNeeded | ThreadStatus::Recoverable
@@ -1364,7 +1364,11 @@ pub fn rollout_hook_stop_message_with_source(
                 } else {
                     "last_assistant_message"
                 };
+                let is_plan = source == "proposed_plan";
                 latest_assistant = Some((message.text, source.to_string()));
+                if is_plan && latest_plan.is_none() {
+                    latest_plan = latest_assistant.clone();
+                }
             }
         }
         if rollout_event_type(&value) != "task_complete" {
@@ -4347,6 +4351,40 @@ mod tests {
     }
 
     #[test]
+    fn rollout_hook_stop_message_keeps_final_answer_plan_over_later_progress() {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-hook-stop-final-answer-plan-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        let plan = "# Remove Local WARP Cleanly\n- stop service\n- verify cleanup";
+        let events = [
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":format!("<proposed_plan>\n{plan}\n</proposed_plan>")}],"phase":"final_answer"}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}),
+            json!({"type":"response_item","turn_id":"turn-next","payload":{"type":"message","role":"assistant","content":[{"text":"我会按刚才的计划执行系统清理。"}],"phase":"commentary"}}),
+        ];
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(source, "proposed_plan");
+        assert!(message.contains(plan));
+        assert!(!message.contains("我会按刚才的计划执行系统清理"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn list_threads_preserves_db_rollout_path_when_session_index_misses_thread() {
         let root = unique_temp_dir("db-rollout-path");
         fs::create_dir_all(&root).unwrap();
@@ -4944,6 +4982,47 @@ mod tests {
         assert!(latest.contains("# 修复计划"));
         assert!(!latest.contains("<proposed_plan>"));
         assert!(!latest.contains("</proposed_plan>"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn request_user_input_status_takes_priority_over_running_turn() {
+        let root = unique_temp_dir("request-user-input-priority");
+        fs::create_dir_all(&root).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        write_thread_fixture(
+            &conn,
+            &root,
+            "choice-thread",
+            "选择线程",
+            "",
+            &[
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-choice"}}),
+                json!({"type":"response_item","turn_id":"turn-choice","payload":{"type":"function_call","name":"request_user_input","call_id":"choice-1","arguments":{"questions":[{"id":"choice","question":"选择方案","options":[{"label":"A"}]}]}}}),
+                json!({"type":"response_item","turn_id":"turn-choice","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-1","arguments":{"targets":["agent-1"]}}}),
+            ],
+            1,
+        );
+
+        let rows = list_threads(&CodexPaths::new(&root), Some("reply-needed"), None, 10).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
+        assert_eq!(rows[0].active_turn_id.as_deref(), Some("turn-choice"));
+        assert!(rows[0].pending_elicitation.is_some());
         let _ = fs::remove_dir_all(root);
     }
 
