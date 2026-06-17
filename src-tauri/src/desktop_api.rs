@@ -1461,7 +1461,10 @@ mod tests {
     #[tokio::test]
     async fn desktop_probe_status_uses_core_aggregation_for_running_jobs() {
         let (_temp, state) = test_state();
-        state.db.create_job("job-a", "codex_chat", "正在运行").unwrap();
+        state
+            .db
+            .create_job("job-a", "codex_chat", "正在运行")
+            .unwrap();
         state
             .db
             .link_job_thread("job-a", Some("thread-from-job"), Some("turn-a"))
