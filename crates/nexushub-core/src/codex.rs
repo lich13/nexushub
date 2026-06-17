@@ -1128,6 +1128,13 @@ enum PendingAction {
     },
 }
 
+#[derive(Debug, Clone)]
+struct PendingHookStopAction {
+    action: PendingAction,
+    message: String,
+    source: &'static str,
+}
+
 fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
@@ -1261,7 +1268,6 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
                 }
             }
             if last_agent_message.is_some() {
-                pending_action = None;
                 scan.recoverable = false;
             }
             current_plan_marker = None;
@@ -1351,7 +1357,7 @@ fn rollout_hook_stop_message_with_source_inner(
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     let mut latest_assistant = None;
-    let mut latest_plan = None;
+    let mut latest_unresolved_action: Option<PendingHookStopAction> = None;
     let mut latest_task_complete = None;
     for line in text.lines() {
         if line.trim().is_empty() {
@@ -1360,13 +1366,35 @@ fn rollout_hook_stop_message_with_source_inner(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(expected_turn_id) = turn_id {
-            if event_turn_id(&value).as_deref() != Some(expected_turn_id) {
-                continue;
-            }
+        let matches_turn_scope = turn_id
+            .map(|expected_turn_id| event_turn_id(&value).as_deref() == Some(expected_turn_id))
+            .unwrap_or(true);
+        if !matches_turn_scope {
+            continue;
         }
         if let Some(plan) = plan_text_from_event(&value) {
-            latest_plan = Some((plan, "proposed_plan".to_string()));
+            let (action_turn_id, action_item_id) = plan_marker_for_event(&None, &value)
+                .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
+            latest_unresolved_action = Some(PendingHookStopAction {
+                action: PendingAction::Plan {
+                    turn_id: action_turn_id,
+                    item_id: action_item_id,
+                },
+                message: plan,
+                source: "proposed_plan",
+            });
+        }
+        if let Some(elicitation) = parse_pending_elicitation(&value) {
+            latest_unresolved_action = Some(PendingHookStopAction {
+                action: PendingAction::Elicitation {
+                    turn_id: elicitation.turn_id.clone(),
+                    item_id: elicitation.item_id.clone(),
+                    call_id: event_call_id(&value),
+                    elicitation,
+                },
+                message: request_user_input_hook_message(&value),
+                source: "request_user_input",
+            });
         }
         if let Some(message) = parse_raw_message_event(&value) {
             if message.role == "assistant" && !message.text.trim().is_empty() {
@@ -1376,11 +1404,31 @@ fn rollout_hook_stop_message_with_source_inner(
                     "last_assistant_message"
                 };
                 let is_plan = source == "proposed_plan";
-                latest_assistant = Some((message.text, source.to_string()));
-                if is_plan && latest_plan.is_none() {
-                    latest_plan = latest_assistant.clone();
+                if is_plan {
+                    let pending_plan = PendingHookStopAction {
+                        action: PendingAction::Plan {
+                            turn_id: event_turn_id(&value),
+                            item_id: event_item_id(&value),
+                        },
+                        message: extract_proposed_plan_text(&message.text).unwrap_or(message.text),
+                        source: "proposed_plan",
+                    };
+                    if should_replace_pending_hook_stop_action(
+                        latest_unresolved_action.as_ref(),
+                        &pending_plan,
+                    ) {
+                        latest_unresolved_action = Some(pending_plan);
+                    }
+                } else {
+                    latest_assistant = Some((message.text, source.to_string()));
                 }
             }
+        }
+        if latest_unresolved_action
+            .as_ref()
+            .is_some_and(|pending| clears_pending_action(&value, Some(&pending.action)))
+        {
+            latest_unresolved_action = None;
         }
         if rollout_event_type(&value) != "task_complete" {
             continue;
@@ -1398,7 +1446,34 @@ fn rollout_hook_stop_message_with_source_inner(
                 .map(|message| (message, "task_complete.last_agent_message".to_string()));
         }
     }
-    Ok(latest_task_complete.or(latest_plan).or(latest_assistant))
+    Ok(latest_unresolved_action
+        .map(|pending| (pending.message, pending.source.to_string()))
+        .or(latest_task_complete)
+        .or(latest_assistant))
+}
+
+fn should_replace_pending_hook_stop_action(
+    current: Option<&PendingHookStopAction>,
+    next: &PendingHookStopAction,
+) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    match (&current.action, &next.action) {
+        (
+            PendingAction::Plan {
+                turn_id: current_turn,
+                item_id: current_item,
+            },
+            PendingAction::Plan {
+                turn_id: next_turn,
+                item_id: next_item,
+            },
+        ) if current_turn == next_turn && (next_item.is_none() || current_item == next_item) => {
+            next.message.len() > current.message.len()
+        }
+        _ => true,
+    }
 }
 
 pub fn rollout_completion_last_agent_message(
@@ -1539,9 +1614,17 @@ fn rollout_event_type(value: &Value) -> &str {
         top_level
     };
     match raw {
+        "thread.started" => "thread_started",
         "TurnStarted" => "task_started",
-        "TurnComplete" | "TurnCompleted" | "turn_complete" | "turn/complete" => "turn_completed",
-        "TurnAborted" => "turn_aborted",
+        "turn.started" => "turn_started",
+        "TurnComplete" | "TurnCompleted" | "turn_complete" | "turn/complete" | "turn.completed" => {
+            "turn_completed"
+        }
+        "TurnAborted" | "turn.failed" | "error" => "turn_aborted",
+        "item.started" => "item_started",
+        "item.completed" => "item_completed",
+        "item.plan.delta" => "item/plan/delta",
+        "turn.plan.updated" => "turn/plan/updated",
         "RequestUserInput" | "requestUserInput" => "request_user_input",
         other => other,
     }
@@ -1769,7 +1852,7 @@ fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
 }
 
 fn plan_text_from_event(value: &Value) -> Option<String> {
-    if value.get("type").and_then(Value::as_str) == Some("item_completed")
+    if rollout_event_type(value) == "item_completed"
         && value
             .get("item")
             .and_then(|item| item.get("type"))
@@ -2295,7 +2378,7 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
 }
 
 fn is_plan_item_completed(value: &Value) -> bool {
-    value.get("type").and_then(Value::as_str) == Some("item_completed")
+    rollout_event_type(value) == "item_completed"
         && value
             .get("item")
             .and_then(|item| item.get("type"))
@@ -2333,6 +2416,31 @@ fn pending_elicitation_block(value: &Value, raw_index: usize) -> Option<MessageB
         questions: elicitation.questions,
         payload: Some(value.clone()),
     })
+}
+
+fn request_user_input_hook_message(value: &Value) -> String {
+    let Some(elicitation) = parse_pending_elicitation(value) else {
+        return "Request user input".to_string();
+    };
+    elicitation
+        .questions
+        .iter()
+        .map(|question| {
+            let mut text = question.question.clone();
+            if !question.options.is_empty() {
+                let options = question
+                    .options
+                    .iter()
+                    .map(|option| option.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                text.push_str("\nOptions: ");
+                text.push_str(&options);
+            }
+            text
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn plan_delta_block(value: &Value, raw_index: usize) -> Option<MessageBlock> {
@@ -3894,6 +4002,122 @@ mod tests {
 
         assert!(!scan.reply_needed);
         assert!(!scan.recoverable);
+    }
+
+    #[test]
+    fn same_turn_proposed_plan_survives_task_complete_last_agent_message() {
+        let events = [
+            json!({"type":"thread.started","thread_id":"thread-plan"}),
+            json!({"type":"turn.started","turn_id":"turn-plan"}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# Plan\n- inspect\n- patch\n</proposed_plan>"}]}}),
+            json!({"type":"task_complete","turn_id":"turn-plan","status":"completed","last_agent_message":"I will run the plan now."}),
+        ];
+        let scan = scan_fixture(&events);
+        assert!(scan.reply_needed);
+        assert!(scan.pending_elicitation.is_none());
+        assert_eq!(scan.active_turn_id, None);
+
+        let path = rollout_fixture_path("same-turn-proposed-plan", &events);
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(source, "proposed_plan");
+        assert!(message.contains("- inspect"));
+        assert!(!message.contains("I will run the plan now."));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn official_turn_started_alias_marks_thread_running() {
+        let scan = scan_fixture(&[
+            json!({"type":"thread.started","thread_id":"thread-running"}),
+            json!({"type":"turn.started","turn_id":"turn-running"}),
+        ]);
+
+        assert!(scan.running);
+        assert_eq!(scan.active_turn_id.as_deref(), Some("turn-running"));
+    }
+
+    #[test]
+    fn completed_plan_item_alias_supplies_full_hook_stop_plan_text() {
+        let completed_plan =
+            "# Full Plan\n- inspect current state\n- patch state machine\n- verify targeted tests";
+        let events = [
+            json!({"type":"turn.started","turn_id":"turn-plan"}),
+            json!({"type":"item.plan.delta","turn_id":"turn-plan","item_id":"plan-1","delta":"# Full Plan\n- inspect current state\n"}),
+            json!({"type":"item.completed","turn_id":"turn-plan","item":{"id":"plan-1","type":"Plan","text":completed_plan}}),
+            json!({"type":"task_complete","turn_id":"turn-plan","status":"completed","last_agent_message":"short completion"}),
+        ];
+
+        let path = rollout_fixture_path("completed-plan-item-alias", &events);
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-plan"))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(source, "proposed_plan");
+        assert_eq!(message, completed_plan);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn request_user_input_survives_task_complete_and_hook_stop_until_answer() {
+        let waiting_events = [
+            json!({"type":"turn.started","turn_id":"turn-choice"}),
+            json!({"type":"RequestUserInput","turnId":"turn-choice","itemId":"choice-1","questions":[{"id":"choice","question":"Choose a path?","options":[{"label":"A"},{"label":"B"}]}]}),
+            json!({"type":"task_complete","turn_id":"turn-choice","status":"completed","last_agent_message":"Waiting for your choice."}),
+        ];
+        let waiting = scan_fixture(&waiting_events);
+        assert!(waiting.reply_needed);
+        assert_eq!(
+            waiting.pending_elicitation.unwrap().questions[0].question,
+            "Choose a path?"
+        );
+
+        let path = rollout_fixture_path("request-user-input-pending", &waiting_events);
+        let (message, source) =
+            super::rollout_hook_stop_message_with_source(&path, Some("turn-choice"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(source, "request_user_input");
+        assert!(message.contains("Choose a path?"));
+        assert!(!message.contains("Waiting for your choice."));
+        let _ = fs::remove_file(path);
+
+        let answered = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-choice"}),
+            json!({"type":"RequestUserInput","turnId":"turn-choice","itemId":"choice-1","questions":[{"id":"choice","question":"Choose a path?","options":[{"label":"A"},{"label":"B"}]}]}),
+            json!({"type":"task_complete","turn_id":"turn-choice","status":"completed","last_agent_message":"Waiting for your choice."}),
+            json!({"type":"UserInputAnswer","turnId":"turn-choice","itemId":"choice-1","answers":{"choice":["A"]}}),
+        ]);
+        assert!(!answered.reply_needed);
+        assert!(answered.pending_elicitation.is_none());
+
+        let output_cleared = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-choice"}),
+            json!({"type":"response_item","turn_id":"turn-choice","payload":{"type":"function_call","name":"request_user_input","call_id":"choice-call","arguments":{"questions":[{"id":"choice","question":"Choose a path?","options":[{"label":"A"},{"label":"B"}]}]}}}),
+            json!({"type":"task_complete","turn_id":"turn-choice","status":"completed","last_agent_message":"Waiting for your choice."}),
+            json!({"type":"response_item","turn_id":"turn-choice","payload":{"type":"function_call_output","call_id":"choice-call","output":"{\"choice\":[\"B\"]}"}}),
+        ]);
+        assert!(!output_cleared.reply_needed);
+        assert!(output_cleared.pending_elicitation.is_none());
+    }
+
+    #[test]
+    fn stale_plan_stays_resolved_after_user_tool_assistant_and_turn_completion() {
+        let scan = scan_fixture(&[
+            json!({"type":"turn.started","turn_id":"turn-plan"}),
+            json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>old plan</proposed_plan>"}]}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"user","content":[{"text":"go ahead"}]}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":{"cmd":"pwd"}}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"function_call_output","call_id":"call-1","output":"/tmp"}}),
+            json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"execution progress"}]}}),
+            json!({"type":"turn.completed","turn_id":"turn-plan"}),
+        ]);
+
+        assert!(!scan.reply_needed);
+        assert!(scan.pending_elicitation.is_none());
     }
 
     #[test]
@@ -5935,6 +6159,24 @@ mod tests {
         let scan = scan_rollout(&path, 80).unwrap();
         let _ = fs::remove_file(path);
         scan
+    }
+
+    fn rollout_fixture_path(label: &str, events: &[serde_json::Value]) -> PathBuf {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "nexushub-rollout-{label}-{}-{counter}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        path
     }
 
     fn detail_fixture(events: &[serde_json::Value]) -> super::ThreadDetail {

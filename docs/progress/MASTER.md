@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: Probe replacement released/deployed<br>
-**Active Task**: `v0.1.76` removes NexusHub's app-server runtime dependency, keeps Codex path auto-discovery across Probe, system status, uploads, and settings, and uses local state plus controlled jobs for Codex operations.
+**Active Phase**: Plan Mode/Bark/UI cleanup release prep<br>
+**Active Task**: `v0.1.90` prepares release metadata and docs for Plan Mode, Bark, and UI cleanup while preserving `/nexushub/` as the only public panel path and keeping Codex operations on local state plus controlled jobs.
 **Blockers**: None. Browser plugin was present but no `iab` instance was available, so rendered Probe QA used Playwright fallback.
 
 ## Governance Status

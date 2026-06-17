@@ -24,6 +24,7 @@ pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS: i64 = 6 * 60 * 60;
 pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
 const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
+const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 
 pub fn redact_probe_event_for_output(mut event: ProbeEvent) -> ProbeEvent {
     event.title = event.title.map(|value| redact_output(&value));
@@ -410,6 +411,7 @@ impl ProbeRuntime {
             body_source = "proposed_plan".to_string();
         }
         let redacted_body = redact_output(raw_body);
+        let bark_body = probe_event_bark_body(&event_type, &body_source, raw_body, &redacted_body);
         let last_assistant_message = input
             .last_assistant_message
             .as_deref()
@@ -460,14 +462,15 @@ impl ProbeRuntime {
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset"))
             .format("%Y-%m-%d %H:%M:%S 北京时间")
             .to_string();
-        let bark_detail = probe_event_bark_detail(&event_type, &body_source, &redacted_body);
         let bark_message = probe_event_bark_message(&event_type, &body_source, &message);
         let bark = probe_event_bark_text(
             &event_type,
             input.thread_title.as_deref(),
             &bark_message,
-            Some(&bark_detail),
+            Some(&bark_body),
         );
+        let bark_chunk_count =
+            probe_bark_body_chunks(&bark.body, PROBE_BARK_BODY_CHUNK_BYTES).len();
         let source = input.source_override.clone().unwrap_or_else(|| {
             if notify_completion {
                 "nexushubd probe notify-completion".to_string()
@@ -508,8 +511,8 @@ impl ProbeRuntime {
                 "body_truncated": body_truncated,
                 "dedupe_ttl_seconds": ttl_seconds,
                 "scan_source": scan_source.clone(),
-                "chunk_count": null,
-                "request_count": null,
+                "chunk_count": bark_chunk_count,
+                "request_count": 0,
                 "status": "pending"
             }
         });
@@ -1759,12 +1762,109 @@ fn fallback_bark_title(title: Option<&str>) -> &str {
         .unwrap_or("未命名线程")
 }
 
-fn probe_event_bark_detail(event_type: &str, body_source: &str, redacted_body: &str) -> String {
-    if event_type == "reply_needed" && body_source == "proposed_plan" {
-        return extract_proposed_plan_text(redacted_body)
-            .unwrap_or_else(|| redacted_body.to_string());
+fn probe_event_bark_body(
+    event_type: &str,
+    body_source: &str,
+    raw_body: &str,
+    redacted_body: &str,
+) -> String {
+    let body = match event_type {
+        "reply_needed" if body_source == "proposed_plan" => extract_probe_plan_body(raw_body)
+            .or_else(|| extract_probe_plan_body(redacted_body))
+            .unwrap_or_else(|| redacted_body.to_string()),
+        "reply_needed" if body_source == "request_user_input" => {
+            extract_request_user_input_body(redacted_body)
+                .unwrap_or_else(|| redacted_body.to_string())
+        }
+        "completion" => extract_completion_final_reply_body(redacted_body)
+            .unwrap_or_else(|| redacted_body.to_string()),
+        _ => redacted_body.to_string(),
+    };
+    sanitize_probe_bark_body(&body)
+}
+
+fn extract_probe_plan_body(body: &str) -> Option<String> {
+    extract_proposed_plan_text(body).or_else(|| {
+        body.split_once("Plan 摘要:")
+            .map(|(_, plan)| plan.trim().to_string())
+            .filter(|plan| !plan.is_empty())
+    })
+}
+
+fn extract_request_user_input_body(body: &str) -> Option<String> {
+    let mut kept = Vec::new();
+    let mut in_questions = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("问题 ")
+            || trimmed.starts_with("选项 ")
+            || trimmed.starts_with("标题：")
+            || trimmed.starts_with("标题:")
+            || trimmed.starts_with("说明：")
+            || trimmed.starts_with("说明:")
+        {
+            in_questions = true;
+            kept.push(trimmed.to_string());
+        } else if in_questions && trimmed.is_empty() {
+            kept.push(String::new());
+        }
     }
-    redacted_body.to_string()
+    let text = kept.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn extract_completion_final_reply_body(body: &str) -> Option<String> {
+    for marker in ["最后反馈：", "最后反馈:", "最终反馈：", "最终反馈:"] {
+        if let Some((_, reply)) = body.split_once(marker) {
+            let cleaned = sanitize_probe_bark_body(reply);
+            if !cleaned.is_empty() {
+                return Some(cleaned);
+            }
+        }
+    }
+    None
+}
+
+fn sanitize_probe_bark_body(body: &str) -> String {
+    body.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return Some(String::new());
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            if trimmed == "[redacted sensitive line]"
+                || lower.starts_with("thread_id:")
+                || lower.starts_with("turn_id:")
+                || lower.starts_with("time:")
+                || lower.starts_with("url:")
+                || lower.contains("://")
+                || trimmed.starts_with("线程 ID：")
+                || trimmed.starts_with("线程ID：")
+                || trimmed.starts_with("Turn ID：")
+                || trimmed.starts_with("Call ID：")
+                || trimmed.starts_with("状态说明:")
+                || trimmed.starts_with("状态说明：")
+                || trimmed.starts_with("待回复内容:")
+                || trimmed.starts_with("待回复内容：")
+                || trimmed.starts_with("待选择内容:")
+                || trimmed.starts_with("待选择内容：")
+                || trimmed.starts_with("等待用户回复")
+                || trimmed.starts_with("等待用户选择")
+                || trimmed.starts_with("最后反馈:")
+                || trimmed.starts_with("最后反馈：")
+                || trimmed.contains("<proposed_plan>")
+                || trimmed.contains("</proposed_plan>")
+            {
+                None
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn probe_event_dedupe_body_component(
@@ -1796,11 +1896,7 @@ fn probe_event_dedupe_body_component(
 }
 
 fn stable_proposed_plan_dedupe_hash(body: &str) -> Option<String> {
-    let plan = extract_proposed_plan_text(body).or_else(|| {
-        body.split_once("Plan 摘要:")
-            .map(|(_, plan)| plan.trim().to_string())
-            .filter(|plan| !plan.is_empty())
-    })?;
+    let plan = extract_probe_plan_body(body)?;
     let digest = hex::encode(Sha256::digest(plan.trim().as_bytes()));
     Some(digest.get(..16).unwrap_or(digest.as_str()).to_string())
 }
@@ -1817,16 +1913,26 @@ fn summarize_probe_event_assistant_message(
     classification: &str,
     body_source: &str,
 ) -> Value {
-    let redacted = if classification == "reply_needed" && body_source == "proposed_plan" {
-        extract_proposed_plan_text(&redact_output(value)).unwrap_or_else(|| redact_output(value))
-    } else {
-        redact_output(value)
+    let redacted = redact_output(value);
+    let summary_source = match classification {
+        "reply_needed" if body_source == "proposed_plan" => extract_probe_plan_body(&redacted)
+            .map(|plan| sanitize_probe_bark_body(&plan))
+            .unwrap_or_else(|| sanitize_probe_bark_body(&redacted)),
+        "reply_needed" if body_source == "request_user_input" => {
+            extract_request_user_input_body(&redacted)
+                .map(|input| sanitize_probe_bark_body(&input))
+                .unwrap_or_else(|| sanitize_probe_bark_body(&redacted))
+        }
+        "completion" => extract_completion_final_reply_body(&redacted)
+            .unwrap_or_else(|| sanitize_probe_bark_body(&redacted)),
+        _ => sanitize_probe_bark_body(&redacted),
     };
-    let summary = truncate_utf8_with_marker(&redacted, PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
+    let summary =
+        truncate_utf8_with_marker(&summary_source, PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES);
     json!({
         "summary": summary,
         "original_length": value.len(),
-        "redacted_length": redacted.len(),
+        "redacted_length": summary_source.len(),
         "sha256": hex::encode(Sha256::digest(value.as_bytes())),
         "classification": classification,
     })
@@ -1851,6 +1957,47 @@ fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
     let mut truncated = value[..end].to_string();
     truncated.push_str(marker);
     truncated
+}
+
+fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    if value.is_empty() || max_bytes == 0 {
+        return vec![String::new()];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < value.len() {
+        let mut end = (start + max_bytes).min(value.len());
+        while end > start && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = value[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| start + offset)
+                .unwrap_or(value.len());
+        }
+        chunks.push(value[start..end].to_string());
+        start = end;
+    }
+    chunks
+}
+
+fn probe_bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || max_bytes == 0 {
+        return vec![String::new()];
+    }
+    let raw_chunks = utf8_chunks(trimmed, max_bytes);
+    let chunk_count = raw_chunks.len();
+    if chunk_count <= 1 {
+        return raw_chunks;
+    }
+    raw_chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| format!("第 {}/{} 段\n\n{chunk}", index + 1, chunk_count))
+        .collect()
 }
 
 fn ts_to_rfc3339(ts: i64) -> String {
@@ -1980,7 +2127,7 @@ mod tests {
         assert!(!event.bark_body.contains("thread-a"));
         assert!(!event.bark_body.contains("状态说明："));
         assert!(!event.bark_body.contains("待回复内容："));
-        assert!(event.bark_body.contains("[redacted sensitive line]"));
+        assert!(!event.bark_body.contains("[redacted sensitive line]"));
         assert!(event.bark_body.contains("完成完成完成"));
         assert!(event.bark_body.contains("UNIQUE_FULL_BARK_TAIL"));
         assert!(!event.bark_body.contains("[truncated]"));
@@ -2027,7 +2174,7 @@ mod tests {
             .unwrap()
             .ends_with("北京时间"));
         let stored = &event.payload["last_assistant_message"];
-        assert!(stored["summary"]
+        assert!(!stored["summary"]
             .as_str()
             .unwrap()
             .contains("[redacted sensitive line]"));
@@ -2294,6 +2441,159 @@ mod tests {
     }
 
     #[test]
+    fn long_bark_chunks_reassemble_to_original_body_after_prefix_removal() {
+        let original = format!(
+            "{}中间🙂{}尾段",
+            "计划正文".repeat(280),
+            "emoji🙂".repeat(220)
+        );
+        let chunks = probe_bark_body_chunks(&original, 2400);
+
+        assert!(chunks.len() > 1);
+        let mut reassembled = String::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            assert!(chunk.starts_with(&prefix));
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert!(body_part.len() <= 2400);
+            assert!(original.is_char_boundary(
+                original
+                    .find(body_part)
+                    .expect("chunk should start at utf8 boundary")
+            ));
+            reassembled.push_str(body_part);
+        }
+        assert_eq!(reassembled, original);
+    }
+
+    #[test]
+    fn request_user_input_bark_body_keeps_only_question_options_and_safe_text() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body = "\
+等待用户选择：需要用户确认。\n\
+\n\
+thread_id: thread-question\n\
+线程 ID：thread-question\n\
+Turn ID：turn-question\n\
+Call ID：call-question\n\
+状态说明: 这是待回复状态。\n\
+待选择内容：\n\
+问题 1：怎么继续？\n\
+选项 1：直接执行\n\
+说明：按当前计划继续\n\
+选项 2：先调整\n\
+URL: https://example.com/secret-token\n\
+Authorization: Bearer secret-token";
+
+        let event = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-question"),
+                Some("turn-question"),
+                Some("thread-question"),
+                None,
+                Some(body),
+                "reply-needed",
+            )
+            .with_body_source(Some("request_user_input")),
+        );
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(
+            event.bark_body,
+            "问题 1：怎么继续？\n选项 1：直接执行\n说明：按当前计划继续\n选项 2：先调整"
+        );
+        assert_eq!(event.payload["body_summary"], event.bark_body);
+        assert_probe_bark_body_is_safe(&event.bark_body);
+    }
+
+    #[test]
+    fn completion_bark_body_keeps_only_final_reply_text_and_safe_metadata() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body = "\
+线程 ID：thread-complete\n\
+thread_id: thread-complete\n\
+状态说明: 线程已完成。\n\
+最后反馈：\n\
+最终回复第一行\n\
+已完成用户要求。\n\
+URL: https://example.com/path\n\
+Authorization: Bearer secret-token";
+
+        let event = runtime.build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-complete"),
+                Some("turn-complete"),
+                Some("thread-complete"),
+                None,
+                Some(body),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("完成线程")),
+        );
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.bark_title, "线程正常完成：完成线程");
+        assert_eq!(event.bark_body, "最终回复第一行\n已完成用户要求。");
+        assert_eq!(event.payload["body_summary"], event.bark_body);
+        assert_probe_bark_body_is_safe(&event.bark_body);
+    }
+
+    #[test]
+    fn passive_old_plan_payload_keeps_only_safe_body_metadata() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let old_plan = "\
+等待用户回复：Plan 已完成，正在等待确认后继续。\n\
+\n\
+thread_id: thread-old-plan\n\
+状态说明: old passive scan should not persist this full body.\n\
+Plan 摘要:\n\
+# 旧计划\n\
+- 不应回填\n\
+Authorization: Bearer secret-token";
+
+        let event = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-old-plan"),
+                Some("turn-old-plan"),
+                Some("thread-old-plan"),
+                None,
+                Some(old_plan),
+                "reply-needed",
+            )
+            .with_body_source(Some("proposed_plan"))
+            .with_passive_scan_source(),
+        );
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.payload["scan_source"], "passive-scan");
+        assert_eq!(event.payload["body_summary"], "# 旧计划\n- 不应回填");
+        assert_eq!(
+            event.payload["body_length"].as_u64().unwrap(),
+            old_plan.len() as u64
+        );
+        assert!(event.payload["body_sha256"].as_str().unwrap().len() >= 64);
+        assert!(event.payload["bark"].get("body").is_none());
+        assert!(event.payload["bark_body"].is_null());
+        assert_eq!(event.payload["bark"]["chunk_count"], 1);
+        assert_eq!(event.payload["bark"]["request_count"], 0);
+        let stored = serde_json::to_string(&event.payload).unwrap();
+        assert!(!stored.contains("Authorization"));
+        assert!(!stored.contains("secret-token"));
+        assert!(!stored.contains("thread_id:"));
+        assert!(!stored.contains("状态说明"));
+        assert!(!stored.contains("等待用户回复"));
+    }
+
+    #[test]
     fn passive_scan_status_events_use_six_hour_ttl_and_scan_metadata() {
         let runtime = ProbeRuntime::new(
             Config::default(),
@@ -2502,6 +2802,27 @@ mod tests {
 
         assert_eq!(event.kind, "hook-stop");
         assert_eq!(event.event_type, "hook_stop");
+    }
+
+    fn assert_probe_bark_body_is_safe(body: &str) {
+        for forbidden in [
+            "thread_id:",
+            "thread-question",
+            "thread-complete",
+            "线程 ID：",
+            "状态说明",
+            "<proposed_plan>",
+            "</proposed_plan>",
+            "https://",
+            "secret-token",
+            "Authorization",
+            "[redacted sensitive line]",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "Bark body should not contain {forbidden:?}: {body}"
+            );
+        }
     }
 
     fn seed_codex_logs_db(path: &Path, timestamps: &[i64]) {

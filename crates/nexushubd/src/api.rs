@@ -55,6 +55,7 @@ const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
 const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
+const CODEX_SUBMITTED_MESSAGE: &str = "已提交给 Codex";
 
 pub struct ApiError(Box<Response>);
 
@@ -1688,7 +1689,7 @@ async fn create_thread(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some("started codex exec fallback job".to_string()),
+        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -1796,7 +1797,7 @@ async fn send_message(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some("started codex exec fallback job".to_string()),
+        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -2298,9 +2299,7 @@ async fn plan_accept(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let mut result = start_codex_resume_job(&state, &id, "1".to_string())?;
-    result.fallback = true;
-    result.message = Some("Plan accept sent as a controlled codex exec resume job".to_string());
+    let result = start_codex_resume_job(&state, &id, plan_accept_resume_message())?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.accept",
@@ -2327,9 +2326,7 @@ async fn plan_revise(
             "revision instructions cannot be empty",
         ));
     }
-    let mut result = start_codex_resume_job(&state, &id, format!("请调整计划：\n{instructions}"))?;
-    result.fallback = true;
-    result.message = Some("Plan revision sent as a controlled codex exec resume job".to_string());
+    let result = start_codex_resume_job(&state, &id, plan_revise_resume_message(instructions))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.revise",
@@ -2389,23 +2386,35 @@ async fn answer_elicitation(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let message = payload
-        .answers
-        .iter()
-        .map(|(question, answers)| format!("{question}: {}", answers.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let message = elicitation_answer_resume_message(&payload.answers);
     if message.trim().is_empty() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "answers cannot be empty",
         ));
     }
-    let mut result = start_codex_resume_job(&state, &id, message)?;
-    result.fallback = true;
-    result.message =
-        Some("Elicitation answer sent as a controlled codex exec resume job".to_string());
+    let result = start_codex_resume_job(&state, &id, message)?;
     ok(result)
+}
+
+fn plan_accept_resume_message() -> String {
+    "是，实施此计划".to_string()
+}
+
+fn plan_revise_resume_message(instructions: &str) -> String {
+    format!(
+        "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n{}",
+        instructions.trim()
+    )
+}
+
+fn elicitation_answer_resume_message(answers: &HashMap<String, Vec<String>>) -> String {
+    let mut rows = answers.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|(question, _)| *question);
+    rows.into_iter()
+        .map(|(question, answers)| format!("{question}: {}", answers.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn start_codex_resume_job(
@@ -2442,7 +2451,7 @@ fn start_codex_resume_job(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some("started codex exec fallback job".to_string()),
+        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -4178,8 +4187,9 @@ mod tests {
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         apply_running_job_to_thread_list, archived_filter, block_changed, effective_message,
-        filter_thread_summaries, fixed_probe_shell_command, followup_request, load_probe_threads,
-        merge_thread_summaries, normalize_goal_response, probe_config_path,
+        elicitation_answer_resume_message, filter_thread_summaries, fixed_probe_shell_command,
+        followup_request, load_probe_threads, merge_thread_summaries, normalize_goal_response,
+        plan_accept_resume_message, plan_revise_resume_message, probe_config_path,
         prune_hidden_thread_summaries, requested_thread_limit, router, seed_thread_event_blocks,
         thread_block_page, thread_event_block_key, thread_list_fetch_limit, thread_title,
         turnstile_login_action, SendMessageRequest, TurnstileLoginAction,
@@ -4669,6 +4679,11 @@ mod tests {
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(value["bridge"], false, "{uri}");
             assert_eq!(value["fallback"], true, "{uri}");
+            assert_eq!(value["message"], "已提交给 Codex", "{uri}");
+            let message = value["message"].as_str().unwrap_or_default();
+            assert!(!message.contains("fallback"), "{uri}");
+            assert!(!message.contains("codex exec"), "{uri}");
+            assert!(!message.contains("job"), "{uri}");
             assert!(
                 value["job_id"].as_str().is_some_and(|id| !id.is_empty()),
                 "{uri}"
@@ -4703,6 +4718,31 @@ mod tests {
             assert!(!error.contains("app-server"), "{uri}");
         }
         let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn plan_resume_messages_match_tui_intent() {
+        assert_eq!(plan_accept_resume_message(), "是，实施此计划");
+
+        let revise = plan_revise_resume_message("  补充灰度验证  ");
+        assert!(revise.contains("否，请告知 Codex 如何调整"));
+        assert!(revise.contains("补充灰度验证"));
+        assert!(revise.contains("Plan Mode"));
+        assert!(revise.contains("重新给出计划"));
+        assert!(revise.contains("不要开始实施"));
+    }
+
+    #[test]
+    fn elicitation_answer_resume_message_is_stable_user_answer_text() {
+        let answers = HashMap::from([
+            ("q2".to_string(), vec!["B".to_string(), "C".to_string()]),
+            ("q1".to_string(), vec!["A".to_string()]),
+        ]);
+
+        assert_eq!(
+            elicitation_answer_resume_message(&answers),
+            "q1: A\nq2: B, C"
+        );
     }
 
     #[test]

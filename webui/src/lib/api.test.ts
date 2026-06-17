@@ -905,15 +905,34 @@ describe("archive delete API compatibility", () => {
     ).serviceTier).toBe("");
   });
 
-  test("slash commands expose compact Codex composer entry points", async () => {
+  test("slash commands omit removed Goal controls", async () => {
     const app = await import("../App");
 
-    expect(app.slashCommandSuggestions("/goal r", 7)).toEqual([
-      expect.objectContaining({ command: "/goal resume", description: expect.stringContaining("恢复") })
-    ]);
-    expect(app.slashCommandSuggestions("/goal r", 7, false)).toEqual([
-      expect.objectContaining({ command: "/goal resume", requiresThread: true })
-    ]);
+    expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal");
+    expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal resume");
+    expect(app.slashCommands.map((item: { command: string }) => item.command)).not.toContain("/goal clear");
+    expect(app.slashCommandSuggestions("/goal r", 7)).toEqual([]);
+  });
+
+  test("Plan Mode persists after successful send until explicit user change", async () => {
+    const app = await import("../App");
+
+    expect(app.runConfigAfterSuccessfulSend({ collaborationMode: "plan", model: "gpt-5.5" })).toEqual({
+      collaborationMode: "plan",
+      model: "gpt-5.5"
+    });
+    expect(app.runConfigAfterSuccessfulSend({ collaborationMode: "", model: "gpt-5.5" })).toEqual({
+      collaborationMode: "",
+      model: "gpt-5.5"
+    });
+  });
+
+  test("bridge action copy hides fallback implementation wording", async () => {
+    const app = await import("../App");
+
+    expect(app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: "started codex exec fallback job" })).toBe("已提交给 Codex");
+    expect(app.actionMessage({ bridge: false, fallback: true, message: "已提交给 Codex" })).toBe("已提交给 Codex");
+    expect(app.actionMessage({ bridge: false, fallback: false, turn_id: "turn-12345678" })).toBe("已提交给 Codex");
   });
 
   test("plugin mention helpers expose @ as the web plugin trigger instead of dollar", async () => {
@@ -1564,7 +1583,8 @@ describe("archive delete API compatibility", () => {
 
     expect(app.currentPlanActionOptions().map((option) => option.label)).toEqual([
       "是，实施此计划",
-      "否，请告知 Codex 如何调整"
+      "否，请告知 Codex 如何调整",
+      "保持计划模式"
     ]);
     expect(app.planActionSubmission(0, "")).toEqual({ action: "accept" });
     expect(app.planActionSubmission(1, "")).toBeNull();
@@ -1572,6 +1592,7 @@ describe("archive delete API compatibility", () => {
       action: "revise",
       instructions: "增加验收步骤"
     });
+    expect(app.planActionSubmission(2, "")).toEqual({ action: "keep_plan" });
   });
 
   test("question and hidden cleanup helpers expose readiness and disabled state", async () => {

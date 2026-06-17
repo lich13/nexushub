@@ -32,7 +32,7 @@ host_label = "43.155.235.227"
 
 Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home and reads `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
 
-Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly.
+Nginx should proxy only `/nexushub/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -48,6 +48,7 @@ ssh 43.155.235.227 'sudo -n systemctl is-active nexushub'
 ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
 curl -fsS https://661313.xyz/nexushub/
 curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/codex-cloud-panel/
+curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/api/sentinel/status
 ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
 ```
 
@@ -58,7 +59,7 @@ Then log in and verify:
 - create/send starts controlled `codex exec --json` jobs and returns a job-backed response;
 - system status shows `43.155.235.227` / `https://661313.xyz/nexushub/` instead of any removed SSH alias;
 - thread titles refresh from local state DB, `session_index.jsonl`, and rollout metadata without plan-body pollution;
-- Goal settings and permission/model/config selectors load;
+- Plan Mode and permission/model/config selectors load;
 - Turnstile Site Key / Secret Key can be saved, action is `login`, expected hostname is `661313.xyz`, session TTL is 365 days, and token replay protection is active;
 - archive delete dry-run returns counts and `integrity=ok`;
 - archive delete execute uses button confirmation only, with no typed confirmation text;
@@ -67,7 +68,7 @@ Then log in and verify:
 - panel prune removes old NexusHub release-update backups while keeping the latest three;
 - Codex update / prune buttons start only the configured fixed wrappers.
 
-Expected legacy path result: `/codex-cloud-panel/` returns `404`.
+Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`.
 
 ## Cleanup
 

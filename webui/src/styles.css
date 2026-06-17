@@ -652,7 +652,7 @@ button { cursor: pointer; }
 }
 .composer-grid {
   display: grid;
-  grid-template-columns: 160px 144px minmax(0, 1fr);
+  grid-template-columns: 160px 144px;
   gap: 8px;
   margin-top: 8px;
 }
@@ -1776,7 +1776,6 @@ button { cursor: pointer; }
   .composer { padding: 8px 12px; position: sticky; bottom: 58px; max-height: 28vh; }
   .conversation-shell .composer textarea { min-height: 46px; max-height: 70px; }
   .composer-grid { grid-template-columns: 1fr 1fr; }
-  .composer-grid .cwd-field { grid-column: 1 / -1; }
   .composer-actions { align-items: stretch; flex-direction: column; }
   .composer-actions .primary-button { width: 100%; min-width: 96px; }
   .slash-menu {

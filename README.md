@@ -12,7 +12,7 @@ Current scope:
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
 - Split Panel update and Codex update jobs. Panel updates use `/usr/local/bin/nexushub-update`; Codex updates keep the existing `/home/ubuntu/codex-admin/bin` wrappers.
 - Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
-- Goal Mode, model, reasoning, cwd, and a compact Codex APP-style permission menu for the conversation workspace.
+- Plan Mode, model, reasoning, working directory context, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
 - Provider preview framework for Codex, Claude Code, future Cursor CLI, and future Gemini CLI. Codex is the only full-control provider in this release.
 - Claude Code preview is read-only: it discovers `~/.claude/projects`, session JSONL files, and redacted settings. It does not launch, resume, send, stop, or write Claude configuration.
@@ -20,7 +20,7 @@ Current scope:
 - Desktop navigation can be hidden to give the conversation workspace more horizontal room.
 - System status, job history, and responsive sky-blue dark WebUI.
 
-Thread listing, thread details, status cards, Probe, archive deletion, Goal Mode, and logs-db maintenance read or persist NexusHub state locally from the resolved Codex home plus the NexusHub panel DB: `state_5.sqlite`, `session_index.jsonl`, rollout files, `logs_2.sqlite`, and `nexushub.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, and approvals that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical Plan/choice/approval items are only surfaced when they are still the latest unresolved action.
+Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode state, and logs-db maintenance read or persist NexusHub state locally from the resolved Codex home plus the NexusHub panel DB: `state_5.sqlite`, `session_index.jsonl`, rollout files, `logs_2.sqlite`, and `nexushub.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, and approvals that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical goal/plan/choice/approval items are only surfaced when they are still the latest unresolved action.
 
 ## Runtime Layout
 
@@ -47,7 +47,7 @@ host_label = "43.155.235.227"
 
 `codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
 
-The public site must expose only `nexushub` through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. If a response has `fallback=true`, check Job History for the controlled `codex exec` job.
+The public site must expose only `/nexushub/` through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
 
 ## Probe
 
@@ -115,7 +115,7 @@ curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
 ```
 
-Then log in and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through the configured control path, Goal and the compact permission menu work, old Plan Mode threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and `/codex-cloud-panel/` remains `404`.
+Then log in and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, both update cards work, archive delete dry-run reports `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 

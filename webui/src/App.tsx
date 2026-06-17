@@ -11,7 +11,6 @@ import {
   Edit3,
   Files,
   GitFork,
-  Goal,
   HardDrive,
   KeyRound,
   Lock,
@@ -42,14 +41,12 @@ import {
   archiveThread,
   cancelFollowUp,
   changePassword,
-  clearGoalMode,
   createThread,
   deleteUpload,
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
   forkThread,
   getCodexConfig,
-  getGoalMode,
   getPublicSettings,
   getProbeLogsDbStatus,
   getProbeSettings,
@@ -69,12 +66,10 @@ import {
   logout,
   renameThread,
   revisePlan,
-  resumeGoalMode,
   restoreThread,
   saveProbeSettings,
   saveSecurity,
   sendMessage,
-  setGoalMode,
   startClaudeCodeJob,
   startArchiveDelete,
   startHiddenThreadDelete,
@@ -244,10 +239,10 @@ type PluginMentionCandidate = {
 };
 
 type SlashCommandAction =
-  | { kind: "archive_thread" | "clear_goal" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "resume_goal" | "stop_thread" | "toggle_fast" | "toggle_plan_mode"; command: string; message?: string }
+  | { kind: "archive_thread" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "stop_thread" | "toggle_fast" | "toggle_plan_mode"; command: string; message?: string }
   | { kind: "focus_control" | "insert_template" | "requires_thread" | "unavailable" | "unknown"; command: string; message: string };
 
-type ControlledSlashActionKind = "archive_thread" | "clear_goal" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "resume_goal" | "stop_thread" | "toggle_fast" | "toggle_plan_mode";
+type ControlledSlashActionKind = "archive_thread" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "stop_thread" | "toggle_fast" | "toggle_plan_mode";
 
 export const slashCommands: SlashCommand[] = [
   { command: "/permissions", description: "调整权限与审批模式", usageHint: "/permissions" },
@@ -278,10 +273,6 @@ export const slashCommands: SlashCommand[] = [
   { command: "/model", description: "切换模型或推理等级", usageHint: "/model" },
   { command: "/fast", description: "切换 Fast 服务层", usageHint: "/fast" },
   { command: "/plan", description: "切换计划模式，可带内联提示", usageHint: "/plan [prompt]" },
-  { command: "/goal", description: "查看或设置当前线程 Goal", usageHint: "/goal [objective]", requiresThread: true },
-  { command: "/goal pause", description: "暂停当前线程 Goal", usageHint: "/goal pause", requiresThread: true },
-  { command: "/goal resume", description: "恢复当前线程 Goal", usageHint: "/goal resume", requiresThread: true },
-  { command: "/goal clear", description: "清除当前线程 Goal", usageHint: "/goal clear", requiresThread: true },
   { command: "/personality", description: "切换沟通风格", usageHint: "/personality" },
   { command: "/ps", description: "查看后台终端", usageHint: "/ps", requiresThread: true },
   { command: "/stop", description: "停止后台终端", usageHint: "/stop", requiresThread: true },
@@ -1354,9 +1345,6 @@ const controlledSlashActions: Record<string, ControlledSlashActionKind> = {
   "/archive": "archive_thread",
   "/fork": "fork_thread",
   "/stop": "stop_thread",
-  "/goal": "open_thread_settings",
-  "/goal resume": "resume_goal",
-  "/goal clear": "clear_goal",
   "/fast": "toggle_fast",
   "/plan": "toggle_plan_mode",
   "/status": "open_status",
@@ -1480,8 +1468,7 @@ export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: str
 }
 
 export function runConfigAfterSuccessfulSend<T extends { collaborationMode: string }>(config: T): T {
-  if (config.collaborationMode !== "plan") return config;
-  return { ...config, collaborationMode: "" };
+  return config;
 }
 
 export function mergeRunConfigFromDefaults<T extends { collaborationMode: string }>(current: T, defaults: T): T {
@@ -1890,7 +1877,7 @@ function SlashCommandTextarea({
 
 type CurrentActionKind = "plan" | "question";
 type CurrentActionQuestion = PendingElicitation["questions"][number];
-type PlanActionSubmission = { action: "accept" } | { action: "revise"; instructions: string };
+type PlanActionSubmission = { action: "accept" } | { action: "revise"; instructions: string } | { action: "keep_plan" };
 
 export function currentActionKey(plan: MessageBlock | null | undefined, pending: PendingElicitation | null | undefined): string | null {
   if (plan) {
@@ -1920,13 +1907,15 @@ export function moveActionSelection(current: number, total: number, delta: numbe
 export function currentPlanActionOptions(): { label: string; description: string }[] {
   return [
     { label: "是，实施此计划", description: "按聊天记录里的 Proposed Plan 继续执行" },
-    { label: "否，请告知 Codex 如何调整", description: "补充修改要求后重新生成计划" }
+    { label: "否，请告知 Codex 如何调整", description: "补充修改要求后重新生成计划" },
+    { label: "保持计划模式", description: "不提交回复，继续让本线程使用 Plan Mode" }
   ];
 }
 
 export function planActionSubmission(selected: number, revision: string): PlanActionSubmission | null {
   if (selected === 0) return { action: "accept" };
   if (selected === 1 && revision.trim()) return { action: "revise", instructions: revision.trim() };
+  if (selected === 2) return { action: "keep_plan" };
   return null;
 }
 
@@ -2599,20 +2588,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           jobId: lastResult?.job_id ?? summary.active_job_id
         });
         break;
-      case "resume_goal":
-        setDraft("");
-        resumeGoalMode(summary.id, csrfToken).then((result) => {
-          messageStore.setFeedback(threadId, result.available ? "Goal 已恢复" : optionalUnavailableMessage("Goal", result));
-          qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
-        }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
-        break;
-      case "clear_goal":
-        setDraft("");
-        clearGoalMode(summary.id, csrfToken).then((result) => {
-          messageStore.setFeedback(threadId, result.available ? "Goal 已清除" : optionalUnavailableMessage("Goal", result));
-          qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
-        }).catch((err: Error) => messageStore.setFeedback(threadId, err.message));
-        break;
       case "copy_latest":
         setDraft("");
         {
@@ -2855,7 +2830,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           <div className="composer-actions">
             <span>{lastResult ? actionMessage(lastResult) : `CSRF ${csrfToken ? "已就绪" : "未恢复"}`}</span>
             <button className="primary-button composer-action-button" disabled={actionMode === "disabled" || actionBusy} title={actionTitle}>
-              {actionMode === "stop" ? <Square size={17} /> : actionMode === "followup" ? <Goal size={17} /> : <Send size={17} />}
+              {actionMode === "stop" ? <Square size={17} /> : actionMode === "followup" ? <MessageSquare size={17} /> : <Send size={17} />}
               {actionLabel}
             </button>
           </div>
@@ -2890,9 +2865,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             </button>
             <button className="secondary-button" onClick={() => forkMutation.mutate({ threadId: summary.id })} disabled={forkPending}><GitFork size={17} />Fork</button>
           </div>
-        </Panel>
-
-        <Panel title="名称与归档" icon={<Edit3 size={18} />}>
           <label className="field-label">线程标题<input value={renameValue} onChange={(event) => {
             setRenameDirty(true);
             setRenameValue(event.target.value);
@@ -2906,14 +2878,12 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           </div>
         </Panel>
 
-        <GoalCard threadId={summary.id} csrfToken={csrfToken} />
-
-        <Panel title="运行路径" icon={<HardDrive size={18} />}>
-          <Metric label="Workspace" value={runConfig.cwd || defaultCwd} />
+        <Panel title="状态摘要" icon={<HardDrive size={18} />}>
+          <Metric label="状态" value={threadStatusLabel(summary.status)} />
+          <Metric label="Turn" value={summary.active_turn_id || "无"} />
+          <Metric label="Job" value={summary.active_job_id || "无"} />
           <Metric label="Model" value={runConfig.model || "default"} />
           <Metric label="Reasoning" value={runConfig.reasoning || "default"} />
-          <Metric label="Permissions" value={permissionLabel(runConfig.permissionPreset)} />
-          <Metric label="Network" value="enabled" tone="success" />
         </Panel>
       </aside>
     </div>
@@ -2973,7 +2943,6 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
           <ClipboardCheck size={15} />{planButton.label}
         </button>
         <span className="composer-chip muted">{planButton.statusText}</span>
-        <span className="composer-chip muted"><Goal size={15} />Pursue Goal</span>
         <label className="permission-menu-trigger">
           <ShieldCheck size={15} />
           <select value={config.permissionPreset} onChange={(event) => setConfig(applyPermissionPreset(config, event.target.value as PermissionPresetId))}>
@@ -3005,10 +2974,6 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
             {reasoningOptions.map((value) => <option key={value || "default"} value={value}>{value || "default"}</option>)}
           </select>
         </label>
-        <label className="cwd-field">
-          <span>CWD</span>
-          <input value={config.cwd} onChange={(event) => setConfig({ ...config, cwd: event.target.value })} />
-        </label>
       </div>
       <div className="permission-summary">
         <div className="permission-summary-icon">{activePreset.icon}</div>
@@ -3019,72 +2984,6 @@ function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles
       </div>
       {unavailable.config && <div className="config-note">Codex 默认配置接口不可用，使用当前表单值发送。</div>}
     </div>
-  );
-}
-
-function GoalCard({ threadId, csrfToken }: { threadId: string; csrfToken?: string | null }) {
-  const qc = useQueryClient();
-  const goal = useQuery({ queryKey: ["codex-goal", threadId], queryFn: () => getGoalMode(threadId), refetchInterval: 8000, staleTime: 5000, placeholderData: (previous) => previous });
-  const goalState = goal.data?.available ? goal.data.data : null;
-  const [objective, setObjective] = useState(goalState?.objective ?? "");
-  const [tokenBudget, setTokenBudget] = useState(goalState?.token_budget ? String(goalState.token_budget) : "");
-  const [feedback, setFeedback] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!goalState) return;
-    setObjective(goalState.objective ?? "");
-    setTokenBudget(goalState.token_budget ? String(goalState.token_budget) : "");
-  }, [goalState?.objective, goalState?.token_budget, goalState]);
-
-  const saveGoal = useMutation({
-    mutationFn: () => setGoalMode({
-      enabled: Boolean(objective.trim()),
-      objective: objective.trim() || null,
-      token_budget: tokenBudget.trim() ? Number(tokenBudget) : null
-    }, threadId, csrfToken),
-    onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已保存" : optionalUnavailableMessage("Goal", result));
-      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
-    },
-    onError: (err: Error) => setFeedback(err.message)
-  });
-  const clearGoal = useMutation({
-    mutationFn: () => clearGoalMode(threadId, csrfToken),
-    onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已清除" : optionalUnavailableMessage("Goal", result));
-      setObjective("");
-      setTokenBudget("");
-      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
-    },
-    onError: (err: Error) => setFeedback(err.message)
-  });
-  const resumeGoal = useMutation({
-    mutationFn: () => resumeGoalMode(threadId, csrfToken),
-    onSuccess: (result) => {
-      setFeedback(result.available ? "Goal 已恢复" : optionalUnavailableMessage("Goal", result));
-      qc.invalidateQueries({ queryKey: ["codex-goal", threadId] });
-    },
-    onError: (err: Error) => setFeedback(err.message)
-  });
-
-  return (
-    <Panel title="Goal" icon={<Goal size={18} />}>
-      {goal.data && !goal.data.available ? (
-        <div className="config-note">{optionalUnavailableMessage("Goal", goal.data)}</div>
-      ) : (
-        <>
-          <Metric label="状态" value={formatGoalStatus(goalState)} tone={goalState?.enabled ? "success" : undefined} />
-          <label className="field-label">目标<textarea value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="本线程要持续追踪的目标" /></label>
-          <label className="field-label">Token budget<input type="number" min={1} value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} placeholder="可选" /></label>
-          {feedback && <div className="config-note">{feedback}</div>}
-          <div className="button-row">
-            <button className="secondary-button" onClick={() => saveGoal.mutate()} disabled={saveGoal.isPending || (!objective.trim() && !tokenBudget.trim())}><CheckCircle2 size={17} />保存</button>
-            <button className="danger-button soft" onClick={() => clearGoal.mutate()} disabled={clearGoal.isPending}><Trash2 size={17} />清除</button>
-            <button className="secondary-button" onClick={() => resumeGoal.mutate()} disabled={resumeGoal.isPending || !threadId}><Play size={17} />恢复</button>
-          </div>
-        </>
-      )}
-    </Panel>
   );
 }
 
@@ -3477,8 +3376,10 @@ function CurrentActionCard({
       if (!submission) return;
       if (submission.action === "accept") {
         onAcceptPlan(plan);
-      } else {
+      } else if (submission.action === "revise") {
         onRevisePlan(plan, submission.instructions);
+      } else {
+        onDismiss();
       }
       return;
     }
@@ -4733,9 +4634,9 @@ export function codexUpdateState(version?: Pick<SystemVersion, "codex_update_ava
   return { label: "未知", tone: "warning" };
 }
 
-function actionMessage(result: BridgeActionResult): string {
-  if (result.fallback) return result.message ?? `Fallback job ${result.job_id?.slice(0, 8) ?? ""} 已启动`;
-  return `Codex ${result.turn_id ? `turn ${result.turn_id.slice(0, 8)}` : "请求"} 已提交`;
+export function actionMessage(result: BridgeActionResult): string {
+  void result;
+  return "已提交给 Codex";
 }
 
 function legacyBlocks(detail: ThreadDetail): MessageBlock[] {
@@ -5124,22 +5025,6 @@ export function messageBlockText(block: MessageBlock): string {
 function firstDisplayLine(value?: string | null): string | null {
   const line = value?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
   return line || null;
-}
-
-export function formatGoalStatus(goal: { enabled?: boolean; status?: string | null } | null | undefined): string {
-  const status = goal?.status?.trim().toLowerCase() || (goal?.enabled ? "active" : "idle");
-  const labels: Record<string, string> = {
-    active: "运行中",
-    running: "运行中",
-    complete: "已完成",
-    completed: "已完成",
-    blocked: "已阻塞",
-    paused: "已暂停",
-    idle: "未启用",
-    missing_thread: "未选择线程",
-    cleared: "已清除"
-  };
-  return labels[status] ?? status;
 }
 
 export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age_seconds" | "is_refreshing" | "snapshot_status"> | null, fetching = false): string {

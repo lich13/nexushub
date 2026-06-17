@@ -1,13 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
-import type { GoalModeState, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
+import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
   buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
   composerFileInputAcceptValue?: () => string | undefined;
   composerActionMode?: (running: boolean, draft: string, canStop: boolean, attachmentCount?: number) => string;
   defaultRunConfig?: () => Record<string, unknown>;
-  formatGoalStatus?: (goal: Pick<GoalModeState, "enabled" | "status"> | null | undefined) => string;
   segmentInternalReferences?: (text: string) => Array<{ type: "text" | "internal_reference"; text: string; copyText?: string; kind?: string }>;
   slashCommands?: Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
   slashCommandSuggestions?: (draft: string, cursor: number, hasThread?: boolean) => Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
@@ -113,8 +112,8 @@ describe("conversation helpers", () => {
       "/permissions", "/ide", "/keymap", "/vim", "/sandbox-add-read-dir", "/agent", "/apps", "/plugins", "/hooks",
       "/clear", "/archive", "/compact", "/copy", "/diff", "/exit", "/quit", "/experimental", "/approve",
       "/memories", "/skills", "/feedback", "/init", "/logout", "/mcp", "/mention", "/model", "/fast", "/plan",
-      "/goal", "/goal pause", "/goal resume", "/goal clear", "/personality", "/ps", "/stop", "/fork", "/side",
-      "/btw", "/raw", "/resume", "/new", "/review", "/status", "/debug-config", "/statusline", "/title", "/theme"
+      "/personality", "/ps", "/stop", "/fork", "/side", "/btw", "/raw", "/resume", "/new", "/review", "/status",
+      "/debug-config", "/statusline", "/title", "/theme"
     ];
     const commands = app.slashCommands?.map((item) => item.command);
 
@@ -122,30 +121,17 @@ describe("conversation helpers", () => {
     expect(app.slashCommands?.every((item) => item.description.trim().length > 0)).toBe(true);
     expect(app.slashCommands?.every((item) => /[\u4e00-\u9fff]/.test(item.description))).toBe(true);
     expect(app.slashCommands?.every((item) => item.usageHint.trim().length > 0)).toBe(true);
-    expect(app.slashCommands?.filter((item) => item.command.startsWith("/goal")).every((item) => item.requiresThread)).toBe(true);
+    expect(app.slashCommands?.some((item) => item.command.startsWith("/goal"))).toBe(false);
   });
 
   test("slash command helpers filter full catalog and keep thread commands visible for new threads", async () => {
     const app = await loadApp();
 
     expect(app.slashCommandSuggestions?.("/", 1).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
-    expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([
-      "/goal", "/goal pause", "/goal resume", "/goal clear"
-    ]);
-    expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([
-      "/goal", "/goal pause", "/goal resume", "/goal clear"
-    ]);
-    expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([
-      expect.objectContaining({
-        command: "/goal resume",
-        description: expect.stringContaining("恢复"),
-        usageHint: expect.stringContaining("/goal resume"),
-        requiresThread: true
-      })
-    ]);
-    expect(app.slashCommandSuggestions?.("/goal resume", "/goal resume".length, false)).toEqual([
-      expect.objectContaining({ command: "/goal resume", requiresThread: true })
-    ]);
+    expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([]);
+    expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([]);
+    expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([]);
+    expect(app.slashCommandSuggestions?.("/goal resume", "/goal resume".length, false)).toEqual([]);
     expect(app.slashCommandSuggestions?.("/theme", 6)).toEqual([
       expect.objectContaining({ command: "/theme", description: expect.stringContaining("主题") })
     ]);
@@ -154,11 +140,11 @@ describe("conversation helpers", () => {
   test("slash command menu renders listbox with command, Chinese explanation, usage, and thread marker", async () => {
     const app = await loadApp();
 
-    const html = app.renderSlashCommandMenuHtml?.("/goal r", 7, false);
+    const html = app.renderSlashCommandMenuHtml?.("/archive", 8, false);
 
     expect(html).toContain('role="listbox"');
-    expect(html).toContain("/goal resume");
-    expect(html).toContain("恢复");
+    expect(html).toContain("/archive");
+    expect(html).toContain("归档");
     expect(html).toContain("用法");
     expect(html).toContain("需要已有线程");
   });
@@ -278,7 +264,7 @@ describe("conversation helpers", () => {
     const app = await loadApp();
 
     expect(app.exactSlashCommandFromDraft?.("/plan")).toBe("/plan");
-    expect(app.exactSlashCommandFromDraft?.(" /goal   resume ")).toBe("/goal resume");
+    expect(app.exactSlashCommandFromDraft?.(" /fork ")).toBe("/fork");
     expect(app.exactSlashCommandFromDraft?.("/go")).toBeNull();
     expect(app.exactSlashCommandFromDraft?.("/goal r")).toBeNull();
   });
@@ -302,10 +288,10 @@ describe("conversation helpers", () => {
 
     expect(app.slashCommandAction?.("/plan")).toEqual({ kind: "toggle_plan_mode", command: "/plan" });
     expect(app.slashCommandAction?.("/new")).toEqual({ kind: "open_new_thread", command: "/new" });
-    expect(app.slashCommandAction?.("/goal resume")).toEqual({ kind: "resume_goal", command: "/goal resume" });
-    expect(app.slashCommandAction?.("/goal resume", false)).toEqual({
+    expect(app.slashCommandAction?.("/archive")).toEqual({ kind: "archive_thread", command: "/archive" });
+    expect(app.slashCommandAction?.("/archive", false)).toEqual({
       kind: "requires_thread",
-      command: "/goal resume",
+      command: "/archive",
       message: expect.stringContaining("需要已有线程")
     });
     expect(app.slashCommandAction?.("/theme")).toEqual({
@@ -320,7 +306,7 @@ describe("conversation helpers", () => {
     });
   });
 
-  test("plan mode button is a next-send state and successful sends reset it", async () => {
+  test("plan mode button is a persistent thread send state", async () => {
     const app = await loadApp();
     const config = {
       ...(app.defaultRunConfig?.() ?? {}),
@@ -340,7 +326,7 @@ describe("conversation helpers", () => {
     expect(app.planModeButtonState?.(false, "ReplyNeeded", false, true)?.statusText).toBe("当前线程正在等待问题回复");
     expect(app.buildPayload?.("请先制定计划", config).collaboration_mode).toBe("plan");
     expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "plan", other: "kept" })).toEqual({
-      collaborationMode: "",
+      collaborationMode: "plan",
       other: "kept"
     });
     expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "", other: "kept" })).toEqual({
@@ -379,7 +365,7 @@ describe("conversation helpers", () => {
       ...defaults,
       collaborationMode: "plan"
     });
-    expect(app.runConfigAfterSuccessfulSend?.(app.mergeRunConfigFromDefaults?.(current, defaults) ?? current).collaborationMode).toBe("");
+    expect(app.runConfigAfterSuccessfulSend?.(app.mergeRunConfigFromDefaults?.(current, defaults) ?? current).collaborationMode).toBe("plan");
   });
 
   test("latest assistant copy text skips tools, plans, and internal context", async () => {
@@ -648,30 +634,4 @@ describe("conversation helpers", () => {
     expect(app.shouldAutoScrollProbeFeed?.({ scrollTop: 620, clientHeight: 300, scrollHeight: 1010 }, { scrollTop: 0, clientHeight: 300, scrollHeight: 1010 })).toBe(false);
   });
 
-  test("goal status labels normalize known local goal states in Chinese", async () => {
-    const app = await loadApp();
-
-    expect(app.formatGoalStatus?.({ enabled: true, status: "running" })).toBe("运行中");
-    expect(app.formatGoalStatus?.({ enabled: true, status: "active" })).toBe("运行中");
-    expect(app.formatGoalStatus?.({ enabled: true, status: "completed" })).toBe("已完成");
-    expect(app.formatGoalStatus?.({ enabled: true, status: "complete" })).toBe("已完成");
-    expect(app.formatGoalStatus?.({ enabled: true, status: "blocked" })).toBe("已阻塞");
-    expect(app.formatGoalStatus?.({ enabled: false, status: "missing_thread" })).toBe("未选择线程");
-    expect(app.formatGoalStatus?.({ enabled: false, status: "idle" })).toBe("未启用");
-    expect(app.formatGoalStatus?.({ enabled: false, status: "cleared" })).toBe("已清除");
-  });
-
-  test("goal unavailable copy uses explicit local-read degradation reasons", async () => {
-    const app = await loadApp();
-
-    expect(app.optionalUnavailableMessage?.("Goal", {
-      available: false,
-      reason: "Codex state database is missing"
-    })).toBe("Goal 不可用：Codex state database is missing");
-    expect(app.optionalUnavailableMessage?.("Goal", {
-      available: false,
-      error: "HTTP 404"
-    })).toBe("Goal 不可用：HTTP 404");
-    expect(app.optionalUnavailableMessage?.("Goal", { available: false })).toBe("Goal 暂不可用");
-  });
 });

@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub is a dense remote-operations console for a cloud Codex app-server. It should feel closer to a Linear/Raycast developer tool than a marketing page.
+NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. It should feel closer to a Linear/Raycast developer tool than a marketing page.
 
 ## Visual Direction
 
@@ -38,7 +38,7 @@ NexusHub is a dense remote-operations console for a cloud Codex app-server. It s
 - Desktop: 240px left navigation can collapse to maximize the conversation pane; thread list remains 320px when visible.
 - Operations and security pages use compact panels in a two-column grid.
 - Mobile under 768px: no sidebar; use top bar, bottom tab nav, full-screen content, and a thread drawer.
-- Composer remains stable at the bottom of the conversation area and uses compact Codex-style chips for mode, goal, permissions, model, reasoning, service tier, and cwd.
+- Composer remains stable at the bottom of the conversation area and uses compact Codex-style controls for Plan Mode, permissions, model, reasoning, service tier, and working-directory context.
 - Thread detail uses a centered message rail with a maximum readable width. The inspector is secondary and visually quieter than the conversation.
 
 ## Components
