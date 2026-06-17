@@ -407,6 +407,7 @@ mod tests {
     async fn exclusive_shell_jobs_reject_same_group_until_finished() {
         let db = PanelDb::open(":memory:").unwrap();
         let runner = JobRunner::new(db);
+        let mut events = runner.subscribe();
 
         let first = runner
             .start_exclusive_shell_job(
@@ -426,12 +427,8 @@ mod tests {
         );
         assert!(second.is_err());
 
-        for _ in 0..20 {
-            if runner.exclusive_group_job("panel_update").is_none() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        wait_for_job_status(&mut events, &first, "succeeded").await;
+        assert!(runner.exclusive_group_job("panel_update").is_none());
 
         let third = runner.start_exclusive_shell_job(
             "panel_update_prune",
@@ -440,6 +437,26 @@ mod tests {
             "panel_update",
         );
         assert!(third.is_ok());
+    }
+
+    async fn wait_for_job_status(
+        events: &mut tokio::sync::broadcast::Receiver<super::JobEvent>,
+        job_id: &str,
+        status: &str,
+    ) {
+        let timeout = tokio::time::sleep(Duration::from_secs(3));
+        tokio::pin!(timeout);
+        loop {
+            tokio::select! {
+                _ = &mut timeout => panic!("timed out waiting for job {job_id} to reach {status}"),
+                event = events.recv() => {
+                    let event = event.expect("job event");
+                    if event.job_id == job_id && event.status == status {
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

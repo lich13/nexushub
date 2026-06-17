@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-17
-> **Mode**: V0.1.99_CC_SWITCH_STYLE_NATIVE_TAURI_ALIGNMENT
+> **Last Updated**: 2026-06-18
+> **Mode**: V0.1.100_MACOS_PARITY_PROBE_HELPER_UI_ALIGNMENT
 
 ## References
 
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.99 CC Switch style native Tauri alignment<br>
-**Active Task**: `v0.1.99` keeps Tencent Cloud Linux as the WebUI deployment at `https://661313.xyz/nexushub/`, changes macOS ARM64 packaging to wrap the main `webui` interface in the native Tauri App, and continues to exclude Cloudflare Tunnel, browser local WebUI, and LaunchAgent Web service from the documented macOS capability surface.
-**Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation.
+**Active Phase**: v0.1.100 macOS parity Probe helper and UI alignment<br>
+**Active Task**: `v0.1.100` keeps Tencent Cloud Linux as the WebUI deployment at `https://661313.xyz/nexushub/`, keeps macOS ARM64 as a native Tauri App wrapping the shared `webui`, restores desktop runtime coverage for shared Codex/Probe actions, bundles the local `nexushubd` helper for Probe Bark/Hook actions, and continues to exclude Cloudflare Tunnel, browser local WebUI, and LaunchAgent Web service from the macOS capability surface.
+**Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
 
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.99_CC_SWITCH_STYLE_NATIVE_TAURI_ALIGNMENT
+  mode: V0.1.100_MACOS_PARITY_PROBE_HELPER_UI_ALIGNMENT
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -85,7 +85,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-17"
+  last_updated: "2026-06-18"
 ```
 
 ## Task Telemetry Log
@@ -111,6 +111,7 @@ adaptive:
 | 2026-06-17 | v0.1.97 macOS base path patch | S | P/R pending | 0 | Bumped workspace/package versions to `0.1.97`, fixed local `/nexushub/` static WebUI routing, changed macOS DMG packaging to derive the default version from Cargo metadata, and changed release asset upload paths to version globs. |
 | 2026-06-17 | v0.1.98 Mac Tauri platform split | S | P/R pending | 0 | Bumped workspace/package versions to `0.1.98`, kept Linux WebUI public entry at `https://661313.xyz/nexushub/`, documented macOS as Tauri App only, and removed Cloudflare Tunnel from the project capability docs. |
 | 2026-06-17 | v0.1.99 CC Switch style native Tauri alignment | S | P/R pass | 0 | Bumped workspace/package/Tauri versions to `0.1.99`, changed macOS Tauri and CI/release packaging to use the shared `webui` interface, removed the stale `desktop-ui` surface, wired macOS desktop API actions for Probe settings/jobs, uploads, Goal, cleanup, Job History, and thread operations through Tauri invoke, and verified Rust/WebUI/Tauri checks plus local App/DMG build. |
+| 2026-06-18 | v0.1.100 macOS parity Probe helper and UI alignment | M | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.100`, routed desktop runtime shared actions through the native API bridge, fixed macOS Probe settings/events/logs-db behavior, added bundled `nexushubd` helper sync for Bark/Hook actions, hid Linux-only Ops update actions on macOS, and tightened Probe/composer/right-inspector UI alignment. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -127,6 +128,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
+git ls-remote --tags origin refs/tags/v0.1.100
 ```
 
 ## Next Steps
@@ -137,12 +139,12 @@ bash scripts/test-install-script.sh
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.99 Acceptance Matrix
+## v0.1.100 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
 | Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, loopback `healthz`, public HTTPS smoke, `nexushubd doctor`, retired paths `404`, Linux tarball `.sha256` |
-| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, no Web login/API admin setup, Codex/Probe/Goal/cleanup smoke, log tail, DMG/tarball `.sha256` |
+| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, no Web login/API admin setup, Codex/Probe/Goal/cleanup smoke, helper sync check, log tail, DMG/tarball `.sha256` |
 
 ## Session Log
 
@@ -165,3 +167,4 @@ bash scripts/test-install-script.sh
 | 2026-06-17 | v0.1.97-macos-base-path-patch | Bumped patch versions to `0.1.97`, fixed local `/nexushub/` static WebUI routing, removed concrete `NexusHub-0.1.96-darwin-arm64.dmg` release workflow paths, and covered Cargo-derived macOS DMG versioning with install-script assertions. |
 | 2026-06-17 | v0.1.98-mac-tauri-platform-split | Bumped patch versions to `0.1.98`, kept Tencent Cloud Linux WebUI as `https://661313.xyz/nexushub/`, moved macOS docs to Tauri App-only acceptance, deleted the Cloudflare Tunnel guide, and updated static docs checks to guard against Tunnel and macOS browser WebUI regressions. |
 | 2026-06-17 | v0.1.99-cc-switch-style-native-tauri-alignment | Bumped versions to `0.1.99`, made macOS Tauri consume `webui/dist`, removed stale `desktop-ui`, added native desktop API coverage for the shared UI, retained release artifacts for Linux tarball, darwin app tarball, DMG, and sha256 files, and locally built `NexusHub_0.1.99_aarch64.dmg`. |
+| 2026-06-18 | v0.1.100-macos-parity-probe-helper-ui-alignment | Bumped versions to `0.1.100`, fixed desktop runtime bridge coverage, fixed macOS Probe settings/events/logs-db parity, bundled and synced the local `nexushubd` helper for Probe Bark/Hook actions, and aligned desktop Ops/Probe/composer/right-inspector UI with the shared Linux WebUI surface. |

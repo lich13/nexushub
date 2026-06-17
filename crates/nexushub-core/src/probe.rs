@@ -4,6 +4,7 @@ use crate::{
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
     security::{is_sensitive_output_line, redact_output},
+    services::probe::aggregate_probe_status,
 };
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
@@ -113,6 +114,7 @@ impl ProbeRuntime {
     pub async fn status(&self) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
         let logs_db_status = self.logs_db_status();
+        let aggregation = aggregate_probe_status(&self.config);
         Ok(ProbeStatus {
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
@@ -146,13 +148,13 @@ impl ProbeRuntime {
             doctor_status: self.doctor_status_text(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             poll_seconds: self.config.probe.poll_seconds,
-            recent_event_count: 0,
-            running_count: 0,
-            reply_needed_count: 0,
-            recoverable_count: 0,
-            running_threads: Vec::new(),
-            reply_needed_threads: Vec::new(),
-            recoverable_threads: Vec::new(),
+            recent_event_count: aggregation.recent_event_count,
+            running_count: aggregation.running_threads.len(),
+            reply_needed_count: aggregation.reply_needed_threads.len(),
+            recoverable_count: aggregation.recoverable_threads.len(),
+            running_threads: aggregation.running_threads,
+            reply_needed_threads: aggregation.reply_needed_threads,
+            recoverable_threads: aggregation.recoverable_threads,
             config_path: self.paths.config_file.clone(),
             codex_home: resolved.home.clone(),
             configured_codex_home: resolved.configured_codex_home.clone(),
@@ -2060,6 +2062,172 @@ fn dedupe_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn status_aggregates_running_threads_from_codex_home() {
+        let root = unique_temp_dir("nexushub-probe-status-running");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let rollout = codex_home.join("running-rollout.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"turn_started","turn_id":"turn-live"}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"message","role":"assistant","content":[{"text":"working"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('running-thread', ?1, 1, 1, 'codex', '/tmp', '运行线程', '')",
+            [rollout.display().to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.recent_limit = 20;
+        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+            .status()
+            .await
+            .unwrap();
+
+        assert_eq!(status.running_count, 1);
+        assert_eq!(status.running_threads.len(), 1);
+        assert_eq!(status.running_threads[0].id, "running-thread");
+        assert_eq!(
+            status.running_threads[0].active_turn_id.as_deref(),
+            Some("turn-live")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_aggregates_panel_running_jobs_and_recent_events() {
+        let root = unique_temp_dir("nexushub-probe-status-panel");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        let panel_db_path = root.join("nexushub.sqlite");
+        let db = crate::db::PanelDb::open(&panel_db_path).unwrap();
+        db.record_probe_event(crate::db::NewProbeEvent {
+            kind: "hook-stop",
+            thread_id: Some("job-thread"),
+            title: Some("Probe event"),
+            message: Some("event recorded"),
+            dedupe_key: Some("hook-stop:job-thread"),
+            source: "test",
+            payload: json!({"event_type":"reply_needed"}),
+        })
+        .unwrap();
+        db.create_job("job-live", "codex.run", "继续运行").unwrap();
+        db.link_job_thread("job-live", Some("job-thread"), Some("turn-live"))
+            .unwrap();
+        drop(db);
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.paths.db_path = panel_db_path;
+        config.probe.recent_limit = 20;
+        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+            .status()
+            .await
+            .unwrap();
+
+        assert_eq!(status.recent_event_count, 1);
+        assert_eq!(status.running_count, 1);
+        assert_eq!(status.running_threads.len(), 1);
+        assert_eq!(status.running_threads[0].id, "job-thread");
+        assert_eq!(
+            status.running_threads[0].active_job_id.as_deref(),
+            Some("job-live")
+        );
+        assert_eq!(
+            status.running_threads[0].active_turn_id.as_deref(),
+            Some("turn-live")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_aggregates_reply_needed_and_recoverable_threads() {
+        let root = unique_temp_dir("nexushub-probe-status-buckets");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let reply_rollout = codex_home.join("reply-rollout.jsonl");
+        fs::write(
+            &reply_rollout,
+            [
+                json!({"type":"item_completed","turn_id":"turn-plan","item":{"id":"plan-item","type":"Plan"}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let recoverable_rollout = codex_home.join("recoverable-rollout.jsonl");
+        fs::write(
+            &recoverable_rollout,
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-crash","status":"interrupted","last_agent_message":null}}).to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('reply-thread', ?1, ?2, ?2, 'codex', '/tmp', '待确认', '')",
+            params![reply_rollout.display().to_string(), now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, rollout_path, created_at, updated_at, source, cwd, title, preview)
+             VALUES('recoverable-thread', ?1, ?2, ?2, 'codex', '/tmp', '可恢复', '')",
+            params![recoverable_rollout.display().to_string(), now - 30],
+        )
+        .unwrap();
+        drop(conn);
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.recent_limit = 20;
+        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+            .status()
+            .await
+            .unwrap();
+
+        assert_eq!(status.reply_needed_count, 1);
+        assert_eq!(status.reply_needed_threads.len(), 1);
+        assert_eq!(status.reply_needed_threads[0].id, "reply-thread");
+        assert_eq!(status.recoverable_count, 1);
+        assert_eq!(status.recoverable_threads.len(), 1);
+        assert_eq!(status.recoverable_threads[0].id, "recoverable-thread");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn compact_uses_caller_supplied_quick_check_timeout() {

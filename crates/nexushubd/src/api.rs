@@ -34,6 +34,7 @@ use nexushub_core::{
     platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
+    services::probe::probe_threads_for_status_with_paths,
     update,
     uploads::{
         self, cleanup_upload_ids, prepare_uploads, prompt_with_attachment_context,
@@ -55,7 +56,6 @@ type ApiResponse = Result<Response, ApiError>;
 const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
-const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 const CODEX_SUBMITTED_MESSAGE: &str = "已提交给 Codex";
 
 pub struct ApiError(Box<Response>);
@@ -331,11 +331,6 @@ async fn patch_probe_settings(
             }
         }
     }
-    if let Some(device_key) = device_key {
-        state
-            .db
-            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
-    }
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
@@ -344,6 +339,11 @@ async fn patch_probe_settings(
     let updated = patch_probe_config_toml(&text, &patch)?;
     fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
     let response_config = Config::load(&config_path)?;
+    if let Some(device_key) = device_key {
+        state
+            .db
+            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+    }
     state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -608,33 +608,7 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
 
 async fn probe_status_fresh_value(state: AppState) -> Value {
     match probe_runtime(&state).status().await {
-        Ok(mut status) => {
-            if let Ok(events) = state
-                .db
-                .list_probe_events(state.config().probe.recent_limit as u32)
-            {
-                status.recent_event_count = events.len();
-            }
-            if let Ok(threads) =
-                load_probe_threads(&state, "running", state.config().probe.recent_limit).await
-            {
-                status.running_count = threads.len();
-                status.running_threads = threads;
-            }
-            if let Ok(threads) =
-                load_probe_threads(&state, "reply-needed", state.config().probe.recent_limit).await
-            {
-                status.reply_needed_count = threads.len();
-                status.reply_needed_threads = threads;
-            }
-            if let Ok(threads) =
-                load_probe_threads(&state, "recoverable", state.config().probe.recent_limit).await
-            {
-                status.recoverable_count = threads.len();
-                status.recoverable_threads = threads;
-            }
-            json!(status)
-        }
+        Ok(status) => json!(status),
         Err(err) => json!({
             "label": "Probe",
             "enabled": state.config().probe.enabled,
@@ -821,6 +795,9 @@ pub(crate) async fn load_probe_threads(
     limit: usize,
 ) -> anyhow::Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
+    if thread_status_filter_needs_full_scan(Some(status)) {
+        return probe_threads_for_status_with_paths(&paths, state.db.path(), status, limit);
+    }
     let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
         tracing::warn!("failed to read hidden thread metadata for probe: {err}");
@@ -834,43 +811,12 @@ pub(crate) async fn load_probe_threads(
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
     apply_running_jobs_to_threads(state, &mut threads, &archived_thread_ids)?;
     threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    if status == "reply-needed" {
-        threads.retain(probe_reply_needed_thread_is_fresh);
-    }
     Ok(filter_thread_summaries(
         threads,
         Some(status),
         None,
         limit.clamp(1, 200),
     ))
-}
-
-fn probe_reply_needed_thread_is_fresh(thread: &ThreadSummary) -> bool {
-    if !matches!(thread.status, ThreadStatus::ReplyNeeded) {
-        return false;
-    }
-    if !thread_updated_within(thread, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS) {
-        return false;
-    }
-    thread.pending_elicitation.is_some()
-        || thread.latest_message.as_deref().is_some_and(|value| {
-            value.contains("<proposed_plan>")
-                || value.contains("</proposed_plan>")
-                || !value.trim().is_empty()
-        })
-}
-
-fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
-    let Some(updated_at) = thread.updated_at.as_deref() else {
-        return false;
-    };
-    let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
-        return false;
-    };
-    let age_seconds = chrono::Utc::now()
-        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
-        .num_seconds();
-    (0..=max_age_seconds).contains(&age_seconds)
 }
 
 fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
@@ -3951,7 +3897,7 @@ mod tests {
         probe_config_path, prune_hidden_thread_summaries, requested_thread_limit, router,
         seed_thread_event_blocks, thread_block_page, thread_event_block_key,
         thread_list_fetch_limit, thread_title, turnstile_login_action, SendMessageRequest,
-        TurnstileLoginAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+        TurnstileLoginAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -3961,6 +3907,7 @@ mod tests {
     use nexushub_core::{
         config::Config,
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
+        services::probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
         uploads::{PreparedAttachment, UploadKind},
     };
     use rusqlite::{params, Connection};
@@ -4070,7 +4017,7 @@ mod tests {
             csrf_token: "csrf-token",
             user_agent: None,
             ip: None,
-            expires_at: PanelDb::now() + 60,
+            expires_at: PanelDb::now() + 3_600,
         })
         .unwrap();
 

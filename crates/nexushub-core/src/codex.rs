@@ -1301,6 +1301,12 @@ fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
             }
             if last_agent_message.is_some() {
                 scan.recoverable = false;
+            } else if last_agent_null
+                && last_task_status
+                    .as_deref()
+                    .is_some_and(is_recoverable_terminal_status)
+            {
+                scan.recoverable = true;
             }
             current_plan_marker = None;
         }
@@ -3655,6 +3661,13 @@ fn is_running_status(status: &str) -> bool {
     matches!(
         status.trim().to_ascii_lowercase().as_str(),
         "pending" | "running" | "in_progress" | "inprogress" | "active"
+    )
+}
+
+fn is_recoverable_terminal_status(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "failed" | "error" | "cancelled" | "canceled" | "interrupted"
     )
 }
 

@@ -19,7 +19,9 @@ mkdir -p "${DIST}"
 
 if [[ "${SKIP_WEBUI_BUILD:-0}" != "1" ]]; then
   corepack pnpm@11.0.8 --dir "${ROOT}/webui" install
-  VITE_BASE="${VITE_BASE:-/nexushub/}" corepack pnpm@11.0.8 --dir "${ROOT}/webui" build
+  VITE_BASE="${VITE_BASE:-/nexushub/}" \
+    VITE_API_BASE="${VITE_API_BASE:-/nexushub}" \
+    corepack pnpm@11.0.8 --dir "${ROOT}/webui" build
 fi
 
 cargo build --release --package nexushubd

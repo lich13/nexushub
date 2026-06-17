@@ -142,15 +142,21 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
 export type ProbeSettingsPayload = {
   codex: ProbeSettings["codex"];
   probe: Pick<ProbeSettings["probe"], "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "notifications" | "observability" | "logs_db">;
+  notifications?: Pick<ProbeSettings["notifications"], "device_key">;
 };
 
-export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: ProbeSettings | null): ProbeSettingsPayload {
+export function buildProbeSettingsPayload(
+  draft: ProbeSettingsDraft,
+  _current?: ProbeSettings | null,
+  submittedDeviceKey?: string | null
+): ProbeSettingsPayload {
   const errors = probeSettingsValidation(draft);
   if (errors.length) {
     throw new Error(errors[0]);
   }
+  const deviceKey = (submittedDeviceKey ?? draft.notifications.device_key).trim();
   const notifications: NonNullable<ProbeSettingsPayload["probe"]["notifications"]> & { device_key?: string } = {
-    enabled: draft.notifications.enabled || Boolean(draft.notifications.device_key.trim()) || draft.notifications.device_key_configured,
+    enabled: draft.notifications.enabled || Boolean(deviceKey) || draft.notifications.device_key_configured,
     server_url: draft.notifications.server_url.trim(),
     sound: optionalString(draft.notifications.sound),
     group: draft.notifications.group.trim(),
@@ -159,12 +165,11 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
     notify_reply_needed: draft.notifications.notify_reply_needed,
     notify_recoverable: draft.notifications.notify_recoverable
   };
-  const deviceKey = draft.notifications.device_key.trim();
   if (deviceKey) {
     notifications.device_key = deviceKey;
   }
 
-  return {
+  const payload: ProbeSettingsPayload = {
     codex: {
       home: codexHomePatchValue(draft.codex.home),
       workspace: draft.codex.workspace.trim() || null,
@@ -201,6 +206,10 @@ export function buildProbeSettingsPayload(draft: ProbeSettingsDraft, _current?: 
       }
     }
   };
+  if (deviceKey) {
+    payload.notifications = { device_key: deviceKey };
+  }
+  return payload;
 }
 
 export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {

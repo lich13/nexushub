@@ -51,6 +51,9 @@ type AppExports = typeof import("./App") & {
   mergeSavedThreadTitle?: (threads: ThreadSummary[], threadId: string, title: string) => ThreadSummary[];
   threadSettingsMetricLabels?: () => string[];
   threadResumeCommand?: (threadId?: string | null) => string | null;
+  threadRolloutPath?: (rolloutPath?: string | null) => string | null;
+  probeRunningCountValue?: (status?: { running_count?: number; running_threads?: ThreadSummary[] } | null) => string;
+  probeSettingsAfterBarkSave?: <T extends { notifications: { device_key_configured?: boolean } }>(saved: T, submittedDeviceKey?: string | null) => T;
   probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
   probeAvailabilityView?: (input: {
     available?: boolean;
@@ -58,6 +61,7 @@ type AppExports = typeof import("./App") & {
     loading?: boolean;
     fetching?: boolean;
     hasData?: boolean;
+    error?: boolean;
   }) => { headline: string; metric: string; tone: "success" | "warning" | "danger" };
   probeEventSummary?: (event: ProbeEvent) => string;
   probeEventCard?: (event: ProbeEvent) => { headline: string; summary: string; details: Array<{ label: string; value: string }> };
@@ -119,6 +123,26 @@ function extractThreadListSource(): string {
   return source.slice(start, end);
 }
 
+function extractThreadInspectorSource(): string {
+  const source = appSource;
+  const start = source.indexOf("function ThreadInspectorPanels(");
+  const end = source.indexOf("function ThreadGoalPanel(", start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+function extractProbeWorkspaceSource(): string {
+  const source = appSource;
+  const start = source.indexOf("function ProbeWorkspace(");
+  const end = source.indexOf("function OpsWorkspace(", start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe("conversation helpers", () => {
   test("desktop runtime hides Web-only auth and security navigation", async () => {
     const app = await loadApp();
@@ -131,6 +155,37 @@ describe("conversation helpers", () => {
       username: "desktop",
       csrf_token: null
     });
+  }, 15000);
+
+  test("desktop runtime removes Linux-only update actions but keeps core workspace entry points", async () => {
+    const app = await loadApp();
+
+    expect(app.navigationLabelsForRuntime?.(true)).toEqual(expect.arrayContaining(["Codex", "探针", "运维"]));
+    expect(app.opsWorkspacePanelTitles?.(false)).toContain("面板更新");
+    expect(app.opsWorkspacePanelTitles?.(true)).not.toContain("面板更新");
+    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["面板更新", "Precheck", "Update", "Prune", "Public endpoint"]));
+    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
+    expect(app.opsWorkspaceVisibleCopy?.(true)).toEqual(expect.arrayContaining(["系统状态", "归档线程清理", "隐藏线程清理", "Job History"]));
+  });
+
+  test("desktop runtime hides unsupported fork and approval actions", async () => {
+    const app = await loadApp();
+
+    expect(app.canShowForkAction?.(false)).toBe(true);
+    expect(app.canShowForkAction?.(true)).toBe(false);
+    expect(app.slashCommandsForRuntime?.(false).map((item) => item.command)).toContain("/fork");
+    expect(app.slashCommandsForRuntime?.(true).map((item) => item.command)).not.toContain("/fork");
+    expect(app.slashCommandSuggestions?.("/fo", 3, true, false).map((item) => item.command)).toContain("/fork");
+    expect(app.slashCommandSuggestions?.("/fo", 3, true, true).map((item) => item.command)).not.toContain("/fork");
+    expect(app.exactSlashCommandFromDraft?.(" /fork ", true)).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.(" /fork ", true)).toBeNull();
+    expect(app.slashCommandAction?.("/fork", true, true)).toEqual({
+      kind: "unknown",
+      command: "/fork",
+      message: expect.stringContaining("未知")
+    });
+    expect(app.approvalActionMode?.(false)).toBe("interactive");
+    expect(app.approvalActionMode?.(true)).toBe("unsupported");
   });
 
   test("segments internal paths and Codex ids as copyable references", async () => {
@@ -666,10 +721,11 @@ describe("conversation helpers", () => {
     expect(app.composerFileInputAcceptValue?.()).toBeUndefined();
   });
 
-  test("thread settings hides internal metrics and copies only the thread id", async () => {
+  test("thread copy panel restores id, rollout path, and resume command without internal metrics", async () => {
     const app = await loadApp();
+    const inspectorSource = extractThreadInspectorSource();
 
-    expect(app.threadInspectorPanelTitles?.()).toEqual(["名称与归档", "Goal", "状态摘要"]);
+    expect(app.threadInspectorPanelTitles?.()).toEqual(["名称与归档", "Goal", "复制与路径"]);
     expect(app.threadSettingsMetricLabels?.()).not.toEqual(expect.arrayContaining([
       "Thread ID",
       "Active turn",
@@ -678,16 +734,31 @@ describe("conversation helpers", () => {
       "Rollout path",
       "Blocks"
     ]));
+    expect(app.threadInspectorPanelTitles?.()).not.toContain("状态摘要");
     expect(app.threadResumeCommand?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
       "codex resume 019ec943-0b86-7e22-86e9-4dc0c919b09d"
     );
     expect(app.threadCopyId?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
       "019ec943-0b86-7e22-86e9-4dc0c919b09d"
     );
+    expect(app.threadRolloutPath?.(" /Users/gosu/.codex/sessions/thread.jsonl ")).toBe(
+      "/Users/gosu/.codex/sessions/thread.jsonl"
+    );
     expect(app.threadCopyId?.("  ")).toBeNull();
     expect(app.threadCopyId?.(null)).toBeNull();
+    expect(app.threadRolloutPath?.("  ")).toBeNull();
+    expect(app.threadRolloutPath?.(null)).toBeNull();
     expect(app.threadResumeCommand?.("  ")).toBeNull();
     expect(app.threadResumeCommand?.(null)).toBeNull();
+    expect(inspectorSource).toContain("复制与路径");
+    expect(inspectorSource).toContain("线程 ID");
+    expect(inspectorSource).toContain("复制 ID");
+    expect(inspectorSource).toContain("复制文件路径");
+    expect(inspectorSource).toContain("复制 codex resume+ID");
+    expect(inspectorSource).toContain("会话文件");
+    expect(inspectorSource).not.toContain("状态摘要");
+    expect(inspectorSource).not.toContain("Codex Home");
+    expect(inspectorSource).not.toContain("State DB");
   });
 
   test("goal panel helpers cover TUI states and button rules", async () => {
@@ -759,6 +830,20 @@ describe("conversation helpers", () => {
     expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
   });
 
+  test("probe running summary uses running_threads when backend count is stale", async () => {
+    const app = await loadApp();
+    const probeSource = extractProbeWorkspaceSource();
+    const runningThreads: ThreadSummary[] = [
+      { id: "running-a", title: "运行 A", status: "Running", message_count: 1 },
+      { id: "running-b", title: "运行 B", status: "Running", message_count: 2 }
+    ];
+
+    expect(app.probeThreadsByStatus?.({ running_threads: runningThreads }).running).toEqual(runningThreads);
+    expect(app.probeRunningCountValue?.({ running_count: 0, running_threads: runningThreads })).toBe("2");
+    expect(app.probeRunningCountValue?.({ running_count: 3, running_threads: runningThreads.slice(0, 1) })).toBe("3");
+    expect(probeSource).toContain('<Metric label="运行中" value={probeRunningCountValue(data)}');
+  });
+
   test("probe availability copy treats initial snapshot fetch as loading instead of unavailable", async () => {
     const app = await loadApp();
 
@@ -766,6 +851,11 @@ describe("conversation helpers", () => {
       headline: "正在读取 Probe 快照",
       metric: "读取中",
       tone: "warning"
+    });
+    expect(app.probeAvailabilityView?.({ loading: false, fetching: true, hasData: false, error: true })).toEqual({
+      headline: "Probe 快照读取失败",
+      metric: "读取失败",
+      tone: "danger"
     });
     expect(app.probeAvailabilityView?.({ available: false, loading: false, fetching: false, hasData: false })).toEqual({
       headline: "Probe 端点不可用",
@@ -777,6 +867,24 @@ describe("conversation helpers", () => {
       metric: "运行中",
       tone: "success"
     });
+  });
+
+  test("bark settings save marks a submitted key configured so test buttons unlock", async () => {
+    const app = await loadApp();
+    const saved = {
+      codex: { host_label: "mac" },
+      probe: { enabled: true },
+      notifications: { enabled: true, device_key_configured: false },
+      logs_db: { enabled: true }
+    };
+
+    expect(app.probeSettingsAfterBarkSave?.(saved, " bark-device-key ")).toMatchObject({
+      notifications: { device_key_configured: true }
+    });
+    expect(app.probeSettingsAfterBarkSave?.(saved, "   ")).toMatchObject({
+      notifications: { device_key_configured: false }
+    });
+    expect(extractProbeWorkspaceSource()).toContain("probeSettingsAfterBarkSave(");
   });
 
   test("probe event summary shows context without leaking payload secrets", async () => {
@@ -936,10 +1044,22 @@ describe("conversation helpers", () => {
     expect(copy).toContain("线程标题");
     expect(copy).toContain("重命名");
     expect(copy).toContain("归档");
+    expect(copy).toContain("复制与路径");
+    expect(copy).toContain("复制 ID");
+    expect(copy).toContain("复制文件路径");
+    expect(copy).toContain("复制 codex resume+ID");
     expect(copy).not.toContain("管理员");
     expect(copy).not.toContain("登录");
     expect(copy).not.toContain("Turnstile");
     expect(copy).not.toContain("CSRF");
+    expect(copy).not.toContain("Codex Home");
+    expect(copy).not.toContain("State DB");
+  });
+
+  test("probe path metrics keep Linux Codex Home while hiding it from desktop runtime", () => {
+    expect(appSource).toContain('{!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
+    expect(appSource).toContain('{!desktopRuntime && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
+    expect(appSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
   });
 
   test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {

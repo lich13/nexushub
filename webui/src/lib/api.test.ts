@@ -338,6 +338,33 @@ describe("archive delete API compatibility", () => {
     expect(page.before_cursor).toBe("b:120");
   });
 
+  test("desktop thread block page request keeps limit and cursor in the native bridge", async () => {
+    const { getThreadBlocks } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      expect(command).toBe("desktop_api_command");
+      expect(args).toEqual({
+        request: {
+          path: "/api/threads/thread-a/blocks?limit=80&before=b%3A200",
+          method: "GET"
+        }
+      });
+      return {
+        thread_id: "thread-a",
+        blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
+        total_blocks: 240,
+        has_more_blocks: true,
+        before_cursor: "b:120"
+      };
+    });
+
+    const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(page.before_cursor).toBe("b:120");
+  });
+
   test("routes panel updates to panel-specific endpoints", async () => {
     const { startUpdateJob } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "panel-job" }), {
@@ -558,6 +585,7 @@ describe("archive delete API compatibility", () => {
       ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: false, compact: false }],
       ["/api/probe/settings", "PATCH", "csrf-token", {
         codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
+        notifications: { device_key: "secret" },
         probe: {
           poll_seconds: 20,
           notifications: { enabled: true, device_key: "secret" },
@@ -659,7 +687,7 @@ describe("archive delete API compatibility", () => {
     expect(app.codexHomeStatusValue({ codex_home: "" })).toBe("未知");
   });
 
-  test("saveProbeSettings sends only canonical codex and probe keys", async () => {
+  test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
     const { saveProbeSettings } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ saved: true }), {
       status: 200,
@@ -681,12 +709,13 @@ describe("archive delete API compatibility", () => {
     expect(path).toBe("/api/probe/settings");
     expect(options.method).toBe("PATCH");
     expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(Object.keys(body).sort()).toEqual(["codex", "probe"]);
+    expect(Object.keys(body).sort()).toEqual(["codex", "notifications", "probe"]);
     expect(body.probe.notifications).toEqual({
       enabled: true,
       device_key: "secret",
       server_url: "https://api.day.app"
     });
+    expect(body.notifications).toEqual({ device_key: "secret" });
     expect(body.probe.logs_db).toEqual({ enabled: true, retention_days: 2 });
   });
 
@@ -734,15 +763,16 @@ describe("archive delete API compatibility", () => {
     });
   });
 
-  test("keeps API requests at root when the WebUI is served from a subpath", async () => {
+  test("keeps API requests at root by default when no API base is configured", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
     const { buildApiPath } = await loadRealApi();
 
     expect(buildApiPath("/api/auth/login")).toBe("/api/auth/login");
   });
 
-  test("login posts to root API when the WebUI is served from /nexushub/", async () => {
+  test("login uses the scoped API base configured for the Linux /nexushub/ package", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
+    vi.stubEnv("VITE_API_BASE", "/nexushub");
     const { login } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
       id: "admin",
@@ -757,8 +787,7 @@ describe("archive delete API compatibility", () => {
     await login("admin", "password");
 
     const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/api/auth/login");
-    expect(path).not.toContain("/nexushub/api");
+    expect(path).toBe("/nexushub/api/auth/login");
   });
 
   test("desktop auth helpers never call Web auth endpoints", async () => {
@@ -781,6 +810,32 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
+  });
+
+  test("desktop API bridge accepts empty string request bodies without JSON parsing errors", async () => {
+    const { startArchiveDelete } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      expect(command).toBe("desktop_api_command");
+      expect(args).toEqual({
+        request: {
+          path: "/api/archives/delete/execute",
+          method: "POST",
+          body: { confirmed: true }
+        }
+      });
+      return {
+        before: {},
+        deleted_threads: 0,
+        after_total_threads: 1,
+        after_archived_threads: 0,
+        after_integrity: "ok"
+      };
+    });
+
+    await expect(startArchiveDelete("ignored-csrf")).resolves.toMatchObject({ after_integrity: "ok" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("desktop thread, probe, upload, job and goal helpers route through Tauri invoke commands", async () => {
@@ -927,6 +982,22 @@ describe("archive delete API compatibility", () => {
       item_id: "approval-1",
       decision: "approved"
     });
+  });
+
+  test("desktop unsupported Fork and Approval actions short-circuit before native bridge", async () => {
+    const { ApiError, forkThread, answerApproval } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => {
+      throw new Error("desktop bridge should not be called");
+    });
+
+    await expect(forkThread("thread-a", "ignored-csrf")).rejects.toBeInstanceOf(ApiError);
+    await expect(answerApproval("thread-a", { decision: "approved" }, "ignored-csrf")).rejects.toMatchObject({
+      status: 501
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
   });
 
   test("follow-up API posts thread payload with csrf and supports listing and cancel", async () => {

@@ -11,6 +11,7 @@ pub mod probe;
 pub mod providers;
 pub mod security;
 pub mod sentinel;
+pub mod services;
 pub mod system;
 pub mod update;
 pub mod uploads;

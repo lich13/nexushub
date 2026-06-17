@@ -811,11 +811,6 @@ pub fn desktop_probe_save_settings_with_state(
             }
         }
     }
-    if let Some(device_key) = device_key {
-        state
-            .db
-            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
-    }
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
@@ -824,6 +819,11 @@ pub fn desktop_probe_save_settings_with_state(
     let updated = patch_probe_config_toml(&text, &patch)?;
     std::fs::write(&config_path, updated)?;
     let response_config = Config::load(&config_path)?;
+    if let Some(device_key) = device_key {
+        state
+            .db
+            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+    }
     state.replace_config(response_config);
     desktop_probe_settings_with_state(state)
 }

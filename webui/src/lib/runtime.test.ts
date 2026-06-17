@@ -116,7 +116,39 @@ describe("NexusHub runtime adapter", () => {
     });
   });
 
-  test("desktop unsupported capabilities reject instead of reporting success", async () => {
+  test("desktop runtime routes shared app capabilities through the native API bridge", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
+    const { runtimeRpc } = await loadRuntime(true);
+
+    await runtimeRpc("getProbeSettings");
+    await runtimeRpc("saveProbeSettings", { settings: { probe: { enabled: true } } });
+    await runtimeRpc("getProbeEvents", { limit: 12 });
+    await runtimeRpc("startProbeJob", { path: "/api/probe/bark/test" });
+    await runtimeRpc("getClaudeCodeOverview");
+    await runtimeRpc("getThreadBlocks", { id: "thread-a", options: { limit: 80, before: "b:200" } });
+    await runtimeRpc("createThread", { payload: { message: "hello" } });
+    await runtimeRpc("sendMessage", { threadId: "thread-a", payload: { message: "resume" } });
+    await runtimeRpc("archiveThread", { threadId: "thread-a" });
+    await runtimeRpc("renameThread", { threadId: "thread-a", name: "新标题" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "PATCH", body: { probe: { enabled: true } } } }],
+      ["desktop_api_command", { request: { path: "/api/probe/events?limit=12", method: "GET" } }],
+      ["desktop_api_command", { request: { path: "/api/probe/bark/test", method: "POST" } }],
+      ["desktop_api_command", { request: { path: "/api/providers/claude-code/overview", method: "GET" } }],
+      ["desktop_thread_blocks", { request: { id: "thread-a", limit: 80, before: "b:200" } }],
+      ["desktop_api_command", { request: { path: "/api/threads", method: "POST", body: { message: "hello" } } }],
+      ["desktop_api_command", { request: { path: "/api/threads/thread-a/messages", method: "POST", body: { message: "resume" } } }],
+      ["desktop_api_command", { request: { path: "/api/threads/thread-a/archive", method: "POST" } }],
+      ["desktop_api_command", { request: { path: "/api/threads/thread-a/rename", method: "POST", body: { name: "新标题" } } }]
+    ]);
+  });
+
+  test("desktop keeps Linux-only update jobs explicitly unavailable", async () => {
     const { runtimeRpc, RuntimeUnavailableError } = await loadRuntime(true);
 
     await expect(runtimeRpc("startUpdateJob", {

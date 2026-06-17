@@ -94,8 +94,9 @@ checks = {
     "config.example probe observability": (config, "[probe.observability]\nhook_event_max_lines = 500\nhook_cooldown_max_lines = 1000\nlog_max_bytes = 5242880"),
     "config.example probe logs db": (config, "[probe.logs_db]\nenabled = true\nretention_days = 2\nmaintenance_interval_hours = 6"),
     "nginx proxy target": (nginx, "proxy_pass http://127.0.0.1:15742/;"),
-    "nginx root api proxy": (nginx, "location ^~ /api/"),
-    "nginx sentinel 404": (nginx, "location ^~ /api/sentinel/"),
+    "nginx scoped api proxy": (nginx, "location ^~ /nexushub/api/"),
+    "nginx scoped sentinel 404": (nginx, "location ^~ /nexushub/api/sentinel/"),
+    "nginx retired root sentinel status 404": (nginx, "location = /api/sentinel/status"),
     "install config migration": (install, "http://127.0.0.1:15742/healthz"),
     "install legacy listen migration": (install, '"listen": \'"127.0.0.1:15742"\''),
     "update health URL": (update, 'HEALTH_URL="http://127.0.0.1:15742/healthz"'),
@@ -113,8 +114,63 @@ for name, text in {
 }.items():
     if "127.0.0.1:15732" in text:
         raise SystemExit(f"{name} must not point NexusHub at legacy codex-cloud-panel port 15732")
+if "location ^~ /api/" in nginx:
+    raise SystemExit("nginx-location.conf must not proxy root /api/ because Sub2API owns that namespace")
+for forbidden in [
+    "proxy_pass http://127.0.0.1:15742/api/;",
+]:
+    root_api_index = nginx.find("location ^~ /api/")
+    if root_api_index >= 0 and forbidden in nginx[root_api_index:root_api_index + 300]:
+        raise SystemExit("nginx-location.conf must not route root /api/ to NexusHub")
 
 print("NexusHub deploy port isolation: ok")
+PY
+
+python3 - "${ROOT}/Cargo.toml" "${ROOT}/package.json" "${ROOT}/webui/package.json" "${ROOT}/src-tauri/Cargo.toml" "${ROOT}/src-tauri/tauri.conf.json" "${ROOT}/Cargo.lock" "${ROOT}/src-tauri/Cargo.lock" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+cargo_toml, root_package_json, webui_package_json, tauri_cargo_toml, tauri_config_json, cargo_lock, tauri_cargo_lock = [Path(arg).read_text() for arg in sys.argv[1:]]
+expected_version = "0.1.100"
+
+checks = {
+    "workspace Cargo.toml": (cargo_toml, f'version = "{expected_version}"'),
+    "root package.json": (root_package_json, f'"version": "{expected_version}"'),
+    "webui package.json": (webui_package_json, f'"version": "{expected_version}"'),
+    "src-tauri/Cargo.toml": (tauri_cargo_toml, f'version = "{expected_version}"'),
+    "src-tauri/tauri.conf.json": (tauri_config_json, f'"version": "{expected_version}"'),
+    "Cargo.lock workspace crates": (cargo_lock, f'version = "{expected_version}"'),
+    "src-tauri/Cargo.lock workspace crates": (tauri_cargo_lock, f'version = "{expected_version}"'),
+}
+missing = [name for name, (text, needle) in checks.items() if needle not in text]
+if missing:
+    raise SystemExit("v0.1.100 version fields missing or regressed: " + ", ".join(missing))
+
+root_package = json.loads(root_package_json)
+if root_package.get("scripts", {}).get("tauri:build") != "bash scripts/package-darwin-arm64.sh":
+    raise SystemExit("package.json tauri:build must stay on scripts/package-darwin-arm64.sh")
+for name, needle in {
+    "Tauri helper resource": '"resources/nexushubd": "nexushubd"',
+    "Tauri WebUI resource": '"../webui/dist": "webui"',
+}.items():
+    if needle not in tauri_config_json:
+        raise SystemExit(f"src-tauri/tauri.conf.json missing {name}: {needle}")
+
+for forbidden in ["0.1.99", "v0.1.99"]:
+    for name, text in {
+        "workspace Cargo.toml": cargo_toml,
+        "package.json": root_package_json,
+        "webui/package.json": webui_package_json,
+        "src-tauri/Cargo.toml": tauri_cargo_toml,
+        "src-tauri/tauri.conf.json": tauri_config_json,
+        "Cargo.lock": cargo_lock,
+        "src-tauri/Cargo.lock": tauri_cargo_lock,
+    }.items():
+        if forbidden in text:
+            raise SystemExit(f"{name} must not regress to {forbidden}")
+
+print("v0.1.100 version fields and release wiring: ok")
 PY
 
 python3 - "${CONFIG_EXAMPLE}" "${SYSTEMD_SERVICE}" <<'PY'
@@ -175,20 +231,34 @@ checks = {
     "README macOS Tauri entry": ("README.md", "Tauri App"),
     "README macOS no browser WebUI": ("README.md", "no longer provides a browser WebUI"),
     "README macOS logs": ("README.md", "~/Library/Logs/NexusHub"),
+    "README macOS helper": ("README.md", "~/Library/Application Support/NexusHub/bin/nexushubd"),
+    "README macOS helper sync": ("README.md", "syncs it into `Application Support` on launch"),
+    "README macOS DMG": ("README.md", "NexusHub-<version>-darwin-arm64.dmg"),
+    "README macOS tarball": ("README.md", "nexushub-darwin-arm64.tar.gz"),
+    "README Linux tarball": ("README.md", "nexushub-linux-x86_64.tar.gz"),
+    "README Linux sha256": ("README.md", ".sha256"),
     "README Linux public URL": ("README.md", "https://661313.xyz/nexushub/"),
-    "README root API proxy": ("README.md", "root `/api/`"),
+    "README scoped API proxy": ("README.md", "`/nexushub/api/`"),
     "runbook Linux systemd": ("docs/cloud-deploy-runbook.md", "systemd unit `nexushub`"),
     "runbook Linux runtime": ("docs/cloud-deploy-runbook.md", "/opt/nexushub"),
     "runbook macOS boundary": ("docs/cloud-deploy-runbook.md", "macOS ARM64 Boundary"),
     "runbook macOS Tauri": ("docs/cloud-deploy-runbook.md", "Tauri App"),
-    "runbook root API proxy": ("docs/cloud-deploy-runbook.md", "root `/api/`"),
-    "master v0.1.99": ("docs/progress/MASTER.md", "v0.1.99"),
-    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.99 Acceptance Matrix"),
+    "runbook macOS helper": ("docs/cloud-deploy-runbook.md", "~/Library/Application Support/NexusHub/bin/nexushubd"),
+    "runbook macOS helper sync": ("docs/cloud-deploy-runbook.md", "syncs it into"),
+    "runbook macOS DMG": ("docs/cloud-deploy-runbook.md", "NexusHub-<version>-darwin-arm64.dmg"),
+    "runbook macOS tarball": ("docs/cloud-deploy-runbook.md", "nexushub-darwin-arm64.tar.gz"),
+    "runbook Linux tarball": ("docs/cloud-deploy-runbook.md", "nexushub-linux-x86_64.tar.gz"),
+    "runbook scoped API proxy": ("docs/cloud-deploy-runbook.md", "`/nexushub/api/`"),
+    "master v0.1.100": ("docs/progress/MASTER.md", "v0.1.100"),
+    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.100 Acceptance Matrix"),
+    "master Linux acceptance": ("docs/progress/MASTER.md", "Linux tarball `.sha256`"),
+    "master macOS helper acceptance": ("docs/progress/MASTER.md", "helper sync check"),
+    "master macOS DMG tarball": ("docs/progress/MASTER.md", "DMG/tarball `.sha256`"),
     "master Turnstile retained": ("docs/progress/MASTER.md", "Cloudflare Turnstile login verification"),
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
-    raise SystemExit("v0.1.99 docs/static acceptance missing: " + ", ".join(missing))
+    raise SystemExit("v0.1.100 docs/static acceptance missing: " + ", ".join(missing))
 
 for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/progress/MASTER.md"]:
     text = texts[doc_name]
@@ -225,6 +295,8 @@ for needle in [
         raise SystemExit(f"docs/progress/MASTER.md current status must not reintroduce removed macOS/Tunnel entry: {needle}")
 
 for doc_name, text in texts.items():
+    if "root `/api/`" in text:
+        raise SystemExit(f"{doc_name} must not describe root /api/ as a NexusHub public proxy")
     forbidden = [
         "eyJhIjoi",
         "trycloudflare.com/",
@@ -236,7 +308,7 @@ for doc_name, text in texts.items():
         if needle in text:
             raise SystemExit(f"{doc_name} must not contain live Cloudflare tokens or generated tunnel URLs: {needle}")
 
-print("v0.1.99 Linux WebUI/macOS Tauri docs: ok")
+print("v0.1.100 Linux WebUI/macOS Tauri docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -490,6 +562,7 @@ PY
 
 python3 - "${INSTALL_SH}" "${UPDATE_SH}" "${CODEX_PRECHECK_WRAPPER}" "${CODEX_UPDATE_WRAPPER}" "${CODEX_PRUNE_WRAPPER}" <<'PY'
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
@@ -1295,10 +1368,13 @@ echo "update release download resolves latest from git tags when GitHub API is u
 
 python3 - "${RELEASE_WORKFLOW}" "${MACOS_PACKAGE_SH}" "${MACOS_README}" <<'PY'
 from pathlib import Path
+import json
 import re
+import subprocess
 import sys
 
 workflow_path, package_path, readme_path = [Path(arg) for arg in sys.argv[1:]]
+root = package_path.parents[1]
 
 missing_paths = [
     path
@@ -1357,6 +1433,43 @@ for forbidden in [
         raise SystemExit(f"release workflow must not keep legacy macOS packaging entry: {forbidden}")
 
 package = package_path.read_text()
+helper_resource = root / "src-tauri/resources/nexushubd"
+if not helper_resource.exists():
+    raise SystemExit("src-tauri/resources/nexushubd placeholder is required for clean Tauri builds")
+if helper_resource.stat().st_size > 4096:
+    raise SystemExit("src-tauri/resources/nexushubd placeholder must stay small; use package-darwin-arm64.sh for real helper bundling")
+helper_resource_text = helper_resource.read_text(errors="ignore")
+if not helper_resource_text.startswith("NEXUSHUB_HELPER_PLACEHOLDER"):
+    raise SystemExit("src-tauri/resources/nexushubd must stay as the placeholder text in git")
+helper_resource_kind = subprocess.check_output(["file", str(helper_resource)], text=True)
+if "Mach-O" in helper_resource_kind or "ELF" in helper_resource_kind:
+    raise SystemExit("src-tauri/resources/nexushubd must not be a bundled binary in git")
+tracked_helper = subprocess.run(
+    ["git", "-C", str(root), "ls-files", "--error-unmatch", "src-tauri/resources/nexushubd"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+if tracked_helper.returncode != 0:
+    raise SystemExit("src-tauri/resources/nexushubd placeholder must be tracked in git")
+helper_index = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "--stage", "src-tauri/resources/nexushubd"],
+    text=True,
+).strip()
+if not helper_index.startswith("100644 "):
+    raise SystemExit("src-tauri/resources/nexushubd placeholder must stay non-executable in git")
+if helper_resource.stat().st_mode & 0o111:
+    raise SystemExit("src-tauri/resources/nexushubd placeholder must stay non-executable in the working tree")
+root_package = json.loads((root / "package.json").read_text())
+if root_package.get("scripts", {}).get("tauri:build") != "bash scripts/package-darwin-arm64.sh":
+    raise SystemExit("package.json tauri:build must use scripts/package-darwin-arm64.sh so the macOS helper is bundled")
+tauri_config = (root / "src-tauri/tauri.conf.json").read_text()
+for name, needle in {
+    "Tauri frontendDist": '"frontendDist": "../webui/dist"',
+    "Tauri helper resource": '"resources/nexushubd": "nexushubd"',
+    "Tauri WebUI resource": '"../webui/dist": "webui"',
+}.items():
+    if needle not in tauri_config:
+        raise SystemExit(f"src-tauri/tauri.conf.json missing {name}: {needle}")
 package_checks = {
     "darwin host guard": 'OS="$(uname -s)"',
     "arm64 host guard": 'ARCH="$(uname -m)"',
@@ -1369,6 +1482,17 @@ package_checks = {
     "WebUI project path": 'WEBUI_DIR="${WEBUI_DIR:-${ROOT}/webui}"',
     "Tauri CLI path": 'TAURI_CLI="${TAURI_CLI:-${WEBUI_DIR}/node_modules/.bin/tauri}"',
     "WebUI Tauri build command": 'corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" build:tauri',
+    "helper build command": "cargo build --release --package nexushubd",
+    "helper resource copy": 'cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"',
+    "helper resource chmod": 'chmod 755 "${HELPER_RESOURCE}"',
+    "helper resource restore": "restore_helper_resource",
+    "helper resource backup": 'HELPER_RESOURCE_BACKUP="$(mktemp)"',
+    "helper placeholder post-cleanup assertion": "assert_helper_resource_placeholder",
+    "helper placeholder marker assertion": "^NEXUSHUB_HELPER_PLACEHOLDER",
+    "successful cleanup before exit": "trap - EXIT",
+    "app resource assertion": "assert_app_bundle_resources",
+    "WebUI bundle diff assertion": 'diff -qr "${WEBUI_DIR}/dist" "${bundled_webui}"',
+    "helper arm64 assertion": "Mach-O 64-bit executable arm64",
     "runs from repo root": 'cd "${ROOT}"',
     "Tauri build command": '"${TAURI_CLI}" build',
     "Tauri app/dmg bundles": "--bundles app,dmg",

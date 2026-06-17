@@ -45,10 +45,11 @@ macOS ARM64 Tauri App layout:
 ```text
 ~/Library/Application Support/NexusHub/config.toml
 ~/Library/Application Support/NexusHub/nexushub.sqlite
+~/Library/Application Support/NexusHub/bin/nexushubd
 ~/Library/Logs/NexusHub/
 ```
 
-On macOS, open NexusHub from the installed Tauri App bundle. Do not document or ship a separate browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry for macOS.
+On macOS, open NexusHub from the installed Tauri App bundle. The App bundle carries the local `nexushubd` helper and syncs it into `Application Support` on launch so Probe Bark tests and Hook installation use the same controlled helper path. Do not document or ship a separate browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry for macOS.
 
 ## Codex State
 
@@ -61,13 +62,13 @@ host_label = "43.155.235.227"
 
 `codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
 
-The public site exposes `/nexushub/` for the Linux WebUI and root `/api/` for WebUI requests through Nginx. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
+The public site exposes `/nexushub/` for the Linux WebUI and `/nexushub/api/` for NexusHub API requests through Nginx. The host-level `/api/` namespace is reserved for other services and must not be claimed by NexusHub. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
 
 ## Probe
 
 `[probe]` config controls the built-in Probe runtime. Probe settings are split between `config.toml` for non-sensitive values and encrypted `PanelDb.settings` entries for sensitive values such as the Bark `device_key`.
 
-Probe routes are canonical under `/api/probe/*`. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
+Probe routes are canonical under the daemon-local `/api/probe/*` namespace and are exposed publicly as `/nexushub/api/probe/*` on Linux. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
 
 The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushubd probe hook-stop`.
 
@@ -86,6 +87,7 @@ bash scripts/package-darwin-arm64.sh
 
 `scripts/package-linux.sh` intentionally refuses to produce the Linux release asset on non-Linux hosts. Use the GitHub Actions release workflow for the canonical Linux x86_64 tarball.
 `scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files.
+The script builds the release `nexushubd` helper, injects it into the Tauri resources for packaging, and restores the tracked `src-tauri/resources/nexushubd` placeholder before exit.
 `ALLOW_HOST_MISMATCH=1` is only for local smoke archives and is not a canonical release path.
 
 ## Server Install
@@ -117,6 +119,7 @@ After installing the DMG, validate the Tauri App directly:
 
 ```bash
 open -a NexusHub
+"$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
@@ -144,13 +147,17 @@ sudo systemctl is-active nexushub
 curl -fsS http://127.0.0.1:15742/healthz
 curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
+shasum -a 256 -c dist/nexushub-linux-x86_64.tar.gz.sha256
 ```
 
 macOS ARM64:
 
 ```bash
 open -a NexusHub
+"$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
+shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
+shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 
 Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.

@@ -247,6 +247,20 @@ function unavailableOptional(reason: string) {
   return { available: false, reason, error: reason };
 }
 
+function desktopApiRoute(
+  path: string | ((args?: RpcArgs) => string),
+  method?: string,
+  body?: (args?: RpcArgs) => unknown,
+): DesktopRoute {
+  return {
+    fallback: (args) => invokeDesktopApi({
+      path: typeof path === "function" ? path(args) : path,
+      method,
+      body: body?.(args)
+    })
+  };
+}
+
 function desktopPlatform(home: DesktopHome) {
   const overview = home.overview && typeof home.overview === "object"
     ? home.overview as Record<string, unknown>
@@ -367,8 +381,19 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       }
     },
     desktop: {
-      command: "desktop_thread_detail_command",
-      args: (args) => ({ id: argString(args, "id") })
+      command: "desktop_thread_blocks",
+      args: (args) => {
+        const options = (args?.options && typeof args.options === "object"
+          ? args.options
+          : {}) as Record<string, unknown>;
+        return {
+          request: {
+            id: argString(args, "id"),
+            limit: options.limit,
+            before: options.before
+          }
+        };
+      }
     }
   },
   getSystemStatus: {
@@ -421,7 +446,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getClaudeCodeOverview: {
     web: { path: "/api/providers/claude-code/overview" },
-    desktop: { fallback: () => unavailableOptional("Claude Code preview is not exposed by the current desktop Tauri commands") }
+    desktop: desktopApiRoute("/api/providers/claude-code/overview", "GET")
   },
   getPlatformOverview: {
     web: { path: "/api/platform" },
@@ -437,11 +462,11 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getProbeSettings: {
     web: { path: "/api/probe/settings" },
-    desktop: { fallback: () => unavailableOptional("Probe settings require a desktop Tauri settings command") }
+    desktop: desktopApiRoute("/api/probe/settings", "GET")
   },
   saveProbeSettings: {
     web: { path: "/api/probe/settings", method: "PATCH", csrfArg: "csrfToken", body: (args) => args?.settings ?? {} },
-    desktop: { unavailable: "Desktop Probe settings command is not implemented" }
+    desktop: desktopApiRoute("/api/probe/settings", "PATCH", (args) => args?.settings ?? {})
   },
   getProbeLogsDbStatus: {
     web: { path: "/api/probe/logs-db/status" },
@@ -449,7 +474,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getProbeEvents: {
     web: { path: (args) => `/api/probe/events?limit=${encodeURIComponent(String(args?.limit ?? 10))}` },
-    desktop: { fallback: () => unavailableOptional("Probe events require a desktop Tauri events command") }
+    desktop: desktopApiRoute((args) => `/api/probe/events?limit=${encodeURIComponent(String(args?.limit ?? 10))}`, "GET")
   },
   dryRunArchiveDelete: {
     web: { path: "/api/archives/delete/dry-run", method: "POST", csrfArg: "csrfToken" },
@@ -462,7 +487,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       csrfArg: "csrfToken",
       body: () => ({ confirmed: true })
     },
-    desktop: { unavailable: "Desktop archive delete execute command is not implemented" }
+    desktop: desktopApiRoute("/api/archives/delete/execute", "POST", () => ({ confirmed: true }))
   },
   dryRunHiddenThreadDelete: {
     web: { path: "/api/hidden-threads/delete/dry-run", method: "POST", csrfArg: "csrfToken" },
@@ -475,7 +500,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       csrfArg: "csrfToken",
       body: () => ({ confirmed: true })
     },
-    desktop: { unavailable: "Desktop hidden thread delete execute command is not implemented" }
+    desktop: desktopApiRoute("/api/hidden-threads/delete/execute", "POST", () => ({ confirmed: true }))
   },
   startUpdateJob: {
     web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken" },
@@ -483,55 +508,55 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   startProbeJob: {
     web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken", body: (args) => args?.body },
-    desktop: { unavailable: "Desktop Probe jobs command is not implemented" }
+    desktop: desktopApiRoute((args) => String(args?.path ?? ""), "POST", (args) => args?.body)
   },
   uploadFiles: {
     web: { path: "/api/uploads", method: "POST", csrfArg: "csrfToken", body: (args) => args?.form, skipContentType: true },
-    desktop: { unavailable: "Desktop upload command is not implemented" }
+    desktop: { command: "desktop_upload_files_command", args: (args) => ({ files: Array.isArray(args?.files) ? args.files : [] }) }
   },
   deleteUpload: {
     web: { path: (args) => `/api/uploads/${encodeURIComponent(argString(args, "id"))}`, method: "DELETE", csrfArg: "csrfToken" },
-    desktop: { unavailable: "Desktop upload delete command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/uploads/${encodeURIComponent(argString(args, "id"))}`, "DELETE")
   },
   createThread: {
     web: { path: "/api/threads", method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop thread creation command is not implemented" }
+    desktop: desktopApiRoute("/api/threads", "POST", (args) => args?.payload ?? {})
   },
   sendMessage: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/messages`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop send message command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/messages`, "POST", (args) => args?.payload ?? {})
   },
   steerThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/steer`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop steer command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/steer`, "POST", (args) => args?.payload ?? {})
   },
   listFollowUps: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups` },
-    desktop: { fallback: () => ({ items: [] }) }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, "GET")
   },
   enqueueFollowUp: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop follow-up command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, "POST", (args) => args?.payload ?? {})
   },
   cancelFollowUp: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups/${encodeURIComponent(argString(args, "followUpId"))}/cancel`, method: "POST", csrfArg: "csrfToken" },
-    desktop: { unavailable: "Desktop follow-up cancel command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups/${encodeURIComponent(argString(args, "followUpId"))}/cancel`, "POST")
   },
   stopThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/stop`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop stop command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/stop`, "POST", (args) => args?.payload ?? {})
   },
   archiveThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/archive`, method: "POST", csrfArg: "csrfToken" },
-    desktop: { unavailable: "Desktop archive command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/archive`, "POST")
   },
   restoreThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/restore`, method: "POST", csrfArg: "csrfToken" },
-    desktop: { unavailable: "Desktop restore command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/restore`, "POST")
   },
   renameThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/rename`, method: "POST", csrfArg: "csrfToken", body: (args) => ({ name: args?.name }) },
-    desktop: { unavailable: "Desktop rename command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/rename`, "POST", (args) => ({ name: args?.name }))
   },
   forkThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/fork`, method: "POST", csrfArg: "csrfToken" },
@@ -539,15 +564,15 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   answerElicitation: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/elicitation`, method: "POST", csrfArg: "csrfToken", body: (args) => ({ answers: args?.answers ?? {} }) },
-    desktop: { unavailable: "Desktop elicitation command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/elicitation`, "POST", (args) => ({ answers: args?.answers ?? {} }))
   },
   acceptPlan: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/accept`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop plan accept command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/accept`, "POST", (args) => args?.payload ?? {})
   },
   revisePlan: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/revise`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: { unavailable: "Desktop plan revise command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/revise`, "POST", (args) => args?.payload ?? {})
   },
   answerApproval: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/approval`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
@@ -605,11 +630,11 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   listJobs: {
     web: { path: "/api/jobs?limit=30" },
-    desktop: { fallback: () => [] }
+    desktop: desktopApiRoute("/api/jobs?limit=30", "GET")
   },
   getJob: {
     web: { path: (args) => `/api/jobs/${encodeURIComponent(argString(args, "id"))}` },
-    desktop: { unavailable: "Desktop job detail command is not implemented" }
+    desktop: desktopApiRoute((args) => `/api/jobs/${encodeURIComponent(argString(args, "id"))}`, "GET")
   }
 };
 

@@ -17,6 +17,7 @@ App-only native bundle; it does not add any macOS browser service.
 ```bash
 bash scripts/package-linux.sh
 sha256sum dist/nexushub-linux-x86_64.tar.gz
+sha256sum -c dist/nexushub-linux-x86_64.tar.gz.sha256
 ```
 
 The release workflow also produces:
@@ -53,7 +54,7 @@ host_label = "43.155.235.227"
 
 Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home and reads `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
 
-Nginx should proxy `/nexushub/` and root `/api/` to `127.0.0.1:15742`; do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
+Nginx should proxy `/nexushub/` to `127.0.0.1:15742` and `/nexushub/api/` to the daemon-local `/api/` routes. Do not proxy the host-level `/api/` namespace to NexusHub because Sub2API and other host services own it. Do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -70,9 +71,12 @@ Linux systemd and public HTTPS checks:
 ssh 43.155.235.227 'sudo -n systemctl is-active nexushub'
 ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
 curl -fsS https://661313.xyz/nexushub/
+curl -fsS https://661313.xyz/nexushub/api/public/settings
 curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/codex-cloud-panel/
 curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/api/sentinel/status
+curl -sS -i https://661313.xyz/api/v1/models | head -n 20
 ssh 43.155.235.227 'sudo -n /opt/nexushub/bin/nexushubd doctor'
+sha256sum -c dist/nexushub-linux-x86_64.tar.gz.sha256
 ```
 
 Then log in through Chrome 插件验收 and verify:
@@ -91,7 +95,7 @@ Then log in through Chrome 插件验收 and verify:
 - panel prune removes old NexusHub release-update backups while keeping the latest three;
 - retired local maintenance routes stay unavailable from the WebUI and HTTP API.
 
-Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`.
+Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`. The root `/api/v1/...` namespace must not return NexusHub's `{"error":"not found"}` response; it should continue to be handled by Sub2API.
 
 ## macOS ARM64 Boundary
 
@@ -99,15 +103,23 @@ macOS acceptance is app-local and separate from this cloud runbook:
 
 ```bash
 open -a NexusHub
+"$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
+shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
+shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 
 Expected macOS paths:
 
 ```text
 ~/Library/Application Support/NexusHub/
+~/Library/Application Support/NexusHub/bin/nexushubd
 ~/Library/Logs/NexusHub/
 ```
+
+The macOS App bundle carries the local `nexushubd` helper and syncs it into
+`Application Support` on launch. This helper is used for Probe Bark tests and
+Hook installation; macOS still does not expose a browser WebUI service.
 
 Do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel as a
 macOS entry point. The Tencent Cloud Linux WebUI remains available only at

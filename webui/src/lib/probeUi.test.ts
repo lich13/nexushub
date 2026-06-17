@@ -476,6 +476,28 @@ describe("Probe UI helpers", () => {
       enabled: true,
       device_key: "new-device-key"
     });
+    expect(buildProbeSettingsPayload(draft, unconfiguredSettings).notifications).toMatchObject({
+      device_key: "new-device-key"
+    });
+  });
+
+  test("uses the submitted Bark Device Key when the React draft is stale", () => {
+    const unconfiguredSettings = {
+      ...settings,
+      notifications: { ...settings.notifications, enabled: false, device_key_configured: false }
+    };
+    const staleDraft = buildProbeSettingsDraft(unconfiguredSettings);
+    staleDraft.notifications.device_key = "";
+
+    const payload = buildProbeSettingsPayload(staleDraft, unconfiguredSettings, " submitted-device-key ");
+
+    expect(payload.probe.notifications).toMatchObject({
+      enabled: true,
+      device_key: "submitted-device-key"
+    });
+    expect(payload.notifications).toMatchObject({
+      device_key: "submitted-device-key"
+    });
   });
 
   test("keeps blank numeric input as a blank draft value until validation blocks save", () => {

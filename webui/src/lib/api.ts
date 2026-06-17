@@ -504,12 +504,26 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
   return optionalApiFetch<ProbeSettings>("/api/probe/settings");
 }
 
+function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Partial<ProbeSettings> {
+  const nestedDeviceKey = settings.probe?.notifications?.device_key;
+  if (typeof nestedDeviceKey !== "string" || !nestedDeviceKey.trim()) {
+    return settings;
+  }
+  return {
+    ...settings,
+    notifications: {
+      ...settings.notifications,
+      device_key: nestedDeviceKey.trim()
+    }
+  };
+}
+
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
   return apiFetch<ProbeSettings>("/api/probe/settings", {
     method: "PATCH",
     csrfToken,
-    body: JSON.stringify(settings)
+    body: JSON.stringify(normalizeProbeSettingsSavePayload(settings))
   });
 }
 
@@ -894,6 +908,10 @@ export async function renameThread(threadId: string, name: string, csrfToken?: s
 }
 
 export async function forkThread(threadId: string, csrfToken?: string | null): Promise<BridgeActionResult> {
+  if (isDesktopRuntime()) {
+    void csrfToken;
+    throw new ApiError("macOS App 当前不支持 Fork 操作", 501);
+  }
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/fork`, { method: "POST", csrfToken });
 }
 
@@ -934,6 +952,11 @@ export async function answerApproval(
   payload: { turn_id?: string | null; item_id?: string | null; request_id?: string | null; decision: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
+  if (isDesktopRuntime()) {
+    void payload;
+    void csrfToken;
+    throw new ApiError("macOS App 当前不支持 Approval 操作", 501);
+  }
   return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/approval`, {
     method: "POST",
     csrfToken,

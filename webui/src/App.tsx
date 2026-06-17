@@ -166,24 +166,30 @@ const OPS_PANEL_TITLES = {
   jobs: "Job History"
 } as const;
 
-export function opsWorkspacePanelTitles(): string[] {
-  return [
+export function opsWorkspacePanelTitles(desktop = isDesktopRuntime()): string[] {
+  const titles = [
     OPS_PANEL_TITLES.system,
-    OPS_PANEL_TITLES.panelUpdate,
     OPS_PANEL_TITLES.archivedCleanup,
     OPS_PANEL_TITLES.hiddenCleanup,
     OPS_PANEL_TITLES.jobs
   ];
+  return desktop
+    ? titles
+    : [
+        OPS_PANEL_TITLES.system,
+        OPS_PANEL_TITLES.panelUpdate,
+        OPS_PANEL_TITLES.archivedCleanup,
+        OPS_PANEL_TITLES.hiddenCleanup,
+        OPS_PANEL_TITLES.jobs
+      ];
 }
 
-export function opsWorkspaceVisibleCopy(): string[] {
-  return [
-    ...opsWorkspacePanelTitles(),
+export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] {
+  const copy = [
+    ...opsWorkspacePanelTitles(desktop),
     "Hostname",
-    "Public endpoint",
-    "state DB",
-    "Codex Home",
-    "State DB",
+    ...(desktop ? [] : ["Public endpoint"]),
+    ...(desktop ? [] : ["state DB", "Codex Home", "State DB"]),
     "Hidden threads",
     "Sources",
     "Current",
@@ -207,6 +213,7 @@ export function opsWorkspaceVisibleCopy(): string[] {
     "sources",
     "rollout 删除结果"
   ];
+  return desktop ? copy.filter((item) => !["Current", "Latest", "Update", "Precheck", "Prune"].includes(item)) : copy;
 }
 
 const codexLocalCopy = {
@@ -219,12 +226,27 @@ export function desktopRuntimeVisibleCopy(): string[] {
     codexLocalCopy.threadListEyebrow,
     "Goal",
     "Plan Mode",
+    "线程工具",
     "名称与归档",
     "线程标题",
     "重命名",
     "归档",
-    "恢复"
+    "恢复",
+    "复制与路径",
+    "线程 ID",
+    "会话文件",
+    "复制 ID",
+    "复制文件路径",
+    "复制 codex resume+ID"
   ];
+}
+
+export function canShowForkAction(desktop = isDesktopRuntime()): boolean {
+  return !desktop;
+}
+
+export function approvalActionMode(desktop = isDesktopRuntime()): "interactive" | "unsupported" {
+  return desktop ? "unsupported" : "interactive";
 }
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
@@ -384,6 +406,14 @@ export const slashCommands: SlashCommand[] = [
   { command: "/title", description: "配置终端标题", usageHint: "/title" },
   { command: "/theme", description: "选择语法主题", usageHint: "/theme" }
 ];
+
+const desktopUnsupportedSlashCommands = new Set(["/fork"]);
+
+export function slashCommandsForRuntime(desktop = isDesktopRuntime()): SlashCommand[] {
+  return desktop
+    ? slashCommands.filter((item) => !desktopUnsupportedSlashCommands.has(item.command))
+    : slashCommands;
+}
 
 type TurnstileWidgetId = string;
 
@@ -1473,10 +1503,10 @@ function nearestActiveComposerQuery(draft: string, cursor: number): TriggerQuery
   return slash ?? plugin;
 }
 
-export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true): SlashCommand[] {
+export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop = isDesktopRuntime()): SlashCommand[] {
   const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
   if (!query) return [];
-  return slashCommands
+  return slashCommandsForRuntime(desktop)
     .filter((item) => item.command.toLowerCase().startsWith(query));
 }
 
@@ -1539,13 +1569,13 @@ export function applyPluginMentionSelection(
   return { value, cursor: query.start + insertion.length };
 }
 
-export function exactSlashCommandFromDraft(draft: string): string | null {
+export function exactSlashCommandFromDraft(draft: string, desktop = isDesktopRuntime()): string | null {
   const command = draft.trim().replace(/\s+/g, " ");
-  return slashCommands.some((item) => item.command === command) ? command : null;
+  return slashCommandsForRuntime(desktop).some((item) => item.command === command) ? command : null;
 }
 
-export function slashCommandForComposerSubmit(draft: string): string | null {
-  return exactSlashCommandFromDraft(draft);
+export function slashCommandForComposerSubmit(draft: string, desktop = isDesktopRuntime()): string | null {
+  return exactSlashCommandFromDraft(draft, desktop);
 }
 
 export function activeComposerMenuKind(draft: string, cursor: number, plugins?: PluginInfo[] | null): "slash" | "plugin" | null {
@@ -1651,9 +1681,9 @@ const unavailableSlashCommands: Record<string, string> = {
   "/statusline": "Web 端暂不配置 TUI 状态栏。"
 };
 
-export function slashCommandAction(command: string, hasThread = true): SlashCommandAction {
+export function slashCommandAction(command: string, hasThread = true, desktop = isDesktopRuntime()): SlashCommandAction {
   const normalized = command.trim().replace(/\s+/g, " ");
-  const known = slashCommands.find((item) => item.command === normalized);
+  const known = slashCommandsForRuntime(desktop).find((item) => item.command === normalized);
   if (!known) return { kind: "unknown", command: normalized, message: "未知 Slash 命令" };
   if (known.requiresThread && !hasThread) {
     return { kind: "requires_thread", command: normalized, message: "该命令需要已有线程，请先选择或创建线程。" };
@@ -1784,7 +1814,7 @@ export function threadSettingsMetricLabels(): string[] {
 }
 
 export function threadInspectorPanelTitles(): string[] {
-  return ["名称与归档", "Goal", "状态摘要"];
+  return ["名称与归档", "Goal", "复制与路径"];
 }
 
 export function threadResumeCommand(threadId?: string | null): string | null {
@@ -1794,6 +1824,10 @@ export function threadResumeCommand(threadId?: string | null): string | null {
 
 export function threadCopyId(threadId?: string | null): string | null {
   return threadId?.trim() || null;
+}
+
+export function threadRolloutPath(rolloutPath?: string | null): string | null {
+  return rolloutPath?.trim() || null;
 }
 
 export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ThreadSummary[] {
@@ -1813,6 +1847,26 @@ export function probeThreadsByStatus(status?: Pick<ProbeStatus, "running_threads
     running: status?.running_threads ?? [],
     replyNeeded: status?.reply_needed_threads ?? [],
     recoverable: status?.recoverable_threads ?? []
+  };
+}
+
+export function probeRunningCountValue(status?: Pick<ProbeStatus, "running_count" | "running_threads"> | null): string {
+  const backendCount = typeof status?.running_count === "number" ? Math.max(0, status.running_count) : 0;
+  const threadCount = status?.running_threads?.length ?? 0;
+  return String(backendCount > 0 ? backendCount : threadCount);
+}
+
+export function probeSettingsAfterBarkSave<T extends { notifications: { device_key_configured?: boolean } }>(
+  saved: T,
+  submittedDeviceKey?: string | null,
+): T {
+  if (!submittedDeviceKey?.trim()) return saved;
+  return {
+    ...saved,
+    notifications: {
+      ...saved.notifications,
+      device_key_configured: true
+    }
   };
 }
 
@@ -1977,6 +2031,7 @@ function SlashCommandTextarea({
   hasThread,
   plugins,
   pluginsUnavailable = false,
+  desktopRuntime = isDesktopRuntime(),
   onSlashCommand,
   onSubmitShortcut,
   disabled = false
@@ -1988,6 +2043,7 @@ function SlashCommandTextarea({
   hasThread: boolean;
   plugins?: PluginInfo[] | null;
   pluginsUnavailable?: boolean;
+  desktopRuntime?: boolean;
   onSlashCommand?: (command: string) => void;
   onSubmitShortcut?: (value?: string | null) => void;
   disabled?: boolean;
@@ -1999,7 +2055,7 @@ function SlashCommandTextarea({
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
   const signature = `${value}:${cursor}`;
   const menuKind = activeComposerMenuKind(value, cursor, plugins);
-  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread) : [];
+  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread, desktopRuntime) : [];
   const pluginSuggestions = menuKind === "plugin" ? pluginMentionSuggestions(value, cursor, plugins, pluginsUnavailable) : [];
   const suggestions = dismissedSignature === signature ? [] : menuKind === "plugin" ? pluginSuggestions : slashSuggestions;
   const open = suggestions.length > 0;
@@ -2035,12 +2091,12 @@ function SlashCommandTextarea({
   };
   const maybeRunExactSlashCommand = (currentValue = value) => {
     if (!onSlashCommand) return false;
-    const command = exactSlashCommandFromDraft(currentValue);
+    const command = exactSlashCommandFromDraft(currentValue, desktopRuntime);
     if (!command) return false;
     onSlashCommand(command);
     return true;
   };
-  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue) === command;
+  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue, desktopRuntime) === command;
 
   useEffect(() => {
     if (selected >= suggestions.length) {
@@ -2526,6 +2582,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   nextThreadAfterArchive: string | null;
 }) {
   const qc = useQueryClient();
+  const desktopRuntime = isDesktopRuntime();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2538,6 +2595,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
   const [renameValue, setRenameValue] = useState(detail.summary.title);
   const [renameDirty, setRenameDirty] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const updateMessageFollowState = useCallback(() => {
     shouldFollowMessagesRef.current = messageStreamRef.current
       ? shouldAutoFollowMessageStream(messageStreamRef.current)
@@ -2928,7 +2986,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });
   const executeSlashCommand = useCallback((command: string) => {
-    const action = slashCommandAction(command, Boolean(threadId));
+    const action = slashCommandAction(command, Boolean(threadId), desktopRuntime);
     switch (action.kind) {
       case "toggle_plan_mode":
         setDraft("");
@@ -2967,6 +3025,10 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         break;
       case "fork_thread":
         setDraft("");
+        if (!canShowForkAction(desktopRuntime)) {
+          messageStore.setFeedback(threadId, "macOS App 当前不支持 Fork 操作");
+          break;
+        }
         forkMutation.mutate({ threadId: summary.id });
         break;
       case "stop_thread":
@@ -3014,7 +3076,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         messageStore.setFeedback(threadId, action.message ?? "已执行");
         break;
     }
-  }, [archiveMutation, blocks, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
+  }, [archiveMutation, blocks, csrfToken, desktopRuntime, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
@@ -3033,7 +3095,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     if (attachments.uploadInProgress) return;
     const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
     if (currentDraft !== draft) setDraft(currentDraft);
-    const exactSlash = slashCommandForComposerSubmit(currentDraft);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft, desktopRuntime);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
@@ -3061,7 +3123,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         jobId: lastResult?.job_id ?? summary.active_job_id
       });
     }
-  }, [actionMode, attachments, draft, executeSlashCommand, followNextMessageUpdate, lastResult?.job_id, lastResult?.turn_id, payloadRunConfig, sendMutation, sendPending, steerMutation, steerPending, stopMutation, stopPending, summary.active_job_id, summary.active_turn_id, summary.id]);
+  }, [actionMode, attachments, desktopRuntime, draft, executeSlashCommand, followNextMessageUpdate, lastResult?.job_id, lastResult?.turn_id, payloadRunConfig, sendMutation, sendPending, steerMutation, steerPending, stopMutation, stopPending, summary.active_job_id, summary.active_turn_id, summary.id]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -3071,6 +3133,23 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const actionBusy = sendPending || stopPending || steerPending || attachments.uploadInProgress;
   const actionLabel = composerActionLabel(actionMode);
   const actionTitle = composerActionTitle(actionMode);
+  const inspectorPanels = (
+    <ThreadInspectorPanels
+      summary={summary}
+      csrfToken={csrfToken}
+      renameValue={renameValue}
+      setRenameValue={setRenameValue}
+      setRenameDirty={setRenameDirty}
+      renamePending={renamePending}
+      onRename={() => renameMutation.mutate({ threadId: summary.id, title: renameValue })}
+      archivePending={archivePending}
+      onArchive={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })}
+      forkPending={forkPending}
+      onFork={() => forkMutation.mutate({ threadId: summary.id })}
+      showFork={canShowForkAction(desktopRuntime)}
+      onFeedback={setActiveFeedback}
+    />
+  );
 
   return (
     <div className="conversation-shell">
@@ -3081,6 +3160,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           </div>
           <div className="header-actions">
             <StatusChip status={summary.status} />
+            <button className="secondary-button thread-tools-button" onClick={() => setToolsOpen(true)} type="button">
+              <SlidersHorizontal size={17} />线程工具
+            </button>
             <button
               className="icon-button"
               disabled={!canStop || stopPending}
@@ -3096,6 +3178,18 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           </div>
         </header>
 
+        {toolsOpen && (
+          <div className="thread-tools-backdrop" onClick={() => setToolsOpen(false)}>
+            <aside className="thread-tools-drawer" onClick={(event) => event.stopPropagation()}>
+              <div className="drawer-title-row">
+                <strong>线程工具</strong>
+                <button className="icon-button compact" onClick={() => setToolsOpen(false)} title="关闭线程工具" type="button"><X size={16} /></button>
+              </div>
+              {inspectorPanels}
+            </aside>
+          </div>
+        )}
+
         {summary.status === "ReplyNeeded" && (
           <div className="reply-banner">
             <TriangleAlert size={18} />
@@ -3106,7 +3200,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 
         {approvalBlock && (
           <div className="action-stack">
-            {approvalBlock && (
+            {approvalActionMode(desktopRuntime) === "unsupported" ? (
+              <UnsupportedApprovalCard block={approvalBlock} />
+            ) : (
               <ApprovalCard
                 key={`approval-${approvalBlock.id}`}
                 block={approvalBlock}
@@ -3188,6 +3284,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             hasThread
             plugins={pluginsQuery.data ?? []}
             pluginsUnavailable={pluginsQuery.isError}
+            desktopRuntime={desktopRuntime}
             onSlashCommand={executeSlashCommand}
             onSubmitShortcut={submitComposer}
           />
@@ -3216,7 +3313,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             />
           )}
           <div className="composer-actions">
-            <span>{lastResult ? actionMessage(lastResult) : ""}</span>
+            <span>{feedback || (lastResult ? actionMessage(lastResult) : "")}</span>
             <button className="primary-button composer-action-button" disabled={actionMode === "disabled" || actionBusy} title={actionTitle}>
               {actionMode === "stop" ? <Square size={17} /> : actionMode === "followup" ? <MessageSquare size={17} /> : <Send size={17} />}
               {actionLabel}
@@ -3226,46 +3323,89 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       </div>
 
       <aside className="conversation-inspector">
-        <Panel title="名称与归档" icon={<SlidersHorizontal size={18} />}>
-          <div className="copy-row">
-            <button
-              className="secondary-button"
-              onClick={() => {
-                const id = threadCopyId(summary.id);
-                if (!id) return;
-                navigator.clipboard?.writeText(id);
-                setActiveFeedback("已复制线程 ID");
-              }}
-              disabled={!threadCopyId(summary.id)}
-            >
-              <Copy size={17} />复制 ID
-            </button>
-            <button className="secondary-button" onClick={() => forkMutation.mutate({ threadId: summary.id })} disabled={forkPending}><GitFork size={17} />Fork</button>
-          </div>
-          <label className="field-label">线程标题<input value={renameValue} onChange={(event) => {
-            setRenameDirty(true);
-            setRenameValue(event.target.value);
-          }} /></label>
-          <div className="button-row">
-            <button className="secondary-button" onClick={() => renameMutation.mutate({ threadId: summary.id, title: renameValue })} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
-            <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })} disabled={archivePending}>
-              {summary.status === "Archived" ? <Undo2 size={17} /> : <Archive size={17} />}
-              {summary.status === "Archived" ? "恢复" : "归档"}
-            </button>
-          </div>
-        </Panel>
-
-        <ThreadGoalPanel threadId={summary.id} csrfToken={csrfToken} onFeedback={setActiveFeedback} />
-
-        <Panel title="状态摘要" icon={<HardDrive size={18} />}>
-          <Metric label="状态" value={threadStatusLabel(summary.status)} />
-          <Metric label="Turn" value={summary.active_turn_id || "无"} />
-          <Metric label="Job" value={summary.active_job_id || "无"} />
-          <Metric label="Model" value={runConfig.model || "default"} />
-          <Metric label="Reasoning" value={runConfig.reasoning || "default"} />
-        </Panel>
+        {inspectorPanels}
       </aside>
     </div>
+  );
+}
+
+function ThreadInspectorPanels({
+  summary,
+  csrfToken,
+  renameValue,
+  setRenameValue,
+  setRenameDirty,
+  renamePending,
+  onRename,
+  archivePending,
+  onArchive,
+  forkPending,
+  onFork,
+  showFork,
+  onFeedback
+}: {
+  summary: ThreadSummary;
+  csrfToken?: string | null;
+  renameValue: string;
+  setRenameValue: (value: string) => void;
+  setRenameDirty: (dirty: boolean) => void;
+  renamePending: boolean;
+  onRename: () => void;
+  archivePending: boolean;
+  onArchive: () => void;
+  forkPending: boolean;
+  onFork: () => void;
+  showFork: boolean;
+  onFeedback: (message: string | null) => void;
+}) {
+  const copyText = useCallback((text: string | null, message: string) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    onFeedback(message);
+  }, [onFeedback]);
+  const copyId = threadCopyId(summary.id);
+  const rolloutPath = threadRolloutPath(summary.rollout_path);
+  const resumeCommand = threadResumeCommand(summary.id);
+
+  return (
+    <>
+      <Panel title="名称与归档" icon={<SlidersHorizontal size={18} />}>
+        <label className="field-label">线程标题<input value={renameValue} onChange={(event) => {
+          setRenameDirty(true);
+          setRenameValue(event.target.value);
+        }} /></label>
+        <div className="button-row">
+          <button className="secondary-button" onClick={onRename} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
+          <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={onArchive} disabled={archivePending}>
+            {summary.status === "Archived" ? <Undo2 size={17} /> : <Archive size={17} />}
+            {summary.status === "Archived" ? "恢复" : "归档"}
+          </button>
+        </div>
+        {showFork && (
+          <button className="secondary-button full-width-action" onClick={onFork} disabled={forkPending}>
+            <GitFork size={17} />Fork
+          </button>
+        )}
+      </Panel>
+
+      <ThreadGoalPanel threadId={summary.id} csrfToken={csrfToken} onFeedback={onFeedback} />
+
+      <Panel title="复制与路径" icon={<Files size={18} />}>
+        <Metric label="线程 ID" value={copyId || "无"} wide />
+        <Metric label="会话文件" value={rolloutPath || "无会话文件"} wide />
+        <div className="copy-row">
+          <button className="secondary-button" onClick={() => copyText(copyId, "已复制线程 ID")} disabled={!copyId}>
+            <Copy size={17} />复制 ID
+          </button>
+          <button className="secondary-button" onClick={() => copyText(rolloutPath, "已复制文件路径")} disabled={!rolloutPath}>
+            <Copy size={17} />复制文件路径
+          </button>
+          <button className="secondary-button" onClick={() => copyText(resumeCommand, "已复制 resume 命令")} disabled={!resumeCommand}>
+            <TerminalSquare size={17} />复制 codex resume+ID
+          </button>
+        </div>
+      </Panel>
+    </>
   );
 }
 
@@ -3582,6 +3722,7 @@ export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" |
 
 function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean; csrfToken?: string | null; onCreated: (id: string) => void }) {
   const qc = useQueryClient();
+  const desktopRuntime = isDesktopRuntime();
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
@@ -3614,7 +3755,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     onError: (err: Error) => setFeedback(err.message)
   });
   const executeSlashCommand = (command: string) => {
-    const action = slashCommandAction(command, false);
+    const action = slashCommandAction(command, false, desktopRuntime);
     setDraft("");
     if (action.kind === "toggle_plan_mode") {
       setRunConfig((current) => ({
@@ -3633,7 +3774,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
   const submitComposer = (domValue?: string | null) => {
     const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
     if (currentDraft !== draft) setDraft(currentDraft);
-    const exactSlash = slashCommandForComposerSubmit(currentDraft);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft, desktopRuntime);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
@@ -3671,6 +3812,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           hasThread={false}
           plugins={pluginsQuery.data ?? []}
           pluginsUnavailable={pluginsQuery.isError}
+          desktopRuntime={desktopRuntime}
           onSlashCommand={executeSlashCommand}
           onSubmitShortcut={submitComposer}
         />
@@ -4083,6 +4225,19 @@ function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onD
   );
 }
 
+function UnsupportedApprovalCard({ block }: { block: MessageBlock }) {
+  return (
+    <article className="approval-card action-request">
+      <div className="message-meta">
+        <span>审批请求</span>
+        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
+      </div>
+      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
+      <div className="muted-row">macOS App 当前不支持在此面板处理权限审批，请在 Codex 原生会话中处理。</div>
+    </article>
+  );
+}
+
 function ClaudeWorkspace() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
   const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
@@ -4174,6 +4329,7 @@ function ClaudeWorkspace() {
 }
 
 function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+  const desktopRuntime = isDesktopRuntime();
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
   const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
@@ -4202,7 +4358,8 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
     probeEnabled,
     loading: status.isLoading,
     fetching: status.isFetching,
-    hasData: Boolean(data)
+    hasData: Boolean(data),
+    error: status.isError
   });
   const statusTone = availability.tone;
   const snapshotText = probeSnapshotStatusText(data, status.isFetching);
@@ -4225,19 +4382,20 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   });
   const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (submittedDeviceKey?: string) => {
       if (!draft) throw new Error("探针设置尚未载入");
       const errors = probeSettingsValidation(draft);
       if (errors.length) throw new Error(errors[0]);
-      return saveProbeSettings(buildProbeSettingsPayload(draft, currentSettings), csrfToken);
+      return saveProbeSettings(buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey), csrfToken);
     },
-    onSuccess: (saved) => {
-      if (!isProbeSettings(saved)) {
+    onSuccess: (saved, submittedDeviceKey) => {
+      const nextSettings = probeSettingsAfterBarkSave(saved, submittedDeviceKey ?? draft?.notifications.device_key);
+      if (!isProbeSettings(nextSettings)) {
         setSaveStatus({ tone: "error", message: "保存响应结构异常，已保留当前输入" });
         return;
       }
       setSaveStatus({ tone: "success", message: "设置已保存" });
-      setDraft(buildProbeSettingsDraft(saved));
+      setDraft(buildProbeSettingsDraft(nextSettings));
       qc.invalidateQueries({ queryKey: ["probe-settings"] });
       qc.invalidateQueries({ queryKey: ["probe-status"] });
       qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
@@ -4257,13 +4415,13 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
     <>
       <section className="probe-core-metrics" aria-label="探针核心指标">
         <Metric label="Codex APP" value={availability.metric} tone={statusTone} />
-        <Metric label="运行中" value={String(data?.running_count ?? 0)} tone={(data?.running_count ?? 0) > 0 ? "success" : undefined} />
+        <Metric label="运行中" value={probeRunningCountValue(data)} tone={Number(probeRunningCountValue(data)) > 0 ? "success" : undefined} />
         <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
         <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
         <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
-        <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} />
+        {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
         <Metric label="刷新" value={snapshotText} tone={snapshotTone} />
       </section>
       <section className="probe-control-grid" aria-label="探针线程状态">
@@ -4303,7 +4461,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
                 saveStatus={saveStatus}
                 saving={saveMutation.isPending}
                 testing={pendingProbeAction === "bark-test"}
-                onSave={() => saveMutation.mutate()}
+                onSave={(deviceKey) => saveMutation.mutate(deviceKey)}
                 onTest={() => probeJobMutation.mutate("bark-test")}
               />
             ) : (
@@ -4347,7 +4505,8 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
                   settings={currentSettings}
                   logsDb={logsDb}
                   configuredDeviceKey={barkConfigured}
-                  onSave={() => saveMutation.mutate()}
+                  desktopRuntime={desktopRuntime}
+                  onSave={() => saveMutation.mutate(undefined)}
                 />
               ) : (
                 <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
@@ -4416,8 +4575,9 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
 function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
+  const desktopRuntime = isDesktopRuntime();
   const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
-  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
+  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, enabled: !desktopRuntime, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
@@ -4472,22 +4632,24 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
         <div className="ops-status-overview">
           <Metric label="Hostname" value={hostname} />
-          <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />
-          <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />
-          <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} />
-          <Metric label="State DB" value={status.data?.state_db ?? "unknown"} />
+          {!desktopRuntime && <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />}
+          {!desktopRuntime && <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />}
+          {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} wide />}
+          {!desktopRuntime && <Metric label="State DB" value={status.data?.state_db ?? "unknown"} wide />}
           <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
           <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
         </div>
       </Panel>
-      <Panel title={OPS_PANEL_TITLES.panelUpdate} icon={<RefreshCw size={18} />}>
-        <PanelVersionMetrics version={version.data} />
-        <div className="button-row ops-action-row">
-          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
-          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "start" })}><Play size={17} />Update</button>
-          <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>
-        </div>
-      </Panel>
+      {!desktopRuntime && (
+        <Panel title={OPS_PANEL_TITLES.panelUpdate} icon={<RefreshCw size={18} />}>
+          <PanelVersionMetrics version={version.data} />
+          <div className="button-row ops-action-row">
+            <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
+            <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "start" })}><Play size={17} />Update</button>
+            <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>
+          </div>
+        </Panel>
+      )}
       <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
@@ -4629,8 +4791,8 @@ function Panel({ title, icon, children, className = "" }: { title: string; icon:
   return <section className={`panel ${className}`}><header>{icon}<strong>{title}</strong></header>{children}</section>;
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "success" | "warning" | "danger" }) {
-  return <div className="metric"><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
+function Metric({ label, value, tone, wide = false }: { label: string; value: string; tone?: "success" | "warning" | "danger"; wide?: boolean }) {
+  return <div className={wide ? "metric metric-wide" : "metric"}><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
 }
 
 type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
@@ -4680,16 +4842,19 @@ function ProbeBarkCard({
   saveStatus: ProbeSaveStatus;
   saving: boolean;
   testing: boolean;
-  onSave: () => void;
+  onSave: (deviceKey?: string) => void;
   onTest: () => void;
 }) {
+  const deviceKeyInputRef = useRef<HTMLInputElement>(null);
   const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
+  const handleSave = () => onSave(deviceKeyInputRef.current?.value ?? draft.notifications.device_key);
   return (
     <div className="probe-card-stack">
       <Metric label="配置状态" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
       <label className="field-label">
         Device Key
         <input
+          ref={deviceKeyInputRef}
           type="password"
           value={draft.notifications.device_key}
           placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key"}
@@ -4697,7 +4862,7 @@ function ProbeBarkCard({
         />
       </label>
       <div className="button-row">
-        <button className="primary-button" disabled={saving} onClick={onSave}><CheckCircle2 size={17} />保存</button>
+        <button className="primary-button" disabled={saving} onClick={handleSave}><CheckCircle2 size={17} />保存</button>
         <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
       </div>
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
@@ -4715,6 +4880,7 @@ function ProbeRuntimeSettingsCard({
   settings,
   logsDb,
   configuredDeviceKey,
+  desktopRuntime,
   onSave
 }: {
   draft: ProbeSettingsDraft;
@@ -4726,6 +4892,7 @@ function ProbeRuntimeSettingsCard({
   settings?: ProbeSettings;
   logsDb?: ProbeLogsDbStatus;
   configuredDeviceKey: boolean;
+  desktopRuntime: boolean;
   onSave: () => void;
 }) {
   const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
@@ -4741,12 +4908,12 @@ function ProbeRuntimeSettingsCard({
         <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
-        <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} />
-        <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} />
-        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} />
+        {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
+        <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />
+        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
       </div>
       <div className="form-grid compact-three">
-        <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>
+        {!desktopRuntime && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
         <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
         <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>
@@ -4794,7 +4961,7 @@ function ProbeLogsDbCard({
   return (
     <div className="probe-card-stack">
       <Metric label="状态" value={probeStateLabel(status)} tone={probeLogsDbTone(status)} />
-      <Metric label="数据库路径" value={logsDbPathStatusValue(logsDb)} />
+      <Metric label="数据库路径" value={logsDbPathStatusValue(logsDb)} wide />
       <Metric label="旧行数" value={probeLogDbNumber(logsDb, ["old_rows", "pending_cleanup_rows", "stale_rows", "would_delete_probe_events"])} />
       <Metric label="保留行数" value={probeLogDbNumber(logsDb, ["retained_rows", "retained_row_count", "total_rows", "row_count", "event_count"])} />
       <Metric label="DB 大小" value={probeLogDbSize(logsDb, ["database_size", "db_size_bytes", "database_size_bytes", "size_bytes"])} />
@@ -5609,7 +5776,15 @@ export function probeAvailabilityView(input: {
   loading?: boolean;
   fetching?: boolean;
   hasData?: boolean;
+  error?: boolean;
 }): { headline: string; metric: string; tone: "success" | "warning" | "danger" } {
+  if (!input.hasData && input.error) {
+    return {
+      headline: "Probe 快照读取失败",
+      metric: "读取失败",
+      tone: "danger"
+    };
+  }
   if (!input.hasData && (input.loading || input.fetching)) {
     return {
       headline: "正在读取 Probe 快照",

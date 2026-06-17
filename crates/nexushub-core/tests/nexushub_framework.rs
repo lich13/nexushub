@@ -245,6 +245,7 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     seed_codex_logs_db(&codex_home.join("logs_2.sqlite"), &[]);
     let mut config = Config::default();
     config.codex.home = codex_home;
+    config.paths.db_path = root.join("nexushub.sqlite");
     let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
         .status()
         .await
