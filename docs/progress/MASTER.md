@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.94 Ops cleanup and archive cleanup split<br>
-**Active Task**: `v0.1.94` removes obsolete Codex/Claude maintenance actions from the Ops page and API surface, splits archive cleanup into archived-thread and hidden-thread panels, and keeps rendered WebUI acceptance on Chrome 插件验收.
+**Active Phase**: v0.1.95 thread list scrolling and column alignment<br>
+**Active Task**: `v0.1.95` keeps the thread list constrained to the left column with an internal scroll region, aligns the thread list with the conversation and inspector columns, and keeps rendered WebUI acceptance on Chrome 插件验收.
 **Blockers**: None. Current rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA.
 
 ## Governance Status

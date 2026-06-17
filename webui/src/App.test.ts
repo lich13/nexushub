@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
+import appSource from "./App.tsx?raw";
 import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
@@ -102,6 +103,16 @@ type AppExports = typeof import("./App") & {
 
 async function loadApp(): Promise<AppExports> {
   return import("./App") as Promise<AppExports>;
+}
+
+function extractThreadListSource(): string {
+  const source = appSource;
+  const start = source.indexOf("function ThreadList(");
+  const end = source.indexOf("function useCodexRunOptions", start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
 }
 
 describe("conversation helpers", () => {
@@ -593,6 +604,31 @@ describe("conversation helpers", () => {
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: recent })).toBe(true);
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: archived })).toBe(false);
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: { ...recent, id: "thread-b" } })).toBe(false);
+  });
+
+  test("thread list keeps title, search, and filters outside the independent scroll container", () => {
+    const source = extractThreadListSource();
+    const titleIndex = source.indexOf('className="section-title thread-title-row"');
+    const searchIndex = source.indexOf('className="search-box"');
+    const filtersIndex = source.indexOf('className="segmented"');
+    const scrollIndex = source.indexOf('className="thread-scroll"');
+    const scrollEndIndex = source.indexOf("\n      </div>\n    </div>\n  );", scrollIndex);
+    const scrollBody = source.slice(scrollIndex, scrollEndIndex);
+
+    expect(source.match(/className="thread-scroll"/g)).toHaveLength(1);
+    expect(titleIndex).toBeGreaterThanOrEqual(0);
+    expect(searchIndex).toBeGreaterThan(titleIndex);
+    expect(filtersIndex).toBeGreaterThan(searchIndex);
+    expect(scrollIndex).toBeGreaterThan(filtersIndex);
+    expect(scrollEndIndex).toBeGreaterThan(scrollIndex);
+
+    expect(scrollBody).toContain("{threads.map((thread) => {");
+    expect(scrollBody).toContain("className={`thread-item ");
+    expect(scrollBody).toContain("没有匹配线程");
+    expect(scrollBody).not.toContain('className="section-title thread-title-row"');
+    expect(scrollBody).not.toContain('className="search-box"');
+    expect(scrollBody).not.toContain('className="segmented"');
+    expect(scrollBody).not.toContain("statusTabs.map");
   });
 
   test("visible Codex copy avoids legacy transport labels", async () => {
