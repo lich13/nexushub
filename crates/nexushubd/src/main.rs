@@ -1811,9 +1811,8 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     spawn_probe_thread_scan(state.clone());
     api::spawn_probe_status_refresh(state.clone());
     let webui_dir = config.paths.webui_dir.clone();
-    let app = api::router(state)
-        .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
-        .layer(TraceLayer::new_for_http());
+    let app =
+        with_webui_static_routes(api::router(state), webui_dir).layer(TraceLayer::new_for_http());
     let addr: SocketAddr = config.server.listen;
     let listener = TcpListener::bind(addr)
         .await
@@ -1825,6 +1824,14 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+fn with_webui_static_routes(app: axum::Router, webui_dir: PathBuf) -> axum::Router {
+    app.nest_service(
+        "/nexushub",
+        ServeDir::new(webui_dir.clone()).append_index_html_on_directories(true),
+    )
+    .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
 }
 
 fn open_panel_db(config: &Config) -> Result<PanelDb> {
@@ -2241,9 +2248,64 @@ async fn probe_logs_db_compaction_due(db: &PanelDb, config: &Config) -> Result<b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        routing::{any, get},
+    };
     use rusqlite::{params, Connection};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::SystemTime;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn webui_static_routes_serve_root_subpath_assets_and_preserve_api_routes() {
+        let dir = temp_test_dir("nexushub-webui-static");
+        fs::create_dir_all(dir.join("assets")).unwrap();
+        fs::write(dir.join("index.html"), "<html>NexusHub index</html>").unwrap();
+        fs::write(dir.join("assets/app.js"), "console.log('nexushub asset');").unwrap();
+        let app = with_webui_static_routes(
+            axum::Router::new()
+                .route("/healthz", get(|| async { "health-ok" }))
+                .route(
+                    "/api/*path",
+                    any(|| async { (StatusCode::NOT_FOUND, "api-not-found") }),
+                ),
+            dir.clone(),
+        );
+
+        let (status, body) = static_route_response(app.clone(), "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "<html>NexusHub index</html>");
+
+        let (status, body) = static_route_response(app.clone(), "/nexushub/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "<html>NexusHub index</html>");
+
+        let (status, body) = static_route_response(app.clone(), "/nexushub/assets/app.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "console.log('nexushub asset');");
+
+        let (status, body) = static_route_response(app.clone(), "/healthz").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "health-ok");
+
+        let (status, body) = static_route_response(app, "/api/no-such-route").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "api-not-found");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn static_route_response(app: axum::Router, uri: &str) -> (StatusCode, String) {
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
 
     #[tokio::test]
     async fn unsupported_probe_cli_actions_do_not_report_fake_success() {

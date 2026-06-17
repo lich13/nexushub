@@ -3,9 +3,12 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 DIST="${ROOT}/dist"
-VERSION="${VERSION:-0.1.96}"
-TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
-DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
+
+cargo_package_version() {
+  cargo pkgid --package nexushubd --manifest-path "${ROOT}/Cargo.toml" |
+    awk -F# '{print $NF}'
+}
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -16,6 +19,10 @@ if [[ "${ALLOW_HOST_MISMATCH:-0}" != "1" ]]; then
     exit 1
   fi
 fi
+
+VERSION="${VERSION:-$(cargo_package_version)}"
+TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
+DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
 
 mkdir -p "${DIST}"
 

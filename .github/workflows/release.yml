@@ -43,8 +43,8 @@ jobs:
           path: |
             dist/nexushub-darwin-arm64.tar.gz
             dist/nexushub-darwin-arm64.tar.gz.sha256
-            dist/NexusHub-0.1.96-darwin-arm64.dmg
-            dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256
+            dist/NexusHub-*-darwin-arm64.dmg
+            dist/NexusHub-*-darwin-arm64.dmg.sha256
 
   release:
     runs-on: ubuntu-24.04
@@ -65,5 +65,5 @@ jobs:
             dist/nexushub-linux-x86_64.tar.gz.sha256
             dist/nexushub-darwin-arm64.tar.gz
             dist/nexushub-darwin-arm64.tar.gz.sha256
-            dist/NexusHub-0.1.96-darwin-arm64.dmg
-            dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256
+            dist/NexusHub-*-darwin-arm64.dmg
+            dist/NexusHub-*-darwin-arm64.dmg.sha256

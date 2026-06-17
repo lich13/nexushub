@@ -120,8 +120,8 @@ checks = {
     "runbook Linux systemd": ("docs/cloud-deploy-runbook.md", "systemd unit `nexushub`"),
     "runbook Linux runtime": ("docs/cloud-deploy-runbook.md", "/opt/nexushub"),
     "runbook macOS boundary": ("docs/cloud-deploy-runbook.md", "macOS ARM64 Boundary"),
-    "master v0.1.96": ("docs/progress/MASTER.md", "v0.1.96"),
-    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.96 Acceptance Matrix"),
+    "master v0.1.97": ("docs/progress/MASTER.md", "v0.1.97"),
+    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.97 Acceptance Matrix"),
     "tunnel local origin": ("docs/cloudflare-tunnel.md", "http://127.0.0.1:15742"),
     "tunnel quick temporary": ("docs/cloudflare-tunnel.md", "Quick Tunnel is only for temporary preview"),
     "tunnel Access recommended": ("docs/cloudflare-tunnel.md", "Cloudflare Access is recommended"),
@@ -131,7 +131,7 @@ checks = {
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
-    raise SystemExit("v0.1.96 docs/static acceptance missing: " + ", ".join(missing))
+    raise SystemExit("v0.1.97 docs/static acceptance missing: " + ", ".join(missing))
 
 for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/cloudflare-tunnel.md"]:
     text = texts[doc_name]
@@ -155,7 +155,7 @@ for doc_name, text in texts.items():
 if "--token" in texts["deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub"] and "token arguments are intentionally unsupported" not in texts["deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub"]:
     raise SystemExit("cloudflared helper must not support token installation")
 
-print("v0.1.96 macOS/Linux/Cloudflare Tunnel docs: ok")
+print("v0.1.97 macOS/Linux/Cloudflare Tunnel docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -1242,8 +1242,8 @@ workflow_checks = {
     "Linux sha256 asset": "dist/nexushub-linux-x86_64.tar.gz.sha256",
     "macOS tarball asset": "dist/nexushub-darwin-arm64.tar.gz",
     "macOS tarball sha256 asset": "dist/nexushub-darwin-arm64.tar.gz.sha256",
-    "macOS DMG asset": "dist/NexusHub-0.1.96-darwin-arm64.dmg",
-    "macOS DMG sha256 asset": "dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256",
+    "macOS DMG asset glob": "dist/NexusHub-*-darwin-arm64.dmg",
+    "macOS DMG sha256 asset glob": "dist/NexusHub-*-darwin-arm64.dmg.sha256",
 }
 missing = [name for name, needle in workflow_checks.items() if needle not in workflow]
 if missing:
@@ -1252,6 +1252,8 @@ if workflow.count("softprops/action-gh-release@v2") != 1:
     raise SystemExit("release workflow should upload all release assets in one release step")
 if "needs:" not in workflow or "linux" not in workflow or "macos-darwin-arm64" not in workflow:
     raise SystemExit("release workflow should collect Linux and macOS artifacts before release upload")
+if re.search(r"NexusHub-\d+\.\d+\.\d+-darwin-arm64\.dmg", workflow):
+    raise SystemExit("release workflow must not hard-code a concrete macOS DMG version")
 
 package = package_path.read_text()
 package_checks = {
@@ -1259,7 +1261,9 @@ package_checks = {
     "arm64 host guard": 'ARCH="$(uname -m)"',
     "darwin asset name": 'nexushub-darwin-arm64.tar.gz',
     "dmg asset name": 'NexusHub-${VERSION}-darwin-arm64.dmg',
-    "version default": 'VERSION="${VERSION:-0.1.96}"',
+    "cargo version fallback": 'cargo pkgid --package nexushubd',
+    "cargo version parser": "awk -F# '{print $NF}'",
+    "version default": 'VERSION="${VERSION:-$(cargo_package_version)}"',
     "WebUI base": 'VITE_BASE="${VITE_BASE:-/nexushub/}"',
     "build nexushubd": "cargo build --release --package nexushubd",
     "copies binary": 'cp "${ROOT}/target/release/nexushubd"',
