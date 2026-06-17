@@ -2,6 +2,12 @@
 
 Target host: `43.155.235.227`
 
+This runbook is for the Tencent Cloud Linux deployment only. It keeps the public
+service at `https://661313.xyz/nexushub/`, the systemd unit `nexushub`, and the
+runtime under `/opt/nexushub`. Do not mix these Linux paths with the macOS ARM64
+DMG layout, LaunchAgent, or optional Cloudflare Tunnel entry documented in
+[`cloudflare-tunnel.md`](cloudflare-tunnel.md).
+
 ## Build Release Artifact
 
 ```bash
@@ -43,6 +49,8 @@ ssh 43.155.235.227 "sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' /opt/ne
 
 ## Verification
 
+Linux systemd and public HTTPS checks:
+
 ```bash
 ssh 43.155.235.227 'sudo -n systemctl is-active nexushub'
 ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
@@ -69,6 +77,32 @@ Then log in through Chrome 插件验收 and verify:
 - retired local maintenance routes stay unavailable from the WebUI and HTTP API.
 
 Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`.
+
+## macOS ARM64 Boundary
+
+macOS acceptance is local and separate from this cloud runbook:
+
+```bash
+curl -fsS http://127.0.0.1:15742/healthz
+open http://127.0.0.1:15742/nexushub/
+launchctl print gui/$(id -u)/com.nexushub.nexushub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
+```
+
+Expected macOS paths:
+
+```text
+~/Library/Application Support/NexusHub/
+~/Library/Logs/NexusHub/
+~/Library/LaunchAgents/com.nexushub.nexushub.plist
+```
+
+Cloudflare Tunnel is optional for either platform. A production tunnel requires
+a Cloudflare-owned zone/hostname and maps that hostname to
+`http://127.0.0.1:15742`. Quick Tunnel is only for temporary preview and is not a
+production service. Keep tunnel tokens, URL tokens, credentials JSON, API tokens,
+and generated preview URLs out of the repository, logs, release assets, and
+WebUI.
 
 ## Cleanup
 

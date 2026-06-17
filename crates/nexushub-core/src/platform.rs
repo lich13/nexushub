@@ -18,6 +18,7 @@ pub struct PlatformPaths {
     pub log_dir: PathBuf,
     pub service_name: String,
     pub service_kind: String,
+    pub service_file: Option<PathBuf>,
 }
 
 impl PlatformPaths {
@@ -37,6 +38,11 @@ impl PlatformPaths {
     }
 
     pub fn for_kind(kind: PlatformKind) -> Self {
+        Self::for_kind_with_home(kind, dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")))
+    }
+
+    pub fn for_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
         match kind {
             PlatformKind::Linux => Self {
                 kind,
@@ -46,15 +52,17 @@ impl PlatformPaths {
                 log_dir: PathBuf::from("/opt/nexushub/logs"),
                 service_name: "nexushub".to_string(),
                 service_kind: "systemd".to_string(),
+                service_file: Some(PathBuf::from("/etc/systemd/system/nexushub.service")),
             },
             PlatformKind::Macos => Self {
                 kind,
-                data_dir: PathBuf::from("~/Library/Application Support/NexusHub"),
-                config_file: PathBuf::from("~/Library/Application Support/NexusHub/config.toml"),
-                webui_dir: PathBuf::from("~/Library/Application Support/NexusHub/webui"),
-                log_dir: PathBuf::from("~/Library/Logs/NexusHub"),
-                service_name: "local.nexushub".to_string(),
+                data_dir: home.join("Library/Application Support/NexusHub"),
+                config_file: home.join("Library/Application Support/NexusHub/config.toml"),
+                webui_dir: home.join("Library/Application Support/NexusHub/webui"),
+                log_dir: home.join("Library/Logs/NexusHub"),
+                service_name: "com.nexushub.nexushub".to_string(),
                 service_kind: "launchd".to_string(),
+                service_file: Some(home.join("Library/LaunchAgents/com.nexushub.nexushub.plist")),
             },
             PlatformKind::Windows => Self {
                 kind,
@@ -64,7 +72,16 @@ impl PlatformPaths {
                 log_dir: PathBuf::from(r"%ProgramData%\NexusHub\logs"),
                 service_name: "NexusHub".to_string(),
                 service_kind: "windows_service".to_string(),
+                service_file: None,
             },
         }
+    }
+
+    pub fn daemon_binary(&self) -> PathBuf {
+        let binary = match self.kind {
+            PlatformKind::Windows => "nexushubd.exe",
+            PlatformKind::Linux | PlatformKind::Macos => "nexushubd",
+        };
+        self.data_dir.join("bin").join(binary)
     }
 }

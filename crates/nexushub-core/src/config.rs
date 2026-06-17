@@ -1,4 +1,7 @@
-use crate::{crypto::SecretBox, platform::PlatformPaths};
+use crate::{
+    crypto::SecretBox,
+    platform::{PlatformKind, PlatformPaths},
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -417,15 +420,73 @@ fn default_panel_update_command() -> String {
 }
 
 fn default_panel_precheck_command() -> String {
-    format!(
-        "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"
-    )
+    default_panel_precheck_command_for_platform(&PlatformPaths::current())
 }
 
-impl Default for Config {
-    fn default() -> Self {
+fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
+    match platform.kind {
+        PlatformKind::Linux => format!(
+            "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"
+        ),
+        PlatformKind::Macos => format!(
+            "launchctl print gui/$(id -u)/{} >/dev/null && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz",
+            platform.service_name
+        ),
+        PlatformKind::Windows => format!("curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"),
+    }
+}
+
+fn default_doctor_command_for_platform(platform: &PlatformPaths) -> String {
+    match platform.kind {
+        PlatformKind::Linux => "/home/ubuntu/codex-admin/bin/codex-cloud-doctor".to_string(),
+        _ => format!(
+            "{} --config {} doctor",
+            shell_quote(&platform.daemon_binary().display().to_string()),
+            shell_quote(&platform.config_file.display().to_string())
+        ),
+    }
+}
+
+fn default_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
+    match platform.kind {
+        PlatformKind::Linux => PathBuf::from("/home/ubuntu/codex-workspace"),
+        PlatformKind::Macos => home.join("nexushub-workspace"),
+        PlatformKind::Windows => PathBuf::from(r"%USERPROFILE%\NexusHub\workspace"),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn current_home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+}
+
+fn current_platform_kind() -> PlatformKind {
+    #[cfg(target_os = "macos")]
+    {
+        PlatformKind::Macos
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PlatformKind::Windows
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        PlatformKind::Linux
+    }
+}
+
+impl Config {
+    pub fn for_platform_kind(kind: PlatformKind) -> Self {
+        Self::for_platform_kind_with_home(kind, current_home_dir())
+    }
+
+    pub fn for_platform_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
         let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
-        let platform = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
+        let platform = PlatformPaths::for_kind_with_home(kind, &home);
         Self {
             server: ServerConfig {
                 listen,
@@ -434,7 +495,7 @@ impl Default for Config {
             },
             codex: CodexConfig {
                 home: default_codex_home(),
-                workspace: PathBuf::from("/home/ubuntu/codex-workspace"),
+                workspace: default_workspace_for_platform(&platform, &home),
                 app_server_service: String::new(),
                 app_server_socket: None,
                 bridge_enabled: false,
@@ -461,11 +522,21 @@ impl Default for Config {
                 precheck_command: default_precheck_command(),
                 update_command: default_update_command(),
                 prune_command: default_prune_command(),
-                doctor_command: "/home/ubuntu/codex-admin/bin/codex-cloud-doctor".to_string(),
+                doctor_command: default_doctor_command_for_platform(&platform),
                 panel_update_command: default_panel_update_command(),
-                panel_precheck_command: default_panel_precheck_command(),
+                panel_precheck_command: default_panel_precheck_command_for_platform(&platform),
             },
         }
+    }
+
+    pub fn current_default_config_path() -> PathBuf {
+        PlatformPaths::current().config_file
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::for_platform_kind(current_platform_kind())
     }
 }
 

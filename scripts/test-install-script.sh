@@ -4,6 +4,12 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 INSTALL_SH="${ROOT}/deploy/nexushub/install.sh"
 UPDATE_SH="${ROOT}/deploy/nexushub/update.sh"
+MACOS_INSTALL_SH="${ROOT}/deploy/nexushub/macos/install.sh"
+MACOS_UNINSTALL_SH="${ROOT}/deploy/nexushub/macos/uninstall.sh"
+MACOS_PLIST="${ROOT}/deploy/nexushub/macos/com.nexushub.nexushub.plist"
+MACOS_README="${ROOT}/deploy/nexushub/macos/README.md"
+MACOS_PACKAGE_SH="${ROOT}/scripts/package-darwin-arm64.sh"
+RELEASE_WORKFLOW="${ROOT}/.github/workflows/release.yml"
 DEPLOY_CLOUD_SH="${ROOT}/scripts/deploy-cloud.sh"
 CONFIG_EXAMPLE="${ROOT}/deploy/nexushub/config.example.toml"
 NGINX_LOCATION="${ROOT}/deploy/nexushub/nginx-location.conf"
@@ -11,6 +17,8 @@ SYSTEMD_SERVICE="${ROOT}/deploy/nexushub/systemd.service"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub/nexushub-codex-prune"
+CLOUDFLARE_TUNNEL_DOC="${ROOT}/docs/cloudflare-tunnel.md"
+CLOUDFLARED_NEXUSHUB="${ROOT}/deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub"
 
 python3 - "${CONFIG_EXAMPLE}" "${NGINX_LOCATION}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" <<'PY'
 from pathlib import Path
@@ -88,6 +96,66 @@ if "codex-app-server-root.service" in systemd:
     raise SystemExit("systemd unit must not require codex-app-server-root.service")
 
 print("Codex home auto-discovery deploy templates: ok")
+PY
+
+python3 - "${ROOT}/README.md" "${ROOT}/docs/cloud-deploy-runbook.md" "${ROOT}/docs/progress/MASTER.md" "${CLOUDFLARE_TUNNEL_DOC}" "${CLOUDFLARED_NEXUSHUB}" <<'PY'
+from pathlib import Path
+import sys
+
+readme, runbook, master, tunnel_doc, helper = [Path(arg) for arg in sys.argv[1:]]
+texts = {
+    "README.md": readme.read_text(),
+    "docs/cloud-deploy-runbook.md": runbook.read_text(),
+    "docs/progress/MASTER.md": master.read_text(),
+    "docs/cloudflare-tunnel.md": tunnel_doc.read_text(),
+    "deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub": helper.read_text(),
+}
+
+checks = {
+    "README macOS local URL": ("README.md", "http://127.0.0.1:15742/nexushub/"),
+    "README macOS LaunchAgent": ("README.md", "launchctl print gui/$(id -u)/com.nexushub.nexushub"),
+    "README macOS logs": ("README.md", "~/Library/Logs/NexusHub"),
+    "README Linux public URL": ("README.md", "https://661313.xyz/nexushub/"),
+    "README Cloudflare Tunnel doc link": ("README.md", "docs/cloudflare-tunnel.md"),
+    "runbook Linux systemd": ("docs/cloud-deploy-runbook.md", "systemd unit `nexushub`"),
+    "runbook Linux runtime": ("docs/cloud-deploy-runbook.md", "/opt/nexushub"),
+    "runbook macOS boundary": ("docs/cloud-deploy-runbook.md", "macOS ARM64 Boundary"),
+    "master v0.1.96": ("docs/progress/MASTER.md", "v0.1.96"),
+    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.96 Acceptance Matrix"),
+    "tunnel local origin": ("docs/cloudflare-tunnel.md", "http://127.0.0.1:15742"),
+    "tunnel quick temporary": ("docs/cloudflare-tunnel.md", "Quick Tunnel is only for temporary preview"),
+    "tunnel Access recommended": ("docs/cloudflare-tunnel.md", "Cloudflare Access is recommended"),
+    "tunnel no token storage": ("docs/cloudflare-tunnel.md", "Do not commit tunnel tokens"),
+    "helper token unsupported": ("deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub", "token arguments are intentionally unsupported"),
+    "helper no Cloudflare resources": ("deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub", "does not create Cloudflare accounts"),
+}
+missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
+if missing:
+    raise SystemExit("v0.1.96 docs/static acceptance missing: " + ", ".join(missing))
+
+for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/cloudflare-tunnel.md"]:
+    text = texts[doc_name]
+    if "https://661313.xyz/nexushub/" not in text:
+        raise SystemExit(f"{doc_name} must preserve Tencent Cloud Linux public URL")
+    if "http://127.0.0.1:15742" not in text:
+        raise SystemExit(f"{doc_name} must preserve local loopback acceptance")
+
+for doc_name, text in texts.items():
+    forbidden = [
+        "eyJhIjoi",
+        "trycloudflare.com/",
+        "CF_API_TOKEN=",
+        "TUNNEL_TOKEN=",
+        "cloudflared tunnel route dns --token",
+    ]
+    for needle in forbidden:
+        if needle in text:
+            raise SystemExit(f"{doc_name} must not contain live Cloudflare tokens or generated tunnel URLs: {needle}")
+
+if "--token" in texts["deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub"] and "token arguments are intentionally unsupported" not in texts["deploy/nexushub/cloudflare-tunnel/cloudflared-nexushub"]:
+    raise SystemExit("cloudflared helper must not support token installation")
+
+print("v0.1.96 macOS/Linux/Cloudflare Tunnel docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -1143,3 +1211,249 @@ grep -qx 'git tag sha256' "${SHA256_PATH}"
 SH
 
 echo "update release download resolves latest from git tags when GitHub API is unavailable: ok"
+
+python3 - "${RELEASE_WORKFLOW}" "${MACOS_PACKAGE_SH}" "${MACOS_INSTALL_SH}" "${MACOS_UNINSTALL_SH}" "${MACOS_PLIST}" "${MACOS_README}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+workflow_path, package_path, install_path, uninstall_path, plist_path, readme_path = [
+    Path(arg) for arg in sys.argv[1:]
+]
+
+missing_paths = [
+    path
+    for path in [workflow_path, package_path, install_path, uninstall_path, plist_path, readme_path]
+    if not path.exists()
+]
+if missing_paths:
+    raise SystemExit(
+        "macOS release packaging files missing: "
+        + ", ".join(str(path) for path in missing_paths)
+    )
+
+workflow = workflow_path.read_text()
+workflow_checks = {
+    "linux job stays on ubuntu-24.04": "runs-on: ubuntu-24.04",
+    "macOS release job runs on macos-14": "runs-on: macos-14",
+    "macOS package script": "scripts/package-darwin-arm64.sh",
+    "GitHub release action": "softprops/action-gh-release@v2",
+    "Linux tarball asset": "dist/nexushub-linux-x86_64.tar.gz",
+    "Linux sha256 asset": "dist/nexushub-linux-x86_64.tar.gz.sha256",
+    "macOS tarball asset": "dist/nexushub-darwin-arm64.tar.gz",
+    "macOS tarball sha256 asset": "dist/nexushub-darwin-arm64.tar.gz.sha256",
+    "macOS DMG asset": "dist/NexusHub-0.1.96-darwin-arm64.dmg",
+    "macOS DMG sha256 asset": "dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256",
+}
+missing = [name for name, needle in workflow_checks.items() if needle not in workflow]
+if missing:
+    raise SystemExit("release workflow missing macOS/Linux asset behavior: " + ", ".join(missing))
+if workflow.count("softprops/action-gh-release@v2") != 1:
+    raise SystemExit("release workflow should upload all release assets in one release step")
+if "needs:" not in workflow or "linux" not in workflow or "macos-darwin-arm64" not in workflow:
+    raise SystemExit("release workflow should collect Linux and macOS artifacts before release upload")
+
+package = package_path.read_text()
+package_checks = {
+    "darwin host guard": 'OS="$(uname -s)"',
+    "arm64 host guard": 'ARCH="$(uname -m)"',
+    "darwin asset name": 'nexushub-darwin-arm64.tar.gz',
+    "dmg asset name": 'NexusHub-${VERSION}-darwin-arm64.dmg',
+    "version default": 'VERSION="${VERSION:-0.1.96}"',
+    "WebUI base": 'VITE_BASE="${VITE_BASE:-/nexushub/}"',
+    "build nexushubd": "cargo build --release --package nexushubd",
+    "copies binary": 'cp "${ROOT}/target/release/nexushubd"',
+    "copies webui dist": 'cp -a "${ROOT}/webui/dist/."',
+    "copies install entry": 'install.sh',
+    "copies uninstall entry": 'uninstall.sh',
+    "copies LaunchAgent plist": "com.nexushub.nexushub.plist",
+    "copies README": "README.md",
+    "creates DMG install command": "Install.command",
+    "creates DMG uninstall command": "Uninstall.command",
+    "creates app launcher": "NexusHub.app",
+    "app opens local WebUI": 'open "http://127.0.0.1:15742/nexushub/"',
+    "tarball generation": 'tar -C "${TMP}" -czf',
+    "DMG generation": "hdiutil create",
+    "macOS checksum": "shasum -a 256",
+    "optional signing hook": "MACOS_CODESIGN_IDENTITY",
+}
+missing = [name for name, needle in package_checks.items() if needle not in package]
+if missing:
+    raise SystemExit("package-darwin-arm64.sh missing expected behavior: " + ", ".join(missing))
+
+install = install_path.read_text()
+install_checks = {
+    "user app dir": 'APP_DIR="${HOME}/Library/Application Support/NexusHub"',
+    "user logs dir": 'LOG_DIR="${HOME}/Library/Logs/NexusHub"',
+    "user launch agents dir": 'LAUNCH_AGENTS_DIR="${HOME}/Library/LaunchAgents"',
+    "launch agent path": 'com.nexushub.nexushub.plist',
+    "binary install": 'bin/nexushubd',
+    "webui install": 'webui',
+    "config path": 'config.toml',
+    "env path": 'NEXUSHUB_SECRET_KEY',
+    "loopback listen": 'listen = "127.0.0.1:15742"',
+    "webui base URL": 'http://127.0.0.1:15742/nexushub/',
+    "launchctl bootstrap": "launchctl bootstrap gui/$(id -u)",
+    "launchctl enable": "launchctl enable gui/$(id -u)/com.nexushub.nexushub",
+    "launchctl kickstart": "launchctl kickstart -k gui/$(id -u)/com.nexushub.nexushub",
+}
+missing = [name for name, needle in install_checks.items() if needle not in install]
+if missing:
+    raise SystemExit("macOS install.sh missing expected user-level behavior: " + ", ".join(missing))
+for forbidden in ["sudo ", "/Library/LaunchDaemons", "/usr/local/bin", "/opt/nexushub"]:
+    if forbidden in install:
+        raise SystemExit(f"macOS install.sh must remain user-level and avoid {forbidden}")
+
+uninstall = uninstall_path.read_text()
+uninstall_checks = {
+    "launchctl bootout": "launchctl bootout gui/$(id -u)",
+    "launch agent path": 'com.nexushub.nexushub.plist',
+    "user app dir": 'APP_DIR="${HOME}/Library/Application Support/NexusHub"',
+    "user logs dir": 'LOG_DIR="${HOME}/Library/Logs/NexusHub"',
+    "keep data default": 'REMOVE_DATA="${REMOVE_DATA:-0}"',
+}
+missing = [name for name, needle in uninstall_checks.items() if needle not in uninstall]
+if missing:
+    raise SystemExit("macOS uninstall.sh missing expected user-level behavior: " + ", ".join(missing))
+for forbidden in ["sudo ", "/Library/LaunchDaemons", "/usr/local/bin", "/opt/nexushub"]:
+    if forbidden in uninstall:
+        raise SystemExit(f"macOS uninstall.sh must remain user-level and avoid {forbidden}")
+
+plist = plist_path.read_text()
+plist_checks = {
+    "label": "<string>com.nexushub.nexushub</string>",
+    "program argument binary": "<string>__APP_DIR__/bin/nexushubd</string>",
+    "program argument config flag": "<string>--config</string>",
+    "nexushubd config": "nexushubd</string>",
+    "config path": "config.toml",
+    "serve command": "<string>serve</string>",
+    "run at load": "<key>RunAtLoad</key>",
+    "keep alive": "<key>KeepAlive</key>",
+    "stdout log": "nexushubd.out.log",
+    "stderr log": "nexushubd.err.log",
+    "working dir": "<string>__APP_DIR__</string>",
+}
+missing = [name for name, needle in plist_checks.items() if needle not in plist]
+if missing:
+    raise SystemExit("macOS LaunchAgent plist missing expected behavior: " + ", ".join(missing))
+for forbidden in ["sudo", "/Library/LaunchDaemons", "/opt/nexushub"]:
+    if forbidden in plist:
+        raise SystemExit(f"macOS LaunchAgent plist must remain user-level and avoid {forbidden}")
+
+readme = readme_path.read_text()
+for needle in [
+    "~/Library/Application Support/NexusHub",
+    "~/Library/Logs/NexusHub",
+    "~/Library/LaunchAgents/com.nexushub.nexushub.plist",
+    "http://127.0.0.1:15742/nexushub/",
+    "NexusHub.app",
+    "Install.command",
+    "Uninstall.command",
+    "./install.sh",
+    "./uninstall.sh",
+]:
+    if needle not in readme:
+        raise SystemExit(f"macOS README missing install instruction: {needle}")
+
+print("macOS release packaging static behavior: ok")
+PY
+
+python3 - "${MACOS_INSTALL_SH}" "${MACOS_UNINSTALL_SH}" "${MACOS_PLIST}" <<'PY'
+from pathlib import Path
+import os
+import shlex
+import subprocess
+import tempfile
+import textwrap
+import sys
+
+install_path = Path(sys.argv[1])
+uninstall_path = Path(sys.argv[2])
+plist_path = Path(sys.argv[3])
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp_path = Path(tmp)
+    home = tmp_path / "home"
+    payload = tmp_path / "payload"
+    (payload / "bin").mkdir(parents=True)
+    (payload / "webui").mkdir()
+    (payload / "bin" / "nexushubd").write_text("#!/usr/bin/env bash\n")
+    (payload / "bin" / "nexushubd").chmod(0o755)
+    (payload / "webui" / "index.html").write_text("webui")
+    for source in [install_path, uninstall_path, plist_path]:
+        target = payload / source.name
+        target.write_text(source.read_text())
+        if source.suffix == ".sh":
+            target.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    (fake_bin / "launchctl").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> "
+        + shlex.quote(str(launchctl_log))
+        + "\n"
+    )
+    (fake_bin / "launchctl").chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "NEXUSHUB_SKIP_LAUNCH": "0",
+        }
+    )
+    subprocess.run(["bash", str(payload / "install.sh")], cwd=payload, env=env, check=True)
+
+    app_dir = home / "Library" / "Application Support" / "NexusHub"
+    logs_dir = home / "Library" / "Logs" / "NexusHub"
+    agent_path = home / "Library" / "LaunchAgents" / "com.nexushub.nexushub.plist"
+
+    if not (app_dir / "bin" / "nexushubd").exists():
+        raise SystemExit("macOS install did not copy nexushubd into user Application Support")
+    if not (app_dir / "webui" / "index.html").exists():
+        raise SystemExit("macOS install did not copy webui into user Application Support")
+    if not logs_dir.is_dir():
+        raise SystemExit("macOS install did not create user log directory")
+    if not agent_path.exists():
+        raise SystemExit("macOS install did not create user LaunchAgent")
+
+    config = (app_dir / "config.toml").read_text()
+    for needle in [
+        'listen = "127.0.0.1:15742"',
+        f'data_dir = "{app_dir}"',
+        f'db_path = "{app_dir / "nexushub.sqlite"}"',
+        f'webui_dir = "{app_dir / "webui"}"',
+        f'log_dir = "{logs_dir}"',
+    ]:
+        if needle not in config:
+            raise SystemExit(f"macOS install config missing {needle}")
+    env_text = (app_dir / "env").read_text()
+    if "NEXUSHUB_SECRET_KEY=" not in env_text:
+        raise SystemExit("macOS install did not create env with NEXUSHUB_SECRET_KEY")
+    plist = agent_path.read_text()
+    for needle in [
+        str(app_dir / "bin" / "nexushubd"),
+        str(app_dir / "config.toml"),
+        str(logs_dir / "nexushubd.out.log"),
+        str(logs_dir / "nexushubd.err.log"),
+    ]:
+        if needle not in plist:
+            raise SystemExit(f"macOS LaunchAgent was not expanded with installed path: {needle}")
+    launchctl_calls = launchctl_log.read_text()
+    if "bootstrap gui/" not in launchctl_calls or "kickstart -k gui/" not in launchctl_calls:
+        raise SystemExit("macOS install did not bootstrap and kickstart user LaunchAgent")
+
+    env["REMOVE_DATA"] = "1"
+    subprocess.run(["bash", str(payload / "uninstall.sh")], cwd=payload, env=env, check=True)
+    if agent_path.exists():
+        raise SystemExit("macOS uninstall did not remove LaunchAgent plist")
+    if app_dir.exists():
+        raise SystemExit("macOS uninstall REMOVE_DATA=1 did not remove Application Support dir")
+    if logs_dir.exists():
+        raise SystemExit("macOS uninstall REMOVE_DATA=1 did not remove Logs dir")
+
+print("macOS install/uninstall dry-run behavior: ok")
+PY

@@ -1,6 +1,6 @@
 # NexusHub
 
-`nexushub` is a Rust + React web panel for cloud Codex local state. It runs as a local-only daemon on the server and is exposed through Nginx HTTPS.
+`nexushub` is a Rust + React web panel for cloud Codex local state. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS ARM64 the DMG install is validated locally through `127.0.0.1:15742` and a LaunchAgent.
 
 Current scope:
 
@@ -24,6 +24,8 @@ Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode
 
 ## Runtime Layout
 
+Linux production layout:
+
 ```text
 /opt/nexushub/bin/nexushubd
 /opt/nexushub/config.toml
@@ -35,6 +37,18 @@ Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode
 
 The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
 `/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`. The installer preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
+
+macOS ARM64 DMG layout:
+
+```text
+~/Library/Application Support/NexusHub/config.toml
+~/Library/Application Support/NexusHub/nexushub.sqlite
+~/Library/Application Support/NexusHub/webui/
+~/Library/Logs/NexusHub/
+~/Library/LaunchAgents/com.nexushub.nexushub.plist
+```
+
+The macOS service name is `com.nexushub.nexushub`. It should also listen only on `127.0.0.1:15742`; validate it through `http://127.0.0.1:15742/nexushub/`, `/healthz`, `launchctl`, and `~/Library/Logs/NexusHub`.
 
 ## Codex State
 
@@ -74,6 +88,8 @@ bash scripts/package-linux.sh
 
 ## Server Install
 
+Tencent Cloud Linux remains the canonical hosted deployment:
+
 ```bash
 sudo deploy/nexushub/install.sh \
   --archive ./dist/nexushub-linux-x86_64.tar.gz \
@@ -93,6 +109,31 @@ sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' \
 
 Turnstile is configured after login in `安全 / Security`. The cloud defaults match cc-switch-lite semantics: 365-day sessions, Site Key `0x4AAAAAADPfCPB_O-N3j6ON`, action `login`, expected hostname `661313.xyz`, token replay protection, and enabled login verification. The `required` switch is a fail-closed guard when Turnstile is not enabled. Secret values are encrypted at rest, write-only, and never returned by the API.
 
+## macOS ARM64 Acceptance
+
+After installing the signed DMG, validate the local service before adding any public entry:
+
+```bash
+curl -fsS http://127.0.0.1:15742/healthz
+open http://127.0.0.1:15742/nexushub/
+launchctl print gui/$(id -u)/com.nexushub.nexushub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
+```
+
+The browser should load the NexusHub login page from `http://127.0.0.1:15742/nexushub/`. The LaunchAgent should be loaded as `com.nexushub.nexushub`, and logs should remain under `~/Library/Logs/NexusHub`.
+
+## Optional Cloudflare Tunnel
+
+Cloudflare Tunnel is an optional ingress for a local NexusHub daemon. Production use requires a Cloudflare account with a zone/hostname you control and either a tunnel token from the dashboard-managed connector flow or a locally-managed named tunnel config. Map the hostname to `http://127.0.0.1:15742`.
+
+Quick Tunnel may be used for temporary preview:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:15742
+```
+
+Do not use Quick Tunnel as a production endpoint. Do not commit tunnel tokens, URL tokens, credentials JSON, Cloudflare API tokens, generated URLs, or secrets to the repo; do not include them in logs, release assets, screenshots, or the WebUI. Cloudflare Access is recommended for Internet-facing hostnames, but NexusHub does not require Access to run. See [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md).
+
 ## Update
 
 ```bash
@@ -108,11 +149,22 @@ The configured commands run fixed wrappers only, redact sensitive output, and at
 
 ## Deploy Verification
 
+Tencent Cloud Linux:
+
 ```bash
 sudo systemctl is-active nexushub
 curl -fsS http://127.0.0.1:15742/healthz
 curl -fsS https://661313.xyz/nexushub/
 sudo /opt/nexushub/bin/nexushubd doctor
+```
+
+macOS ARM64:
+
+```bash
+curl -fsS http://127.0.0.1:15742/healthz
+open http://127.0.0.1:15742/nexushub/
+launchctl print gui/$(id -u)/com.nexushub.nexushub
+tail -n 80 "$HOME/Library/Logs/NexusHub/nexushubd.log"
 ```
 
 Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.

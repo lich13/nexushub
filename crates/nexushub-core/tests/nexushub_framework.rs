@@ -4,6 +4,7 @@ use nexushub_core::{
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
+    system::system_status_with_paths,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -13,16 +14,14 @@ use std::{fs, path::PathBuf, time::SystemTime};
 fn default_config_uses_nexushub_runtime_names() {
     let config = Config::default();
 
-    assert_eq!(config.paths.data_dir.to_string_lossy(), "/opt/nexushub");
+    let platform = PlatformPaths::current();
+    assert_eq!(config.paths.data_dir, platform.data_dir);
     assert_eq!(
-        config.paths.db_path.to_string_lossy(),
-        "/opt/nexushub/nexushub.sqlite"
+        config.paths.db_path,
+        platform.data_dir.join("nexushub.sqlite")
     );
-    assert_eq!(
-        config.paths.webui_dir.to_string_lossy(),
-        "/opt/nexushub/webui"
-    );
-    assert_eq!(config.paths.log_dir.to_string_lossy(), "/opt/nexushub/logs");
+    assert_eq!(config.paths.webui_dir, platform.webui_dir);
+    assert_eq!(config.paths.log_dir, platform.log_dir);
     assert_eq!(
         config.update.panel_update_command,
         "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
@@ -30,19 +29,104 @@ fn default_config_uses_nexushub_runtime_names() {
 }
 
 #[test]
+fn linux_default_config_values_stay_cloud_compatible() {
+    let config = Config::for_platform_kind(PlatformKind::Linux);
+
+    assert_eq!(config.paths.data_dir, PathBuf::from("/opt/nexushub"));
+    assert_eq!(
+        config.paths.db_path,
+        PathBuf::from("/opt/nexushub/nexushub.sqlite")
+    );
+    assert_eq!(config.paths.webui_dir, PathBuf::from("/opt/nexushub/webui"));
+    assert_eq!(config.paths.log_dir, PathBuf::from("/opt/nexushub/logs"));
+    assert_eq!(
+        config.codex.workspace,
+        PathBuf::from("/home/ubuntu/codex-workspace")
+    );
+    assert_eq!(
+        config.update.doctor_command,
+        "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
+    );
+    assert!(config.update.panel_precheck_command.contains("systemctl"));
+    assert!(config
+        .update
+        .panel_precheck_command
+        .contains("http://127.0.0.1:15742/healthz"));
+}
+
+#[test]
+fn macos_default_config_uses_application_support_and_launchctl() {
+    let home = temp_dir("nexushub-macos-default-home");
+    fs::create_dir_all(&home).unwrap();
+    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+
+    assert_eq!(
+        config.paths.data_dir,
+        home.join("Library/Application Support/NexusHub")
+    );
+    assert_eq!(
+        config.paths.db_path,
+        home.join("Library/Application Support/NexusHub/nexushub.sqlite")
+    );
+    assert_eq!(
+        config.paths.webui_dir,
+        home.join("Library/Application Support/NexusHub/webui")
+    );
+    assert_eq!(config.paths.log_dir, home.join("Library/Logs/NexusHub"));
+    assert_eq!(config.codex.home.to_string_lossy(), "auto");
+    assert!(config.codex.workspace.starts_with(&home));
+    assert!(!config
+        .codex
+        .workspace
+        .to_string_lossy()
+        .contains("/home/ubuntu"));
+    assert!(!config.update.doctor_command.contains("/home/ubuntu"));
+    assert!(config.update.panel_precheck_command.contains("launchctl"));
+    assert!(config
+        .update
+        .panel_precheck_command
+        .contains("http://127.0.0.1:15742/healthz"));
+    assert!(!config.update.panel_precheck_command.contains("systemctl"));
+    assert!(!toml::to_string(&config).unwrap().contains("/opt/nexushub"));
+    assert!(!toml::to_string(&config).unwrap().contains("/home/ubuntu"));
+
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn platform_paths_cover_linux_macos_and_windows() {
+    let mac_home = temp_dir("nexushub-platform-macos-home");
+    fs::create_dir_all(&mac_home).unwrap();
+
     assert_eq!(
         PlatformPaths::for_kind(PlatformKind::Linux).data_dir,
         PathBuf::from("/opt/nexushub")
     );
+    let macos = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
     assert_eq!(
-        PlatformPaths::for_kind(PlatformKind::Macos).data_dir,
-        PathBuf::from("~/Library/Application Support/NexusHub")
+        macos.data_dir,
+        mac_home.join("Library/Application Support/NexusHub")
     );
+    assert_eq!(
+        macos.config_file,
+        mac_home.join("Library/Application Support/NexusHub/config.toml")
+    );
+    assert_eq!(
+        macos.webui_dir,
+        mac_home.join("Library/Application Support/NexusHub/webui")
+    );
+    assert_eq!(macos.log_dir, mac_home.join("Library/Logs/NexusHub"));
+    assert_eq!(
+        macos.service_file,
+        Some(mac_home.join("Library/LaunchAgents/com.nexushub.nexushub.plist"))
+    );
+    assert_eq!(macos.service_name, "com.nexushub.nexushub");
+    assert_eq!(macos.service_kind, "launchd");
     assert_eq!(
         PlatformPaths::for_kind(PlatformKind::Windows).data_dir,
         PathBuf::from(r"%ProgramData%\NexusHub")
     );
+    fs::remove_dir_all(mac_home).unwrap();
 }
 
 #[test]
@@ -251,6 +335,65 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
         diagnostics.effective_constants["hidden_desktop_control"],
         false
     );
+}
+
+#[test]
+fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() {
+    let home = temp_dir("nexushub-macos-hook-home");
+    fs::create_dir_all(&home).unwrap();
+    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+    let paths = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
+    let runtime = ProbeRuntime::new(config, paths);
+
+    let hook = runtime.hook_status();
+
+    assert!(hook.hook_command.contains("probe hook-stop"));
+    assert!(hook.hook_command.contains("'"));
+    assert!(hook.hook_command.contains(
+        &home
+            .join("Library/Application Support/NexusHub/config.toml")
+            .display()
+            .to_string()
+    ));
+    assert!(!hook.hook_command.contains("/opt/nexushub"));
+    assert!(!hook.hook_command.contains("systemctl"));
+
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn macos_system_status_exposes_launchd_overview() {
+    let home = temp_dir("nexushub-macos-system-home");
+    let codex_home = home.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+    config.codex.home = codex_home;
+    let paths = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
+
+    let status = system_status_with_paths(&config, &paths).await.unwrap();
+
+    assert_eq!(status.platform, PlatformKind::Macos);
+    assert_eq!(status.service_kind, "launchd");
+    assert_eq!(status.service_name, "com.nexushub.nexushub");
+    assert_eq!(
+        status.config_path,
+        home.join("Library/Application Support/NexusHub/config.toml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        status.webui_dir,
+        home.join("Library/Application Support/NexusHub/webui")
+            .display()
+            .to_string()
+    );
+    let launch_agent = home
+        .join("Library/LaunchAgents/com.nexushub.nexushub.plist")
+        .display()
+        .to_string();
+    assert_eq!(status.service_file.as_deref(), Some(launch_agent.as_str()));
+
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[test]

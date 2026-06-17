@@ -535,8 +535,9 @@ impl ProbeRuntime {
 
     fn hook_command(&self) -> String {
         format!(
-            "/opt/nexushub/bin/nexushubd --config {} probe hook-stop",
-            self.paths.config_file.display()
+            "{} --config {} probe hook-stop",
+            shell_quote(&self.paths.daemon_binary().display().to_string()),
+            shell_quote(&self.paths.config_file.display().to_string())
         )
     }
 
@@ -636,6 +637,17 @@ impl ProbeRuntime {
                 Some("vacuum_disabled".to_string())
             },
         }
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 

@@ -6,10 +6,8 @@ on:
       - "v*"
 
 jobs:
-  release:
+  linux:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -20,8 +18,52 @@ jobs:
         with:
           node-version: 22
       - run: bash scripts/package-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexushub-linux-x86_64
+          path: |
+            dist/nexushub-linux-x86_64.tar.gz
+            dist/nexushub-linux-x86_64.tar.gz.sha256
+
+  macos-darwin-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bash scripts/package-darwin-arm64.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexushub-darwin-arm64
+          path: |
+            dist/nexushub-darwin-arm64.tar.gz
+            dist/nexushub-darwin-arm64.tar.gz.sha256
+            dist/NexusHub-0.1.96-darwin-arm64.dmg
+            dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256
+
+  release:
+    runs-on: ubuntu-24.04
+    needs:
+      - linux
+      - macos-darwin-arm64
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/nexushub-linux-x86_64.tar.gz
             dist/nexushub-linux-x86_64.tar.gz.sha256
+            dist/nexushub-darwin-arm64.tar.gz
+            dist/nexushub-darwin-arm64.tar.gz.sha256
+            dist/NexusHub-0.1.96-darwin-arm64.dmg
+            dist/NexusHub-0.1.96-darwin-arm64.dmg.sha256

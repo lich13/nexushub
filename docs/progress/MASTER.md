@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-17
-> **Mode**: RELEASED_LINUX
+> **Mode**: V0.1.96_DUAL_ENTRY_DOCS
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.95 thread list scrolling and column alignment<br>
-**Active Task**: `v0.1.95` keeps the thread list constrained to the left column with an internal scroll region, aligns the thread list with the conversation and inspector columns, and keeps rendered WebUI acceptance on Chrome 插件验收.
+**Active Phase**: v0.1.96 macOS ARM64 and optional Cloudflare Tunnel documentation<br>
+**Active Task**: `v0.1.96` keeps Tencent Cloud Linux acceptance at `https://661313.xyz/nexushub/` with systemd and `/opt/nexushub`, adds macOS ARM64 DMG/LaunchAgent/local `127.0.0.1:15742` acceptance, and documents Cloudflare Tunnel as an optional ingress.
 **Blockers**: None. Current rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: RELEASED_LINUX
+  mode: V0.1.96_DUAL_ENTRY_DOCS
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -85,7 +85,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-15"
+  last_updated: "2026-06-17"
 ```
 
 ## Task Telemetry Log
@@ -107,6 +107,7 @@ adaptive:
 | 2026-06-15 | Probe logs-db retarget and panel slim | L | P/R pass | 0 | `v0.1.52` release candidate retargets maintenance to Codex `logs_2.sqlite`, adds scheduled automatic cleanup with gated compaction, removes stale manual Probe/Sentinel routes, and keeps Probe UI read-only for logs-db maintenance |
 | 2026-06-15 | Codex path auto-discovery | M | P/R pass | 0 | `v0.1.53` resolves Codex home/socket/logs paths from config, env, socket, root/ubuntu homes, and `/home/*/.codex`; UI supports auto home without writing `/root/.codex` back. |
 | 2026-06-15 | Task C deploy/docs auto-discovery | S | P/R pass | 0 | Deploy config omits fixed `codex.home`, systemd grants `/root/.codex` and `/home/ubuntu/.codex`, and docs cover no-new-backup compact plus post-health backup cleanup. |
+| 2026-06-17 | v0.1.96 dual-entry docs | S | P/R pass | 0 | Documented macOS ARM64 DMG local acceptance, preserved Tencent Cloud Linux `/opt/nexushub` systemd acceptance, and added optional Cloudflare Tunnel guidance with no token storage in repo/logs/assets/WebUI. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -129,7 +130,17 @@ bash scripts/test-install-script.sh
 
 1. Keep `origin` pointed at `https://github.com/lich13/nexushub`.
 2. For every future release, wait for CI and Release workflows, verify release assets, deploy to `43.155.235.227`, and smoke `https://661313.xyz/nexushub/`.
-3. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public panel surface under `/nexushub/`.
+3. For macOS ARM64, verify DMG install with `http://127.0.0.1:15742/nexushub/`, `healthz`, `launchctl print gui/$(id -u)/com.nexushub.nexushub`, and `~/Library/Logs/NexusHub`.
+4. Treat Cloudflare Tunnel as optional ingress only: production hostnames require a user-owned Cloudflare zone/hostname and local `127.0.0.1:15742` origin; Quick Tunnel remains temporary preview only.
+5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public panel surface under `/nexushub/`.
+
+## v0.1.96 Acceptance Matrix
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` | `systemctl is-active`, loopback `healthz`, public HTTPS smoke, `nexushubd doctor`, retired paths `404` |
+| macOS ARM64 | `http://127.0.0.1:15742/nexushub/` | LaunchAgent `com.nexushub.nexushub` | `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub` | loopback `healthz`, browser local load, `launchctl print`, log tail |
+| Optional Cloudflare Tunnel | user-owned hostname mapped to `http://127.0.0.1:15742` | `cloudflared`, separate from NexusHub service | Cloudflare credentials outside repo | `cloudflared tunnel info`, hostname smoke after Access/auth policy, no tokens or generated URLs in repo/logs/assets/WebUI |
 
 ## Session Log
 
@@ -148,3 +159,4 @@ bash scripts/test-install-script.sh
 | 2026-06-15 | probe-logs-db-retarget-panel-slim | Local verification passed for `v0.1.52`: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, WebUI tests/build, install script tests, diff check, rendered Probe QA, and compact regression tests covering quick_check/VACUUM plus scheduler app-server inactivity gating |
 | 2026-06-15 | codex-path-auto-discovery | Local verification passed for `v0.1.53`: fmt, Rust workspace tests, clippy, WebUI tests/build, install script tests, and diff check. |
 | 2026-06-15 | task-c-deploy-docs-auto-discovery | Updated deploy/script/docs surfaces for omitted Codex home auto-discovery, root/ubuntu systemd write paths, no-new-backup compact guidance, and cleanup only after health verification. |
+| 2026-06-17 | v0.1.96-dual-entry-docs | Updated README, cloud runbook, Cloudflare Tunnel guide, optional helper script, and static install-script assertions for Linux/macOS/Tunnel acceptance boundaries. |

@@ -1,6 +1,7 @@
 use crate::{
     codex::{resolve_codex_paths, CodexPaths},
     config::Config,
+    platform::{PlatformKind, PlatformPaths},
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,14 @@ use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStatus {
+    pub platform: PlatformKind,
+    pub service_kind: String,
+    pub service_name: String,
+    pub service_file: Option<String>,
+    pub config_path: String,
+    pub data_dir: String,
+    pub webui_dir: String,
+    pub log_dir: String,
     pub host_label: String,
     pub hostname: Option<String>,
     pub public_endpoint: Option<String>,
@@ -45,6 +54,13 @@ pub struct VersionInfo {
 }
 
 pub async fn system_status(config: &Config) -> Result<SystemStatus> {
+    system_status_with_paths(config, &PlatformPaths::current()).await
+}
+
+pub async fn system_status_with_paths(
+    config: &Config,
+    platform: &PlatformPaths,
+) -> Result<SystemStatus> {
     let resolved = resolve_codex_paths(&config.codex.home);
     let paths = CodexPaths::new(&resolved.home);
     let state_db_integrity = crate::codex::db_integrity(&paths).ok();
@@ -53,6 +69,17 @@ pub async fn system_status(config: &Config) -> Result<SystemStatus> {
         .unwrap_or(0);
     let thread_source_counts = crate::codex::thread_source_counts(&paths).unwrap_or_default();
     Ok(SystemStatus {
+        platform: platform.kind,
+        service_kind: platform.service_kind.clone(),
+        service_name: platform.service_name.clone(),
+        service_file: platform
+            .service_file
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        config_path: platform.config_file.display().to_string(),
+        data_dir: platform.data_dir.display().to_string(),
+        webui_dir: platform.webui_dir.display().to_string(),
+        log_dir: platform.log_dir.display().to_string(),
         host_label: config.codex.host_label.clone(),
         hostname: command_stdout("hostname", &[]).await.ok(),
         public_endpoint: config.server.public_base_url.clone(),

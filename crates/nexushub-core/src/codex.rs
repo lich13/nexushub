@@ -170,16 +170,23 @@ pub struct CodexPathDiscoveryOptions {
     pub root_codex_home: PathBuf,
     pub ubuntu_codex_home: PathBuf,
     pub home_scan_root: PathBuf,
+    pub fallback_codex_home: PathBuf,
+    pub fallback_codex_home_source: &'static str,
 }
 
 impl Default for CodexPathDiscoveryOptions {
     fn default() -> Self {
+        let current_user_home = dirs::home_dir();
+        let (fallback_codex_home, fallback_codex_home_source) =
+            default_fallback_codex_home(current_user_home.as_deref());
         Self {
             env_codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
-            current_user_home: dirs::home_dir(),
+            current_user_home,
             root_codex_home: PathBuf::from("/root/.codex"),
             ubuntu_codex_home: PathBuf::from("/home/ubuntu/.codex"),
             home_scan_root: PathBuf::from("/home"),
+            fallback_codex_home,
+            fallback_codex_home_source,
         }
     }
 }
@@ -266,9 +273,12 @@ pub fn resolve_codex_paths_with_options(
         } else {
             warnings.push(format!(
                 "no valid Codex home discovered; using {}",
-                options.root_codex_home.display()
+                options.fallback_codex_home.display()
             ));
-            (options.root_codex_home.clone(), "fallback_root")
+            (
+                options.fallback_codex_home.clone(),
+                options.fallback_codex_home_source,
+            )
         }
     });
     let codex_home_source = codex_home_source.to_string();
@@ -285,6 +295,28 @@ pub fn resolve_codex_paths_with_options(
         app_server_socket_source: None,
         discovery_warnings: warnings,
         home,
+    }
+}
+
+fn default_fallback_codex_home(current_user_home: Option<&Path>) -> (PathBuf, &'static str) {
+    #[cfg(target_os = "macos")]
+    {
+        let path = current_user_home
+            .map(|home| home.join(".codex"))
+            .unwrap_or_else(|| PathBuf::from(".codex"));
+        (path, "fallback_current_user")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let path = current_user_home
+            .map(|home| home.join(".codex"))
+            .unwrap_or_else(|| PathBuf::from(".codex"));
+        (path, "fallback_current_user")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = current_user_home;
+        (PathBuf::from("/root/.codex"), "fallback_root")
     }
 }
 
@@ -3758,9 +3790,11 @@ mod tests {
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
-            root_codex_home: root.join("root/.codex"),
+            root_codex_home: fallback_codex_home(&root),
             ubuntu_codex_home: root.join("ubuntu/.codex"),
             home_scan_root: root.join("home"),
+            fallback_codex_home: fallback_codex_home(&root),
+            fallback_codex_home_source: "fallback_root",
         };
 
         let resolved = resolve_codex_paths_with_options(&configured, &options);
@@ -3787,9 +3821,11 @@ mod tests {
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
-            root_codex_home: root.join("root/.codex"),
+            root_codex_home: fallback_codex_home(&root),
             ubuntu_codex_home: root.join("ubuntu/.codex"),
             home_scan_root: root.join("home"),
+            fallback_codex_home: fallback_codex_home(&root),
+            fallback_codex_home_source: "fallback_root",
         };
 
         let auto = resolve_codex_paths_with_options(Path::new("auto"), &options);
@@ -3816,9 +3852,11 @@ mod tests {
             &CodexPathDiscoveryOptions {
                 env_codex_home: None,
                 current_user_home: Some(current_home.clone()),
-                root_codex_home: root.join("root/.codex"),
+                root_codex_home: fallback_codex_home(&root),
                 ubuntu_codex_home: root.join("ubuntu/.codex"),
                 home_scan_root: root.join("home"),
+                fallback_codex_home: fallback_codex_home(&root),
+                fallback_codex_home_source: "fallback_root",
             },
         );
 
@@ -3838,9 +3876,11 @@ mod tests {
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
-            root_codex_home: root.join("root/.codex"),
+            root_codex_home: fallback_codex_home(&root),
             ubuntu_codex_home: root.join("ubuntu/.codex"),
             home_scan_root: root.join("home"),
+            fallback_codex_home: fallback_codex_home(&root),
+            fallback_codex_home_source: "fallback_root",
         };
 
         let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
@@ -3859,9 +3899,11 @@ mod tests {
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
-            root_codex_home: root.join("root/.codex"),
+            root_codex_home: fallback_codex_home(&root),
             ubuntu_codex_home: root.join("ubuntu/.codex"),
             home_scan_root: root.join("home"),
+            fallback_codex_home: fallback_codex_home(&root),
+            fallback_codex_home_source: "fallback_root",
         };
 
         let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
@@ -3893,6 +3935,8 @@ mod tests {
                 root_codex_home: root_home.clone(),
                 ubuntu_codex_home: ubuntu_home.clone(),
                 home_scan_root: root.join("home"),
+                fallback_codex_home: fallback_codex_home(&root),
+                fallback_codex_home_source: "fallback_root",
             },
         );
         assert_eq!(current_resolved.home, current_home.join(".codex"));
@@ -3910,6 +3954,8 @@ mod tests {
                 root_codex_home: root_home.clone(),
                 ubuntu_codex_home: ubuntu_home.clone(),
                 home_scan_root: root.join("home"),
+                fallback_codex_home: root_home.clone(),
+                fallback_codex_home_source: "fallback_root",
             },
         );
         assert_eq!(root_resolved.home, root_home);
@@ -3923,6 +3969,8 @@ mod tests {
                 root_codex_home: root.join("missing-root/.codex"),
                 ubuntu_codex_home: ubuntu_home,
                 home_scan_root: root.join("home"),
+                fallback_codex_home: fallback_codex_home(&root),
+                fallback_codex_home_source: "fallback_root",
             },
         );
         assert_eq!(ubuntu_resolved.codex_home_source, "home_ubuntu");
@@ -3935,10 +3983,34 @@ mod tests {
                 root_codex_home: root.join("missing-root/.codex"),
                 ubuntu_codex_home: root.join("missing-ubuntu/.codex"),
                 home_scan_root: root.join("home"),
+                fallback_codex_home: fallback_codex_home(&root),
+                fallback_codex_home_source: "fallback_root",
             },
         );
         assert_eq!(scan_resolved.home, scanned_home);
         assert_eq!(scan_resolved.codex_home_source, "home_scan");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolved_codex_paths_keeps_linux_root_fallback_source_name() {
+        let root = unique_temp_dir("resolved-codex-fallback-root");
+        let root_home = fallback_codex_home(&root);
+        let resolved = resolve_codex_paths_with_options(
+            Path::new("auto"),
+            &CodexPathDiscoveryOptions {
+                env_codex_home: None,
+                current_user_home: None,
+                root_codex_home: root_home.clone(),
+                ubuntu_codex_home: root.join("missing-ubuntu/.codex"),
+                home_scan_root: root.join("home"),
+                fallback_codex_home: root_home.clone(),
+                fallback_codex_home_source: "fallback_root",
+            },
+        );
+
+        assert_eq!(resolved.home, root_home);
+        assert_eq!(resolved.codex_home_source, "fallback_root");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3950,9 +4022,11 @@ mod tests {
         let options = CodexPathDiscoveryOptions {
             env_codex_home: Some(env_home.clone()),
             current_user_home: None,
-            root_codex_home: root.join("root/.codex"),
+            root_codex_home: fallback_codex_home(&root),
             ubuntu_codex_home: root.join("ubuntu/.codex"),
             home_scan_root: root.join("home"),
+            fallback_codex_home: fallback_codex_home(&root),
+            fallback_codex_home_source: "fallback_root",
         };
 
         let resolved = resolve_codex_paths_with_options(Path::new("auto"), &options);
@@ -6431,5 +6505,9 @@ mod tests {
         fs::write(home.join("state_5.sqlite"), b"").unwrap();
         fs::write(home.join("session_index.jsonl"), b"").unwrap();
         fs::create_dir_all(home.join("app-server-control")).unwrap();
+    }
+
+    fn fallback_codex_home(root: &Path) -> PathBuf {
+        root.join("root/.codex")
     }
 }

@@ -36,7 +36,6 @@ use tokio::{net::TcpListener, time};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DEFAULT_CONFIG: &str = "/opt/nexushub/config.toml";
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
 const PROBE_PASSIVE_SENT_MARKER_PREFIX: &str = "probe_passive_sent_marker:";
@@ -54,7 +53,7 @@ static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::cons
     about = "Headless Web panel for local Codex state and controlled jobs"
 )]
 struct Cli {
-    #[arg(long, env = "NEXUSHUB_CONFIG", default_value = DEFAULT_CONFIG)]
+    #[arg(long, env = "NEXUSHUB_CONFIG", default_value_os_t = Config::current_default_config_path())]
     config: PathBuf,
 
     #[command(subcommand)]
@@ -662,9 +661,11 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
     let resolved = resolve_codex_paths(&config.codex.home);
     let hooks_path = resolved.home.join("hooks.json");
     let codex_config_path = resolved.home.join("config.toml");
+    let platform = PlatformPaths::current();
     let hook_command = format!(
-        "/opt/nexushub/bin/nexushubd --config {} probe hook-stop",
-        PlatformPaths::current().config_file.display()
+        "{} --config {} probe hook-stop",
+        shell_quote(&platform.daemon_binary().display().to_string()),
+        shell_quote(&platform.config_file.display().to_string())
     );
     let mut root = read_hooks_json(&hooks_path)?;
     let hooks_json_changed = ensure_stop_hook(&mut root, &hook_command);
@@ -772,6 +773,17 @@ fn read_hooks_json(path: &Path) -> Result<Value> {
     }
     let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }
 
 fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
