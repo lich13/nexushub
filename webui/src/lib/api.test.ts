@@ -516,6 +516,27 @@ describe("archive delete API compatibility", () => {
     });
   });
 
+  test("desktop demo platform data reflects macOS Tauri instead of Linux WebUI", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    const { getPlatformOverview, getProbeStatus } = await import("./api");
+
+    await expect(getPlatformOverview()).resolves.toMatchObject({
+      kind: "macos",
+      service_kind: "tauri",
+      service_name: "NexusHub.app"
+    });
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        platform: "macos",
+        service_kind: "tauri",
+        service_name: "NexusHub.app"
+      }
+    });
+  });
+
   test("Claude Code demo overview includes read-only MCP install and cache summaries", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
@@ -783,13 +804,6 @@ describe("archive delete API compatibility", () => {
     });
   });
 
-  test("keeps API requests at root by default when no API base is configured", async () => {
-    vi.stubEnv("BASE_URL", "/nexushub/");
-    const { buildApiPath } = await loadRealApi();
-
-    expect(buildApiPath("/api/auth/login")).toBe("/api/auth/login");
-  });
-
   test("login uses the scoped API base configured for the Linux /nexushub/ package", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
     vi.stubEnv("VITE_API_BASE", "/nexushub");
@@ -1038,20 +1052,19 @@ describe("archive delete API compatibility", () => {
   test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
     expect(apiSource).not.toContain("desktopApiRoute");
     expect(apiSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(apiSource).not.toContain("invokeDesktopApi");
+    expect(apiSource).not.toContain("desktop_api_command");
+    expect(apiSource).not.toContain("DesktopApiUpload");
+    expect(apiSource).not.toContain('"/api/');
+    expect(apiSource).not.toContain("'/api/");
+    expect(apiSource).not.toContain("`/api/");
+    expect(apiSource).not.toContain("new EventSource");
     expect(apiSource).not.toContain("/api/system/panel/update");
     expect(appSource).not.toContain("desktopApiRoute");
     expect(appSource).not.toContain('runtimeRpc("desktopApi"');
     expect(appSource).not.toContain("invoke(");
     expect(appSource).not.toContain('"/api/');
     expect(appSource).not.toContain("'/api/");
-  });
-
-  test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
-    vi.stubEnv("BASE_URL", "/nexushub/");
-    vi.stubEnv("VITE_API_BASE", "/backend/");
-    const { buildApiPath } = await loadRealApi();
-
-    expect(buildApiPath("/api/auth/login")).toBe("/backend/api/auth/login");
   });
 
   test("uses protocol endpoints for Plan and approval actions", async () => {

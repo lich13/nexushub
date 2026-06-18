@@ -92,7 +92,11 @@ type AppExports = typeof import("./App") & {
   };
   formatGoalTimestamp?: (value: number | string | null | undefined) => string;
   codexVisibleCopy?: () => Record<string, string>;
-  failureCategoryLabel?: (category: string) => string;
+  failureCategoryLabel?: (category: string, capabilities?: unknown) => string;
+  jobFailureAnalysisView?: (
+    analysis: NonNullable<import("./types").JobRecord["failure_analysis"]>,
+    capabilities?: unknown
+  ) => { label: string; explanation: string; suggestions: string[] };
   optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
   renderConversationHeaderHtml?: (summary: ThreadSummary) => string;
   preservePreviousQueryData?: <T>(previous: T | undefined) => T | undefined;
@@ -104,6 +108,7 @@ type AppExports = typeof import("./App") & {
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
   desktopRuntimeVisibleCopy?: () => string[];
+  runtimeCapabilitiesForRuntime?: (desktop?: boolean) => { runtimeKind: "web" | "desktop"; [key: string]: unknown };
   navigationLabelsForRuntime?: (desktop?: boolean) => string[];
   shouldShowLogoutForRuntime?: (desktop?: boolean) => boolean;
   initialSessionForRuntime?: (desktop?: boolean) => import("./types").SessionUser | null;
@@ -143,6 +148,16 @@ function extractProbeWorkspaceSource(): string {
   return source.slice(start, end);
 }
 
+function extractFunctionSource(name: string): string {
+  const source = appSource;
+  const start = source.indexOf(`function ${name}`);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+
+  const next = source.indexOf("\nfunction ", start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+}
+
 describe("conversation helpers", () => {
   test("desktop runtime hides Web-only auth and security navigation", async () => {
     const app = await loadApp();
@@ -165,6 +180,7 @@ describe("conversation helpers", () => {
     expect(app.opsWorkspacePanelTitles?.(true)).toContain("NexusHub 更新");
     expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["Precheck", "Prune", "Public endpoint"]));
     expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
+    expect(app.opsWorkspaceVisibleCopy?.(true).join("\n")).not.toMatch(/systemd|Nginx|管理员密码|Linux prune/i);
     expect(app.opsWorkspaceVisibleCopy?.(true)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
   });
 
@@ -186,6 +202,50 @@ describe("conversation helpers", () => {
     });
     expect(app.approvalActionMode?.(false)).toBe("interactive");
     expect(app.approvalActionMode?.(true)).toBe("unsupported");
+  });
+
+  test("desktop runtime maps Linux-only job failure categories to generic copy", async () => {
+    const app = await loadApp();
+
+    const webCapabilities = app.runtimeCapabilitiesForRuntime?.(false);
+    const desktopCapabilities = app.runtimeCapabilitiesForRuntime?.(true);
+
+    expect(app.failureCategoryLabel?.("systemd_failure", webCapabilities)).toBe("systemd 失败");
+    expect(app.failureCategoryLabel?.("nginx_failure", webCapabilities)).toBe("Nginx 失败");
+    expect(app.failureCategoryLabel?.("systemd_failure", desktopCapabilities)).toBe("服务失败");
+    expect(app.failureCategoryLabel?.("nginx_failure", desktopCapabilities)).toBe("更新失败");
+    expect(app.failureCategoryLabel?.("permission_denied_sudo", desktopCapabilities)).toBe("权限失败");
+
+    const view = app.jobFailureAnalysisView?.({
+      category: "nginx_failure",
+      explanation: "Nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune",
+      suggestions: ["检查 Nginx", "systemd restart", "输入管理员密码", "Linux prune"]
+    }, desktopCapabilities);
+    const rendered = [view?.label, view?.explanation, ...(view?.suggestions ?? [])].join("\n");
+
+    expect(rendered).not.toMatch(/systemd|Nginx|管理员密码|Linux prune/i);
+    expect(rendered).toContain("更新失败");
+  });
+
+  test("component sources use capability props instead of runtime or transport access", () => {
+    const guardedComponents = [
+      "SideNav",
+      "MobileTopBar",
+      "ChatWorkspace",
+      "Conversation",
+      "EmptyConversation",
+      "ProbeWorkspace",
+      "OpsWorkspace",
+      "JobList"
+    ];
+
+    for (const component of guardedComponents) {
+      const source = extractFunctionSource(component);
+      expect(source, component).not.toContain("isDesktopRuntime(");
+      expect(source, component).not.toContain('"/api/');
+      expect(source, component).not.toContain("'/api/");
+      expect(source, component).not.toMatch(/\binvoke\s*\(/);
+    }
   });
 
   test("segments internal paths and Codex ids as copyable references", async () => {

@@ -44,6 +44,7 @@ import {
   clearCodexGoal,
   createThread,
   deleteUpload,
+  desktopRuntimeSessionUser,
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
   forkThread,
@@ -87,6 +88,9 @@ import {
   getPlatformOverview,
   getProbeEvents,
   listProviders,
+  runtimeCapabilities,
+  runtimeCapabilitiesForRuntime,
+  type RuntimeCapabilityMatrix,
   type ThreadSendPayload
 } from "./lib/api";
 import {
@@ -120,7 +124,6 @@ import {
   type ThreadMessageSlot,
   type ThreadMessageStoreState
 } from "./lib/threadMessageStore";
-import { desktopSessionUser, isDesktopRuntime } from "./lib/runtime";
 import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
@@ -155,54 +158,18 @@ import type {
   UploadRecord
 } from "./types";
 
+export { runtimeCapabilitiesForRuntime } from "./lib/api";
+
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
-type RuntimeCapabilityMatrix = {
-  runtimeKind: "web" | "desktop";
-  webAuth: boolean;
-  logout: boolean;
-  securitySettings: boolean;
-  publicEndpointStatus: boolean;
-  codexStatePaths: boolean;
-  linuxBackupPrune: boolean;
-  linuxUpdateLabels: boolean;
-  forkAction: boolean;
-  approvalActions: boolean;
-};
 type RuntimeCapabilityInput = RuntimeCapabilityMatrix | boolean | undefined;
 
-const DESKTOP_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
-  runtimeKind: "desktop",
-  webAuth: false,
-  logout: false,
-  securitySettings: false,
-  publicEndpointStatus: false,
-  codexStatePaths: false,
-  linuxBackupPrune: false,
-  linuxUpdateLabels: false,
-  forkAction: false,
-  approvalActions: false
-};
-
-const WEB_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  webAuth: true,
-  logout: true,
-  securitySettings: true,
-  publicEndpointStatus: true,
-  codexStatePaths: true,
-  linuxBackupPrune: true,
-  linuxUpdateLabels: true,
-  forkAction: true,
-  approvalActions: true
-};
-
-export function runtimeCapabilitiesForRuntime(desktop = isDesktopRuntime()): RuntimeCapabilityMatrix {
-  return desktop ? DESKTOP_RUNTIME_CAPABILITIES : WEB_RUNTIME_CAPABILITIES;
+function isRuntimeCapabilities(input: RuntimeCapabilityInput): input is RuntimeCapabilityMatrix {
+  return typeof input === "object" && input !== null;
 }
 
 function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
-  return typeof input === "object" && input !== null ? input : runtimeCapabilitiesForRuntime(input);
+  return isRuntimeCapabilities(input) ? input : runtimeCapabilitiesForRuntime(input);
 }
 
 const OPS_PANEL_TITLES = {
@@ -213,7 +180,7 @@ const OPS_PANEL_TITLES = {
   jobs: "Job History"
 } as const;
 
-export function opsWorkspacePanelTitles(_desktop = isDesktopRuntime()): string[] {
+export function opsWorkspacePanelTitles(_desktop?: RuntimeCapabilityInput): string[] {
   const titles = [
     OPS_PANEL_TITLES.system,
     OPS_PANEL_TITLES.updates,
@@ -224,8 +191,8 @@ export function opsWorkspacePanelTitles(_desktop = isDesktopRuntime()): string[]
   return titles;
 }
 
-export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] {
-  const capabilities = runtimeCapabilitiesForRuntime(desktop);
+export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): string[] {
+  const capabilities = capabilitiesForInput(desktop);
   const copy = [
     ...opsWorkspacePanelTitles(),
     "Hostname",
@@ -253,7 +220,10 @@ export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] 
     "visible",
     "hidden",
     "sources",
-    "rollout 删除结果"
+    "rollout 删除结果",
+    failureCategoryLabel("systemd_failure", capabilities),
+    failureCategoryLabel("nginx_failure", capabilities),
+    failureCategoryLabel("permission_denied_sudo", capabilities)
   ];
   return copy;
 }
@@ -283,11 +253,11 @@ export function desktopRuntimeVisibleCopy(): string[] {
   ];
 }
 
-export function canShowForkAction(desktop: RuntimeCapabilityInput = isDesktopRuntime()): boolean {
+export function canShowForkAction(desktop?: RuntimeCapabilityInput): boolean {
   return capabilitiesForInput(desktop).forkAction;
 }
 
-export function approvalActionMode(desktop: RuntimeCapabilityInput = isDesktopRuntime()): "interactive" | "unsupported" {
+export function approvalActionMode(desktop?: RuntimeCapabilityInput): "interactive" | "unsupported" {
   return capabilitiesForInput(desktop).approvalActions ? "interactive" : "unsupported";
 }
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
@@ -355,21 +325,21 @@ function navigationItemsForCapabilities(capabilities: RuntimeCapabilityMatrix) {
     : navigationItems.filter((item) => item.id !== "security");
 }
 
-function runtimeNavigationItems(desktop = isDesktopRuntime()) {
-  return navigationItemsForCapabilities(runtimeCapabilitiesForRuntime(desktop));
+function runtimeNavigationItems(desktop?: RuntimeCapabilityInput) {
+  return navigationItemsForCapabilities(capabilitiesForInput(desktop));
 }
 
-export function navigationLabelsForRuntime(desktop = isDesktopRuntime()): string[] {
+export function navigationLabelsForRuntime(desktop?: RuntimeCapabilityInput): string[] {
   return runtimeNavigationItems(desktop).map((item) => item.label);
 }
 
-export function shouldShowLogoutForRuntime(desktop = isDesktopRuntime()): boolean {
-  return runtimeCapabilitiesForRuntime(desktop).logout;
+export function shouldShowLogoutForRuntime(desktop?: RuntimeCapabilityInput): boolean {
+  return capabilitiesForInput(desktop).logout;
 }
 
-export function initialSessionForRuntime(desktop = isDesktopRuntime()): SessionUser | null {
-  const capabilities = runtimeCapabilitiesForRuntime(desktop);
-  return capabilities.webAuth ? loadSession() : desktopSessionUser();
+export function initialSessionForRuntime(desktop?: RuntimeCapabilityInput): SessionUser | null {
+  const capabilities = capabilitiesForInput(desktop);
+  return capabilities.webAuth ? loadSession() : desktopRuntimeSessionUser();
 }
 
 const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
@@ -456,7 +426,7 @@ export const slashCommands: SlashCommand[] = [
 
 const desktopUnsupportedSlashCommands = new Set(["/fork"]);
 
-export function slashCommandsForRuntime(desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommand[] {
+export function slashCommandsForRuntime(desktop?: RuntimeCapabilityInput): SlashCommand[] {
   const capabilities = capabilitiesForInput(desktop);
   return !capabilities.forkAction
     ? slashCommands.filter((item) => !desktopUnsupportedSlashCommands.has(item.command))
@@ -483,9 +453,8 @@ declare global {
 }
 
 export default function App() {
-  const desktopRuntime = isDesktopRuntime();
-  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
-  const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(desktopRuntime));
+  const capabilities = useMemo(() => runtimeCapabilities(), []);
+  const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(capabilities));
   const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
@@ -511,7 +480,7 @@ export default function App() {
       {navCollapsed ? (
         <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
       ) : (
-        <SideNav view={view} setView={setView} onCollapse={toggleNavCollapsed} onLogout={async () => {
+        <SideNav view={view} setView={setView} capabilities={capabilities} onCollapse={toggleNavCollapsed} onLogout={async () => {
           if (capabilities.logout) {
             await logout(session.csrf_token);
             clearSession();
@@ -520,18 +489,19 @@ export default function App() {
         }} />
       )}
       <main className="main-workspace">
-        <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} />
+        <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} capabilities={capabilities} />
         {view === "codex" && (
           <ChatWorkspace
             csrfToken={session.csrf_token}
             mobileThreadsOpen={mobileThreadsOpen}
             setMobileThreadsOpen={setMobileThreadsOpen}
             setView={setView}
+            capabilities={capabilities}
           />
         )}
         {view === "claude" && <ClaudeWorkspace />}
-        {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} />}
-        {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} />}
+        {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
+        {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
         {capabilities.securitySettings && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
       </main>
     </div>
@@ -679,8 +649,13 @@ function ensureTurnstileScript(): Promise<void> {
   });
 }
 
-function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView: (view: View) => void; onCollapse: () => void; onLogout: () => void }) {
-  const capabilities = runtimeCapabilitiesForRuntime();
+function SideNav({ view, setView, capabilities, onCollapse, onLogout }: {
+  view: View;
+  setView: (view: View) => void;
+  capabilities: RuntimeCapabilityMatrix;
+  onCollapse: () => void;
+  onLogout: () => void;
+}) {
   const items = navigationItemsForCapabilities(capabilities);
   return (
     <aside className="side-nav">
@@ -710,8 +685,13 @@ function NavButton({ icon, active, onClick, children }: { icon: ReactNode; activ
   return <button className={`nav-button ${active ? "active" : ""}`} onClick={onClick}>{icon}{children}</button>;
 }
 
-function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => void; view: View; setView: (view: View) => void }) {
-  const items = navigationItemsForCapabilities(runtimeCapabilitiesForRuntime());
+function MobileTopBar({ onOpenThreads, view, setView, capabilities }: {
+  onOpenThreads: () => void;
+  view: View;
+  setView: (view: View) => void;
+  capabilities: RuntimeCapabilityMatrix;
+}) {
+  const items = navigationItemsForCapabilities(capabilities);
   const current = items.find((item) => item.id === view);
   return (
     <>
@@ -734,11 +714,12 @@ function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => v
   );
 }
 
-function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, setView }: {
+function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, setView, capabilities }: {
   csrfToken?: string | null;
   mobileThreadsOpen: boolean;
   setMobileThreadsOpen: (open: boolean) => void;
   setView: (view: View) => void;
+  capabilities: RuntimeCapabilityMatrix;
 }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState("all");
@@ -848,12 +829,14 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
             onSelect={(id) => selectThread(id)}
             onPanelSelect={setView}
             nextThreadAfterArchive={nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected)}
+            capabilities={capabilities}
           />
         ) : (
           <EmptyConversation
             loading={Boolean(resolvedSelected && detail.isLoading)}
             csrfToken={csrfToken}
             onCreated={(id) => selectThread(id)}
+            capabilities={capabilities}
           />
         )}
       </section>
@@ -1552,7 +1535,7 @@ function nearestActiveComposerQuery(draft: string, cursor: number): TriggerQuery
   return slash ?? plugin;
 }
 
-export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommand[] {
+export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop?: RuntimeCapabilityInput): SlashCommand[] {
   const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
   if (!query) return [];
   return slashCommandsForRuntime(desktop)
@@ -1618,12 +1601,12 @@ export function applyPluginMentionSelection(
   return { value, cursor: query.start + insertion.length };
 }
 
-export function exactSlashCommandFromDraft(draft: string, desktop: RuntimeCapabilityInput = isDesktopRuntime()): string | null {
+export function exactSlashCommandFromDraft(draft: string, desktop?: RuntimeCapabilityInput): string | null {
   const command = draft.trim().replace(/\s+/g, " ");
   return slashCommandsForRuntime(desktop).some((item) => item.command === command) ? command : null;
 }
 
-export function slashCommandForComposerSubmit(draft: string, desktop: RuntimeCapabilityInput = isDesktopRuntime()): string | null {
+export function slashCommandForComposerSubmit(draft: string, desktop?: RuntimeCapabilityInput): string | null {
   return exactSlashCommandFromDraft(draft, desktop);
 }
 
@@ -1730,7 +1713,7 @@ const unavailableSlashCommands: Record<string, string> = {
   "/statusline": "Web 端暂不配置 TUI 状态栏。"
 };
 
-export function slashCommandAction(command: string, hasThread = true, desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommandAction {
+export function slashCommandAction(command: string, hasThread = true, desktop?: RuntimeCapabilityInput): SlashCommandAction {
   const normalized = command.trim().replace(/\s+/g, " ");
   const known = slashCommandsForRuntime(desktop).find((item) => item.command === normalized);
   if (!known) return { kind: "unknown", command: normalized, message: "未知 Slash 命令" };
@@ -2080,7 +2063,7 @@ function SlashCommandTextarea({
   hasThread,
   plugins,
   pluginsUnavailable = false,
-  capabilities = runtimeCapabilitiesForRuntime(),
+  capabilities = runtimeCapabilitiesForRuntime(false),
   onSlashCommand,
   onSubmitShortcut,
   disabled = false
@@ -2620,7 +2603,7 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
   ]);
 }
 
-function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect, nextThreadAfterArchive }: {
+function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect, nextThreadAfterArchive, capabilities }: {
   threadId: string;
   detail: ThreadDetail;
   slot: ThreadMessageSlot;
@@ -2629,10 +2612,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   onSelect: (id: SelectedThread) => void;
   onPanelSelect: (view: View) => void;
   nextThreadAfterArchive: string | null;
+  capabilities: RuntimeCapabilityMatrix;
 }) {
   const qc = useQueryClient();
-  const desktopRuntime = isDesktopRuntime();
-  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3770,10 +3752,13 @@ export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" |
   return `${compact.slice(0, 120)}...`;
 }
 
-function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean; csrfToken?: string | null; onCreated: (id: string) => void }) {
+function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
+  loading: boolean;
+  csrfToken?: string | null;
+  onCreated: (id: string) => void;
+  capabilities: RuntimeCapabilityMatrix;
+}) {
   const qc = useQueryClient();
-  const desktopRuntime = isDesktopRuntime();
-  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
@@ -4379,8 +4364,7 @@ function ClaudeWorkspace() {
   );
 }
 
-function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
-  const capabilities = runtimeCapabilitiesForRuntime();
+function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
   const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
@@ -4564,7 +4548,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
               )}
             </Panel>
             <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
-              <JobList jobs={probeJobs} />
+              <JobList jobs={probeJobs} capabilities={capabilities} />
             </Panel>
           </>
         );
@@ -4624,9 +4608,8 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   );
 }
 
-function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
   const qc = useQueryClient();
-  const capabilities = runtimeCapabilitiesForRuntime();
   const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
   const update = useQuery({ queryKey: ["update-status"], queryFn: getUpdateStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
@@ -4754,7 +4737,7 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         </div>
       </Panel>
       <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
-        <JobList jobs={jobs.data ?? []} />
+        <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
       </Panel>
     </div>
   );
@@ -5290,33 +5273,36 @@ function recentClaudeSessions(overview?: ClaudeOverview): Array<{
     .slice(0, 12);
 }
 
-function JobList({ jobs }: { jobs: JobRecord[] }) {
+function JobList({ jobs, capabilities }: { jobs: JobRecord[]; capabilities: RuntimeCapabilityMatrix }) {
   return (
     <div className="job-list">
-      {jobs.map((job) => (
-        <details key={job.id} className="job-item">
-          <summary>
-            <span>{job.title}</span>
-            <StatusDot status={job.status} />
-            <ChevronRight size={16} />
-          </summary>
-          <div className="job-meta">
-            <span>{job.kind}</span>
-            {job.thread_id && <span>{job.thread_id}</span>}
-            {job.turn_id && <span>{job.turn_id}</span>}
-          </div>
-          {job.failure_analysis && (
-            <div className="job-analysis">
-              <strong>{failureCategoryLabel(job.failure_analysis.category)}</strong>
-              <p>{job.failure_analysis.explanation}</p>
-              <ul>
-                {job.failure_analysis.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
-              </ul>
+      {jobs.map((job) => {
+        const analysis = job.failure_analysis ? jobFailureAnalysisView(job.failure_analysis, capabilities) : null;
+        return (
+          <details key={job.id} className="job-item">
+            <summary>
+              <span>{job.title}</span>
+              <StatusDot status={job.status} />
+              <ChevronRight size={16} />
+            </summary>
+            <div className="job-meta">
+              <span>{job.kind}</span>
+              {job.thread_id && <span>{job.thread_id}</span>}
+              {job.turn_id && <span>{job.turn_id}</span>}
             </div>
-          )}
-          <pre>{job.output || job.error || "no output"}</pre>
-        </details>
-      ))}
+            {analysis && (
+              <div className="job-analysis">
+                <strong>{analysis.label}</strong>
+                <p>{analysis.explanation}</p>
+                <ul>
+                  {analysis.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
+                </ul>
+              </div>
+            )}
+            <pre>{job.output || job.error || "no output"}</pre>
+          </details>
+        );
+      })}
       {jobs.length === 0 && <div className="muted-row">暂无后台 job</div>}
     </div>
   );
@@ -5338,13 +5324,27 @@ function threadStatusLabel(status?: ThreadStatus | string | null): string {
   return "最近";
 }
 
-export function failureCategoryLabel(category: string): string {
+const linuxFailureLabels: Record<string, string> = {
+  systemd_failure: "systemd 失败",
+  nginx_failure: "Nginx 失败",
+  permission_denied_sudo: "权限或 sudo 失败"
+};
+
+const genericFailureLabels: Record<string, string> = {
+  systemd_failure: "服务失败",
+  nginx_failure: "更新失败",
+  permission_denied_sudo: "权限失败"
+};
+
+export function failureCategoryLabel(category: string, capabilities?: RuntimeCapabilityInput): string {
+  const resolvedCapabilities = capabilitiesForInput(capabilities);
+  if (!resolvedCapabilities.linuxUpdateLabels && genericFailureLabels[category]) {
+    return genericFailureLabels[category];
+  }
   const labels: Record<string, string> = {
     release_missing: "Release 缺失",
     download_sha256_mismatch: "下载或校验失败",
-    systemd_failure: "systemd 失败",
-    nginx_failure: "Nginx 失败",
-    permission_denied_sudo: "权限或 sudo 失败",
+    ...linuxFailureLabels,
     read_only_file_system: "文件系统只读/安装目录不可写",
     codex_auth_failure: "Codex 认证失败",
     sqlite_integrity_failure: "SQLite 完整性失败",
@@ -5354,6 +5354,38 @@ export function failureCategoryLabel(category: string): string {
     unknown: "未知失败"
   };
   return labels[category] ?? category;
+}
+
+export function jobFailureAnalysisView(
+  analysis: NonNullable<JobRecord["failure_analysis"]>,
+  capabilities?: RuntimeCapabilityInput
+): { label: string; explanation: string; suggestions: string[] } {
+  const resolvedCapabilities = capabilitiesForInput(capabilities);
+  const label = failureCategoryLabel(analysis.category, resolvedCapabilities);
+  if (resolvedCapabilities.linuxUpdateLabels) {
+    return {
+      label,
+      explanation: analysis.explanation,
+      suggestions: analysis.suggestions
+    };
+  }
+  const sanitize = (value: string) => sanitizeDesktopFailureCopy(value, label);
+  return {
+    label,
+    explanation: sanitize(analysis.explanation),
+    suggestions: analysis.suggestions.map(sanitize)
+  };
+}
+
+function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
+  const sanitized = value
+    .replace(/\bsystemd\b/gi, "服务")
+    .replace(/\bNginx\b/g, "服务")
+    .replace(/管理员密码/g, "权限")
+    .replace(/Linux prune/gi, "清理")
+    .replace(/\bsudo\b/gi, "权限")
+    .trim();
+  return sanitized || fallback;
 }
 
 export function optionalUnavailableMessage(

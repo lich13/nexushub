@@ -17,6 +17,7 @@ describe("NexusHub runtime adapter", () => {
     delete globalThis.__NEXUSHUB_TEST_INVOKE__;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 
@@ -39,6 +40,21 @@ describe("NexusHub runtime adapter", () => {
     expect(path).toBe("/api/public/settings");
     expect(options.method).toBe("GET");
     expect(options.credentials).toBe("include");
+  });
+
+  test("keeps API requests at root by default when no API base is configured", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    const { buildRuntimeApiPath } = await loadRuntime();
+
+    expect(buildRuntimeApiPath("/api/auth/login")).toBe("/api/auth/login");
+  });
+
+  test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    vi.stubEnv("VITE_API_BASE", "/backend/");
+    const { buildRuntimeApiPath } = await loadRuntime();
+
+    expect(buildRuntimeApiPath("/api/auth/login")).toBe("/backend/api/auth/login");
   });
 
   test("desktop rpc invokes Tauri commands and never calls fetch", async () => {
@@ -87,6 +103,41 @@ describe("NexusHub runtime adapter", () => {
       command: "desktop_upload_files_command",
       args: { files: [{ name: "note.md", mime: "text/markdown", bytes: [35] }] }
     });
+  });
+
+  test("web thread event transport opens EventSource through runtime API paths", async () => {
+    const close = vi.fn();
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      constructor(readonly url: string, readonly init?: EventSourceInit) {
+        MockEventSource.instances.push(this);
+      }
+      addEventListener = vi.fn();
+      close = close;
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+    const { createRuntimeThreadEventSource } = await loadRuntime();
+
+    const source = createRuntimeThreadEventSource("thread-a");
+    source.close();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0].url).toBe("/api/threads/thread-a/events");
+    expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  test("desktop thread event transport is unavailable without touching EventSource", async () => {
+    const EventSourceMock = vi.fn();
+    vi.stubGlobal("EventSource", EventSourceMock);
+    const { createRuntimeThreadEventSource } = await loadRuntime(true);
+
+    const source = createRuntimeThreadEventSource("thread-a");
+    source.addEventListener("block", vi.fn());
+    source.close();
+
+    expect(source.unavailable).toBe(true);
+    expect(EventSourceMock).not.toHaveBeenCalled();
   });
 
   test("desktop runtime routes shared app capabilities through typed native commands", async () => {
@@ -171,6 +222,7 @@ describe("NexusHub runtime adapter", () => {
     expect(runtimeSource).not.toContain("desktopApiRoute");
     expect(runtimeSource).not.toContain("invokeDesktopApi");
     expect(runtimeSource).not.toContain("desktop_api_command");
+    expect(runtimeSource).not.toContain("DesktopApiUpload");
     expect(runtimeSource).not.toContain('runtimeRpc("desktopApi"');
   });
 });

@@ -2,14 +2,12 @@ use crate::{
     codex::{self, CodexPaths, ThreadStatus, ThreadSummary},
     config::Config,
     db::JobRecord,
+    services::threads::{self, ThreadListRuntimeState},
 };
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-};
+use std::path::Path;
 
 pub const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 
@@ -55,22 +53,23 @@ pub fn probe_threads_for_status_with_paths(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let local_fetch_limit = if thread_status_filter_needs_full_scan(status) {
-        usize::MAX
-    } else {
-        limit
-    };
+    let local_fetch_limit = threads::thread_list_fetch_limit(Some(status), Some(limit));
     let hidden_thread_ids = codex::hidden_thread_ids(paths).unwrap_or_default();
     let archived_thread_ids = codex::archived_thread_ids(paths).unwrap_or_default();
-    let mut threads = codex::list_threads(paths, None, None, local_fetch_limit)?;
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    let threads = codex::list_threads(paths, None, None, local_fetch_limit)?;
     let running_jobs = running_thread_jobs(panel_db_path).unwrap_or_default();
-    apply_running_jobs_to_threads(&mut threads, &running_jobs, &archived_thread_ids);
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    let mut threads = threads::apply_thread_list_runtime_state(
+        threads,
+        ThreadListRuntimeState {
+            running_jobs: &running_jobs,
+            hidden_thread_ids: &hidden_thread_ids,
+            archived_thread_ids: &archived_thread_ids,
+        },
+    );
     if status == "reply-needed" {
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
-    Ok(filter_thread_summaries(threads, status, limit))
+    Ok(threads::thread_summaries_for_status(threads, status, limit))
 }
 
 fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> {
@@ -119,101 +118,6 @@ fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     .map(|count| count > 0)
 }
 
-fn apply_running_jobs_to_threads(
-    threads: &mut Vec<ThreadSummary>,
-    jobs: &[JobRecord],
-    archived_thread_ids: &HashSet<String>,
-) {
-    let mut by_thread: HashMap<&str, &JobRecord> = HashMap::new();
-    for job in jobs {
-        if let Some(thread_id) = job.thread_id.as_deref() {
-            by_thread.entry(thread_id).or_insert(job);
-        }
-    }
-    for thread in threads.iter_mut() {
-        if let Some(job) = by_thread.get(thread.id.as_str()) {
-            apply_running_job_to_summary(thread, job);
-        }
-    }
-    for job in by_thread.values() {
-        apply_running_job_to_thread_list(threads, job, archived_thread_ids);
-    }
-}
-
-fn apply_running_job_to_thread_list(
-    threads: &mut Vec<ThreadSummary>,
-    job: &JobRecord,
-    archived_thread_ids: &HashSet<String>,
-) {
-    let Some(thread_id) = job.thread_id.as_deref() else {
-        return;
-    };
-    if archived_thread_ids.contains(thread_id) {
-        return;
-    }
-    if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
-        apply_running_job_to_summary(thread, job);
-        return;
-    }
-    threads.push(thread_summary_from_running_job(job));
-}
-
-fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord) {
-    if matches!(summary.status, ThreadStatus::Archived) {
-        return;
-    }
-    summary.status = ThreadStatus::Running;
-    summary.active_job_id = Some(job.id.clone());
-    if summary.active_turn_id.is_none() {
-        summary.active_turn_id = job.turn_id.clone();
-    }
-    if summary.latest_message.is_none() {
-        summary.latest_message = Some(job.title.clone());
-    }
-}
-
-fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
-    ThreadSummary {
-        id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
-        title: "未命名线程".to_string(),
-        status: ThreadStatus::Running,
-        updated_at: timestamp_to_rfc3339(job.started_at),
-        archived_at: None,
-        message_count: 0,
-        latest_message: Some(job.title.clone()),
-        cwd: None,
-        model: None,
-        rollout_path: None,
-        active_turn_id: job.turn_id.clone(),
-        active_job_id: Some(job.id.clone()),
-        pending_elicitation: None,
-        last_event_kind: None,
-    }
-}
-
-fn filter_thread_summaries(
-    mut rows: Vec<ThreadSummary>,
-    status: &str,
-    limit: usize,
-) -> Vec<ThreadSummary> {
-    rows.retain(|row| thread_matches_status(row, status));
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    rows.truncate(limit.max(1));
-    rows
-}
-
-fn prune_hidden_thread_summaries(
-    rows: Vec<ThreadSummary>,
-    hidden_thread_ids: &HashSet<String>,
-) -> Vec<ThreadSummary> {
-    if hidden_thread_ids.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(|row| !hidden_thread_ids.contains(&row.id))
-        .collect()
-}
-
 fn probe_reply_needed_thread_is_fresh(thread: &ThreadSummary) -> bool {
     if !matches!(thread.status, ThreadStatus::ReplyNeeded) {
         return false;
@@ -240,23 +144,6 @@ fn thread_updated_within(thread: &ThreadSummary, max_age_seconds: i64) -> bool {
         .signed_duration_since(updated_at.with_timezone(&Utc))
         .num_seconds();
     (0..=max_age_seconds).contains(&age_seconds)
-}
-
-fn thread_status_filter_needs_full_scan(status: &str) -> bool {
-    matches!(status, "running" | "reply-needed" | "recoverable")
-}
-
-fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
-    matches!(
-        (status, &row.status),
-        ("running", ThreadStatus::Running)
-            | ("reply-needed", ThreadStatus::ReplyNeeded)
-            | ("recoverable", ThreadStatus::Recoverable)
-    )
-}
-
-fn timestamp_to_rfc3339(ts: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
 }
 
 fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {

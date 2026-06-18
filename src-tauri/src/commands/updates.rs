@@ -1,7 +1,7 @@
 use crate::overview::DesktopState;
 use anyhow::Result;
-use nexushub_core::db::JobRecord;
 use nexushub_core::config::Config;
+use nexushub_core::db::JobRecord;
 use nexushub_core::platform::PlatformPaths;
 use nexushub_core::services::updates::{self, UpdateState, UpdateStatus};
 use serde::Serialize;
@@ -14,7 +14,8 @@ pub fn desktop_update_status_with_state(
     last_error: Option<&str>,
 ) -> Result<UpdateStatus> {
     let config = state.config();
-    let mut status = desktop_update_status_for(&config, state.platform(), latest_version, last_error)?;
+    let mut status =
+        desktop_update_status_for(&config, state.platform(), latest_version, last_error)?;
     if latest_version.is_none() && last_error.is_none() {
         if let Some(job) = state
             .db

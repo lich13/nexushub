@@ -37,30 +37,14 @@ import type {
 } from "../types";
 import {
   RuntimeUnavailableError,
-  buildRuntimeApiPath,
+  createRuntimeThreadEventSource,
   desktopSessionUser,
+  getRuntimeKind,
   isDesktopRuntime,
   runtimeRpc,
-  type DesktopApiUpload
+  type RuntimeUploadFile
 } from "./runtime";
 
-type RequestOptions = RequestInit & {
-  csrfToken?: string | null;
-  skipContentType?: boolean;
-};
-
-function normalizeApiBase(base: string | undefined): string {
-  const value = (base ?? "").trim();
-  if (!value || value === "/") {
-    return "";
-  }
-  if (/^https?:\/\//i.test(value)) {
-    return value.replace(/\/+$/g, "");
-  }
-  return `/${value.replace(/^\/+|\/+$/g, "")}`;
-}
-
-const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE);
 const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
 
 export class ApiError extends Error {
@@ -72,54 +56,6 @@ export class ApiError extends Error {
 
 function isMissingEndpoint(error: unknown): boolean {
   return error instanceof RuntimeUnavailableError || error instanceof ApiError && [404, 405, 501].includes(error.status);
-}
-
-export function buildApiPath(path: string): string {
-  return buildRuntimeApiPath(path);
-}
-
-async function parse<T>(response: Response): Promise<T> {
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "error" in payload
-      ? String((payload as { error: unknown }).error)
-      : `请求失败，HTTP ${response.status}`;
-    throw new ApiError(message, response.status);
-  }
-  return payload as T;
-}
-
-async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (isDesktopRuntime()) {
-    void path;
-    void options;
-    throw new ApiError("macOS App 只能使用 typed Tauri command，不能通过 HTTP path 透传。", 501);
-  }
-  const headers = new Headers(options.headers);
-  if (!options.skipContentType && !headers.has("content-type") && options.body) {
-    headers.set("content-type", "application/json");
-  }
-  if (options.csrfToken) {
-    headers.set("x-csrf-token", options.csrfToken);
-  }
-  const response = await fetch(buildApiPath(path), {
-    credentials: "include",
-    ...options,
-    headers
-  });
-  return parse<T>(response);
-}
-
-async function optionalApiFetch<T>(path: string, options: RequestOptions = {}): Promise<OptionalResult<T>> {
-  try {
-    return normalizeOptionalResult(await apiFetch<T>(path, options));
-  } catch (error) {
-    if (isMissingEndpoint(error)) {
-      return { available: false, error: error instanceof Error ? error.message : String(error) };
-    }
-    throw error;
-  }
 }
 
 function normalizeOptionalResult<T>(payload: T): OptionalResult<T> {
@@ -134,55 +70,96 @@ function normalizeOptionalResult<T>(payload: T): OptionalResult<T> {
   return { available: true, data: payload };
 }
 
+export type RuntimeCapabilityMatrix = {
+  runtimeKind: "web" | "desktop";
+  webAuth: boolean;
+  logout: boolean;
+  securitySettings: boolean;
+  publicEndpointStatus: boolean;
+  codexStatePaths: boolean;
+  linuxBackupPrune: boolean;
+  linuxUpdateLabels: boolean;
+  forkAction: boolean;
+  approvalActions: boolean;
+};
+
+const DESKTOP_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
+  runtimeKind: "desktop",
+  webAuth: false,
+  logout: false,
+  securitySettings: false,
+  publicEndpointStatus: false,
+  codexStatePaths: false,
+  linuxBackupPrune: false,
+  linuxUpdateLabels: false,
+  forkAction: false,
+  approvalActions: false
+};
+
+const WEB_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
+  runtimeKind: "web",
+  webAuth: true,
+  logout: true,
+  securitySettings: true,
+  publicEndpointStatus: true,
+  codexStatePaths: true,
+  linuxBackupPrune: true,
+  linuxUpdateLabels: true,
+  forkAction: true,
+  approvalActions: true
+};
+
+export function runtimeCapabilities(): RuntimeCapabilityMatrix {
+  return getRuntimeKind() === "desktop"
+    ? DESKTOP_RUNTIME_CAPABILITIES
+    : WEB_RUNTIME_CAPABILITIES;
+}
+
+export function runtimeCapabilitiesForRuntime(
+  desktop: boolean | RuntimeCapabilityMatrix["runtimeKind"] = false,
+): RuntimeCapabilityMatrix {
+  if (desktop === "desktop") return DESKTOP_RUNTIME_CAPABILITIES;
+  if (desktop === "web") return WEB_RUNTIME_CAPABILITIES;
+  return desktop ? DESKTOP_RUNTIME_CAPABILITIES : WEB_RUNTIME_CAPABILITIES;
+}
+
+export function desktopRuntimeSessionUser(): SessionUser {
+  return desktopSessionUser();
+}
+
 export async function getPublicSettings(): Promise<PublicSettings> {
-  if (isDesktopRuntime()) {
-    return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
-  }
   if (USE_DEMO) {
     return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
   }
-  return apiFetch<PublicSettings>("/api/public/settings");
+  return runtimeRpc<PublicSettings>("getPublicSettings");
 }
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
-  if (isDesktopRuntime()) {
-    return desktopSessionUser();
-  }
   if (USE_DEMO) {
-    return { id: "dev", username, csrf_token: "dev-csrf" };
+    return isDesktopRuntime()
+      ? desktopSessionUser()
+      : { id: "dev", username, csrf_token: "dev-csrf" };
   }
-  const body: { username: string; password: string; turnstile_token?: string } = { username, password };
-  if (turnstileToken?.trim()) {
-    body.turnstile_token = turnstileToken.trim();
-  }
-  return apiFetch<SessionUser>("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify(body)
-  });
+  return runtimeRpc<SessionUser>("login", { username, password, turnstileToken });
 }
 
 export async function logout(csrfToken?: string | null): Promise<void> {
-  if (isDesktopRuntime()) return;
   if (USE_DEMO) return;
-  await apiFetch("/api/auth/logout", { method: "POST", csrfToken });
+  await runtimeRpc("logout", { csrfToken });
 }
 
 export async function me(): Promise<SessionUser> {
-  if (isDesktopRuntime()) return desktopSessionUser();
-  if (USE_DEMO) return { id: "dev", username: "admin", csrf_token: "dev-csrf" };
-  return apiFetch<SessionUser>("/api/auth/me");
+  if (USE_DEMO) {
+    return isDesktopRuntime()
+      ? desktopSessionUser()
+      : { id: "dev", username: "admin", csrf_token: "dev-csrf" };
+  }
+  return runtimeRpc<SessionUser>("me");
 }
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);
-  if (isDesktopRuntime()) {
-    return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
-  }
-  const params = new URLSearchParams();
-  if (status !== "all") params.set("status", status);
-  if (q.trim()) params.set("q", q.trim());
-  params.set("limit", "120");
-  return apiFetch<ThreadSummary[]>(`/api/threads?${params.toString()}`);
+  return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
 }
 
 export type ThreadDetailOptions = {
@@ -235,15 +212,7 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
       ]
     };
   }
-  const params = new URLSearchParams();
-  if (options.limit !== undefined) params.set("limit", String(options.limit));
-  if (options.before) params.set("before", options.before);
-  if (options.full) params.set("full", "true");
-  const query = params.toString();
-  if (isDesktopRuntime()) {
-    return runtimeRpc<ThreadDetail>("getThread", { id, options });
-  }
-  return apiFetch<ThreadDetail>(`/api/threads/${id}${query ? `?${query}` : ""}`);
+  return runtimeRpc<ThreadDetail>("getThread", { id, options });
 }
 
 export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOptions, "limit" | "before"> = {}): Promise<ThreadBlockPage> {
@@ -257,29 +226,12 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
       before_cursor: detail.before_cursor ?? null
     };
   }
-  const params = new URLSearchParams();
-  if (options.limit !== undefined) params.set("limit", String(options.limit));
-  if (options.before) params.set("before", options.before);
-  const query = params.toString();
-  if (isDesktopRuntime()) {
-    return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
-  }
-  return apiFetch<ThreadBlockPage>(`/api/threads/${id}/blocks${query ? `?${query}` : ""}`);
+  return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
 }
 
 export async function getSystemStatus(): Promise<SystemStatus> {
   if (USE_DEMO) {
-    return {
-      host_label: "43.155.235.227",
-      hostname: "codex-cloud-root",
-      public_endpoint: "https://661313.xyz/nexushub/",
-      codex_home: "/root/.codex",
-      configured_codex_home: "/root/.codex",
-      resolved_codex_home: "/root/.codex",
-      codex_home_source: "config",
-      panel_db: "/opt/nexushub/panel.sqlite",
-      state_db_integrity: "ok"
-    };
+    return demoSystemStatus();
   }
   return runtimeRpc<SystemStatus>("getSystemStatus");
 }
@@ -324,15 +276,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
 
 export async function getSecurity(): Promise<SecuritySettings> {
   if (USE_DEMO) {
-    return {
-      turnstile_enabled: false,
-      turnstile_required: false,
-      turnstile_site_key: "",
-      turnstile_secret_configured: false,
-      session_ttl_seconds: 31536000,
-      turnstile_expected_hostname: "661313.xyz",
-      turnstile_expected_action: "login"
-    };
+    return demoSecurity();
   }
   return runtimeRpc<SecuritySettings>("getSecurity");
 }
@@ -435,15 +379,7 @@ export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOver
 
 export async function getPlatformOverview(): Promise<PlatformOverview> {
   if (USE_DEMO) {
-    return {
-      kind: "linux",
-      data_dir: "/opt/nexushub",
-      config_file: "/opt/nexushub/config.toml",
-      webui_dir: "/opt/nexushub/webui",
-      log_dir: "/opt/nexushub/logs",
-      service_name: "nexushub",
-      service_kind: "systemd"
-    };
+    return demoPlatformOverview();
   }
   return runtimeRpc<PlatformOverview>("getPlatformOverview");
 }
@@ -776,7 +712,7 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
     };
   }
   if (isDesktopRuntime()) {
-    const uploads: DesktopApiUpload[] = await Promise.all(files.map(async (file) => ({
+    const uploads: RuntimeUploadFile[] = await Promise.all(files.map(async (file) => ({
       name: file.name,
       mime: file.type || "application/octet-stream",
       bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
@@ -1023,9 +959,9 @@ export function subscribeThreadEvents(
   threadId: string,
   handlers: { onBlock?: (block: MessageBlock, threadId: string) => void; onBlocks?: (blocks: MessageBlock[], threadId: string) => void; onSummary?: (summary: ThreadSummary, threadId: string) => void; onError?: (message: string, threadId: string) => void }
 ): () => void {
-  if (isDesktopRuntime()) return () => {};
   if (USE_DEMO) return () => {};
-  const source = new EventSource(buildApiPath(`/api/threads/${threadId}/events`), { withCredentials: true });
+  const source = createRuntimeThreadEventSource(threadId);
+  if (source.unavailable) return () => {};
   let pendingBlocks: MessageBlock[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   const flushBlocks = () => {
@@ -1062,7 +998,7 @@ export async function listJobs(): Promise<JobRecord[]> {
     return [
       { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "Probe Bark 测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "POST https://api.day.app\nHTTP 200\nBark push accepted" },
       { id: "probe-logs-demo", kind: "probe_logs_db_maintain", status: "succeeded", title: "Probe logs-db dry-run", started_at: 1780731666, finished_at: 1780731672, exit_code: 0, output: "dry_run=true\nwould_delete_probe_events=42\ncompact=false" },
-      { id: "job-demo", kind: "panel_update_precheck", status: "succeeded", title: "Panel update precheck", started_at: 1780731606, output: "panel version check\nintegrity_check: ok" },
+      { id: "job-demo", kind: "nexushub_update_check", status: "succeeded", title: "NexusHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }
@@ -1143,14 +1079,89 @@ function normalizePermissionProfiles(value: unknown): PermissionProfile[] {
   });
 }
 
+function demoPlatformOverview(): PlatformOverview {
+  if (isDesktopRuntime()) {
+    return {
+      kind: "macos",
+      data_dir: "~/Library/Application Support/NexusHub",
+      config_file: "~/Library/Application Support/NexusHub/config.toml",
+      webui_dir: "~/Library/Application Support/NexusHub/webui",
+      log_dir: "~/Library/Logs/NexusHub",
+      service_name: "NexusHub.app",
+      service_kind: "tauri"
+    };
+  }
+  return {
+    kind: "linux",
+    data_dir: "/opt/nexushub",
+    config_file: "/opt/nexushub/config.toml",
+    webui_dir: "/opt/nexushub/webui",
+    log_dir: "/opt/nexushub/logs",
+    service_name: "nexushub",
+    service_kind: "systemd"
+  };
+}
+
+function demoSystemStatus(): SystemStatus {
+  if (isDesktopRuntime()) {
+    return {
+      host_label: "local-macos",
+      hostname: "macos",
+      public_endpoint: null,
+      codex_home: "~/.codex",
+      configured_codex_home: "~/.codex",
+      resolved_codex_home: "~/.codex",
+      codex_home_source: "default",
+      panel_db: "~/Library/Application Support/NexusHub/panel.sqlite",
+      state_db_integrity: "ok"
+    };
+  }
+  return {
+    host_label: "43.155.235.227",
+    hostname: "codex-cloud-root",
+    public_endpoint: "https://661313.xyz/nexushub/",
+    codex_home: "/root/.codex",
+    configured_codex_home: "/root/.codex",
+    resolved_codex_home: "/root/.codex",
+    codex_home_source: "config",
+    panel_db: "/opt/nexushub/panel.sqlite",
+    state_db_integrity: "ok"
+  };
+}
+
+function demoSecurity(): SecuritySettings {
+  if (isDesktopRuntime()) {
+    return {
+      turnstile_enabled: false,
+      turnstile_required: false,
+      turnstile_site_key: "",
+      turnstile_secret_configured: false,
+      session_ttl_seconds: 31536000,
+      turnstile_expected_hostname: null,
+      turnstile_expected_action: null
+    };
+  }
+  return {
+    turnstile_enabled: false,
+    turnstile_required: false,
+    turnstile_site_key: "",
+    turnstile_secret_configured: false,
+    session_ttl_seconds: 31536000,
+    turnstile_expected_hostname: "661313.xyz",
+    turnstile_expected_action: "login"
+  };
+}
+
 function demoProbeStatus(): ProbeStatus {
+  const platform = demoPlatformOverview();
+  const system = demoSystemStatus();
   return {
     label: "Probe",
     enabled: true,
     available: true,
-    platform: "linux",
-    service_kind: "systemd",
-    service_name: "nexushub",
+    platform: platform.kind,
+    service_kind: platform.service_kind,
+    service_name: platform.service_name,
     flavor: "builtin",
     hook_status: "managed",
     bark_status: "not_configured",
@@ -1169,13 +1180,13 @@ function demoProbeStatus(): ProbeStatus {
     lifecycle_status: "ok",
     doctor_status: "ok",
     runtime_version: "demo",
-    config_path: "/opt/nexushub/config.toml",
-    codex_home: "/root/.codex",
-    configured_codex_home: "/root/.codex",
-    resolved_codex_home: "/root/.codex",
-    codex_home_source: "config",
+    config_path: platform.config_file,
+    codex_home: system.codex_home,
+    configured_codex_home: system.configured_codex_home,
+    resolved_codex_home: system.resolved_codex_home,
+    codex_home_source: system.codex_home_source,
     logs_db_source: "resolved_codex_home",
-    host_label: "43.155.235.227",
+    host_label: system.host_label,
     snapshot_age_seconds: 0,
     is_refreshing: false,
     snapshot_status: "cached"
@@ -1183,16 +1194,21 @@ function demoProbeStatus(): ProbeStatus {
 }
 
 function demoProbeSettings(): ProbeSettings {
+  const platform = demoPlatformOverview();
+  const system = demoSystemStatus();
+  const logsPath = isDesktopRuntime()
+    ? "~/Library/Application Support/NexusHub/logs_2.sqlite"
+    : "/root/.codex/logs_2.sqlite";
   return {
     codex: {
-      home: "/root/.codex",
-      configured_codex_home: "/root/.codex",
-      resolved_codex_home: "/root/.codex",
-      codex_home_source: "config",
+      home: system.codex_home,
+      configured_codex_home: system.configured_codex_home,
+      resolved_codex_home: system.resolved_codex_home,
+      codex_home_source: system.codex_home_source,
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
-      workspace: "/home/ubuntu/codex-workspace",
-      host_label: "43.155.235.227"
+      workspace: isDesktopRuntime() ? "~/Documents" : "/home/ubuntu/codex-workspace",
+      host_label: system.host_label
     },
     probe: {
       enabled: true,
@@ -1206,6 +1222,10 @@ function demoProbeSettings(): ProbeSettings {
       group: "NexusHub"
     },
     logs_db: {
+      path: logsPath,
+      resolved_path: logsPath,
+      logs_db_source: "resolved_codex_home",
+      config_file: platform.config_file,
       enabled: true,
       retention_days: 2,
       maintenance_interval_hours: 6,

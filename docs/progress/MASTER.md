@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-18
-> **Mode**: V0.1.103_UNIFIED_RUNTIME_UPDATE_STATUS_CLOSURE
+> **Mode**: V0.1.104_CC_SWITCH_ARCHITECTURE_CLOSURE
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.103 unified Linux/macOS runtime and signed update status closure<br>
-**Active Task**: `v0.1.103` keeps Tencent Cloud Linux as the WebUI deployment at `https://661313.xyz/nexushub/`, keeps macOS ARM64 as a native Tauri App wrapping the shared `webui`, routes threads/jobs/settings/system/probe/update behavior through shared NexusHub services, uses typed Tauri commands plus a frontend capability matrix so Linux WebUI-only auth/security/systemd/Nginx/update-prune surfaces do not leak into macOS, and preserves the signed macOS updater check result in the shared update status after `Check`.
+**Active Phase**: v0.1.104 cc-switch architecture closure<br>
+**Active Task**: `v0.1.104` closes the remaining cc-switch alignment gaps: shared services remain the single source for cross-platform behavior, Linux WebUI stays the only Web auth/security/systemd/Nginx host, macOS stays a native Tauri App with typed commands only, frontend components read capability matrix instead of runtime branching, and update status remains unified while Linux and macOS keep separate executors.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.103_UNIFIED_RUNTIME_UPDATE_STATUS_CLOSURE
+  mode: V0.1.104_CC_SWITCH_ARCHITECTURE_CLOSURE
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -115,6 +115,7 @@ adaptive:
 | 2026-06-18 | v0.1.102 unified runtime signed updates | L | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.102`, added shared update status/service contracts, routed Linux HTTP and macOS Tauri update status through shared services, added signed updater packaging for `nexushub-darwin-arm64.tar.gz.sig` and `latest.json`, and kept Windows out of scope. |
 | 2026-06-18 | v0.1.102 cc-switch architecture alignment | L | P/R pass locally | 0 | Added shared `threads`, `jobs`, `settings`, and `system` services; thinned Linux HTTP and macOS Tauri typed commands onto shared DTO/action contracts; removed frontend production dependence on the desktop API bridge and old panel update routes; added capability-matrix gates and static tests for Linux-only WebUI surfaces. |
 | 2026-06-18 | v0.1.103 macOS updater status closure | S | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.103`, made macOS `desktop_update_status` remember the latest signed updater check job, and kept the UI `NexusHub 更新` card from reverting to `Latest unknown` after a successful `Check`. |
+| 2026-06-18 | v0.1.104 cc-switch architecture closure | L | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.104`; closes remaining shared service, typed command, runtime transport, capability matrix, and static guard gaps so Linux WebUI remains a Linux-only extra host while macOS stays native Tauri. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -131,7 +132,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.103
+git ls-remote --tags origin refs/tags/v0.1.104
 ```
 
 ## Next Steps
@@ -142,7 +143,7 @@ git ls-remote --tags origin refs/tags/v0.1.103
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.103 Acceptance Matrix
+## v0.1.104 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -174,3 +175,4 @@ git ls-remote --tags origin refs/tags/v0.1.103
 | 2026-06-18 | v0.1.102-unified-runtime-signed-updates | Bumped versions to `0.1.102`, added shared update service/status contracts, exposed one `NexusHub 更新` entry across Linux and macOS, added signed updater release artifacts (`nexushub-darwin-arm64.tar.gz.sig`, `latest.json`), and kept Cloudflare Turnstile login verification separate from updater signing. |
 | 2026-06-18 | v0.1.102-cc-switch-architecture-alignment | Finished shared service convergence for threads/jobs/settings/system, routed Linux HTTP and macOS Tauri through thin adapters, removed frontend production use of `desktop_api_command` bridge/panel update aliases, and verified capability-matrix gating for Linux-only WebUI functions. |
 | 2026-06-18 | v0.1.103-macos-updater-status-closure | Fixed the macOS updater status loop discovered during native App acceptance: signed updater `Check` results are now remembered by `desktop_update_status`, and the shared `NexusHub 更新` card can show the latest signed version without falling back to `unknown`. |
+| 2026-06-18 | v0.1.104-cc-switch-architecture-closure | Closes the remaining cross-platform architecture gaps: service helpers are shared, macOS does not expose Web security/Turnstile commands, frontend domain APIs go through runtime transport, and component differences are capability-matrix driven. |

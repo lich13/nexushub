@@ -1,9 +1,8 @@
 use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
-    update::{self, analyze_job_failure, JobFailureCategory},
+    update::{analyze_job_failure, JobFailureCategory},
 };
-use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,16 +62,16 @@ pub struct UpdateStatus {
     pub capabilities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UpdateJobSpec {
-    pub kind: String,
-    pub title: String,
-    pub command: String,
-    pub exclusive_group: Option<String>,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateJobPlan {
+    pub action: UpdateAction,
+    pub method: UpdateExecutionMethod,
+    pub platform: PlatformKind,
+    pub exclusive: bool,
 }
 
 pub fn update_status(
-    config: &Config,
+    _config: &Config,
     platform: &PlatformPaths,
     latest_version: Option<&str>,
     last_error: Option<&str>,
@@ -92,7 +91,7 @@ pub fn update_status(
     };
     let method = execution_method(platform.kind);
     let capabilities = capabilities_for(platform.kind);
-    let recommended_action = recommended_action(config, platform.kind, method, update_available);
+    let recommended_action = recommended_action(platform.kind, method, update_available);
 
     UpdateStatus {
         current_version,
@@ -107,36 +106,12 @@ pub fn update_status(
     }
 }
 
-pub fn update_action_job_spec(
-    config: &Config,
-    platform: &PlatformPaths,
-    action: UpdateAction,
-) -> Result<UpdateJobSpec> {
-    match (platform.kind, action) {
-        (PlatformKind::Linux, UpdateAction::Check) => Ok(UpdateJobSpec {
-            kind: "nexushub_update_check".to_string(),
-            title: "NexusHub update precheck".to_string(),
-            command: config.update.panel_precheck_command.clone(),
-            exclusive_group: Some("nexushub-update".to_string()),
-        }),
-        (PlatformKind::Linux, UpdateAction::Install) => Ok(UpdateJobSpec {
-            kind: "nexushub_update_install".to_string(),
-            title: "NexusHub update install".to_string(),
-            command: update::panel_update_command(&config.update.panel_update_command),
-            exclusive_group: Some("nexushub-update".to_string()),
-        }),
-        (PlatformKind::Linux, UpdateAction::Prune) => Ok(UpdateJobSpec {
-            kind: "nexushub_update_prune".to_string(),
-            title: "NexusHub update backup prune".to_string(),
-            command: update::panel_prune_command(),
-            exclusive_group: Some("nexushub-update".to_string()),
-        }),
-        (PlatformKind::Macos, _) => Err(anyhow!(
-            "macOS updates must run through the signed Tauri updater, not shell jobs"
-        )),
-        (PlatformKind::Windows, _) => {
-            Err(anyhow!("Windows updates are not supported in this release"))
-        }
+pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> UpdateJobPlan {
+    UpdateJobPlan {
+        action,
+        method: execution_method(platform.kind),
+        platform: platform.kind,
+        exclusive: platform.kind == PlatformKind::Linux,
     }
 }
 
@@ -186,14 +161,13 @@ fn capabilities_for(platform: PlatformKind) -> Vec<String> {
 }
 
 fn recommended_action(
-    config: &Config,
     platform: PlatformKind,
     method: UpdateExecutionMethod,
     update_available: Option<bool>,
 ) -> String {
     match (platform, method, update_available) {
         (PlatformKind::Linux, UpdateExecutionMethod::LinuxSystemdJob, Some(true)) => {
-            update::panel_update_command(&config.update.panel_update_command)
+            "Confirm install to start the Linux server update job after precheck.".to_string()
         }
         (PlatformKind::Linux, UpdateExecutionMethod::LinuxSystemdJob, _) => {
             "Run the fixed Linux update precheck before installing a new release.".to_string()

@@ -24,6 +24,13 @@ pub struct ThreadsOverview {
     pub fetch_limit: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ThreadListRuntimeState<'a> {
+    pub running_jobs: &'a [JobRecord],
+    pub hidden_thread_ids: &'a HashSet<String>,
+    pub archived_thread_ids: &'a HashSet<String>,
+}
+
 pub fn build_threads_overview(
     threads: Vec<ThreadSummary>,
     running_jobs: Vec<JobRecord>,
@@ -33,10 +40,15 @@ pub fn build_threads_overview(
 ) -> ThreadsOverview {
     let response_limit = requested_thread_limit(query.limit);
     let fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
-    let mut threads = prune_hidden_thread_summaries(threads, hidden_thread_ids);
-    merge_running_jobs(&mut threads, &running_jobs, archived_thread_ids);
-    threads = prune_hidden_thread_summaries(threads, hidden_thread_ids);
-    threads = filter_thread_summaries(
+    let threads = apply_thread_list_runtime_state(
+        threads,
+        ThreadListRuntimeState {
+            running_jobs: &running_jobs,
+            hidden_thread_ids,
+            archived_thread_ids,
+        },
+    );
+    let threads = filter_thread_summaries(
         threads,
         query.status.as_deref(),
         query.q.as_deref(),
@@ -48,6 +60,19 @@ pub fn build_threads_overview(
         query,
         fetch_limit,
     }
+}
+
+pub fn apply_thread_list_runtime_state(
+    threads: Vec<ThreadSummary>,
+    runtime: ThreadListRuntimeState<'_>,
+) -> Vec<ThreadSummary> {
+    let mut threads = prune_hidden_thread_summaries(threads, runtime.hidden_thread_ids);
+    merge_running_jobs(
+        &mut threads,
+        runtime.running_jobs,
+        runtime.archived_thread_ids,
+    );
+    prune_hidden_thread_summaries(threads, runtime.hidden_thread_ids)
 }
 
 pub fn merge_running_jobs(
@@ -130,6 +155,14 @@ pub fn filter_thread_summaries(
     rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     rows.truncate(limit.max(1));
     rows
+}
+
+pub fn thread_summaries_for_status(
+    rows: Vec<ThreadSummary>,
+    status: &str,
+    limit: usize,
+) -> Vec<ThreadSummary> {
+    filter_thread_summaries(rows, Some(status), None, limit)
 }
 
 pub fn prune_hidden_thread_summaries(
@@ -215,7 +248,8 @@ mod tests {
         codex::{ThreadStatus, ThreadSummary},
         db::JobRecord,
         services::threads::{
-            build_threads_overview, merge_running_jobs, thread_list_fetch_limit, ThreadsQuery,
+            build_threads_overview, merge_running_jobs, thread_list_fetch_limit,
+            thread_summaries_for_status, ThreadsQuery,
         },
     };
 
@@ -281,6 +315,50 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_helper_applies_running_jobs_hidden_and_archived_rules_for_probe() {
+        let rows = vec![
+            thread(
+                "visible",
+                ThreadStatus::Recent,
+                Some("2026-06-18T10:00:00Z"),
+            ),
+            thread("hidden", ThreadStatus::Recent, Some("2026-06-18T11:00:00Z")),
+            thread(
+                "archived",
+                ThreadStatus::Archived,
+                Some("2026-06-18T12:00:00Z"),
+            ),
+        ];
+        let jobs = vec![
+            running_job("job-visible", "visible", Some("turn-visible"), 30),
+            running_job("job-hidden", "hidden", Some("turn-hidden"), 40),
+            running_job("job-new", "new-running", Some("turn-new"), 50),
+            running_job("job-archived", "archived", Some("turn-archived"), 60),
+        ];
+        let hidden = HashSet::from(["hidden".to_string()]);
+        let archived = HashSet::from(["archived".to_string()]);
+
+        let rows = super::apply_thread_list_runtime_state(
+            rows,
+            super::ThreadListRuntimeState {
+                running_jobs: &jobs,
+                hidden_thread_ids: &hidden,
+                archived_thread_ids: &archived,
+            },
+        );
+        let filtered = thread_summaries_for_status(rows, "running", 10);
+
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["visible", "new-running"]
+        );
+        assert_eq!(filtered[0].active_job_id.as_deref(), Some("job-visible"));
+    }
+
+    #[test]
     fn merge_running_jobs_preserves_existing_active_turn_and_uses_job_title_fallback() {
         let mut rows = vec![ThreadSummary {
             active_turn_id: Some("turn-from-rollout".to_string()),
@@ -314,6 +392,28 @@ mod tests {
         );
         assert_eq!(thread_list_fetch_limit(None, Some(25)), 25);
         assert_eq!(thread_list_fetch_limit(Some("recent"), None), 80);
+    }
+
+    #[test]
+    fn shared_status_filter_keeps_archived_out_of_probe_style_running_lists() {
+        let rows = vec![
+            thread("recent", ThreadStatus::Recent, Some("2026-06-18T10:00:00Z")),
+            thread(
+                "archived",
+                ThreadStatus::Archived,
+                Some("2026-06-18T12:00:00Z"),
+            ),
+            thread(
+                "running",
+                ThreadStatus::Running,
+                Some("2026-06-18T11:00:00Z"),
+            ),
+        ];
+
+        let filtered = thread_summaries_for_status(rows, "running", 10);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "running");
     }
 
     fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {

@@ -425,14 +425,12 @@ fn default_panel_precheck_command() -> String {
 
 fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
     match platform.kind {
-        PlatformKind::Linux => format!(
-            "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"
-        ),
+        PlatformKind::Linux => "/usr/local/bin/nexushub-update --precheck".to_string(),
         PlatformKind::Macos => format!(
             "test -d {}",
             shell_quote(&platform.data_dir.display().to_string())
         ),
-        PlatformKind::Windows => format!("curl -fsS http://127.0.0.1:{DEFAULT_LOOPBACK_PORT}/healthz"),
+        PlatformKind::Windows => "nexushub-update --precheck".to_string(),
     }
 }
 
@@ -725,21 +723,41 @@ fn env_file_value(text: &str, key: &str) -> Option<String> {
 }
 
 pub fn valid_probe_notification_server_url(value: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(value.trim()) else {
+    let trimmed = value.trim();
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        return has_non_empty_url_host(rest);
+    }
+    let Some(rest) = trimmed.strip_prefix("http://") else {
         return false;
     };
-    match url.scheme() {
-        "https" => true,
-        "http" => url.host_str().is_some_and(is_loopback_host),
-        _ => false,
-    }
+    let Some(host) = url_host(rest) else {
+        return false;
+    };
+    is_loopback_host(host)
 }
 
 fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host == "127.0.0.1"
+        || host == "[::1]"
         || host == "::1"
         || host.starts_with("127.")
+}
+
+fn has_non_empty_url_host(rest: &str) -> bool {
+    url_host(rest).is_some_and(|host| !host.trim().is_empty())
+}
+
+fn url_host(rest: &str) -> Option<&str> {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        return Some(&authority[..=end]);
+    }
+    authority.split(':').next()
 }
 
 fn deserialize_optional_string_field<'de, D>(
@@ -1039,10 +1057,10 @@ mod tests {
     fn linux_config_uses_loopback_panel_port() {
         let config = Config::for_platform_kind(PlatformKind::Linux);
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
-        assert!(config
-            .update
-            .panel_precheck_command
-            .contains("http://127.0.0.1:15742/healthz"));
+        assert_eq!(
+            config.update.panel_precheck_command,
+            "/usr/local/bin/nexushub-update --precheck"
+        );
         assert_eq!(config.codex.home.to_string_lossy(), "auto");
     }
 
@@ -1255,7 +1273,7 @@ update_command = "/usr/local/bin/nexushub-codex-update"
 prune_command = "/usr/local/bin/nexushub-codex-prune"
 doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
 panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
-panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"
+panel_precheck_command = "/usr/local/bin/nexushub-update --precheck"
 "#;
         let config: Config = toml::from_str(input).unwrap();
 
@@ -1377,10 +1395,9 @@ host_label = "old"
         assert_eq!(config.codex.host_label, "43.155.235.227");
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         match super::current_platform_kind() {
-            PlatformKind::Linux | PlatformKind::Windows => assert!(config
-                .update
-                .panel_precheck_command
-                .contains("http://127.0.0.1:15742/healthz")),
+            PlatformKind::Linux | PlatformKind::Windows => {
+                assert!(config.update.panel_precheck_command.contains("--precheck"))
+            }
             PlatformKind::Macos => {
                 assert!(config.update.panel_precheck_command.starts_with("test -d "));
                 assert!(!config

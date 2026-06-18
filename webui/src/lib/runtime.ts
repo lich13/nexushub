@@ -2,10 +2,20 @@ type RuntimeKind = "web" | "desktop";
 
 type RpcArgs = Record<string, unknown> | undefined;
 
-export type DesktopApiUpload = {
+export type RuntimeUploadFile = {
   name: string;
   mime: string;
   bytes: number[];
+};
+
+export type RuntimeThreadEventSource = {
+  unavailable?: boolean;
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  close(): void;
 };
 
 type WebRoute = {
@@ -111,6 +121,24 @@ export function buildRuntimeApiPath(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const base = apiBase();
   return base ? `${base}${normalizedPath}` : normalizedPath;
+}
+
+function unavailableThreadEventSource(): RuntimeThreadEventSource {
+  return {
+    unavailable: true,
+    addEventListener: () => undefined,
+    close: () => undefined
+  };
+}
+
+export function createRuntimeThreadEventSource(threadId: string): RuntimeThreadEventSource {
+  if (isDesktopRuntime()) {
+    return unavailableThreadEventSource();
+  }
+  return new EventSource(
+    buildRuntimeApiPath(`/api/threads/${encodeURIComponent(threadId)}/events`),
+    { withCredentials: true },
+  );
 }
 
 function createUnavailableApiError(message: string): Error & { status: number } {
@@ -550,12 +578,12 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   getSecurity: {
     web: { path: "/api/security" },
     desktop: {
-      unavailable: "安全/Turnstile 配置是 Linux WebUI 专属入口，macOS 桌面端不会调用 Web auth 或 CSRF。"
+      unavailable: "该宿主不支持安全设置"
     }
   },
   saveSecurity: {
     web: { path: "/api/security", method: "PATCH", csrfArg: "csrfToken", body: (args) => args?.settings ?? {} },
-    desktop: { unavailable: "Desktop security settings command is not implemented" }
+    desktop: { unavailable: "该宿主不支持安全设置" }
   },
   changePassword: {
     web: {
@@ -863,7 +891,7 @@ export async function runtimeRpc<T = unknown>(
 }
 
 export async function invokeDesktopUpload<T = unknown>(
-  uploads: DesktopApiUpload[],
+  uploads: RuntimeUploadFile[],
 ): Promise<T> {
   return invokeDesktop("desktop_upload_files_command", { files: uploads }) as Promise<T>;
 }

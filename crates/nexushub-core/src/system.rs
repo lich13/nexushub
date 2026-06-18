@@ -55,6 +55,12 @@ pub struct VersionInfo {
     pub codex_raw: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct VersionInfoInputs {
+    pub panel_latest: Option<String>,
+    pub codex_latest: Option<String>,
+}
+
 pub async fn system_status(config: &Config) -> Result<SystemStatus> {
     system_status_with_paths(config, &PlatformPaths::current()).await
 }
@@ -100,7 +106,11 @@ pub async fn system_status_with_paths(
 }
 
 pub async fn version_info() -> Result<VersionInfo> {
-    let latest = github_latest_release("lich13", "nexushub").await.ok();
+    version_info_with_inputs(VersionInfoInputs::default()).await
+}
+
+pub async fn version_info_with_inputs(inputs: VersionInfoInputs) -> Result<VersionInfo> {
+    let latest = inputs.panel_latest.and_then(non_empty_string);
     let current = env!("CARGO_PKG_VERSION").to_string();
     let update_available = latest
         .as_ref()
@@ -127,7 +137,7 @@ pub async fn version_info() -> Result<VersionInfo> {
         codex_root.as_deref(),
         codex_user.as_deref(),
     );
-    let codex_latest = npm_latest_version("@openai/codex").await.ok();
+    let codex_latest = inputs.codex_latest.and_then(non_empty_string);
     let codex_update_available =
         codex_update_available(codex_current.as_deref(), codex_latest.as_deref());
     Ok(VersionInfo {
@@ -143,46 +153,9 @@ pub async fn version_info() -> Result<VersionInfo> {
     })
 }
 
-async fn github_latest_release(owner: &str, repo: &str) -> Result<String> {
-    #[derive(Deserialize)]
-    struct Release {
-        tag_name: String,
-    }
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let release: Release = reqwest::Client::new()
-        .get(url)
-        .header("user-agent", "nexushub")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(release.tag_name)
-}
-
-async fn npm_latest_version(package: &str) -> Result<String> {
-    #[derive(Deserialize)]
-    struct DistTags {
-        latest: String,
-    }
-    #[derive(Deserialize)]
-    struct PackageInfo {
-        #[serde(rename = "dist-tags")]
-        dist_tags: DistTags,
-    }
-    let encoded = package.replace('/', "%2F");
-    let url = format!("https://registry.npmjs.org/{encoded}");
-    let package: PackageInfo = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()?
-        .get(url)
-        .header("user-agent", "nexushub")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(package.dist_tags.latest)
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn current_codex_version(

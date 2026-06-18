@@ -50,11 +50,10 @@ fn linux_default_config_values_stay_cloud_compatible() {
         config.update.doctor_command,
         "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
     );
-    assert!(config.update.panel_precheck_command.contains("systemctl"));
-    assert!(config
-        .update
-        .panel_precheck_command
-        .contains("http://127.0.0.1:15742/healthz"));
+    assert_eq!(
+        config.update.panel_precheck_command,
+        "/usr/local/bin/nexushub-update --precheck"
+    );
 }
 
 #[test]

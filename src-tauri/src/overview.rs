@@ -1,21 +1,21 @@
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-	archive::{
-	    execute_delete_archived, execute_delete_hidden, plan_delete_archived, plan_delete_hidden,
-	    ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
-	},
+    archive::{
+        execute_delete_archived, execute_delete_hidden, plan_delete_archived, plan_delete_hidden,
+        ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
+    },
     claude_code::{claude_overview, ClaudeOverview, ClaudePaths},
     codex::{
         list_threads, resolve_codex_paths, set_thread_archived, set_thread_title, thread_detail,
         window_thread_detail, CodexPaths, MessageBlock, ThreadDetail, ThreadSummary,
     },
     config::{
-        patch_probe_config_toml, CodexProbeConfigPatch,
-        Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
-        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+        patch_probe_config_toml, CodexProbeConfigPatch, Config, ProbeConfigFilePatch,
+        ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
+        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     crypto::SecretBox,
-	db::{JobRecord, PanelDb, ProbeEvent, SecuritySettings, ThreadFollowUp, ThreadGoalUpdate},
+    db::{JobRecord, PanelDb, ProbeEvent, ThreadFollowUp, ThreadGoalUpdate},
     jobs::{CodexActionResult, JobRunner},
     local::{
         default_codex_models, default_permission_profiles, local_codex_config,
@@ -23,18 +23,17 @@ use nexushub_core::{
         LocalPluginInfo,
     },
     platform::{PlatformKind, PlatformPaths},
-	probe::{
-	    redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeLogsDbStatus,
-	    ProbeRuntime, ProbeStatus,
-	},
+    probe::{
+        redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeLogsDbStatus,
+        ProbeRuntime, ProbeStatus,
+    },
     services::{
-        jobs as job_service,
-        settings as settings_service,
+        jobs as job_service, settings as settings_service,
         threads::{self as thread_service, ThreadsQuery},
     },
     system::{system_status_with_paths, SystemStatus},
-	update::{analyze_job_failure, JobFailureAnalysis},
-	uploads,
+    update::{analyze_job_failure, JobFailureAnalysis},
+    uploads,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -201,7 +200,7 @@ pub struct DesktopSecurityStatus {
     pub admin_required: bool,
     pub csrf_required: bool,
     pub session_required: bool,
-    pub settings: SecuritySettings,
+    pub settings: Option<serde_json::Value>,
     pub turnstile_expected_hostname: Option<String>,
     pub turnstile_expected_action: Option<String>,
 }
@@ -250,7 +249,7 @@ pub struct DesktopDeleteUploadResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DesktopApiUpload {
+pub struct DesktopUploadFile {
     pub name: String,
     pub mime: String,
     pub bytes: Vec<u8>,
@@ -849,10 +848,9 @@ pub fn desktop_probe_settings_with_state(state: &DesktopState) -> Result<Desktop
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    Ok(DesktopProbeSettings::from(settings_service::build_settings_view(
-        &config,
-        secret_state,
-    )))
+    Ok(DesktopProbeSettings::from(
+        settings_service::build_settings_view(&config, secret_state),
+    ))
 }
 
 pub fn desktop_probe_save_settings_with_state(
@@ -886,9 +884,10 @@ pub fn desktop_probe_save_settings_with_state(
     std::fs::write(&config_path, updated)?;
     let response_config = Config::load(&config_path)?;
     if let Some(device_key) = device_key {
-        state
-            .db
-            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+        state.db.set_secret_setting_bytes(
+            settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
+            device_key.as_bytes(),
+        )?;
     }
     state.replace_config(response_config);
     desktop_probe_settings_with_state(state)
@@ -925,9 +924,10 @@ pub fn desktop_probe_logs_db_maintain_with_state(
 
     match run {
         Ok(result) => {
-            state
-                .db
-                .append_job_output(&job_id, &format!("{}\n", serde_json::to_string_pretty(&result)?))?;
+            state.db.append_job_output(
+                &job_id,
+                &format!("{}\n", serde_json::to_string_pretty(&result)?),
+            )?;
             state.db.finish_job(&job_id, "succeeded", Some(0), None)?;
             Ok(ok_action(
                 "desktop_probe_logs_db_maintain",
@@ -951,7 +951,7 @@ pub fn desktop_probe_logs_db_maintain_with_state(
 pub fn desktop_probe_bark_test_with_state(state: &DesktopState) -> Result<DesktopActionResponse> {
     let device_key_configured = state
         .db
-        .get_secret_setting_bytes("probe_bark_device_key")?
+        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
     let runtime = ProbeRuntime::new(state.config(), state.platform().clone());
     let plan = runtime.bark_test_plan(device_key_configured);
@@ -1088,7 +1088,7 @@ pub fn desktop_delete_upload_with_state(
 
 pub fn desktop_store_uploads_with_state(
     state: &DesktopState,
-    files: Vec<DesktopApiUpload>,
+    files: Vec<DesktopUploadFile>,
 ) -> Result<uploads::UploadOutcome> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
     let mut stored = Vec::new();
@@ -1173,27 +1173,16 @@ pub fn desktop_cancel_followup_with_state(
 }
 
 pub fn desktop_security_status_with_state(state: &DesktopState) -> Result<DesktopSecurityStatus> {
-    let config = state.config();
-    let settings = state
-        .db
-        .security_settings(config.security.session_ttl_seconds)?;
-    let expected_hostname = state
-        .db
-        .get_setting("turnstile_expected_hostname")?
-        .or_else(|| config.security.turnstile_expected_hostname.clone());
-    let expected_action = state
-        .db
-        .get_setting("turnstile_expected_action")?
-        .or_else(|| config.security.turnstile_expected_action.clone());
+    let _ = state;
     Ok(DesktopSecurityStatus {
-        available: true,
-        mode: "native".to_string(),
+        available: false,
+        mode: "unavailable".to_string(),
         admin_required: false,
         csrf_required: false,
         session_required: false,
-        settings,
-        turnstile_expected_hostname: expected_hostname,
-        turnstile_expected_action: expected_action,
+        settings: None,
+        turnstile_expected_hostname: None,
+        turnstile_expected_action: None,
     })
 }
 
@@ -1237,21 +1226,21 @@ pub fn desktop_native_command_names() -> Vec<&'static str> {
         "desktop_rename_thread",
         "desktop_fork_thread",
         "desktop_probe_status",
-	    "desktop_probe_settings",
-	    "desktop_probe_save_settings",
-	    "desktop_probe_bark_test",
-	    "desktop_probe_hooks_install",
-	    "desktop_probe_logs_db_maintain",
-	    "desktop_probe_events",
-	    "desktop_archive_plan",
-	    "desktop_hidden_plan",
-	    "desktop_archive_delete_dry_run",
-	    "desktop_archive_delete_execute",
-	    "desktop_hidden_delete_dry_run",
-	    "desktop_hidden_delete_execute",
-	    "desktop_delete_upload",
+        "desktop_probe_settings",
+        "desktop_probe_save_settings",
+        "desktop_probe_bark_test",
+        "desktop_probe_hooks_install",
+        "desktop_probe_logs_db_maintain",
+        "desktop_probe_events",
+        "desktop_archive_plan",
+        "desktop_hidden_plan",
+        "desktop_archive_delete_dry_run",
+        "desktop_archive_delete_execute",
+        "desktop_hidden_delete_dry_run",
+        "desktop_hidden_delete_execute",
+        "desktop_delete_upload",
         "desktop_upload_files_command",
-	    "desktop_jobs",
+        "desktop_jobs",
         "desktop_job_detail",
         "desktop_list_followups",
         "desktop_enqueue_followup",
@@ -1454,10 +1443,7 @@ fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String>
         .map(|job| job.id)
 }
 
-fn thread_list_with_jobs(
-    state: &DesktopState,
-    query: ThreadsQuery,
-) -> Result<Vec<ThreadSummary>> {
+fn thread_list_with_jobs(state: &DesktopState, query: ThreadsQuery) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
     let fetch_limit = thread_service::thread_list_fetch_limit(query.status.as_deref(), query.limit);
     let hidden_thread_ids = nexushub_core::codex::hidden_thread_ids(&paths).unwrap_or_default();
@@ -1671,11 +1657,9 @@ mod tests {
         std::fs::create_dir_all(&config.codex.home).unwrap();
         std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
         std::fs::create_dir_all(&config.codex.workspace).unwrap();
-        let db = PanelDb::open_with_secret_box(
-            &config.paths.db_path,
-            SecretBox::deterministic_dev(),
-        )
-        .unwrap();
+        let db =
+            PanelDb::open_with_secret_box(&config.paths.db_path, SecretBox::deterministic_dev())
+                .unwrap();
         let state = DesktopState::new(
             config,
             db,
@@ -1807,13 +1791,77 @@ mod tests {
             "desktop invoke commands must not expose retired HTTP bridge"
         );
         assert!(
-            commands
-                .iter()
-                .all(|command| !command.contains("login")
-                    && !command.contains("csrf")
-                    && !command.contains("desktop_api")),
+            commands.iter().all(|command| !command.contains("login")
+                && !command.contains("csrf")
+                && !command.contains("desktop_api")),
             "desktop invoke commands must not expose Web auth/session commands"
         );
+    }
+
+    #[test]
+    fn desktop_security_status_is_unavailable_without_turnstile_details() {
+        let (_temp, state) = test_desktop_state();
+        state.db.set_setting("turnstile_enabled", "true").unwrap();
+        state.db.set_setting("turnstile_required", "true").unwrap();
+        state
+            .db
+            .set_setting("turnstile_site_key", "site-key")
+            .unwrap();
+        state
+            .db
+            .set_secret_setting_bytes("turnstile_secret_key", b"secret-key")
+            .unwrap();
+        state
+            .db
+            .set_setting("turnstile_expected_hostname", "security.example.com")
+            .unwrap();
+
+        let status = desktop_security_status_with_state(&state).unwrap();
+        let serialized = serde_json::to_string(&status).unwrap();
+
+        assert!(!status.available);
+        assert_eq!(status.mode, "unavailable");
+        assert!(!serialized.contains("security.example.com"));
+        assert!(!serialized.contains("site-key"));
+        assert!(!serialized.contains("secret"));
+        assert!(status.turnstile_expected_hostname.is_none());
+        assert!(status.turnstile_expected_action.is_none());
+    }
+
+    #[test]
+    fn desktop_probe_save_settings_uses_shared_bark_device_key_constant() {
+        let (_temp, state) = test_desktop_state();
+        std::fs::create_dir_all(state.platform().config_file.parent().unwrap()).unwrap();
+        let config = state.config();
+        std::fs::write(
+            &state.platform().config_file,
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        desktop_probe_save_settings_with_state(
+            &state,
+            DesktopProbeSettingsRequest {
+                codex: None,
+                probe: None,
+                notifications: Some(DesktopProbeNotificationsRequest {
+                    device_key: Some("  shared-device-key  ".to_string()),
+                    patch: ProbeNotificationsConfigPatch::default(),
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .db
+                .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)
+                .unwrap()
+                .as_deref(),
+            Some(b"shared-device-key".as_slice())
+        );
+        let hardcoded_setter = concat!("set_secret_setting_bytes(\"", "probe_bark_device_key\"");
+        assert!(!include_str!("overview.rs").contains(hardcoded_setter));
     }
 
     #[test]
@@ -1822,7 +1870,7 @@ mod tests {
 
         let outcome = desktop_store_uploads_with_state(
             &state,
-            vec![DesktopApiUpload {
+            vec![DesktopUploadFile {
                 name: "note.md".to_string(),
                 mime: "text/markdown".to_string(),
                 bytes: b"# hello".to_vec(),
@@ -1834,8 +1882,8 @@ mod tests {
         let root = uploads::upload_root(&state.resolved_codex_paths().home);
         assert!(root.join(&id).join("meta.json").is_file());
 
-        let deleted = desktop_delete_upload_with_state(&state, DesktopDeleteUploadRequest { id })
-            .unwrap();
+        let deleted =
+            desktop_delete_upload_with_state(&state, DesktopDeleteUploadRequest { id }).unwrap();
         assert!(deleted.ok);
         assert!(deleted.deleted);
     }
@@ -1845,7 +1893,7 @@ mod tests {
         let (_temp, state) = test_desktop_state();
         let outcome = desktop_store_uploads_with_state(
             &state,
-            vec![DesktopApiUpload {
+            vec![DesktopUploadFile {
                 name: "plan.md".to_string(),
                 mime: "text/markdown".to_string(),
                 bytes: b"# Plan\nShip parity".to_vec(),
@@ -1878,9 +1926,7 @@ mod tests {
         assert!(spec.prompt.contains("请读取附件"), "{}", spec.prompt);
         assert!(spec.prompt.contains("Ship parity"), "{}", spec.prompt);
         assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-m", "gpt-5.5"]),
+            spec.args.windows(2).any(|pair| pair == ["-m", "gpt-5.5"]),
             "{:?}",
             spec.args
         );

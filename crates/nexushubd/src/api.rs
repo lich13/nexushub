@@ -8,6 +8,7 @@ use crate::{
     },
     turnstile::verify_turnstile,
 };
+use anyhow::Result as AnyhowResult;
 use axum::{
     extract::connect_info::ConnectInfo,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
@@ -147,12 +148,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/update/precheck", post(system_update_precheck))
         .route("/api/system/update/install", post(system_update_install))
         .route("/api/system/update/prune", post(system_update_prune))
-        .route(
-            "/api/system/panel/update/precheck",
-            post(panel_update_precheck),
-        )
-        .route("/api/system/panel/update/start", post(panel_update_start))
-        .route("/api/system/panel/update/prune", post(panel_update_prune))
         .route("/api/codex/models", get(codex_models))
         .route(
             "/api/codex/permission-profiles",
@@ -2177,18 +2172,68 @@ async fn system_status(State(state): State<AppState>, headers: HeaderMap) -> Api
 
 async fn system_version(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(nexushub_core::system::version_info().await?)
+    ok(http_version_info().await?)
 }
 
 async fn system_update_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let version = nexushub_core::system::version_info().await?;
+    let version = http_version_info().await?;
     ok(update_service::update_status(
         &state.config(),
         &http_update_platform(),
         version.panel_latest.as_deref(),
         None,
     ))
+}
+
+async fn http_version_info() -> AnyhowResult<nexushub_core::system::VersionInfo> {
+    let inputs = nexushub_core::system::VersionInfoInputs {
+        panel_latest: github_latest_release("lich13", "nexushub").await.ok(),
+        codex_latest: npm_latest_version("@openai/codex").await.ok(),
+    };
+    nexushub_core::system::version_info_with_inputs(inputs).await
+}
+
+async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> {
+    #[derive(Deserialize)]
+    struct Release {
+        tag_name: String,
+    }
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let release: Release = reqwest::Client::new()
+        .get(url)
+        .header("user-agent", "nexushub")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(release.tag_name)
+}
+
+async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
+    #[derive(Deserialize)]
+    struct DistTags {
+        latest: String,
+    }
+    #[derive(Deserialize)]
+    struct PackageInfo {
+        #[serde(rename = "dist-tags")]
+        dist_tags: DistTags,
+    }
+    let encoded = package.replace('/', "%2F");
+    let url = format!("https://registry.npmjs.org/{encoded}");
+    let package: PackageInfo = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?
+        .get(url)
+        .header("user-agent", "nexushub")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(package.dist_tags.latest)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2347,30 +2392,6 @@ async fn codex_goal_resume(
     ok(local_goal_response(Some(&goal)))
 }
 
-async fn panel_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(state, headers, UpdateAction::Check, None).await
-}
-
-async fn panel_update_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(
-        state,
-        headers,
-        UpdateAction::Install,
-        Some("panel.update.started"),
-    )
-    .await
-}
-
-async fn panel_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(
-        state,
-        headers,
-        UpdateAction::Prune,
-        Some("panel.update.prune_started"),
-    )
-    .await
-}
-
 async fn system_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     start_update_action(state, headers, UpdateAction::Check, None).await
 }
@@ -2413,8 +2434,8 @@ async fn start_update_action(
             json!({ "action": format!("{action:?}") }),
         )?;
     }
-    let spec =
-        update_service::update_action_job_spec(&state.config(), &http_update_platform(), action)?;
+    let plan = update_service::update_action_plan(&http_update_platform(), action);
+    let spec = linux_update_job_spec(&state.config(), plan)?;
     let id = if let Some(group) = spec.exclusive_group.as_deref() {
         state
             .jobs
@@ -2429,6 +2450,43 @@ async fn start_update_action(
 
 fn http_update_platform() -> PlatformPaths {
     PlatformPaths::for_kind(PlatformKind::Linux)
+}
+
+struct LinuxUpdateJobSpec {
+    kind: String,
+    title: String,
+    command: String,
+    exclusive_group: Option<String>,
+}
+
+fn linux_update_job_spec(
+    config: &Config,
+    plan: update_service::UpdateJobPlan,
+) -> AnyhowResult<LinuxUpdateJobSpec> {
+    if plan.platform != PlatformKind::Linux {
+        anyhow::bail!("only Linux WebUI can start server update jobs");
+    }
+    let exclusive_group = plan.exclusive.then(|| "nexushub-update".to_string());
+    match plan.action {
+        UpdateAction::Check => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_check".to_string(),
+            title: "NexusHub update precheck".to_string(),
+            command: config.update.panel_precheck_command.clone(),
+            exclusive_group,
+        }),
+        UpdateAction::Install => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_install".to_string(),
+            title: "NexusHub update install".to_string(),
+            command: update::panel_update_command(&config.update.panel_update_command),
+            exclusive_group,
+        }),
+        UpdateAction::Prune => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_prune".to_string(),
+            title: "NexusHub update backup prune".to_string(),
+            command: update::panel_prune_command(),
+            exclusive_group,
+        }),
+    }
 }
 
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -3724,10 +3782,10 @@ mod tests {
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, fixed_probe_shell_command,
-        followup_request, load_probe_threads, merge_thread_summaries, normalize_goal_response,
-        probe_config_path, router, seed_thread_event_blocks, thread_block_page,
-        thread_event_block_key, thread_title, turnstile_login_action, SendMessageRequest,
-        TurnstileLoginAction,
+        followup_request, linux_update_job_spec, load_probe_threads, merge_thread_summaries,
+        normalize_goal_response, probe_config_path, router, seed_thread_event_blocks,
+        thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
+        update_service, SendMessageRequest, TurnstileLoginAction, UpdateAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -3737,6 +3795,7 @@ mod tests {
     use nexushub_core::{
         config::Config,
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
+        platform::{PlatformKind, PlatformPaths},
         services::{
             jobs as job_service, probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
             threads as thread_service,
@@ -4572,21 +4631,6 @@ mod tests {
                 "nexushub_update_prune",
                 "NexusHub update backup prune",
             ),
-            (
-                "/api/system/panel/update/precheck",
-                "nexushub_update_check",
-                "NexusHub update precheck",
-            ),
-            (
-                "/api/system/panel/update/start",
-                "nexushub_update_install",
-                "NexusHub update install",
-            ),
-            (
-                "/api/system/panel/update/prune",
-                "nexushub_update_prune",
-                "NexusHub update backup prune",
-            ),
         ] {
             let (state, session_token, csrf_token) = authenticated_test_state();
             let app = router(state.clone());
@@ -4641,6 +4685,65 @@ mod tests {
             assert_eq!(job.kind, kind, "{uri}");
             assert_eq!(job.title, title, "{uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_panel_update_routes_return_404() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state);
+
+        for uri in [
+            "/api/system/panel/update/precheck",
+            "/api/system/panel/update/start",
+            "/api/system/panel/update/prune",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        }
+    }
+
+    #[test]
+    fn linux_update_adapter_builds_shell_job_specs_outside_core_service() {
+        let mut config = Config::for_platform_kind(PlatformKind::Linux);
+        config.update.panel_precheck_command = "nexushub-update --precheck".to_string();
+        config.update.panel_update_command = "nexushub-update --install".to_string();
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+
+        let precheck = linux_update_job_spec(
+            &config,
+            update_service::update_action_plan(&platform, UpdateAction::Check),
+        )
+        .unwrap();
+        assert_eq!(precheck.kind, "nexushub_update_check");
+        assert_eq!(precheck.command, "nexushub-update --precheck");
+
+        let install = linux_update_job_spec(
+            &config,
+            update_service::update_action_plan(&platform, UpdateAction::Install),
+        )
+        .unwrap();
+        assert_eq!(install.kind, "nexushub_update_install");
+        assert_eq!(install.command, "nexushub-update --install");
+
+        let prune = linux_update_job_spec(
+            &config,
+            update_service::update_action_plan(&platform, UpdateAction::Prune),
+        )
+        .unwrap();
+        assert_eq!(prune.kind, "nexushub_update_prune");
+        assert!(prune.command.contains("release update backups"));
     }
 
     #[tokio::test]
