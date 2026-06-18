@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::overview::DesktopState;
+use anyhow::Result;
 use nexushub_core::config::Config;
 use nexushub_core::platform::PlatformPaths;
 use nexushub_core::services::updates::{self, UpdateState, UpdateStatus};
@@ -12,7 +12,12 @@ pub fn desktop_update_status_with_state(
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> Result<UpdateStatus> {
-    desktop_update_status_for(&state.config(), state.platform(), latest_version, last_error)
+    desktop_update_status_for(
+        &state.config(),
+        state.platform(),
+        latest_version,
+        last_error,
+    )
 }
 
 pub fn desktop_update_status_for(
@@ -49,7 +54,11 @@ pub async fn check_update_status(
     let job_id = update_job_id("check");
     state
         .db
-        .create_job(&job_id, "nexushub_update_check", "NexusHub app update check")
+        .create_job(
+            &job_id,
+            "nexushub_update_check",
+            "NexusHub app update check",
+        )
         .map_err(|err| err.to_string())?;
     state
         .db
@@ -80,7 +89,11 @@ pub async fn install_update_and_restart(
     let job_id = update_job_id("install");
     state
         .db
-        .create_job(&job_id, "nexushub_update_install", "NexusHub app update install")
+        .create_job(
+            &job_id,
+            "nexushub_update_install",
+            "NexusHub app update install",
+        )
         .map_err(|err| err.to_string())?;
     state
         .db
@@ -114,11 +127,7 @@ fn update_job_id(action: &str) -> String {
     )
 }
 
-async fn check_update(
-    app: &AppHandle,
-    state: &DesktopState,
-    job_id: &str,
-) -> Result<UpdateStatus> {
+async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Result<UpdateStatus> {
     let updater = app
         .updater_builder()
         .build()
@@ -180,6 +189,8 @@ async fn install_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> 
     update
         .install(bytes)
         .map_err(|err| anyhow::anyhow!("安装更新失败: {err}"))?;
-    state.db.append_job_output(job_id, "signed app update installed\n")?;
+    state
+        .db
+        .append_job_output(job_id, "signed app update installed\n")?;
     Ok(true)
 }

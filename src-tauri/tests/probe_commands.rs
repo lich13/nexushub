@@ -107,9 +107,15 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
     let status = desktop_update_status_with_state(&state, Some("v0.1.101"), None).unwrap();
     let serialized = serde_json::to_string(&status).unwrap();
 
-    assert_eq!(status.method, nexushub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater);
+    assert_eq!(
+        status.method,
+        nexushub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater
+    );
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
-    assert!(status.capabilities.iter().any(|capability| capability == "signature_verification"));
+    assert!(status
+        .capabilities
+        .iter()
+        .any(|capability| capability == "signature_verification"));
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/nexushub"));
