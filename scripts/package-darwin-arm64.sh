@@ -30,6 +30,7 @@ cleanup() {
   restore_helper_resource
   [[ -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]] && rm -f "${HELPER_RESOURCE_BACKUP}"
   [[ -n "${UNSIGNED_TAURI_CONFIG}" && -f "${UNSIGNED_TAURI_CONFIG}" ]] && rm -f "${UNSIGNED_TAURI_CONFIG}"
+  return 0
 }
 
 trap cleanup EXIT

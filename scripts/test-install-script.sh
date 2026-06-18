@@ -1530,6 +1530,7 @@ package_checks = {
     "helper resource backup": 'HELPER_RESOURCE_BACKUP="$(mktemp)"',
     "helper placeholder post-cleanup assertion": "assert_helper_resource_placeholder",
     "helper placeholder marker assertion": "^NEXUSHUB_HELPER_PLACEHOLDER",
+    "cleanup returns success": "return 0",
     "successful cleanup before exit": "trap - EXIT",
     "app resource assertion": "assert_app_bundle_resources",
     "WebUI bundle diff assertion": 'diff -qr "${WEBUI_DIR}/dist" "${bundled_webui}"',
