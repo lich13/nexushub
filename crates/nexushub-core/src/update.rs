@@ -179,6 +179,7 @@ pub fn analyze_job_failure(
             "connection reset",
             "connection refused",
             "connection timed out",
+            "network timeout",
             "network is unreachable",
             "unexpected eof",
             "early eof",

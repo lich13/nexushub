@@ -132,7 +132,7 @@ import json
 import sys
 
 cargo_toml, root_package_json, webui_package_json, tauri_cargo_toml, tauri_config_json, cargo_lock, tauri_cargo_lock = [Path(arg).read_text() for arg in sys.argv[1:]]
-expected_version = "0.1.100"
+expected_version = "0.1.101"
 
 checks = {
     "workspace Cargo.toml": (cargo_toml, f'version = "{expected_version}"'),
@@ -145,7 +145,7 @@ checks = {
 }
 missing = [name for name, (text, needle) in checks.items() if needle not in text]
 if missing:
-    raise SystemExit("v0.1.100 version fields missing or regressed: " + ", ".join(missing))
+    raise SystemExit("v0.1.101 version fields missing or regressed: " + ", ".join(missing))
 
 root_package = json.loads(root_package_json)
 if root_package.get("scripts", {}).get("tauri:build") != "bash scripts/package-darwin-arm64.sh":
@@ -157,7 +157,7 @@ for name, needle in {
     if needle not in tauri_config_json:
         raise SystemExit(f"src-tauri/tauri.conf.json missing {name}: {needle}")
 
-for forbidden in ["0.1.99", "v0.1.99"]:
+for forbidden in ["0.1.100", "v0.1.100"]:
     for name, text in {
         "workspace Cargo.toml": cargo_toml,
         "package.json": root_package_json,
@@ -170,7 +170,7 @@ for forbidden in ["0.1.99", "v0.1.99"]:
         if forbidden in text:
             raise SystemExit(f"{name} must not regress to {forbidden}")
 
-print("v0.1.100 version fields and release wiring: ok")
+print("v0.1.101 version fields and release wiring: ok")
 PY
 
 python3 - "${CONFIG_EXAMPLE}" "${SYSTEMD_SERVICE}" <<'PY'
@@ -249,8 +249,17 @@ checks = {
     "runbook macOS tarball": ("docs/cloud-deploy-runbook.md", "nexushub-darwin-arm64.tar.gz"),
     "runbook Linux tarball": ("docs/cloud-deploy-runbook.md", "nexushub-linux-x86_64.tar.gz"),
     "runbook scoped API proxy": ("docs/cloud-deploy-runbook.md", "`/nexushub/api/`"),
-    "master v0.1.100": ("docs/progress/MASTER.md", "v0.1.100"),
-    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.100 Acceptance Matrix"),
+    "README signed updater sig": ("README.md", "nexushub-darwin-arm64.tar.gz.sig"),
+    "README updater latest": ("README.md", "latest.json"),
+    "README updater platform": ("README.md", "darwin-aarch64"),
+    "README updater endpoint": ("README.md", "https://github.com/lich13/nexushub/releases/latest/download/latest.json"),
+    "runbook signed updater sig": ("docs/cloud-deploy-runbook.md", "nexushub-darwin-arm64.tar.gz.sig"),
+    "runbook updater latest": ("docs/cloud-deploy-runbook.md", "latest.json"),
+    "runbook updater platform": ("docs/cloud-deploy-runbook.md", "darwin-aarch64"),
+    "master v0.1.101": ("docs/progress/MASTER.md", "v0.1.101"),
+    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.101 Acceptance Matrix"),
+    "master signed updater": ("docs/progress/MASTER.md", "signed updater"),
+    "master latest json": ("docs/progress/MASTER.md", "latest.json"),
     "master Linux acceptance": ("docs/progress/MASTER.md", "Linux tarball `.sha256`"),
     "master macOS helper acceptance": ("docs/progress/MASTER.md", "helper sync check"),
     "master macOS DMG tarball": ("docs/progress/MASTER.md", "DMG/tarball `.sha256`"),
@@ -258,7 +267,7 @@ checks = {
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
-    raise SystemExit("v0.1.100 docs/static acceptance missing: " + ", ".join(missing))
+    raise SystemExit("v0.1.101 docs/static acceptance missing: " + ", ".join(missing))
 
 for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/progress/MASTER.md"]:
     text = texts[doc_name]
@@ -308,7 +317,7 @@ for doc_name, text in texts.items():
         if needle in text:
             raise SystemExit(f"{doc_name} must not contain live Cloudflare tokens or generated tunnel URLs: {needle}")
 
-print("v0.1.100 Linux WebUI/macOS Tauri docs: ok")
+print("v0.1.101 Linux WebUI/macOS Tauri docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -1404,13 +1413,26 @@ workflow_checks = {
     "linux job stays on ubuntu-24.04": "runs-on: ubuntu-24.04",
     "macOS release job runs on macos-14": "runs-on: macos-14",
     "macOS package script": "scripts/package-darwin-arm64.sh",
+    "Tauri signing private key env": "TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+    "Tauri signing password env": "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
     "GitHub release action": "softprops/action-gh-release@v2",
     "Linux tarball asset": "dist/nexushub-linux-x86_64.tar.gz",
     "Linux sha256 asset": "dist/nexushub-linux-x86_64.tar.gz.sha256",
     "macOS tarball asset": "dist/nexushub-darwin-arm64.tar.gz",
+    "macOS tarball signature asset": "dist/nexushub-darwin-arm64.tar.gz.sig",
     "macOS tarball sha256 asset": "dist/nexushub-darwin-arm64.tar.gz.sha256",
     "macOS DMG asset glob": "dist/NexusHub-*-darwin-arm64.dmg",
     "macOS DMG sha256 asset glob": "dist/NexusHub-*-darwin-arm64.dmg.sha256",
+    "updater metadata asset": "dist/latest.json",
+    "updater metadata generation": "Generate updater latest.json",
+    "updater metadata signature read": "dist/nexushub-darwin-arm64.tar.gz.sig",
+    "updater metadata platform": "darwin-aarch64",
+    "updater metadata version": '"version"',
+    "updater metadata notes": '"notes"',
+    "updater metadata pub_date": '"pub_date"',
+    "updater metadata platforms": '"platforms"',
+    "updater metadata url": '"url"',
+    "updater metadata signature": '"signature"',
 }
 missing = [name for name, needle in workflow_checks.items() if needle not in workflow]
 if missing:
@@ -1424,6 +1446,10 @@ if re.search(r"NexusHub-\d+\.\d+\.\d+-darwin-arm64\.dmg", workflow):
 if "dist/nexushub-darwin-arm64.tar.gz" in workflow:
     if "dist/nexushub-darwin-arm64.tar.gz.sha256" not in workflow:
         raise SystemExit("release workflow must upload macOS tarball checksum when tarball is retained")
+    if "dist/nexushub-darwin-arm64.tar.gz.sig" not in workflow:
+        raise SystemExit("release workflow must upload macOS tarball updater signature when tarball is retained")
+if "dist/latest.json" not in workflow:
+    raise SystemExit("release workflow must upload Tauri updater latest.json")
 for forbidden in [
     "Install.command",
     "Uninstall.command",
@@ -1465,11 +1491,21 @@ if root_package.get("scripts", {}).get("tauri:build") != "bash scripts/package-d
 tauri_config = (root / "src-tauri/tauri.conf.json").read_text()
 for name, needle in {
     "Tauri frontendDist": '"frontendDist": "../webui/dist"',
+    "Tauri create updater artifacts": '"createUpdaterArtifacts": true',
     "Tauri helper resource": '"resources/nexushubd": "nexushubd"',
     "Tauri WebUI resource": '"../webui/dist": "webui"',
+    "Tauri updater plugin": '"updater"',
+    "Tauri updater endpoint": '"https://github.com/lich13/nexushub/releases/latest/download/latest.json"',
+    "Tauri updater pubkey": '"pubkey"',
 }.items():
     if needle not in tauri_config:
         raise SystemExit(f"src-tauri/tauri.conf.json missing {name}: {needle}")
+tauri_manifest = (root / "src-tauri/Cargo.toml").read_text()
+if "tauri-plugin-updater" not in tauri_manifest:
+    raise SystemExit("src-tauri/Cargo.toml must keep tauri-plugin-updater")
+tauri_capabilities = (root / "src-tauri/capabilities/default.json").read_text()
+if "updater:default" not in tauri_capabilities:
+    raise SystemExit("src-tauri/capabilities/default.json must grant updater:default")
 package_checks = {
     "darwin host guard": 'OS="$(uname -s)"',
     "arm64 host guard": 'ARCH="$(uname -m)"',
@@ -1485,6 +1521,11 @@ package_checks = {
     "helper build command": "cargo build --release --package nexushubd",
     "helper resource copy": 'cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"',
     "helper resource chmod": 'chmod 755 "${HELPER_RESOURCE}"',
+    "unsigned local Tauri config": "UNSIGNED_TAURI_CONFIG",
+    "unsigned local updater config removal": 'pop("updater", None)',
+    "unsigned local updater artifact disable": '["createUpdaterArtifacts"] = False',
+    "release requires signing private key before build": 'release builds require TAURI_SIGNING_PRIVATE_KEY',
+    "Tauri build config path": 'TAURI_BUILD_CONFIG',
     "helper resource restore": "restore_helper_resource",
     "helper resource backup": 'HELPER_RESOURCE_BACKUP="$(mktemp)"',
     "helper placeholder post-cleanup assertion": "assert_helper_resource_placeholder",
@@ -1498,6 +1539,12 @@ package_checks = {
     "Tauri app/dmg bundles": "--bundles app,dmg",
     "Tauri app discovery": 'find_tauri_artifact "NexusHub.app"',
     "Tauri dmg discovery": 'find_tauri_artifact "*.dmg"',
+    "Tauri updater signature discovery": 'find_tauri_signature_artifact',
+    "updater signature asset name": 'nexushub-darwin-arm64.tar.gz.sig',
+    "updater signature copy": 'cp "${TAURI_UPDATER_SIGNATURE}" "${DIST}/${SIGNATURE_ASSET}"',
+    "signed release context guard": 'SIGNED_RELEASE_CONTEXT',
+    "signing private key guard": 'TAURI_SIGNING_PRIVATE_KEY',
+    "missing signature failure": "missing Tauri updater signature",
     "copies Tauri app bundle": 'cp -a "${APP_BUNDLE}"',
     "renames Tauri dmg asset": 'cp "${TAURI_DMG}" "${DIST}/${DMG_ASSET}"',
     "app-only tarball assertion": "assert_app_only_archive",

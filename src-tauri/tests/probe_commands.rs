@@ -4,7 +4,9 @@ use nexushub_core::{
     db::PanelDb,
     platform::{PlatformKind, PlatformPaths},
 };
-use nexushub_desktop_lib::{desktop_probe_status_with_state, DesktopState};
+use nexushub_desktop_lib::{
+    desktop_probe_status_with_state, desktop_update_status_with_state, DesktopState,
+};
 use serde_json::json;
 use std::{path::Path, process::Command};
 
@@ -95,4 +97,20 @@ async fn typed_probe_status_includes_real_thread_buckets() {
     assert_eq!(status.running_threads[0].id, "running-thread");
     assert_eq!(status.reply_needed_count, 1);
     assert_eq!(status.reply_needed_threads[0].id, "reply-thread");
+}
+
+#[tokio::test]
+async fn desktop_update_status_uses_macos_tauri_updater_shape() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = desktop_state(&temp);
+
+    let status = desktop_update_status_with_state(&state, Some("v0.1.101"), None).unwrap();
+    let serialized = serde_json::to_string(&status).unwrap();
+
+    assert_eq!(status.method, nexushub_core::services::updates::UpdateExecutionMethod::MacosTauriUpdater);
+    assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
+    assert!(status.capabilities.iter().any(|capability| capability == "signature_verification"));
+    assert!(!serialized.contains("systemctl"));
+    assert!(!serialized.contains("nginx"));
+    assert!(!serialized.contains("/opt/nexushub"));
 }

@@ -365,19 +365,40 @@ describe("archive delete API compatibility", () => {
     expect(page.before_cursor).toBe("b:120");
   });
 
-  test("routes panel updates to panel-specific endpoints", async () => {
-    const { startUpdateJob } = await loadRealApi();
+  test("routes NexusHub updates to unified endpoints", async () => {
+    const { getUpdateStatus, runUpdateAction, startUpdateJob } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "panel-job" }), {
       status: 200,
       headers: { "content-type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await startUpdateJob("panel", "start", "csrf-token");
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      current_version: "0.1.100",
+      latest_version: "v0.1.101",
+      update_available: true,
+      channel: "stable",
+      method: "linux_systemd_job",
+      state: "idle",
+      recommended_action: "/usr/local/bin/nexushub-update",
+      capabilities: ["job_history"]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const status = await getUpdateStatus();
+    const result = await runUpdateAction("install", "csrf-token");
+    const legacyResult = await startUpdateJob("panel", "start", "csrf-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers }];
+    const [statusPath] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers }];
+    const [path, options] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers }];
+    const [legacyPath] = fetchMock.mock.calls[2] as [string, RequestInit & { headers: Headers }];
+    expect(status.method).toBe("linux_systemd_job");
     expect(result).toEqual({ job_id: "panel-job" });
-    expect(path).toBe("/api/system/panel/update/start");
+    expect(legacyResult).toEqual({ job_id: "panel-job" });
+    expect(statusPath).toBe("/api/system/update/status");
+    expect(path).toBe("/api/system/update/install");
+    expect(legacyPath).toBe("/api/system/panel/update/start");
     expect(options.method).toBe("POST");
     expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
   });
@@ -810,6 +831,51 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
+  });
+
+  test("desktop update helpers use macOS updater command instead of Linux panel routes", async () => {
+    const { getUpdateStatus, runUpdateAction, startUpdateJob } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
+      if (command === "install_update_and_restart") {
+        return { job_id: "desktop-native-job", installed: false };
+      }
+      if (command === "check_update_status") {
+        return {
+          job_id: "desktop-check-job",
+          status: {
+            current_version: "0.1.100",
+            latest_version: "v0.1.101",
+            update_available: true,
+            channel: "stable",
+            method: "macos_tauri_updater",
+            state: "ready",
+            recommended_action: "Confirm install in the Tauri updater after signature verification.",
+            capabilities: ["signature_verification", "job_history"]
+          }
+        };
+      }
+      expect(command).toBe("desktop_update_status");
+      return {
+        current_version: "0.1.100",
+        latest_version: "v0.1.101",
+        update_available: true,
+        channel: "stable",
+        method: "macos_tauri_updater",
+        state: "idle",
+        recommended_action: "Confirm install in the Tauri updater after signature verification.",
+        capabilities: ["signature_verification", "job_history"]
+      };
+    });
+
+    expect((await getUpdateStatus()).method).toBe("macos_tauri_updater");
+    await expect(runUpdateAction("check", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-check-job" });
+    await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
+    await expect(startUpdateJob("panel", "start", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(4);
   });
 
   test("desktop API bridge accepts empty string request bodies without JSON parsing errors", async () => {

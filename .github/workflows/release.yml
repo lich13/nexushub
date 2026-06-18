@@ -37,11 +37,15 @@ jobs:
         with:
           node-version: 22
       - run: bash scripts/package-darwin-arm64.sh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: nexushub-darwin-arm64
           path: |
             dist/nexushub-darwin-arm64.tar.gz
+            dist/nexushub-darwin-arm64.tar.gz.sig
             dist/nexushub-darwin-arm64.tar.gz.sha256
             dist/NexusHub-*-darwin-arm64.dmg
             dist/NexusHub-*-darwin-arm64.dmg.sha256
@@ -58,12 +62,43 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate updater latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          signature="$(cat dist/nexushub-darwin-arm64.tar.gz.sig)"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/nexushub-darwin-arm64.tar.gz"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          python3 - "${version}" "${signature}" "${url}" "${pub_date}" <<'PY'
+          import json
+          import sys
+
+          version, signature, url, pub_date = sys.argv[1:]
+          latest = {
+              "version": version,
+              "notes": f"Release v{version}",
+              "pub_date": pub_date,
+              "platforms": {
+                  "darwin-aarch64": {
+                      "signature": signature,
+                      "url": url,
+                  }
+              },
+          }
+          with open("dist/latest.json", "w", encoding="utf-8") as fh:
+              json.dump(latest, fh, ensure_ascii=False, indent=2)
+              fh.write("\n")
+          PY
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/nexushub-linux-x86_64.tar.gz
             dist/nexushub-linux-x86_64.tar.gz.sha256
             dist/nexushub-darwin-arm64.tar.gz
+            dist/nexushub-darwin-arm64.tar.gz.sig
             dist/nexushub-darwin-arm64.tar.gz.sha256
             dist/NexusHub-*-darwin-arm64.dmg
             dist/NexusHub-*-darwin-arm64.dmg.sha256
+            dist/latest.json

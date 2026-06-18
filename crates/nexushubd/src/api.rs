@@ -31,10 +31,13 @@ use nexushub_core::{
     db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
     jobs::CodexActionResult,
     local,
-    platform::PlatformPaths,
+    platform::{PlatformKind, PlatformPaths},
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
-    services::probe::probe_threads_for_status_with_paths,
+    services::{
+        probe::probe_threads_for_status_with_paths,
+        updates::{self as update_service, UpdateAction},
+    },
     update,
     uploads::{
         self, cleanup_upload_ids, prepare_uploads, prompt_with_attachment_context,
@@ -134,6 +137,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/uploads/:id", delete(delete_upload_file))
         .route("/api/system/status", get(system_status))
         .route("/api/system/version", get(system_version))
+        .route("/api/system/update/status", get(system_update_status))
+        .route("/api/system/update/precheck", post(system_update_precheck))
+        .route("/api/system/update/install", post(system_update_install))
+        .route("/api/system/update/prune", post(system_update_prune))
         .route(
             "/api/system/panel/update/precheck",
             post(panel_update_precheck),
@@ -2319,6 +2326,17 @@ async fn system_version(State(state): State<AppState>, headers: HeaderMap) -> Ap
     ok(nexushub_core::system::version_info().await?)
 }
 
+async fn system_update_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let version = nexushub_core::system::version_info().await?;
+    ok(update_service::update_status(
+        &state.config(),
+        &http_update_platform(),
+        version.panel_latest.as_deref(),
+        None,
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct CwdQuery {
     cwd: Option<String>,
@@ -2476,52 +2494,87 @@ async fn codex_goal_resume(
 }
 
 async fn panel_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let id = state.jobs.start_shell_job(
-        "panel_update_precheck",
-        "Panel update precheck",
-        state.config().update.panel_precheck_command.clone(),
-    )?;
-    ok(json!({"job_id": id}))
+    start_update_action(state, headers, UpdateAction::Check, None).await
 }
 
 async fn panel_update_start(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "panel.update.started",
-        Some("system"),
-        Some("panel"),
-        None,
-        json!({}),
-    )?;
-    let id = state.jobs.start_shell_job(
-        "panel_update_start",
-        "Panel update latest",
-        update::panel_update_command(&state.config().update.panel_update_command),
-    )?;
-    ok(json!({"job_id": id}))
+    start_update_action(
+        state,
+        headers,
+        UpdateAction::Install,
+        Some("panel.update.started"),
+    )
+    .await
 }
 
 async fn panel_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_update_action(
+        state,
+        headers,
+        UpdateAction::Prune,
+        Some("panel.update.prune_started"),
+    )
+    .await
+}
+
+async fn system_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_update_action(state, headers, UpdateAction::Check, None).await
+}
+
+async fn system_update_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_update_action(
+        state,
+        headers,
+        UpdateAction::Install,
+        Some("nexushub.update.install_started"),
+    )
+    .await
+}
+
+async fn system_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
+    start_update_action(
+        state,
+        headers,
+        UpdateAction::Prune,
+        Some("nexushub.update.prune_started"),
+    )
+    .await
+}
+
+async fn start_update_action(
+    state: AppState,
+    headers: HeaderMap,
+    action: UpdateAction,
+    audit_action: Option<&str>,
+) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "panel.update.prune_started",
-        Some("system"),
-        Some("panel"),
-        None,
-        json!({}),
-    )?;
-    let id = state.jobs.start_shell_job(
-        "panel_update_prune",
-        "Panel backup prune",
-        update::panel_prune_command(),
-    )?;
+    if let Some(audit_action) = audit_action {
+        state.db.record_audit(
+            Some(&auth.admin_id),
+            audit_action,
+            Some("system"),
+            Some("updates"),
+            None,
+            json!({ "action": format!("{action:?}") }),
+        )?;
+    }
+    let spec =
+        update_service::update_action_job_spec(&state.config(), &http_update_platform(), action)?;
+    let id = if let Some(group) = spec.exclusive_group.as_deref() {
+        state
+            .jobs
+            .start_exclusive_shell_job(&spec.kind, &spec.title, spec.command, group)?
+    } else {
+        state
+            .jobs
+            .start_shell_job(&spec.kind, &spec.title, spec.command)?
+    };
     ok(json!({"job_id": id}))
+}
+
+fn http_update_platform() -> PlatformPaths {
+    PlatformPaths::for_kind(PlatformKind::Linux)
 }
 
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -4723,26 +4776,41 @@ mod tests {
 
     #[tokio::test]
     async fn panel_update_routes_require_auth_and_csrf_and_start_fixed_panel_jobs() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state.clone());
-
         for (uri, kind, title) in [
             (
+                "/api/system/update/precheck",
+                "nexushub_update_check",
+                "NexusHub update precheck",
+            ),
+            (
+                "/api/system/update/install",
+                "nexushub_update_install",
+                "NexusHub update install",
+            ),
+            (
+                "/api/system/update/prune",
+                "nexushub_update_prune",
+                "NexusHub update backup prune",
+            ),
+            (
                 "/api/system/panel/update/precheck",
-                "panel_update_precheck",
-                "Panel update precheck",
+                "nexushub_update_check",
+                "NexusHub update precheck",
             ),
             (
                 "/api/system/panel/update/start",
-                "panel_update_start",
-                "Panel update latest",
+                "nexushub_update_install",
+                "NexusHub update install",
             ),
             (
                 "/api/system/panel/update/prune",
-                "panel_update_prune",
-                "Panel backup prune",
+                "nexushub_update_prune",
+                "NexusHub update backup prune",
             ),
         ] {
+            let (state, session_token, csrf_token) = authenticated_test_state();
+            let app = router(state.clone());
+
             let unauthorized = app
                 .clone()
                 .oneshot(
@@ -4793,6 +4861,49 @@ mod tests {
             assert_eq!(job.kind, kind, "{uri}");
             assert_eq!(job.title, title, "{uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn unified_update_status_requires_auth_and_uses_shared_shape() {
+        let (state, session_token, _) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/system/update/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/system/update/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["method"], "linux_systemd_job");
+        assert_eq!(payload["state"], "idle");
+        assert_eq!(payload["channel"], "stable");
+        assert!(payload["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "job_history"));
     }
 
     #[tokio::test]
@@ -5730,9 +5841,7 @@ mod tests {
             "/api/system/codex/update/precheck",
             "/api/system/codex/update/start",
             "/api/system/codex/update/prune",
-            "/api/system/update/precheck",
             "/api/system/update/start",
-            "/api/system/update/prune",
             "/api/providers/claude-code/jobs/version-check",
             "/api/providers/claude-code/jobs/update/precheck",
             "/api/providers/claude-code/jobs/update/start",

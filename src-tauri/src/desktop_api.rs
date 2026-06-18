@@ -220,6 +220,21 @@ pub async fn handle_desktop_api(
             system_status_with_paths(&state.config(), &state.platform).await?,
         )?),
         ("GET", ["api", "system", "version"]) => Ok(serde_json::to_value(version_info().await?)?),
+        ("GET", ["api", "system", "update", "status"]) => {
+            let config = state
+                .config
+                .read()
+                .map_err(|_| anyhow!("config lock poisoned"))?
+                .clone();
+            Ok(serde_json::to_value(
+                crate::commands::updates::desktop_update_status_for(
+                    &config,
+                    &state.platform,
+                    None,
+                    None,
+                )?,
+            )?)
+        }
         ("GET", ["api", "security"]) => Ok(json!({
             "turnstile_enabled": false,
             "turnstile_required": false,

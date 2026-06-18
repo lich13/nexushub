@@ -157,15 +157,15 @@ describe("conversation helpers", () => {
     });
   }, 15000);
 
-  test("desktop runtime removes Linux-only update actions but keeps core workspace entry points", async () => {
+  test("desktop runtime keeps shared update entry but removes Linux-only update actions", async () => {
     const app = await loadApp();
 
     expect(app.navigationLabelsForRuntime?.(true)).toEqual(expect.arrayContaining(["Codex", "探针", "运维"]));
-    expect(app.opsWorkspacePanelTitles?.(false)).toContain("面板更新");
-    expect(app.opsWorkspacePanelTitles?.(true)).not.toContain("面板更新");
-    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["面板更新", "Precheck", "Update", "Prune", "Public endpoint"]));
+    expect(app.opsWorkspacePanelTitles?.(false)).toContain("NexusHub 更新");
+    expect(app.opsWorkspacePanelTitles?.(true)).toContain("NexusHub 更新");
+    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["Precheck", "Prune", "Public endpoint"]));
     expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
-    expect(app.opsWorkspaceVisibleCopy?.(true)).toEqual(expect.arrayContaining(["系统状态", "归档线程清理", "隐藏线程清理", "Job History"]));
+    expect(app.opsWorkspaceVisibleCopy?.(true)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
   });
 
   test("desktop runtime hides unsupported fork and approval actions", async () => {
@@ -1010,7 +1010,7 @@ describe("conversation helpers", () => {
 
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
       "系统状态",
-      "面板更新",
+      "NexusHub 更新",
       "归档线程清理",
       "隐藏线程清理",
       "Job History"

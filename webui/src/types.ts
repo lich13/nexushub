@@ -196,6 +196,21 @@ export type SystemVersion = {
   codex_raw?: string | null;
 };
 
+export type UpdateExecutionMethod = "linux_systemd_job" | "macos_tauri_updater" | "unsupported";
+export type UpdateState = "idle" | "checking" | "ready" | "installing" | "succeeded" | "failed" | "unsupported";
+
+export type UpdateStatus = {
+  current_version: string;
+  latest_version?: string | null;
+  update_available?: boolean | null;
+  channel: string;
+  method: UpdateExecutionMethod;
+  state: UpdateState;
+  failure_category?: string | null;
+  recommended_action: string;
+  capabilities: string[];
+};
+
 export type SecuritySettings = {
   turnstile_enabled: boolean;
   turnstile_required: boolean;

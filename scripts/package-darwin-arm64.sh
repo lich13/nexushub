@@ -13,6 +13,7 @@ TMP=""
 HELPER_RESOURCE=""
 HELPER_RESOURCE_BACKUP=""
 HELPER_RESOURCE_HAD_ORIGINAL=0
+UNSIGNED_TAURI_CONFIG=""
 
 restore_helper_resource() {
   if [[ -n "${HELPER_RESOURCE}" && -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]]; then
@@ -28,6 +29,7 @@ cleanup() {
   [[ -n "${TMP}" && -d "${TMP}" ]] && rm -rf "${TMP}"
   restore_helper_resource
   [[ -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]] && rm -f "${HELPER_RESOURCE_BACKUP}"
+  [[ -n "${UNSIGNED_TAURI_CONFIG}" && -f "${UNSIGNED_TAURI_CONFIG}" ]] && rm -f "${UNSIGNED_TAURI_CONFIG}"
 }
 
 trap cleanup EXIT
@@ -57,6 +59,20 @@ find_tauri_artifact() {
   done
 
   [[ -n "${found}" ]] || die "missing Tauri artifact matching ${pattern}"
+  printf '%s\n' "${found}"
+}
+
+find_tauri_signature_artifact() {
+  local archive_path="${1:-}"
+  local found=""
+
+  if [[ -n "${archive_path}" && -f "${archive_path}.sig" ]]; then
+    printf '%s\n' "${archive_path}.sig"
+    return 0
+  fi
+
+  found="$(find_tauri_artifact "*.app.tar.gz.sig" 2>/dev/null || true)"
+  [[ -n "${found}" ]] || return 1
   printf '%s\n' "${found}"
 }
 
@@ -112,7 +128,15 @@ fi
 
 VERSION="${VERSION:-$(cargo_package_version)}"
 TARBALL_ASSET="nexushub-darwin-arm64.tar.gz"
+SIGNATURE_ASSET="nexushub-darwin-arm64.tar.gz.sig"
 DMG_ASSET="NexusHub-${VERSION}-darwin-arm64.dmg"
+SIGNED_RELEASE_CONTEXT=0
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  SIGNED_RELEASE_CONTEXT=1
+fi
+if [[ "${SIGNED_RELEASE_CONTEXT}" == "1" && -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  die "release builds require TAURI_SIGNING_PRIVATE_KEY for signed updater artifacts"
+fi
 
 [[ -d "${TAURI_DIR}" ]] || die "missing Tauri project directory: ${TAURI_DIR}"
 [[ -d "${WEBUI_DIR}" ]] || die "missing WebUI project directory: ${WEBUI_DIR}"
@@ -145,12 +169,37 @@ HELPER_BINARY="${ROOT}/target/release/nexushubd"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"
 
+TAURI_BUILD_CONFIG="${TAURI_DIR}/tauri.conf.json"
+if [[ "${SIGNED_RELEASE_CONTEXT}" != "1" ]]; then
+  UNSIGNED_TAURI_CONFIG="$(mktemp)"
+  python3 - "${TAURI_DIR}/tauri.conf.json" "${UNSIGNED_TAURI_CONFIG}" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:]
+with open(source, "r", encoding="utf-8") as fh:
+    config = json.load(fh)
+config.setdefault("bundle", {})["createUpdaterArtifacts"] = False
+config.get("plugins", {}).pop("updater", None)
+with open(target, "w", encoding="utf-8") as fh:
+    json.dump(config, fh, ensure_ascii=False, indent=2)
+    fh.write("\n")
+PY
+  TAURI_BUILD_CONFIG="${UNSIGNED_TAURI_CONFIG}"
+fi
+
 if [[ "${SKIP_TAURI_BUILD:-0}" != "1" ]]; then
-  "${TAURI_CLI}" build --config "${TAURI_DIR}/tauri.conf.json" --bundles app,dmg
+  "${TAURI_CLI}" build --config "${TAURI_BUILD_CONFIG}" --bundles app,dmg
 fi
 
 APP_BUNDLE="$(find_tauri_artifact "NexusHub.app")"
 TAURI_DMG="$(find_tauri_artifact "*.dmg")"
+TAURI_UPDATER_ARCHIVE="$(find_tauri_artifact "*.app.tar.gz" 2>/dev/null || true)"
+TAURI_UPDATER_SIGNATURE="$(find_tauri_signature_artifact "${TAURI_UPDATER_ARCHIVE}" 2>/dev/null || true)"
+
+if [[ "${SIGNED_RELEASE_CONTEXT}" == "1" && -z "${TAURI_UPDATER_SIGNATURE}" ]]; then
+  die "missing Tauri updater signature; set TAURI_SIGNING_PRIVATE_KEY for release builds"
+fi
 
 assert_app_bundle_resources "${APP_BUNDLE}"
 
@@ -167,7 +216,12 @@ if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
 fi
 
 assert_app_only_archive "${APP_ARCHIVE_ROOT}"
-tar -C "${APP_ARCHIVE_ROOT}" -czf "${DIST}/${TARBALL_ASSET}" NexusHub.app
+if [[ -n "${TAURI_UPDATER_ARCHIVE}" && -n "${TAURI_UPDATER_SIGNATURE}" ]]; then
+  cp "${TAURI_UPDATER_ARCHIVE}" "${DIST}/${TARBALL_ASSET}"
+  cp "${TAURI_UPDATER_SIGNATURE}" "${DIST}/${SIGNATURE_ASSET}"
+else
+  tar -C "${APP_ARCHIVE_ROOT}" -czf "${DIST}/${TARBALL_ASSET}" NexusHub.app
+fi
 
 cp "${TAURI_DMG}" "${DIST}/${DMG_ASSET}"
 

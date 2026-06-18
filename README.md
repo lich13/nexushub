@@ -2,7 +2,7 @@
 
 `nexushub` is a Rust + React web panel for cloud Codex local state plus a macOS Tauri desktop app. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS ARM64 the supported user entry is the Tauri App; NexusHub no longer provides a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel path on macOS.
 
-The macOS app follows the CC Switch native packaging model: Tauri wraps the main `webui` interface directly and produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, and `nexushub-darwin-arm64.tar.gz`. This is a shared-interface packaging alignment, not a platform split. The Linux release chain still builds the same `webui` into `/opt/nexushub/webui/` and publishes the hosted browser entry at `https://661313.xyz/nexushub/`.
+The macOS app follows the CC Switch native packaging model: Tauri wraps the main `webui` interface directly and produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, `nexushub-darwin-arm64.tar.gz`, signed updater metadata `nexushub-darwin-arm64.tar.gz.sig`, and `latest.json` for the Tauri updater platform `darwin-aarch64`. This is a shared-interface packaging alignment, not a platform split. The Linux release chain still builds the same `webui` into `/opt/nexushub/webui/` and publishes the hosted browser entry at `https://661313.xyz/nexushub/`.
 
 Current scope:
 
@@ -12,7 +12,7 @@ Current scope:
 - Thread read model from the resolved Codex home, Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`.
 - Running / reply-needed / recoverable / archived status cards.
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
-- Panel update jobs through `/usr/local/bin/nexushub-update`; retired local maintenance actions are not exposed from the WebUI or HTTP API.
+- Shared update status and update jobs: Linux uses `/usr/local/bin/nexushub-update` through fixed systemd-health-checked jobs; macOS uses the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json`.
 - Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
 - Plan Mode, model, reasoning, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
@@ -86,7 +86,7 @@ bash scripts/package-darwin-arm64.sh
 ```
 
 `scripts/package-linux.sh` intentionally refuses to produce the Linux release asset on non-Linux hosts. Use the GitHub Actions release workflow for the canonical Linux x86_64 tarball.
-`scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files.
+`scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/nexushub-darwin-arm64.tar.gz.sig`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files in signed release builds. The release workflow publishes `latest.json` for `darwin-aarch64`.
 The script builds the release `nexushubd` helper, injects it into the Tauri resources for packaging, and restores the tracked `src-tauri/resources/nexushubd` placeholder before exit.
 `ALLOW_HOST_MISMATCH=1` is only for local smoke archives and is not a canonical release path.
 
@@ -131,9 +131,10 @@ The app should open as a native macOS desktop experience. A local browser URL, L
 sudo /usr/local/bin/nexushub-update --repo lich13/nexushub --version latest
 ```
 
-Use the WebUI Ops page for panel updates and cleanup:
+Use the shared update entry for updates and cleanup:
 
-- `面板更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`; its prune action removes old `/opt/nexushub/backups/release-updates` backups while keeping the latest three.
+- Linux `NexusHub 更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`; its prune action removes old `/opt/nexushub/backups/release-updates` backups while keeping the latest three.
+- macOS `NexusHub 更新` checks the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json` and installs only after user confirmation and signature verification.
 - Archive cleanup is split into archived-thread cleanup and hidden-thread cleanup, each with a dry-run and confirmation step.
 
 The configured commands run fixed wrappers only, redact sensitive output, and attach a structured explanation when a job fails.
@@ -157,6 +158,8 @@ open -a NexusHub
 "$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
+test -s dist/nexushub-darwin-arm64.tar.gz.sig
+test -s dist/latest.json
 shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 

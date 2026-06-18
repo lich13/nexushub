@@ -1,7 +1,7 @@
 {
   "name": "nexushub",
   "private": true,
-  "version": "0.1.100",
+  "version": "0.1.101",
   "scripts": {
     "build:ui": "corepack pnpm@11.0.8 --dir webui build",
     "desktop:dev": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",

@@ -7,7 +7,9 @@ mod overview;
 use std::path::Path;
 use tauri::Manager;
 
-pub use commands::probe::desktop_probe_status_with_state;
+pub use commands::{
+    probe::desktop_probe_status_with_state, updates::desktop_update_status_with_state,
+};
 use desktop_api::{DesktopApiRequest, DesktopApiState, DesktopApiUpload};
 pub use overview::{
     build_desktop_home, build_desktop_home_with_state, build_desktop_overview,
@@ -292,6 +294,14 @@ async fn desktop_probe_status(
 }
 
 #[tauri::command]
+fn desktop_update_status(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::services::updates::UpdateStatus, String> {
+    commands::updates::desktop_update_status_with_state(&state, None, None)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn desktop_archive_plan_command() -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
     overview::desktop_archive_plan().map_err(|err| err.to_string())
 }
@@ -538,6 +548,7 @@ fn desktop_upload_files_command(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             desktop_overview,
             desktop_home,
@@ -555,6 +566,9 @@ pub fn run() {
             desktop_answer_elicitation,
             desktop_probe_status_command,
             desktop_probe_status,
+            desktop_update_status,
+            commands::updates::check_update_status,
+            commands::updates::install_update_and_restart,
             desktop_archive_plan_command,
             desktop_archive_plan,
             desktop_hidden_plan_command,

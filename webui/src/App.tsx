@@ -55,7 +55,7 @@ import {
   getProbeStatus,
   getSecurity,
   getSystemStatus,
-  getSystemVersion,
+  getUpdateStatus,
   getThread,
   getThreadBlocks,
   listFollowUps,
@@ -78,7 +78,7 @@ import {
   startArchiveDelete,
   startHiddenThreadDelete,
   startProbeJob,
-  startUpdateJob,
+  runUpdateAction,
   stopThread,
   steerThread,
   subscribeThreadEvents,
@@ -148,7 +148,7 @@ import type {
   SecuritySettings,
   SessionUser,
   SystemStatus,
-  SystemVersion,
+  UpdateStatus,
   ThreadDetail,
   ThreadStatus,
   ThreadSummary,
@@ -160,7 +160,7 @@ type SelectedThread = string | "__new" | null;
 
 const OPS_PANEL_TITLES = {
   system: "系统状态",
-  panelUpdate: "面板更新",
+  updates: "NexusHub 更新",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
   jobs: "Job History"
@@ -169,19 +169,12 @@ const OPS_PANEL_TITLES = {
 export function opsWorkspacePanelTitles(desktop = isDesktopRuntime()): string[] {
   const titles = [
     OPS_PANEL_TITLES.system,
+    OPS_PANEL_TITLES.updates,
     OPS_PANEL_TITLES.archivedCleanup,
     OPS_PANEL_TITLES.hiddenCleanup,
     OPS_PANEL_TITLES.jobs
   ];
-  return desktop
-    ? titles
-    : [
-        OPS_PANEL_TITLES.system,
-        OPS_PANEL_TITLES.panelUpdate,
-        OPS_PANEL_TITLES.archivedCleanup,
-        OPS_PANEL_TITLES.hiddenCleanup,
-        OPS_PANEL_TITLES.jobs
-      ];
+  return titles;
 }
 
 export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] {
@@ -195,7 +188,8 @@ export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] 
     "Current",
     "Latest",
     "Update",
-    "Precheck",
+    desktop ? "Check" : "Precheck",
+    desktop ? "Install" : "Update",
     "Prune",
     "Dry-run",
     "清理归档",
@@ -213,7 +207,7 @@ export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] 
     "sources",
     "rollout 删除结果"
   ];
-  return desktop ? copy.filter((item) => !["Current", "Latest", "Update", "Precheck", "Prune"].includes(item)) : copy;
+  return desktop ? copy.filter((item) => item !== "Prune") : copy;
 }
 
 const codexLocalCopy = {
@@ -4577,14 +4571,17 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
   const desktopRuntime = isDesktopRuntime();
   const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
-  const version = useQuery({ queryKey: ["system-version"], queryFn: getSystemVersion, enabled: !desktopRuntime, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
+  const update = useQuery({ queryKey: ["update-status"], queryFn: getUpdateStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
-  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "precheck" | "start" | "prune" }) => startUpdateJob("panel", action, csrfToken), onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }) });
+  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "check" | "install" | "prune" }) => runUpdateAction(action, csrfToken), onSuccess: () => {
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["update-status"] });
+  } });
   const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: (nextPlan) => {
     setPlan(nextPlan);
     setDeleteArmed(false);
@@ -4640,16 +4637,14 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
           <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
         </div>
       </Panel>
-      {!desktopRuntime && (
-        <Panel title={OPS_PANEL_TITLES.panelUpdate} icon={<RefreshCw size={18} />}>
-          <PanelVersionMetrics version={version.data} />
-          <div className="button-row ops-action-row">
-            <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "precheck" })}><CheckCircle2 size={17} />Precheck</button>
-            <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "start" })}><Play size={17} />Update</button>
-            <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>
-          </div>
-        </Panel>
-      )}
+      <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
+        <UpdateMetrics status={update.data} />
+        <div className="button-row ops-action-row">
+          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{desktopRuntime ? "Check" : "Precheck"}</button>
+          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{desktopRuntime ? "Install" : "Update"}</button>
+          {!desktopRuntime && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
+        </div>
+      </Panel>
       <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
@@ -4705,16 +4700,16 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   );
 }
 
-function PanelVersionMetrics({ version }: { version?: SystemVersion }) {
+function UpdateMetrics({ status }: { status?: UpdateStatus }) {
   return (
     <div className="version-grid">
-      <Metric label="Current" value={version?.panel_current ?? "读取中"} />
+      <Metric label="Current" value={status?.current_version ?? "读取中"} />
       <Metric
         label="Latest"
-        value={version?.panel_latest ?? "unknown"}
-        tone={version?.panel_update_available ? "warning" : "success"}
+        value={status?.latest_version ?? "unknown"}
+        tone={status?.update_available ? "warning" : "success"}
       />
-      <Metric label="Update" value={version?.panel_update_available ? "available" : "current"} tone={version?.panel_update_available ? "warning" : "success"} />
+      <Metric label="Update" value={status?.update_available ? "available" : status?.state ?? "current"} tone={status?.update_available ? "warning" : "success"} />
     </div>
   );
 }

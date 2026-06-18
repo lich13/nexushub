@@ -148,12 +148,41 @@ describe("NexusHub runtime adapter", () => {
     ]);
   });
 
-  test("desktop keeps Linux-only update jobs explicitly unavailable", async () => {
-    const { runtimeRpc, RuntimeUnavailableError } = await loadRuntime(true);
+  test("desktop update action routes to macOS updater command", async () => {
+    const { runtimeRpc } = await loadRuntime(true);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
+      expect(command).toBe("install_update_and_restart");
+      return { job_id: "desktop-native-job", installed: false };
+    });
 
-    await expect(runtimeRpc("startUpdateJob", {
-      path: "/api/system/panel/update/start",
-      csrfToken: "ignored"
-    })).rejects.toBeInstanceOf(RuntimeUnavailableError);
+    await expect(runtimeRpc("runUpdateAction", { action: "install" })).resolves.toMatchObject({
+      job_id: "desktop-native-job",
+      installed: false
+    });
+  });
+
+  test("desktop update check routes to signed updater feed and job history command", async () => {
+    const { runtimeRpc } = await loadRuntime(true);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
+      expect(command).toBe("check_update_status");
+      return {
+        job_id: "desktop-check-job",
+        status: {
+          current_version: "0.1.101",
+          latest_version: "v0.1.102",
+          update_available: true,
+          channel: "stable",
+          method: "macos_tauri_updater",
+          state: "ready",
+          recommended_action: "Confirm install in the Tauri updater after signature verification.",
+          capabilities: ["signature_verification", "job_history"]
+        }
+      };
+    });
+
+    await expect(runtimeRpc("runUpdateAction", { action: "check" })).resolves.toMatchObject({
+      job_id: "desktop-check-job",
+      status: { state: "ready" }
+    });
   });
 });

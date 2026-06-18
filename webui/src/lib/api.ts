@@ -25,6 +25,7 @@ import type {
   SessionUser,
   SystemStatus,
   SystemVersion,
+  UpdateStatus,
   BridgeActionResult,
   CodexGoal,
   CodexGoalSaveInput,
@@ -318,6 +319,27 @@ export async function getSystemVersion(): Promise<SystemVersion> {
     };
   }
   return apiFetch<SystemVersion>("/api/system/version");
+}
+
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  if (USE_DEMO) {
+    return {
+      current_version: "0.1.100",
+      latest_version: "v0.1.101",
+      update_available: true,
+      channel: "stable",
+      method: isDesktopRuntime() ? "macos_tauri_updater" : "linux_systemd_job",
+      state: "idle",
+      failure_category: null,
+      recommended_action: isDesktopRuntime()
+        ? "Confirm install in the Tauri updater after signature verification."
+        : "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
+      capabilities: isDesktopRuntime()
+        ? ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
+        : ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
+    };
+  }
+  return runtimeRpc<UpdateStatus>("getUpdateStatus");
 }
 
 export async function getSecurity(): Promise<SecuritySettings> {
@@ -733,6 +755,7 @@ export async function startJob(path: string, csrfToken?: string | null): Promise
 
 export type UpdateTarget = "panel";
 export type UpdateAction = "precheck" | "start" | "prune";
+export type UnifiedUpdateAction = "check" | "install" | "prune";
 
 const panelUpdateRoutes: Record<UpdateAction, string> = {
   precheck: "/api/system/panel/update/precheck",
@@ -746,9 +769,30 @@ export async function startUpdateJob(target: UpdateTarget, action: UpdateAction,
   }
   if (USE_DEMO) return { job_id: `panel-${action}-demo` };
   if (isDesktopRuntime()) {
-    throw new ApiError("macOS App 不提供 Linux 面板更新任务，请使用 DMG 或 Release 资产更新。", 501);
+    return runUpdateAction(action === "start" ? "install" : action === "precheck" ? "check" : "prune", csrfToken);
   }
   return apiFetch<{ job_id: string }>(panelUpdateRoutes[action], { method: "POST", csrfToken });
+}
+
+const updateActionRoutes: Record<UnifiedUpdateAction, string> = {
+  check: "/api/system/update/precheck",
+  install: "/api/system/update/install",
+  prune: "/api/system/update/prune"
+};
+
+export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<{ job_id: string }> {
+  if (USE_DEMO) return { job_id: `update-${action}-demo` };
+  if (isDesktopRuntime()) {
+    if (action === "prune") {
+      throw new ApiError("macOS App 没有 Linux 备份清理动作。", 501);
+    }
+    const result = await runtimeRpc<{ job_id?: string }>("runUpdateAction", { action });
+    return { job_id: result.job_id ?? `desktop-update-${action}` };
+  }
+  return runtimeRpc<{ job_id: string }>("runUpdateAction", {
+    path: updateActionRoutes[action],
+    csrfToken
+  });
 }
 
 const probeJobRoutes: Record<ProbeJobAction, { path: string; body?: Record<string, unknown> }> = {

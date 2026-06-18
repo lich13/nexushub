@@ -26,10 +26,14 @@ The release workflow also produces:
 dist/nexushub-linux-x86_64.tar.gz
 dist/nexushub-linux-x86_64.tar.gz.sha256
 dist/nexushub-darwin-arm64.tar.gz
+dist/nexushub-darwin-arm64.tar.gz.sig
 dist/nexushub-darwin-arm64.tar.gz.sha256
 dist/NexusHub-<version>-darwin-arm64.dmg
 dist/NexusHub-<version>-darwin-arm64.dmg.sha256
+dist/latest.json
 ```
+
+`latest.json` is the signed Tauri updater manifest for `darwin-aarch64`; its URL points at the release `nexushub-darwin-arm64.tar.gz` asset and its signature must match `nexushub-darwin-arm64.tar.gz.sig`.
 
 ## Deploy
 
@@ -106,6 +110,8 @@ open -a NexusHub
 "$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
+test -s dist/nexushub-darwin-arm64.tar.gz.sig
+test -s dist/latest.json
 shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 

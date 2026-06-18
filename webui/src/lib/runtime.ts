@@ -506,6 +506,21 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
     web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken" },
     desktop: { unavailable: "Desktop update jobs command is not implemented" }
   },
+  getUpdateStatus: {
+    web: { path: "/api/system/update/status" },
+    desktop: { command: "desktop_update_status" }
+  },
+  runUpdateAction: {
+    web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken" },
+    desktop: {
+      fallback: (args) => {
+        const action = args?.action;
+        return action === "install"
+          ? invokeDesktop("install_update_and_restart")
+          : invokeDesktop("check_update_status");
+      }
+    }
+  },
   startProbeJob: {
     web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken", body: (args) => args?.body },
     desktop: desktopApiRoute((args) => String(args?.path ?? ""), "POST", (args) => args?.body)
