@@ -1,5 +1,4 @@
 mod commands;
-mod desktop_api;
 // Probe status typed command 已迁移到 commands::probe；overview 仍保留旧兼容 helper。
 #[allow(dead_code)]
 mod overview;
@@ -10,32 +9,36 @@ use tauri::Manager;
 pub use commands::{
     probe::desktop_probe_status_with_state, updates::desktop_update_status_with_state,
 };
-use desktop_api::{DesktopApiRequest, DesktopApiState, DesktopApiUpload};
 pub use overview::{
-    build_desktop_home, build_desktop_home_with_state, build_desktop_overview,
-    desktop_answer_elicitation_with_state, desktop_archive_delete_dry_run_with_state,
-    desktop_archive_plan_with_state, desktop_archive_thread_with_state,
-    desktop_cancel_followup_with_state, desktop_clear_goal_with_state,
-    desktop_continue_thread_with_state, desktop_enqueue_followup_with_state,
-    desktop_fork_thread_with_state, desktop_hidden_delete_dry_run_with_state,
-    desktop_hidden_plan_with_state, desktop_job_detail_with_state, desktop_jobs_with_state,
-    desktop_list_followups_with_state, desktop_open_config_dir, desktop_open_log_dir,
-    desktop_pause_goal_with_state, desktop_plan_accept_with_state, desktop_plan_revise_with_state,
-    desktop_platform_status_with_state, desktop_probe_bark_test_with_state,
-    desktop_probe_logs_db_maintain_with_state, desktop_probe_save_settings_with_state,
-    desktop_probe_settings_with_state, desktop_rename_thread_with_state,
-    desktop_restore_thread_with_state, desktop_resume_goal_with_state,
-    desktop_save_goal_with_state, desktop_security_status_with_state,
-    desktop_send_message_with_state, desktop_stop_thread_with_state,
-    desktop_thread_blocks_with_state, desktop_thread_detail_with_state, desktop_threads_with_state,
-    nexus_paths_for_home, DesktopActionResponse, DesktopCancelFollowupRequest,
-    DesktopElicitationAnswerRequest, DesktopFollowupRequest, DesktopGoal, DesktopGoalRequest,
-    DesktopHome, DesktopJobDetailRequest, DesktopJobResponse, DesktopJobsRequest,
-    DesktopLogsDbMaintainRequest, DesktopOverview, DesktopPlanAcceptRequest,
-    DesktopPlanReviseRequest, DesktopProbeSettings, DesktopProbeSettingsRequest,
-    DesktopRenameThreadRequest, DesktopSecurityStatus, DesktopSendMessageRequest, DesktopState,
-    DesktopStopRequest, DesktopThreadBlockPage, DesktopThreadIdRequest, NexusPaths,
-    ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
+	build_desktop_home, build_desktop_home_with_state, build_desktop_overview,
+	desktop_answer_elicitation_with_state, desktop_archive_delete_dry_run_with_state,
+	desktop_archive_delete_execute_with_state, desktop_archive_plan_with_state,
+	desktop_archive_thread_with_state,
+	desktop_cancel_followup_with_state, desktop_clear_goal_with_state,
+	desktop_continue_thread_with_state, desktop_delete_upload_with_state,
+	desktop_enqueue_followup_with_state, desktop_fork_thread_with_state,
+	desktop_hidden_delete_dry_run_with_state, desktop_hidden_delete_execute_with_state,
+	desktop_hidden_plan_with_state, desktop_job_detail_with_state, desktop_jobs_with_state,
+	desktop_list_followups_with_state, desktop_open_config_dir, desktop_open_log_dir,
+	desktop_pause_goal_with_state, desktop_plan_accept_with_state, desktop_plan_revise_with_state,
+	desktop_platform_status_with_state, desktop_probe_bark_test_with_state,
+	desktop_probe_events_with_state, desktop_probe_hooks_install_with_state,
+	desktop_probe_logs_db_maintain_with_state, desktop_probe_save_settings_with_state,
+	desktop_probe_settings_with_state, desktop_rename_thread_with_state,
+	desktop_restore_thread_with_state, desktop_resume_goal_with_state,
+	desktop_save_goal_with_state, desktop_security_status_with_state,
+	desktop_send_message_with_state, desktop_stop_thread_with_state, desktop_store_uploads_with_state,
+	desktop_thread_blocks_with_state, desktop_thread_detail_with_state, desktop_threads_with_state,
+	nexus_paths_for_home, DesktopActionResponse, DesktopCancelFollowupRequest,
+	DesktopApiUpload, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopElicitationAnswerRequest,
+	DesktopFollowupRequest, DesktopGoal, DesktopGoalRequest, DesktopHome,
+	DesktopJobDetailRequest, DesktopJobResponse, DesktopJobsRequest,
+	DesktopLogsDbMaintainRequest, DesktopOverview, DesktopPlanAcceptRequest,
+	DesktopPlanReviseRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
+	DesktopProbeSettings, DesktopProbeSettingsRequest,
+	DesktopRenameThreadRequest, DesktopSecurityStatus, DesktopSendMessageRequest, DesktopState,
+	DesktopStopRequest, DesktopThreadBlockPage, DesktopThreadIdRequest, NexusPaths,
+	ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
 };
 
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
@@ -429,11 +432,26 @@ fn desktop_probe_bark_test(
 }
 
 #[tauri::command]
+fn desktop_probe_hooks_install(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    desktop_probe_hooks_install_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn desktop_probe_logs_db_maintain(
     state: tauri::State<'_, DesktopState>,
     request: DesktopLogsDbMaintainRequest,
-) -> Result<nexushub_core::probe::ProbeLogsDbMaintenanceResult, String> {
+) -> Result<DesktopActionResponse, String> {
     desktop_probe_logs_db_maintain_with_state(&state, request).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn desktop_probe_events(
+    state: tauri::State<'_, DesktopState>,
+    request: DesktopProbeEventsRequest,
+) -> Result<DesktopProbeEventsResponse, String> {
+    desktop_probe_events_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -444,10 +462,32 @@ fn desktop_archive_delete_dry_run(
 }
 
 #[tauri::command]
+fn desktop_archive_delete_execute(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::archive::ArchiveDeleteResult, String> {
+    desktop_archive_delete_execute_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn desktop_hidden_delete_dry_run(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
     desktop_hidden_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn desktop_hidden_delete_execute(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
+    desktop_hidden_delete_execute_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn desktop_delete_upload(
+    state: tauri::State<'_, DesktopState>,
+    request: DesktopDeleteUploadRequest,
+) -> Result<DesktopDeleteUploadResponse, String> {
+    desktop_delete_upload_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -528,21 +568,11 @@ fn desktop_open_log_dir_command() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn desktop_api_command(
-    state: tauri::State<'_, DesktopApiState>,
-    request: DesktopApiRequest,
-) -> Result<serde_json::Value, String> {
-    desktop_api::handle_desktop_api(&state, request)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 fn desktop_upload_files_command(
-    state: tauri::State<'_, DesktopApiState>,
+    state: tauri::State<'_, DesktopState>,
     files: Vec<DesktopApiUpload>,
 ) -> Result<nexushub_core::uploads::UploadOutcome, String> {
-    desktop_api::store_desktop_uploads(&state, files).map_err(|err| err.to_string())
+    desktop_store_uploads_with_state(&state, files).map_err(|err| err.to_string())
 }
 
 pub fn run() {
@@ -585,13 +615,18 @@ pub fn run() {
             desktop_restore_thread,
             desktop_rename_thread,
             desktop_fork_thread,
-            desktop_probe_settings,
-            desktop_probe_save_settings,
-            desktop_probe_bark_test,
-            desktop_probe_logs_db_maintain,
-            desktop_archive_delete_dry_run,
-            desktop_hidden_delete_dry_run,
-            desktop_jobs,
+	            desktop_probe_settings,
+	            desktop_probe_save_settings,
+	            desktop_probe_bark_test,
+	            desktop_probe_hooks_install,
+	            desktop_probe_logs_db_maintain,
+	            desktop_probe_events,
+	            desktop_archive_delete_dry_run,
+	            desktop_archive_delete_execute,
+	            desktop_hidden_delete_dry_run,
+	            desktop_hidden_delete_execute,
+	            desktop_delete_upload,
+	            desktop_jobs,
             desktop_job_detail,
             desktop_list_followups,
             desktop_enqueue_followup,
@@ -601,7 +636,6 @@ pub fn run() {
             desktop_claude_code_overview,
             desktop_open_config_dir_command,
             desktop_open_log_dir_command,
-            desktop_api_command,
             desktop_upload_files_command
         ])
         .setup(|app| {
@@ -609,8 +643,6 @@ pub fn run() {
                 sync_nexushubd_helper_from_resource(&resource_dir)?;
                 prepare_macos_webui_assets_from_resource(&resource_dir)?;
             }
-            let state = DesktopApiState::new().map_err(|err| err.to_string())?;
-            app.manage(state);
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             app.manage(state);
             if let Some(window) = app.get_webview_window("main") {

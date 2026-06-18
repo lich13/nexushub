@@ -2,6 +2,7 @@ use crate::{
     codex::{resolve_codex_paths, CodexPaths},
     config::Config,
     platform::{PlatformKind, PlatformPaths},
+    services::system::{system_capabilities, SystemCapabilities},
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use tokio::process::Command;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStatus {
     pub platform: PlatformKind,
+    pub capabilities: SystemCapabilities,
     pub service_kind: String,
     pub service_name: String,
     pub service_file: Option<String>,
@@ -70,6 +72,7 @@ pub async fn system_status_with_paths(
     let thread_source_counts = crate::codex::thread_source_counts(&paths).unwrap_or_default();
     Ok(SystemStatus {
         platform: platform.kind,
+        capabilities: system_capabilities(config, platform),
         service_kind: platform.service_kind.clone(),
         service_name: platform.service_name.clone(),
         service_file: platform

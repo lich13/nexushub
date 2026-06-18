@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import appSource from "../App.tsx?raw";
+import apiSource from "./api.ts?raw";
 import type { MessageBlock, ProbeLogsDbStatus, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
 
 async function loadRealApi() {
@@ -338,16 +340,17 @@ describe("archive delete API compatibility", () => {
     expect(page.before_cursor).toBe("b:120");
   });
 
-  test("desktop thread block page request keeps limit and cursor in the native bridge", async () => {
+  test("desktop thread block page request keeps limit and cursor in the typed native command", async () => {
     const { getThreadBlocks } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("desktop_api_command");
+      expect(command).toBe("desktop_thread_blocks");
       expect(args).toEqual({
         request: {
-          path: "/api/threads/thread-a/blocks?limit=80&before=b%3A200",
-          method: "GET"
+          id: "thread-a",
+          limit: 80,
+          before: "b:200"
         }
       });
       return {
@@ -366,7 +369,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("routes NexusHub updates to unified endpoints", async () => {
-    const { getUpdateStatus, runUpdateAction, startUpdateJob } = await loadRealApi();
+    const { getUpdateStatus, runUpdateAction } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "panel-job" }), {
       status: 200,
       headers: { "content-type": "application/json" }
@@ -375,7 +378,7 @@ describe("archive delete API compatibility", () => {
 
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       current_version: "0.1.100",
-      latest_version: "v0.1.101",
+      latest_version: "v0.1.102",
       update_available: true,
       channel: "stable",
       method: "linux_systemd_job",
@@ -388,32 +391,28 @@ describe("archive delete API compatibility", () => {
     }));
     const status = await getUpdateStatus();
     const result = await runUpdateAction("install", "csrf-token");
-    const legacyResult = await startUpdateJob("panel", "start", "csrf-token");
 
     const [statusPath] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers }];
     const [path, options] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers }];
-    const [legacyPath] = fetchMock.mock.calls[2] as [string, RequestInit & { headers: Headers }];
     expect(status.method).toBe("linux_systemd_job");
     expect(result).toEqual({ job_id: "panel-job" });
-    expect(legacyResult).toEqual({ job_id: "panel-job" });
     expect(statusPath).toBe("/api/system/update/status");
     expect(path).toBe("/api/system/update/install");
-    expect(legacyPath).toBe("/api/system/panel/update/start");
     expect(options.method).toBe("POST");
     expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
   });
 
-  test("rejects legacy codex update targets without calling codex update routes", async () => {
-    const { startUpdateJob } = await loadRealApi();
+  test("does not export legacy update job helper or codex update targets", async () => {
+    const api = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
       status: 200,
       headers: { "content-type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect((startUpdateJob as (target: string, action: "precheck", csrfToken?: string | null) => Promise<{ job_id: string }>)("codex", "precheck", "csrf-token")).rejects.toMatchObject({
-      status: 400
-    });
+    expect("startUpdateJob" in api).toBe(false);
+    expect(apiSource).not.toContain("codex/update");
+    expect(apiSource).not.toContain("/api/system/panel/update");
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -502,8 +501,8 @@ describe("archive delete API compatibility", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getClaudeCodeOverview()).resolves.toMatchObject({ available: false });
-    await expect(getProbeStatus()).resolves.toMatchObject({ available: false });
+    await expect(getClaudeCodeOverview()).rejects.toMatchObject({ status: 404 });
+    await expect(getProbeStatus()).rejects.toMatchObject({ status: 404 });
   });
 
   test("Probe demo data labels the builtin NexusHub service consistently", async () => {
@@ -599,7 +598,7 @@ describe("archive delete API compatibility", () => {
       (options as RequestInit & { body?: string }).body ? JSON.parse(String((options as RequestInit & { body?: string }).body)) : null
     ]);
     expect(calls).toEqual([
-      ["/api/probe/logs-db/status", undefined, null, null],
+      ["/api/probe/logs-db/status", "GET", null, null],
       ["/api/probe/bark/test", "POST", "csrf-token", null],
       ["/api/probe/hooks/install", "POST", "csrf-token", null],
       ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: true }],
@@ -834,7 +833,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("desktop update helpers use macOS updater command instead of Linux panel routes", async () => {
-    const { getUpdateStatus, runUpdateAction, startUpdateJob } = await loadDesktopApi();
+    const { getUpdateStatus, runUpdateAction } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
@@ -846,7 +845,7 @@ describe("archive delete API compatibility", () => {
           job_id: "desktop-check-job",
           status: {
             current_version: "0.1.100",
-            latest_version: "v0.1.101",
+            latest_version: "v0.1.102",
             update_available: true,
             channel: "stable",
             method: "macos_tauri_updater",
@@ -859,7 +858,7 @@ describe("archive delete API compatibility", () => {
       expect(command).toBe("desktop_update_status");
       return {
         current_version: "0.1.100",
-        latest_version: "v0.1.101",
+        latest_version: "v0.1.102",
         update_available: true,
         channel: "stable",
         method: "macos_tauri_updater",
@@ -872,25 +871,18 @@ describe("archive delete API compatibility", () => {
     expect((await getUpdateStatus()).method).toBe("macos_tauri_updater");
     await expect(runUpdateAction("check", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-check-job" });
     await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
-    await expect(startUpdateJob("panel", "start", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(4);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
   });
 
-  test("desktop API bridge accepts empty string request bodies without JSON parsing errors", async () => {
+  test("desktop archive cleanup uses a typed native command instead of a route bridge", async () => {
     const { startArchiveDelete } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("desktop_api_command");
-      expect(args).toEqual({
-        request: {
-          path: "/api/archives/delete/execute",
-          method: "POST",
-          body: { confirmed: true }
-        }
-      });
+      expect(command).toBe("desktop_archive_delete_execute");
+      expect(args).toBeUndefined();
       return {
         before: {},
         deleted_threads: 0,
@@ -904,7 +896,7 @@ describe("archive delete API compatibility", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("desktop thread, probe, upload, job and goal helpers route through Tauri invoke commands", async () => {
+  test("desktop thread, probe, upload, job and goal helpers route through typed Tauri invoke commands", async () => {
     const {
       listThreads,
       getThread,
@@ -928,31 +920,64 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      if (command !== "desktop_api_command") {
-        throw new Error(`unexpected command ${command}`);
+      switch (command) {
+        case "desktop_threads":
+          expect(args).toEqual({ request: { status: "all", query: "needle", limit: 120 } });
+          return [];
+        case "desktop_thread_detail":
+          expect(args).toEqual({ request: { id: "thread-a", limit: undefined, before: undefined, full: undefined } });
+          return { summary: { id: "thread-a", title: "A", status: "Recent", message_count: 1 }, messages: [], blocks: [], raw_event_count: 0 };
+        case "desktop_archive_delete_dry_run":
+          expect(args).toBeUndefined();
+          return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
+        case "desktop_archive_delete_execute":
+          expect(args).toBeUndefined();
+          return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
+        case "desktop_hidden_delete_dry_run":
+          expect(args).toBeUndefined();
+          return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
+        case "desktop_hidden_delete_execute":
+          expect(args).toBeUndefined();
+          return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
+        case "desktop_probe_settings":
+          expect(args).toBeUndefined();
+          return { probe: { enabled: true }, notifications: {}, logs_db: {} };
+        case "desktop_probe_save_settings":
+          expect(args).toMatchObject({ request: { probe: { enabled: false } } });
+          return { probe: { enabled: false }, notifications: {}, logs_db: {} };
+        case "desktop_probe_bark_test":
+          expect(args).toBeUndefined();
+          return { job_id: "probe-bark-job" };
+        case "desktop_probe_logs_db_maintain":
+          expect(args).toEqual({ request: { dryRun: true, compact: false } });
+          return { job_id: "probe-logs-job" };
+        case "desktop_delete_upload":
+          expect(args).toEqual({ id: "upload-a" });
+          return { ok: true, deleted: true };
+        case "desktop_jobs":
+          expect(args).toEqual({ request: { limit: 30 } });
+          return [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 }];
+        case "desktop_job_detail":
+          expect(args).toEqual({ request: { id: "job-a" } });
+          return { id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 };
+        case "desktop_home":
+          expect(args).toBeUndefined();
+          return { goal: { available: true, enabled: false, objective: null, token_budget: null, status: "idle" } };
+        case "desktop_save_goal_command":
+          expect(args).toEqual({ request: { threadId: "thread-a", objective: "ship", tokenBudget: 5000 } });
+          return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
+        case "desktop_clear_goal_command":
+          expect(args).toEqual({ threadId: "thread-a" });
+          return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "cleared" };
+        case "desktop_pause_goal_command":
+          expect(args).toEqual({ threadId: "thread-a" });
+          return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "paused" };
+        case "desktop_resume_goal_command":
+          expect(args).toEqual({ threadId: "thread-a" });
+          return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
+        default:
+          throw new Error(`unexpected command ${command}`);
       }
-      const request = (args as { request?: { path?: string; method?: string; body?: unknown } } | undefined)?.request;
-      if (request?.path === "/api/threads?q=needle&limit=120") return [];
-      if (request?.path === "/api/threads/thread-a") {
-        return { summary: { id: "thread-a", title: "A", status: "Recent", message_count: 1 }, messages: [], blocks: [], raw_event_count: 0 };
-      }
-      if (request?.path === "/api/archives/delete/dry-run") return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
-      if (request?.path === "/api/archives/delete/execute") return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
-      if (request?.path === "/api/hidden-threads/delete/dry-run") return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
-      if (request?.path === "/api/hidden-threads/delete/execute") return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
-      if (request?.path === "/api/probe/settings" && request.method === "GET") return { probe: { enabled: true }, notifications: {}, logs_db: {} };
-      if (request?.path === "/api/probe/settings" && request.method === "PATCH") return { probe: { enabled: false }, notifications: {}, logs_db: {} };
-      if (request?.path === "/api/probe/bark/test") return { job_id: "probe-bark-job" };
-      if (request?.path === "/api/probe/logs-db/maintain") return { job_id: "probe-logs-job" };
-      if (request?.path === "/api/uploads/upload-a") return { ok: true, deleted: true };
-      if (request?.path === "/api/jobs?limit=30") return [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 }];
-      if (request?.path === "/api/jobs/job-a") return { id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 };
-      if (request?.path === "/api/codex/goal?thread_id=thread-a") return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "idle" };
-      if (request?.path === "/api/codex/goal") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
-      if (request?.path === "/api/codex/goal/clear") return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "cleared" };
-      if (request?.path === "/api/codex/goal/pause") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "paused" };
-      if (request?.path === "/api/codex/goal/resume") return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
-      throw new Error(`unexpected desktop API request ${JSON.stringify(request)}`);
     });
 
     await listThreads("all", "needle");
@@ -976,24 +1001,24 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["desktop_api_command", { request: { path: "/api/threads?q=needle&limit=120", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/threads/thread-a", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/archives/delete/dry-run", method: "POST" } }],
-      ["desktop_api_command", { request: { path: "/api/archives/delete/execute", method: "POST", body: { confirmed: true } } }],
-      ["desktop_api_command", { request: { path: "/api/hidden-threads/delete/dry-run", method: "POST" } }],
-      ["desktop_api_command", { request: { path: "/api/hidden-threads/delete/execute", method: "POST", body: { confirmed: true } } }],
-      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "PATCH", body: { probe: { enabled: false } } } }],
-      ["desktop_api_command", { request: { path: "/api/probe/bark/test", method: "POST" } }],
-      ["desktop_api_command", { request: { path: "/api/probe/logs-db/maintain", method: "POST", body: { dry_run: true } } }],
-      ["desktop_api_command", { request: { path: "/api/uploads/upload-a", method: "DELETE" } }],
-      ["desktop_api_command", { request: { path: "/api/jobs?limit=30", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/jobs/job-a", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/codex/goal?thread_id=thread-a", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/codex/goal", method: "POST", body: { thread_id: "thread-a", objective: "ship", token_budget: 5000 } } }],
-      ["desktop_api_command", { request: { path: "/api/codex/goal/clear", method: "POST", body: { thread_id: "thread-a" } } }],
-      ["desktop_api_command", { request: { path: "/api/codex/goal/pause", method: "POST", body: { thread_id: "thread-a" } } }],
-      ["desktop_api_command", { request: { path: "/api/codex/goal/resume", method: "POST", body: { thread_id: "thread-a" } } }]
+      ["desktop_threads", { request: { status: "all", query: "needle", limit: 120 } }],
+      ["desktop_thread_detail", { request: { id: "thread-a", limit: undefined, before: undefined, full: undefined } }],
+      ["desktop_archive_delete_dry_run", undefined],
+      ["desktop_archive_delete_execute", undefined],
+      ["desktop_hidden_delete_dry_run", undefined],
+      ["desktop_hidden_delete_execute", undefined],
+      ["desktop_probe_settings", undefined],
+      ["desktop_probe_save_settings", expect.objectContaining({ request: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
+      ["desktop_probe_bark_test", undefined],
+      ["desktop_probe_logs_db_maintain", { request: { dryRun: true, compact: false } }],
+      ["desktop_delete_upload", { id: "upload-a" }],
+      ["desktop_jobs", { request: { limit: 30 } }],
+      ["desktop_job_detail", { request: { id: "job-a" } }],
+      ["desktop_home", undefined],
+      ["desktop_save_goal_command", { request: { threadId: "thread-a", objective: "ship", tokenBudget: 5000 } }],
+      ["desktop_clear_goal_command", { threadId: "thread-a" }],
+      ["desktop_pause_goal_command", { threadId: "thread-a" }],
+      ["desktop_resume_goal_command", { threadId: "thread-a" }]
     ]);
     const file = new File(["# hello"], "note.md", { type: "text/markdown" });
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
@@ -1002,6 +1027,17 @@ describe("archive delete API compatibility", () => {
       return { files: [{ id: "upload-a", name: "note.md", mime: "text/markdown", size: 7, sha256: "x", kind: "markdown", status: "ready" }] };
     });
     await uploadFiles([file], "ignored-csrf");
+  });
+
+  test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
+    expect(apiSource).not.toContain("desktopApiRoute");
+    expect(apiSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(apiSource).not.toContain("/api/system/panel/update");
+    expect(appSource).not.toContain("desktopApiRoute");
+    expect(appSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(appSource).not.toContain("invoke(");
+    expect(appSource).not.toContain('"/api/');
+    expect(appSource).not.toContain("'/api/");
   });
 
   test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
@@ -1051,16 +1087,18 @@ describe("archive delete API compatibility", () => {
   });
 
   test("desktop unsupported Fork and Approval actions short-circuit before native bridge", async () => {
-    const { ApiError, forkThread, answerApproval } = await loadDesktopApi();
+    const { forkThread, answerApproval } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => {
       throw new Error("desktop bridge should not be called");
     });
 
-    await expect(forkThread("thread-a", "ignored-csrf")).rejects.toBeInstanceOf(ApiError);
+    await expect(forkThread("thread-a", "ignored-csrf")).rejects.toMatchObject({
+      feature: "Desktop fork command is not implemented"
+    });
     await expect(answerApproval("thread-a", { decision: "approved" }, "ignored-csrf")).rejects.toMatchObject({
-      status: 501
+      feature: "Desktop approval command is not implemented"
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();

@@ -92,11 +92,9 @@ async function parse<T>(response: Response): Promise<T> {
 
 async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (isDesktopRuntime()) {
-    const method = options.method ?? (options.body ? "POST" : "GET");
-    const body = typeof options.body === "string"
-      ? JSON.parse(options.body)
-      : undefined;
-    return runtimeRpc<T>("desktopApi", { request: { path, method, body } });
+    void path;
+    void options;
+    throw new ApiError("macOS App 只能使用 typed Tauri command，不能通过 HTTP path 透传。", 501);
   }
   const headers = new Headers(options.headers);
   if (!options.skipContentType && !headers.has("content-type") && options.body) {
@@ -116,33 +114,6 @@ async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<
 async function optionalApiFetch<T>(path: string, options: RequestOptions = {}): Promise<OptionalResult<T>> {
   try {
     return normalizeOptionalResult(await apiFetch<T>(path, options));
-  } catch (error) {
-    if (isMissingEndpoint(error)) {
-      return { available: false, error: error instanceof Error ? error.message : String(error) };
-    }
-    throw error;
-  }
-}
-
-async function apiFetchFirst<T>(paths: string[], options: RequestOptions = {}, label = "API"): Promise<T> {
-  let lastMissing: ApiError | null = null;
-  for (const path of paths) {
-    try {
-      return await apiFetch<T>(path, options);
-    } catch (error) {
-      if (isMissingEndpoint(error)) {
-        lastMissing = error instanceof ApiError ? error : null;
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new ApiError(`${label} endpoint is not available${lastMissing ? ` (${lastMissing.message})` : ""}`, 404);
-}
-
-async function optionalApiFetchFirst<T>(paths: string[], options: RequestOptions = {}): Promise<OptionalResult<T>> {
-  try {
-    return normalizeOptionalResult(await apiFetchFirst<T>(paths, options));
   } catch (error) {
     if (isMissingEndpoint(error)) {
       return { available: false, error: error instanceof Error ? error.message : String(error) };
@@ -204,6 +175,9 @@ export async function me(): Promise<SessionUser> {
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);
+  if (isDesktopRuntime()) {
+    return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
+  }
   const params = new URLSearchParams();
   if (status !== "all") params.set("status", status);
   if (q.trim()) params.set("q", q.trim());
@@ -266,6 +240,9 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
   if (options.before) params.set("before", options.before);
   if (options.full) params.set("full", "true");
   const query = params.toString();
+  if (isDesktopRuntime()) {
+    return runtimeRpc<ThreadDetail>("getThread", { id, options });
+  }
   return apiFetch<ThreadDetail>(`/api/threads/${id}${query ? `?${query}` : ""}`);
 }
 
@@ -284,6 +261,9 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
   if (options.limit !== undefined) params.set("limit", String(options.limit));
   if (options.before) params.set("before", options.before);
   const query = params.toString();
+  if (isDesktopRuntime()) {
+    return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
+  }
   return apiFetch<ThreadBlockPage>(`/api/threads/${id}/blocks${query ? `?${query}` : ""}`);
 }
 
@@ -301,7 +281,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
       state_db_integrity: "ok"
     };
   }
-  return apiFetch<SystemStatus>("/api/system/status");
+  return runtimeRpc<SystemStatus>("getSystemStatus");
 }
 
 export async function getSystemVersion(): Promise<SystemVersion> {
@@ -318,14 +298,14 @@ export async function getSystemVersion(): Promise<SystemVersion> {
       codex_raw: "codex-cli 0.137.0"
     };
   }
-  return apiFetch<SystemVersion>("/api/system/version");
+  return runtimeRpc<SystemVersion>("getSystemVersion");
 }
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
     return {
       current_version: "0.1.100",
-      latest_version: "v0.1.101",
+      latest_version: "v0.1.102",
       update_available: true,
       channel: "stable",
       method: isDesktopRuntime() ? "macos_tauri_updater" : "linux_systemd_job",
@@ -354,7 +334,7 @@ export async function getSecurity(): Promise<SecuritySettings> {
       turnstile_expected_action: "login"
     };
   }
-  return apiFetch<SecuritySettings>("/api/security");
+  return runtimeRpc<SecuritySettings>("getSecurity");
 }
 
 export async function listProviders(): Promise<AgentProviderInfo[]> {
@@ -380,7 +360,7 @@ export async function listProviders(): Promise<AgentProviderInfo[]> {
       { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
     ];
   }
-  return apiFetch<AgentProviderInfo[]>("/api/providers");
+  return runtimeRpc<AgentProviderInfo[]>("listProviders");
 }
 
 export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOverview>> {
@@ -443,7 +423,14 @@ export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOver
       }
     };
   }
-  return optionalApiFetch<ClaudeOverview>("/api/providers/claude-code/overview");
+  try {
+    return normalizeOptionalResult(await runtimeRpc<ClaudeOverview>("getClaudeCodeOverview"));
+  } catch (error) {
+    if (isMissingEndpoint(error)) {
+      return { available: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    throw error;
+  }
 }
 
 export async function getPlatformOverview(): Promise<PlatformOverview> {
@@ -458,7 +445,7 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
       service_kind: "systemd"
     };
   }
-  return apiFetch<PlatformOverview>("/api/platform");
+  return runtimeRpc<PlatformOverview>("getPlatformOverview");
 }
 
 export async function listPlugins(): Promise<PluginInfo[]> {
@@ -499,7 +486,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
       }
     ];
   }
-  return apiFetch<PluginInfo[]>("/api/plugins");
+  return runtimeRpc<PluginInfo[]>("listPlugins");
 }
 
 export async function getSentinelStatus(): Promise<OptionalResult<SentinelStatus>> {
@@ -513,7 +500,7 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
       data: demoProbeStatus()
     };
   }
-  return optionalApiFetch<ProbeStatus>("/api/probe/status");
+  return normalizeOptionalResult(await runtimeRpc<ProbeStatus>("getProbeStatus"));
 }
 
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
@@ -523,7 +510,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
       data: demoProbeSettings()
     };
   }
-  return optionalApiFetch<ProbeSettings>("/api/probe/settings");
+  return normalizeOptionalResult(await runtimeRpc<ProbeSettings>("getProbeSettings"));
 }
 
 function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Partial<ProbeSettings> {
@@ -542,10 +529,9 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
-  return apiFetch<ProbeSettings>("/api/probe/settings", {
-    method: "PATCH",
-    csrfToken,
-    body: JSON.stringify(normalizeProbeSettingsSavePayload(settings))
+  return runtimeRpc<ProbeSettings>("saveProbeSettings", {
+    settings: normalizeProbeSettingsSavePayload(settings),
+    csrfToken
   });
 }
 
@@ -578,7 +564,7 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
       recent_result: "dry-run: would_delete_rows=6"
     }
   };
-  return optionalApiFetch<ProbeLogsDbStatus>("/api/probe/logs-db/status");
+  return normalizeOptionalResult(await runtimeRpc<ProbeLogsDbStatus>("getProbeLogsDbStatus"));
 }
 
 export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEventsResponse>> {
@@ -671,31 +657,22 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
       }
     };
   }
-  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : "";
-  return optionalApiFetch<ProbeEventsResponse>(`/api/probe/events${query}`);
+  return normalizeOptionalResult(await runtimeRpc<ProbeEventsResponse>("getProbeEvents", { limit }));
 }
 
 export async function saveSecurity(settings: Partial<SecuritySettings> & { turnstile_secret_key?: string }, csrfToken?: string | null) {
-  return apiFetch<SecuritySettings>("/api/security", {
-    method: "PATCH",
-    csrfToken,
-    body: JSON.stringify(settings)
-  });
+  return runtimeRpc<SecuritySettings>("saveSecurity", { settings, csrfToken });
 }
 
 export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeletePlan> {
   if (USE_DEMO) {
     return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };
   }
-  return apiFetch<ArchiveDeletePlan>("/api/archives/delete/dry-run", { method: "POST", csrfToken });
+  return runtimeRpc<ArchiveDeletePlan>("dryRunArchiveDelete", { csrfToken });
 }
 
 export async function startArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeleteResult> {
-  return apiFetch<ArchiveDeleteResult>("/api/archives/delete/execute", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ confirmed: true })
-  });
+  return runtimeRpc<ArchiveDeleteResult>("startArchiveDelete", { csrfToken });
 }
 
 export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
@@ -712,7 +689,7 @@ export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promi
       integrity: "ok"
     };
   }
-  return apiFetch<HiddenThreadDeletePlan>("/api/hidden-threads/delete/dry-run", { method: "POST", csrfToken });
+  return runtimeRpc<HiddenThreadDeletePlan>("dryRunHiddenThreadDelete", { csrfToken });
 }
 
 export async function startHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeleteResult> {
@@ -741,75 +718,25 @@ export async function startHiddenThreadDelete(csrfToken?: string | null): Promis
       deleted_rollout_files: 4
     };
   }
-  return apiFetch<HiddenThreadDeleteResult>("/api/hidden-threads/delete/execute", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ confirmed: true })
-  });
+  return runtimeRpc<HiddenThreadDeleteResult>("startHiddenThreadDelete", { csrfToken });
 }
 
-export async function startJob(path: string, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (USE_DEMO) return { job_id: "job-demo" };
-  return apiFetch<{ job_id: string }>(path, { method: "POST", csrfToken });
-}
-
-export type UpdateTarget = "panel";
-export type UpdateAction = "precheck" | "start" | "prune";
 export type UnifiedUpdateAction = "check" | "install" | "prune";
 
-const panelUpdateRoutes: Record<UpdateAction, string> = {
-  precheck: "/api/system/panel/update/precheck",
-  start: "/api/system/panel/update/start",
-  prune: "/api/system/panel/update/prune"
-};
-
-export async function startUpdateJob(target: UpdateTarget, action: UpdateAction, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (target !== "panel") {
-    throw new ApiError(`Unsupported update target: ${String(target)}`, 400);
-  }
-  if (USE_DEMO) return { job_id: `panel-${action}-demo` };
-  if (isDesktopRuntime()) {
-    return runUpdateAction(action === "start" ? "install" : action === "precheck" ? "check" : "prune", csrfToken);
-  }
-  return apiFetch<{ job_id: string }>(panelUpdateRoutes[action], { method: "POST", csrfToken });
+function jobIdFromRuntimeResult(result: { job_id?: string | null; jobId?: string | null }, fallback: string): { job_id: string } {
+  return { job_id: result.job_id ?? result.jobId ?? fallback };
 }
-
-const updateActionRoutes: Record<UnifiedUpdateAction, string> = {
-  check: "/api/system/update/precheck",
-  install: "/api/system/update/install",
-  prune: "/api/system/update/prune"
-};
 
 export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `update-${action}-demo` };
-  if (isDesktopRuntime()) {
-    if (action === "prune") {
-      throw new ApiError("macOS App 没有 Linux 备份清理动作。", 501);
-    }
-    const result = await runtimeRpc<{ job_id?: string }>("runUpdateAction", { action });
-    return { job_id: result.job_id ?? `desktop-update-${action}` };
-  }
-  return runtimeRpc<{ job_id: string }>("runUpdateAction", {
-    path: updateActionRoutes[action],
-    csrfToken
-  });
+  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>("runUpdateAction", { action, csrfToken });
+  return jobIdFromRuntimeResult(result, `update-${action}`);
 }
-
-const probeJobRoutes: Record<ProbeJobAction, { path: string; body?: Record<string, unknown> }> = {
-  "bark-test": { path: "/api/probe/bark/test" },
-  "hooks-install": { path: "/api/probe/hooks/install" },
-  "logs-db-dry-run": { path: "/api/probe/logs-db/maintain", body: { dry_run: true } },
-  "logs-db-execute": { path: "/api/probe/logs-db/maintain", body: { dry_run: false, compact: false } }
-};
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  const route = probeJobRoutes[action];
-  return apiFetch<{ job_id: string }>(route.path, {
-    method: "POST",
-    csrfToken,
-    body: route.body ? JSON.stringify(route.body) : undefined
-  });
+  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>("startProbeJob", { action, csrfToken });
+  return jobIdFromRuntimeResult(result, `probe-${action}`);
 }
 
 export type ThreadSendPayload = {
@@ -846,58 +773,39 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
       mime: file.type || "application/octet-stream",
       bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
     })));
-    return runtimeRpc<UploadOutcome>("desktopUploadFiles", { files: uploads });
+    return runtimeRpc<UploadOutcome>("uploadFiles", { files: uploads });
   }
   const form = new FormData();
   for (const file of files) {
     form.append("files", file, file.name);
   }
-  return apiFetch<UploadOutcome>("/api/uploads", {
-    method: "POST",
-    csrfToken,
-    body: form,
-    skipContentType: true
-  });
+  return runtimeRpc<UploadOutcome>("uploadFiles", { form, csrfToken });
 }
 
 export async function deleteUpload(id: string, csrfToken?: string | null): Promise<{ ok: boolean; deleted: boolean }> {
   if (USE_DEMO) return { ok: true, deleted: true };
-  return apiFetch<{ ok: boolean; deleted: boolean }>(`/api/uploads/${id}`, {
-    method: "DELETE",
-    csrfToken
-  });
+  return runtimeRpc<{ ok: boolean; deleted: boolean }>("deleteUpload", { id, csrfToken });
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return apiFetch<BridgeActionResult>("/api/threads", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("createThread", { payload, csrfToken });
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/messages`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("sendMessage", { threadId, payload, csrfToken });
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/steer`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("steerThread", { threadId, payload, csrfToken });
 }
 
 export async function listFollowUps(threadId: string): Promise<FollowUpQueueState> {
   if (USE_DEMO) return { items: [] };
-  return apiFetch<FollowUpQueueState>(`/api/threads/${threadId}/follow-ups`);
+  const result = await runtimeRpc<FollowUpQueueState | FollowUpQueueItem[]>("listFollowUps", { threadId });
+  return Array.isArray(result) ? { items: result } : result;
 }
 
 export async function enqueueFollowUp(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<FollowUpQueueItem> {
@@ -911,60 +819,37 @@ export async function enqueueFollowUp(threadId: string, payload: ThreadSendPaylo
       created_at: Math.floor(Date.now() / 1000)
     };
   }
-  return apiFetch<FollowUpQueueItem>(`/api/threads/${threadId}/follow-ups`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<FollowUpQueueItem>("enqueueFollowUp", { threadId, payload, csrfToken });
 }
 
 export async function cancelFollowUp(threadId: string, followUpId: string, csrfToken?: string | null): Promise<{ ok: boolean }> {
   if (USE_DEMO) return { ok: true };
-  return apiFetch<{ ok: boolean }>(`/api/threads/${threadId}/follow-ups/${followUpId}/cancel`, {
-    method: "POST",
-    csrfToken
-  });
+  return runtimeRpc<{ ok: boolean }>("cancelFollowUp", { threadId, followUpId, csrfToken });
 }
 
 export async function stopThread(threadId: string, payload: { turn_id?: string | null; job_id?: string | null }, csrfToken?: string | null) {
   if (USE_DEMO) return { ok: true };
-  return apiFetch(`/api/threads/${threadId}/stop`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc("stopThread", { threadId, payload, csrfToken });
 }
 
 export async function archiveThread(threadId: string, csrfToken?: string | null) {
-  return apiFetch(`/api/threads/${threadId}/archive`, { method: "POST", csrfToken });
+  return runtimeRpc("archiveThread", { threadId, csrfToken });
 }
 
 export async function restoreThread(threadId: string, csrfToken?: string | null) {
-  return apiFetch(`/api/threads/${threadId}/restore`, { method: "POST", csrfToken });
+  return runtimeRpc("restoreThread", { threadId, csrfToken });
 }
 
 export async function renameThread(threadId: string, name: string, csrfToken?: string | null) {
-  return apiFetch(`/api/threads/${threadId}/rename`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ name })
-  });
+  return runtimeRpc("renameThread", { threadId, name, csrfToken });
 }
 
 export async function forkThread(threadId: string, csrfToken?: string | null): Promise<BridgeActionResult> {
-  if (isDesktopRuntime()) {
-    void csrfToken;
-    throw new ApiError("macOS App 当前不支持 Fork 操作", 501);
-  }
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/fork`, { method: "POST", csrfToken });
+  return runtimeRpc<BridgeActionResult>("forkThread", { threadId, csrfToken });
 }
 
 export async function answerElicitation(threadId: string, answers: Record<string, string[]>, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/elicitation`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ answers })
-  });
+  return runtimeRpc<BridgeActionResult>("answerElicitation", { threadId, answers, csrfToken });
 }
 
 export async function acceptPlan(
@@ -972,11 +857,7 @@ export async function acceptPlan(
   payload: { turn_id?: string | null; item_id?: string | null },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/plan/accept`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("acceptPlan", { threadId, payload, csrfToken });
 }
 
 export async function revisePlan(
@@ -984,11 +865,7 @@ export async function revisePlan(
   payload: { turn_id?: string | null; item_id?: string | null; instructions: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/plan/revise`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("revisePlan", { threadId, payload, csrfToken });
 }
 
 export async function answerApproval(
@@ -996,24 +873,11 @@ export async function answerApproval(
   payload: { turn_id?: string | null; item_id?: string | null; request_id?: string | null; decision: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  if (isDesktopRuntime()) {
-    void payload;
-    void csrfToken;
-    throw new ApiError("macOS App 当前不支持 Approval 操作", 501);
-  }
-  return apiFetch<BridgeActionResult>(`/api/threads/${threadId}/approval`, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify(payload)
-  });
+  return runtimeRpc<BridgeActionResult>("answerApproval", { threadId, payload, csrfToken });
 }
 
 export async function changePassword(current_password: string, new_password: string, csrfToken?: string | null) {
-  return apiFetch("/api/security/password", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ current_password, new_password })
-  });
+  return runtimeRpc("changePassword", { current_password, new_password, csrfToken });
 }
 
 export async function listModels(): Promise<OptionalResult<CodexModel[]>> {
@@ -1029,12 +893,15 @@ export async function listModels(): Promise<OptionalResult<CodexModel[]>> {
       ]
     };
   }
-  const result = await optionalApiFetchFirst<unknown[]>([
-    "/api/codex/models",
-    "/api/config/models",
-    "/api/models"
-  ]);
-  return result.available ? { available: true, data: normalizeModels(result.data ?? []) } : result as OptionalResult<CodexModel[]>;
+  try {
+    const result = normalizeOptionalResult(await runtimeRpc<unknown[]>("listModels"));
+    return result.available ? { available: true, data: normalizeModels(result.data ?? []) } : result as OptionalResult<CodexModel[]>;
+  } catch (error) {
+    if (isMissingEndpoint(error)) {
+      return { available: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    throw error;
+  }
 }
 
 export async function listPermissionProfiles(): Promise<OptionalResult<PermissionProfile[]>> {
@@ -1048,12 +915,15 @@ export async function listPermissionProfiles(): Promise<OptionalResult<Permissio
       ]
     };
   }
-  const result = await optionalApiFetchFirst<unknown[]>([
-    "/api/codex/permission-profiles",
-    "/api/codex/permissionProfiles",
-    "/api/config/permission-profiles"
-  ]);
-  return result.available ? { available: true, data: normalizePermissionProfiles(result.data ?? []) } : result as OptionalResult<PermissionProfile[]>;
+  try {
+    const result = normalizeOptionalResult(await runtimeRpc<unknown[]>("listPermissionProfiles"));
+    return result.available ? { available: true, data: normalizePermissionProfiles(result.data ?? []) } : result as OptionalResult<PermissionProfile[]>;
+  } catch (error) {
+    if (isMissingEndpoint(error)) {
+      return { available: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    throw error;
+  }
 }
 
 export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
@@ -1073,13 +943,19 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
       }
     };
   }
-  return optionalApiFetch<CodexConfig>("/api/codex/config");
+  try {
+    return normalizeOptionalResult(await runtimeRpc<CodexConfig>("getCodexConfig"));
+  } catch (error) {
+    if (isMissingEndpoint(error)) {
+      return { available: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    throw error;
+  }
 }
 
 export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
-  const params = new URLSearchParams({ thread_id: threadId });
-  return apiFetch<CodexGoal>(`/api/codex/goal?${params.toString()}`);
+  return runtimeRpc<CodexGoal>("getCodexGoal", { threadId });
 }
 
 export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1092,14 +968,11 @@ export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, 
       status: "active"
     };
   }
-  return apiFetch<CodexGoal>("/api/codex/goal", {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({
-      thread_id: threadId,
-      objective: goal.objective,
-      token_budget: goal.token_budget ?? null
-    })
+  return runtimeRpc<CodexGoal>("saveCodexGoal", {
+    threadId,
+    objective: goal.objective,
+    tokenBudget: goal.token_budget ?? null,
+    csrfToken
   });
 }
 
@@ -1113,7 +986,7 @@ export async function clearCodexGoal(threadId: string, csrfToken?: string | null
       status: "cleared"
     };
   }
-  return updateCodexGoalStatus("/api/codex/goal/clear", threadId, csrfToken);
+  return runtimeRpc<CodexGoal>("clearCodexGoal", { threadId, csrfToken });
 }
 
 export async function pauseCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1124,7 +997,7 @@ export async function pauseCodexGoal(threadId: string, csrfToken?: string | null
       status: "paused"
     };
   }
-  return updateCodexGoalStatus("/api/codex/goal/pause", threadId, csrfToken);
+  return runtimeRpc<CodexGoal>("pauseCodexGoal", { threadId, csrfToken });
 }
 
 export async function resumeCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1135,15 +1008,7 @@ export async function resumeCodexGoal(threadId: string, csrfToken?: string | nul
       status: "active"
     };
   }
-  return updateCodexGoalStatus("/api/codex/goal/resume", threadId, csrfToken);
-}
-
-function updateCodexGoalStatus(path: string, threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
-  return apiFetch<CodexGoal>(path, {
-    method: "POST",
-    csrfToken,
-    body: JSON.stringify({ thread_id: threadId })
-  });
+  return runtimeRpc<CodexGoal>("resumeCodexGoal", { threadId, csrfToken });
 }
 
 export function subscribeThreadEvents(
@@ -1193,7 +1058,7 @@ export async function listJobs(): Promise<JobRecord[]> {
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }
-  return apiFetch<JobRecord[]>("/api/jobs?limit=30");
+  return runtimeRpc<JobRecord[]>("listJobs");
 }
 
 export async function getJob(id: string): Promise<JobRecord> {
@@ -1208,7 +1073,7 @@ export async function getJob(id: string): Promise<JobRecord> {
       error: "demo job not found"
     };
   }
-  return apiFetch<JobRecord>(`/api/jobs/${id}`);
+  return runtimeRpc<JobRecord>("getJob", { id });
 }
 
 function normalizeModels(value: unknown): CodexModel[] {

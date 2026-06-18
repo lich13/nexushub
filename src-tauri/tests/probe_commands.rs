@@ -104,7 +104,7 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
     let temp = tempfile::tempdir().unwrap();
     let state = desktop_state(&temp);
 
-    let status = desktop_update_status_with_state(&state, Some("v0.1.101"), None).unwrap();
+    let status = desktop_update_status_with_state(&state, Some("v0.1.102"), None).unwrap();
     let serialized = serde_json::to_string(&status).unwrap();
 
     assert_eq!(

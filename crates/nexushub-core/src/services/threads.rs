@@ -1,0 +1,353 @@
+use std::collections::{HashMap, HashSet};
+
+use chrono::{Local, TimeZone};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    codex::{ThreadStatus, ThreadSummary},
+    db::JobRecord,
+};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadsQuery {
+    pub status: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadsOverview {
+    pub threads: Vec<ThreadSummary>,
+    pub query: ThreadsQuery,
+    pub fetch_limit: usize,
+}
+
+pub fn build_threads_overview(
+    threads: Vec<ThreadSummary>,
+    running_jobs: Vec<JobRecord>,
+    query: ThreadsQuery,
+    hidden_thread_ids: &HashSet<String>,
+    archived_thread_ids: &HashSet<String>,
+) -> ThreadsOverview {
+    let response_limit = requested_thread_limit(query.limit);
+    let fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    let mut threads = prune_hidden_thread_summaries(threads, hidden_thread_ids);
+    merge_running_jobs(&mut threads, &running_jobs, archived_thread_ids);
+    threads = prune_hidden_thread_summaries(threads, hidden_thread_ids);
+    threads = filter_thread_summaries(
+        threads,
+        query.status.as_deref(),
+        query.q.as_deref(),
+        response_limit,
+    );
+
+    ThreadsOverview {
+        threads,
+        query,
+        fetch_limit,
+    }
+}
+
+pub fn merge_running_jobs(
+    threads: &mut Vec<ThreadSummary>,
+    running_jobs: &[JobRecord],
+    archived_thread_ids: &HashSet<String>,
+) {
+    let mut by_thread: HashMap<&str, &JobRecord> = HashMap::new();
+    for job in running_jobs {
+        if let Some(thread_id) = job.thread_id.as_deref() {
+            by_thread.entry(thread_id).or_insert(job);
+        }
+    }
+
+    for thread in threads.iter_mut() {
+        if let Some(job) = by_thread.get(thread.id.as_str()) {
+            apply_running_job_to_summary(thread, job);
+        }
+    }
+
+    for job in by_thread.values() {
+        apply_running_job_to_thread_list(threads, job, archived_thread_ids);
+    }
+}
+
+pub fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord) {
+    if matches!(summary.status, ThreadStatus::Archived) {
+        return;
+    }
+    summary.status = ThreadStatus::Running;
+    summary.active_job_id = Some(job.id.clone());
+    if summary.active_turn_id.is_none() {
+        summary.active_turn_id = job.turn_id.clone();
+    }
+    if summary.latest_message.is_none() {
+        summary.latest_message = Some(job.title.clone());
+    }
+}
+
+pub fn thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
+    if thread_status_filter_needs_full_scan(status) {
+        usize::MAX
+    } else {
+        requested_thread_limit(limit)
+    }
+}
+
+pub fn filter_thread_summaries(
+    mut rows: Vec<ThreadSummary>,
+    status: Option<&str>,
+    q: Option<&str>,
+    limit: usize,
+) -> Vec<ThreadSummary> {
+    let needle = q
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    rows.retain(|row| {
+        if let Some(status) = status {
+            if status != "all" && !thread_matches_status(row, status) {
+                return false;
+            }
+        }
+        if !matches!(status, Some("archived")) && matches!(row.status, ThreadStatus::Archived) {
+            return false;
+        }
+        if let Some(needle) = &needle {
+            row.id.to_ascii_lowercase().contains(needle)
+                || row.title.to_ascii_lowercase().contains(needle)
+                || row
+                    .latest_message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .contains(needle)
+        } else {
+            true
+        }
+    });
+    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    rows.truncate(limit.max(1));
+    rows
+}
+
+pub fn prune_hidden_thread_summaries(
+    rows: Vec<ThreadSummary>,
+    hidden_thread_ids: &HashSet<String>,
+) -> Vec<ThreadSummary> {
+    if hidden_thread_ids.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| !hidden_thread_ids.contains(&row.id))
+        .collect()
+}
+
+fn apply_running_job_to_thread_list(
+    threads: &mut Vec<ThreadSummary>,
+    job: &JobRecord,
+    archived_thread_ids: &HashSet<String>,
+) {
+    let Some(thread_id) = job.thread_id.as_deref() else {
+        return;
+    };
+    if archived_thread_ids.contains(thread_id) {
+        return;
+    }
+    if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
+        apply_running_job_to_summary(thread, job);
+        return;
+    }
+    threads.push(thread_summary_from_running_job(job));
+}
+
+fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
+    ThreadSummary {
+        id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
+        title: "未命名线程".to_string(),
+        status: ThreadStatus::Running,
+        updated_at: timestamp_to_rfc3339(job.started_at),
+        archived_at: None,
+        message_count: 0,
+        latest_message: Some(job.title.clone()),
+        cwd: None,
+        model: None,
+        rollout_path: None,
+        active_turn_id: job.turn_id.clone(),
+        active_job_id: Some(job.id.clone()),
+        pending_elicitation: None,
+        last_event_kind: None,
+    }
+}
+
+fn requested_thread_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(80).clamp(1, 500)
+}
+
+fn thread_status_filter_needs_full_scan(status: Option<&str>) -> bool {
+    matches!(status, Some("running" | "reply-needed" | "recoverable"))
+}
+
+fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
+    matches!(
+        (status, &row.status),
+        ("running", ThreadStatus::Running)
+            | ("reply-needed", ThreadStatus::ReplyNeeded)
+            | ("recoverable", ThreadStatus::Recoverable)
+            | ("archived", ThreadStatus::Archived)
+            | ("recent", ThreadStatus::Recent)
+    )
+}
+
+fn timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|time| time.to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::{
+        codex::{ThreadStatus, ThreadSummary},
+        db::JobRecord,
+        services::threads::{
+            build_threads_overview, merge_running_jobs, thread_list_fetch_limit, ThreadsQuery,
+        },
+    };
+
+    #[test]
+    fn overview_filters_hidden_threads_and_merges_running_jobs() {
+        let threads = vec![
+            thread(
+                "visible",
+                ThreadStatus::Recent,
+                Some("2026-06-18T10:00:00Z"),
+            ),
+            thread("hidden", ThreadStatus::Recent, Some("2026-06-18T11:00:00Z")),
+            thread(
+                "archived",
+                ThreadStatus::Archived,
+                Some("2026-06-18T12:00:00Z"),
+            ),
+        ];
+        let jobs = vec![
+            running_job("job-visible", "visible", Some("turn-visible"), 30),
+            running_job("job-hidden", "hidden", Some("turn-hidden"), 40),
+            running_job("job-new", "new-running", Some("turn-new"), 50),
+            running_job("job-archived", "archived", Some("turn-archived"), 60),
+        ];
+        let hidden = HashSet::from(["hidden".to_string()]);
+        let archived = HashSet::from(["archived".to_string()]);
+
+        let overview = build_threads_overview(
+            threads,
+            jobs,
+            ThreadsQuery {
+                status: Some("running".to_string()),
+                q: None,
+                limit: Some(10),
+            },
+            &hidden,
+            &archived,
+        );
+
+        assert_eq!(overview.query.status.as_deref(), Some("running"));
+        assert_eq!(overview.fetch_limit, usize::MAX);
+        assert_eq!(
+            overview
+                .threads
+                .iter()
+                .map(|thread| thread.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["visible", "new-running"]
+        );
+        let visible = overview
+            .threads
+            .iter()
+            .find(|thread| thread.id == "visible")
+            .expect("visible running thread");
+        assert_eq!(visible.status, ThreadStatus::Running);
+        assert_eq!(visible.active_job_id.as_deref(), Some("job-visible"));
+        assert_eq!(visible.active_turn_id.as_deref(), Some("turn-visible"));
+        assert!(!overview.threads.iter().any(|thread| thread.id == "hidden"));
+        assert!(!overview
+            .threads
+            .iter()
+            .any(|thread| thread.id == "archived"));
+    }
+
+    #[test]
+    fn merge_running_jobs_preserves_existing_active_turn_and_uses_job_title_fallback() {
+        let mut rows = vec![ThreadSummary {
+            active_turn_id: Some("turn-from-rollout".to_string()),
+            latest_message: None,
+            ..thread("thread-a", ThreadStatus::ReplyNeeded, None)
+        }];
+        let jobs = vec![running_job("job-a", "thread-a", Some("turn-from-job"), 10)];
+
+        merge_running_jobs(&mut rows, &jobs, &HashSet::new());
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, ThreadStatus::Running);
+        assert_eq!(rows[0].active_job_id.as_deref(), Some("job-a"));
+        assert_eq!(rows[0].active_turn_id.as_deref(), Some("turn-from-rollout"));
+        assert_eq!(rows[0].latest_message.as_deref(), Some("Job job-a"));
+    }
+
+    #[test]
+    fn full_scan_statuses_fetch_all_threads() {
+        assert_eq!(
+            thread_list_fetch_limit(Some("running"), Some(25)),
+            usize::MAX
+        );
+        assert_eq!(
+            thread_list_fetch_limit(Some("reply-needed"), Some(25)),
+            usize::MAX
+        );
+        assert_eq!(
+            thread_list_fetch_limit(Some("recoverable"), Some(25)),
+            usize::MAX
+        );
+        assert_eq!(thread_list_fetch_limit(None, Some(25)), 25);
+        assert_eq!(thread_list_fetch_limit(Some("recent"), None), 80);
+    }
+
+    fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {
+        ThreadSummary {
+            id: id.to_string(),
+            title: format!("Thread {id}"),
+            status,
+            updated_at: updated_at.map(str::to_string),
+            archived_at: None,
+            message_count: 1,
+            latest_message: Some(format!("latest {id}")),
+            cwd: None,
+            model: None,
+            rollout_path: None,
+            active_turn_id: None,
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: None,
+        }
+    }
+
+    fn running_job(id: &str, thread_id: &str, turn_id: Option<&str>, started_at: i64) -> JobRecord {
+        JobRecord {
+            id: id.to_string(),
+            kind: "codex_chat".to_string(),
+            status: "running".to_string(),
+            title: format!("Job {id}"),
+            thread_id: Some(thread_id.to_string()),
+            turn_id: turn_id.map(str::to_string),
+            started_at,
+            finished_at: None,
+            exit_code: None,
+            output: String::new(),
+            error: None,
+        }
+    }
+}

@@ -157,6 +157,53 @@ import type {
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
+type RuntimeCapabilityMatrix = {
+  runtimeKind: "web" | "desktop";
+  webAuth: boolean;
+  logout: boolean;
+  securitySettings: boolean;
+  publicEndpointStatus: boolean;
+  codexStatePaths: boolean;
+  linuxBackupPrune: boolean;
+  linuxUpdateLabels: boolean;
+  forkAction: boolean;
+  approvalActions: boolean;
+};
+type RuntimeCapabilityInput = RuntimeCapabilityMatrix | boolean | undefined;
+
+const DESKTOP_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
+  runtimeKind: "desktop",
+  webAuth: false,
+  logout: false,
+  securitySettings: false,
+  publicEndpointStatus: false,
+  codexStatePaths: false,
+  linuxBackupPrune: false,
+  linuxUpdateLabels: false,
+  forkAction: false,
+  approvalActions: false
+};
+
+const WEB_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
+  runtimeKind: "web",
+  webAuth: true,
+  logout: true,
+  securitySettings: true,
+  publicEndpointStatus: true,
+  codexStatePaths: true,
+  linuxBackupPrune: true,
+  linuxUpdateLabels: true,
+  forkAction: true,
+  approvalActions: true
+};
+
+export function runtimeCapabilitiesForRuntime(desktop = isDesktopRuntime()): RuntimeCapabilityMatrix {
+  return desktop ? DESKTOP_RUNTIME_CAPABILITIES : WEB_RUNTIME_CAPABILITIES;
+}
+
+function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
+  return typeof input === "object" && input !== null ? input : runtimeCapabilitiesForRuntime(input);
+}
 
 const OPS_PANEL_TITLES = {
   system: "系统状态",
@@ -166,7 +213,7 @@ const OPS_PANEL_TITLES = {
   jobs: "Job History"
 } as const;
 
-export function opsWorkspacePanelTitles(desktop = isDesktopRuntime()): string[] {
+export function opsWorkspacePanelTitles(_desktop = isDesktopRuntime()): string[] {
   const titles = [
     OPS_PANEL_TITLES.system,
     OPS_PANEL_TITLES.updates,
@@ -178,19 +225,20 @@ export function opsWorkspacePanelTitles(desktop = isDesktopRuntime()): string[] 
 }
 
 export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] {
+  const capabilities = runtimeCapabilitiesForRuntime(desktop);
   const copy = [
-    ...opsWorkspacePanelTitles(desktop),
+    ...opsWorkspacePanelTitles(),
     "Hostname",
-    ...(desktop ? [] : ["Public endpoint"]),
-    ...(desktop ? [] : ["state DB", "Codex Home", "State DB"]),
+    ...(capabilities.publicEndpointStatus ? ["Public endpoint"] : []),
+    ...(capabilities.codexStatePaths ? ["state DB", "Codex Home", "State DB"] : []),
     "Hidden threads",
     "Sources",
     "Current",
     "Latest",
     "Update",
-    desktop ? "Check" : "Precheck",
-    desktop ? "Install" : "Update",
-    "Prune",
+    capabilities.linuxUpdateLabels ? "Precheck" : "Check",
+    capabilities.linuxUpdateLabels ? "Update" : "Install",
+    ...(capabilities.linuxBackupPrune ? ["Prune"] : []),
     "Dry-run",
     "清理归档",
     "确认清理归档",
@@ -207,7 +255,7 @@ export function opsWorkspaceVisibleCopy(desktop = isDesktopRuntime()): string[] 
     "sources",
     "rollout 删除结果"
   ];
-  return desktop ? copy.filter((item) => item !== "Prune") : copy;
+  return copy;
 }
 
 const codexLocalCopy = {
@@ -235,12 +283,12 @@ export function desktopRuntimeVisibleCopy(): string[] {
   ];
 }
 
-export function canShowForkAction(desktop = isDesktopRuntime()): boolean {
-  return !desktop;
+export function canShowForkAction(desktop: RuntimeCapabilityInput = isDesktopRuntime()): boolean {
+  return capabilitiesForInput(desktop).forkAction;
 }
 
-export function approvalActionMode(desktop = isDesktopRuntime()): "interactive" | "unsupported" {
-  return desktop ? "unsupported" : "interactive";
+export function approvalActionMode(desktop: RuntimeCapabilityInput = isDesktopRuntime()): "interactive" | "unsupported" {
+  return capabilitiesForInput(desktop).approvalActions ? "interactive" : "unsupported";
 }
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
@@ -301,10 +349,14 @@ export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }
   { id: "security", label: "安全", icon: <ShieldCheck /> }
 ];
 
+function navigationItemsForCapabilities(capabilities: RuntimeCapabilityMatrix) {
+  return capabilities.securitySettings
+    ? navigationItems
+    : navigationItems.filter((item) => item.id !== "security");
+}
+
 function runtimeNavigationItems(desktop = isDesktopRuntime()) {
-  return desktop
-    ? navigationItems.filter((item) => item.id !== "security")
-    : navigationItems;
+  return navigationItemsForCapabilities(runtimeCapabilitiesForRuntime(desktop));
 }
 
 export function navigationLabelsForRuntime(desktop = isDesktopRuntime()): string[] {
@@ -312,11 +364,12 @@ export function navigationLabelsForRuntime(desktop = isDesktopRuntime()): string
 }
 
 export function shouldShowLogoutForRuntime(desktop = isDesktopRuntime()): boolean {
-  return !desktop;
+  return runtimeCapabilitiesForRuntime(desktop).logout;
 }
 
 export function initialSessionForRuntime(desktop = isDesktopRuntime()): SessionUser | null {
-  return desktop ? desktopSessionUser() : loadSession();
+  const capabilities = runtimeCapabilitiesForRuntime(desktop);
+  return capabilities.webAuth ? loadSession() : desktopSessionUser();
 }
 
 const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
@@ -403,8 +456,9 @@ export const slashCommands: SlashCommand[] = [
 
 const desktopUnsupportedSlashCommands = new Set(["/fork"]);
 
-export function slashCommandsForRuntime(desktop = isDesktopRuntime()): SlashCommand[] {
-  return desktop
+export function slashCommandsForRuntime(desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommand[] {
+  const capabilities = capabilitiesForInput(desktop);
+  return !capabilities.forkAction
     ? slashCommands.filter((item) => !desktopUnsupportedSlashCommands.has(item.command))
     : slashCommands;
 }
@@ -430,6 +484,7 @@ declare global {
 
 export default function App() {
   const desktopRuntime = isDesktopRuntime();
+  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
   const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(desktopRuntime));
   const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
@@ -443,7 +498,7 @@ export default function App() {
     });
   };
 
-  if (!session && !desktopRuntime) {
+  if (!session && capabilities.webAuth) {
     return <LoginScreen onLogin={(user) => {
       saveSession(user);
       setSession(user);
@@ -457,7 +512,7 @@ export default function App() {
         <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
       ) : (
         <SideNav view={view} setView={setView} onCollapse={toggleNavCollapsed} onLogout={async () => {
-          if (!desktopRuntime) {
+          if (capabilities.logout) {
             await logout(session.csrf_token);
             clearSession();
             setSession(null);
@@ -477,7 +532,7 @@ export default function App() {
         {view === "claude" && <ClaudeWorkspace />}
         {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} />}
         {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} />}
-        {!desktopRuntime && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+        {capabilities.securitySettings && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
       </main>
     </div>
   );
@@ -625,8 +680,8 @@ function ensureTurnstileScript(): Promise<void> {
 }
 
 function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView: (view: View) => void; onCollapse: () => void; onLogout: () => void }) {
-  const desktopRuntime = isDesktopRuntime();
-  const items = runtimeNavigationItems(desktopRuntime);
+  const capabilities = runtimeCapabilitiesForRuntime();
+  const items = navigationItemsForCapabilities(capabilities);
   return (
     <aside className="side-nav">
       <div className="nav-brand">
@@ -644,7 +699,7 @@ function SideNav({ view, setView, onCollapse, onLogout }: { view: View; setView:
           </NavButton>
         ))}
       </nav>
-      {shouldShowLogoutForRuntime(desktopRuntime) && (
+      {capabilities.logout && (
         <button className="ghost-button nav-logout" onClick={onLogout}><LogOut size={17} />退出</button>
       )}
     </aside>
@@ -656,7 +711,7 @@ function NavButton({ icon, active, onClick, children }: { icon: ReactNode; activ
 }
 
 function MobileTopBar({ onOpenThreads, view, setView }: { onOpenThreads: () => void; view: View; setView: (view: View) => void }) {
-  const items = runtimeNavigationItems();
+  const items = navigationItemsForCapabilities(runtimeCapabilitiesForRuntime());
   const current = items.find((item) => item.id === view);
   return (
     <>
@@ -1497,7 +1552,7 @@ function nearestActiveComposerQuery(draft: string, cursor: number): TriggerQuery
   return slash ?? plugin;
 }
 
-export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop = isDesktopRuntime()): SlashCommand[] {
+export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommand[] {
   const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
   if (!query) return [];
   return slashCommandsForRuntime(desktop)
@@ -1563,12 +1618,12 @@ export function applyPluginMentionSelection(
   return { value, cursor: query.start + insertion.length };
 }
 
-export function exactSlashCommandFromDraft(draft: string, desktop = isDesktopRuntime()): string | null {
+export function exactSlashCommandFromDraft(draft: string, desktop: RuntimeCapabilityInput = isDesktopRuntime()): string | null {
   const command = draft.trim().replace(/\s+/g, " ");
   return slashCommandsForRuntime(desktop).some((item) => item.command === command) ? command : null;
 }
 
-export function slashCommandForComposerSubmit(draft: string, desktop = isDesktopRuntime()): string | null {
+export function slashCommandForComposerSubmit(draft: string, desktop: RuntimeCapabilityInput = isDesktopRuntime()): string | null {
   return exactSlashCommandFromDraft(draft, desktop);
 }
 
@@ -1675,7 +1730,7 @@ const unavailableSlashCommands: Record<string, string> = {
   "/statusline": "Web 端暂不配置 TUI 状态栏。"
 };
 
-export function slashCommandAction(command: string, hasThread = true, desktop = isDesktopRuntime()): SlashCommandAction {
+export function slashCommandAction(command: string, hasThread = true, desktop: RuntimeCapabilityInput = isDesktopRuntime()): SlashCommandAction {
   const normalized = command.trim().replace(/\s+/g, " ");
   const known = slashCommandsForRuntime(desktop).find((item) => item.command === normalized);
   if (!known) return { kind: "unknown", command: normalized, message: "未知 Slash 命令" };
@@ -2025,7 +2080,7 @@ function SlashCommandTextarea({
   hasThread,
   plugins,
   pluginsUnavailable = false,
-  desktopRuntime = isDesktopRuntime(),
+  capabilities = runtimeCapabilitiesForRuntime(),
   onSlashCommand,
   onSubmitShortcut,
   disabled = false
@@ -2037,7 +2092,7 @@ function SlashCommandTextarea({
   hasThread: boolean;
   plugins?: PluginInfo[] | null;
   pluginsUnavailable?: boolean;
-  desktopRuntime?: boolean;
+  capabilities?: RuntimeCapabilityMatrix;
   onSlashCommand?: (command: string) => void;
   onSubmitShortcut?: (value?: string | null) => void;
   disabled?: boolean;
@@ -2049,7 +2104,7 @@ function SlashCommandTextarea({
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
   const signature = `${value}:${cursor}`;
   const menuKind = activeComposerMenuKind(value, cursor, plugins);
-  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread, desktopRuntime) : [];
+  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread, capabilities) : [];
   const pluginSuggestions = menuKind === "plugin" ? pluginMentionSuggestions(value, cursor, plugins, pluginsUnavailable) : [];
   const suggestions = dismissedSignature === signature ? [] : menuKind === "plugin" ? pluginSuggestions : slashSuggestions;
   const open = suggestions.length > 0;
@@ -2085,12 +2140,12 @@ function SlashCommandTextarea({
   };
   const maybeRunExactSlashCommand = (currentValue = value) => {
     if (!onSlashCommand) return false;
-    const command = exactSlashCommandFromDraft(currentValue, desktopRuntime);
+    const command = exactSlashCommandFromDraft(currentValue, capabilities);
     if (!command) return false;
     onSlashCommand(command);
     return true;
   };
-  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue, desktopRuntime) === command;
+  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue, capabilities) === command;
 
   useEffect(() => {
     if (selected >= suggestions.length) {
@@ -2577,6 +2632,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 }) {
   const qc = useQueryClient();
   const desktopRuntime = isDesktopRuntime();
+  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2980,7 +3036,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });
   const executeSlashCommand = useCallback((command: string) => {
-    const action = slashCommandAction(command, Boolean(threadId), desktopRuntime);
+    const action = slashCommandAction(command, Boolean(threadId), capabilities);
     switch (action.kind) {
       case "toggle_plan_mode":
         setDraft("");
@@ -3019,7 +3075,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         break;
       case "fork_thread":
         setDraft("");
-        if (!canShowForkAction(desktopRuntime)) {
+        if (!canShowForkAction(capabilities)) {
           messageStore.setFeedback(threadId, "macOS App 当前不支持 Fork 操作");
           break;
         }
@@ -3070,7 +3126,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         messageStore.setFeedback(threadId, action.message ?? "已执行");
         break;
     }
-  }, [archiveMutation, blocks, csrfToken, desktopRuntime, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
+  }, [archiveMutation, blocks, capabilities, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
@@ -3089,7 +3145,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     if (attachments.uploadInProgress) return;
     const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
     if (currentDraft !== draft) setDraft(currentDraft);
-    const exactSlash = slashCommandForComposerSubmit(currentDraft, desktopRuntime);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft, capabilities);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
@@ -3117,7 +3173,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         jobId: lastResult?.job_id ?? summary.active_job_id
       });
     }
-  }, [actionMode, attachments, desktopRuntime, draft, executeSlashCommand, followNextMessageUpdate, lastResult?.job_id, lastResult?.turn_id, payloadRunConfig, sendMutation, sendPending, steerMutation, steerPending, stopMutation, stopPending, summary.active_job_id, summary.active_turn_id, summary.id]);
+  }, [actionMode, attachments, capabilities, draft, executeSlashCommand, followNextMessageUpdate, lastResult?.job_id, lastResult?.turn_id, payloadRunConfig, sendMutation, sendPending, steerMutation, steerPending, stopMutation, stopPending, summary.active_job_id, summary.active_turn_id, summary.id]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -3140,7 +3196,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       onArchive={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })}
       forkPending={forkPending}
       onFork={() => forkMutation.mutate({ threadId: summary.id })}
-      showFork={canShowForkAction(desktopRuntime)}
+      showFork={canShowForkAction(capabilities)}
       onFeedback={setActiveFeedback}
     />
   );
@@ -3194,7 +3250,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 
         {approvalBlock && (
           <div className="action-stack">
-            {approvalActionMode(desktopRuntime) === "unsupported" ? (
+            {approvalActionMode(capabilities) === "unsupported" ? (
               <UnsupportedApprovalCard block={approvalBlock} />
             ) : (
               <ApprovalCard
@@ -3278,7 +3334,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
             hasThread
             plugins={pluginsQuery.data ?? []}
             pluginsUnavailable={pluginsQuery.isError}
-            desktopRuntime={desktopRuntime}
+            capabilities={capabilities}
             onSlashCommand={executeSlashCommand}
             onSubmitShortcut={submitComposer}
           />
@@ -3717,6 +3773,7 @@ export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" |
 function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean; csrfToken?: string | null; onCreated: (id: string) => void }) {
   const qc = useQueryClient();
   const desktopRuntime = isDesktopRuntime();
+  const capabilities = runtimeCapabilitiesForRuntime(desktopRuntime);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
@@ -3749,7 +3806,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
     onError: (err: Error) => setFeedback(err.message)
   });
   const executeSlashCommand = (command: string) => {
-    const action = slashCommandAction(command, false, desktopRuntime);
+    const action = slashCommandAction(command, false, capabilities);
     setDraft("");
     if (action.kind === "toggle_plan_mode") {
       setRunConfig((current) => ({
@@ -3768,7 +3825,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
   const submitComposer = (domValue?: string | null) => {
     const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
     if (currentDraft !== draft) setDraft(currentDraft);
-    const exactSlash = slashCommandForComposerSubmit(currentDraft, desktopRuntime);
+    const exactSlash = slashCommandForComposerSubmit(currentDraft, capabilities);
     if (exactSlash) {
       executeSlashCommand(exactSlash);
       return;
@@ -3806,7 +3863,7 @@ function EmptyConversation({ loading, csrfToken, onCreated }: { loading: boolean
           hasThread={false}
           plugins={pluginsQuery.data ?? []}
           pluginsUnavailable={pluginsQuery.isError}
-          desktopRuntime={desktopRuntime}
+          capabilities={capabilities}
           onSlashCommand={executeSlashCommand}
           onSubmitShortcut={submitComposer}
         />
@@ -4323,7 +4380,7 @@ function ClaudeWorkspace() {
 }
 
 function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
-  const desktopRuntime = isDesktopRuntime();
+  const capabilities = runtimeCapabilitiesForRuntime();
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
   const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
@@ -4415,7 +4472,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
         <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
         <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
-        {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
+        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
         <Metric label="刷新" value={snapshotText} tone={snapshotTone} />
       </section>
       <section className="probe-control-grid" aria-label="探针线程状态">
@@ -4499,7 +4556,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
                   settings={currentSettings}
                   logsDb={logsDb}
                   configuredDeviceKey={barkConfigured}
-                  desktopRuntime={desktopRuntime}
+                  capabilities={capabilities}
                   onSave={() => saveMutation.mutate(undefined)}
                 />
               ) : (
@@ -4569,7 +4626,7 @@ function ProbeWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 
 function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const qc = useQueryClient();
-  const desktopRuntime = isDesktopRuntime();
+  const capabilities = runtimeCapabilitiesForRuntime();
   const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
   const update = useQuery({ queryKey: ["update-status"], queryFn: getUpdateStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
   const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
@@ -4629,10 +4686,10 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
         <div className="ops-status-overview">
           <Metric label="Hostname" value={hostname} />
-          {!desktopRuntime && <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />}
-          {!desktopRuntime && <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />}
-          {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} wide />}
-          {!desktopRuntime && <Metric label="State DB" value={status.data?.state_db ?? "unknown"} wide />}
+          {capabilities.publicEndpointStatus && <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />}
+          {capabilities.codexStatePaths && <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />}
+          {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} wide />}
+          {capabilities.codexStatePaths && <Metric label="State DB" value={status.data?.state_db ?? "unknown"} wide />}
           <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
           <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
         </div>
@@ -4640,9 +4697,9 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
-          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{desktopRuntime ? "Check" : "Precheck"}</button>
-          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{desktopRuntime ? "Install" : "Update"}</button>
-          {!desktopRuntime && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
+          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.linuxUpdateLabels ? "Precheck" : "Check"}</button>
+          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.linuxUpdateLabels ? "Update" : "Install"}</button>
+          {capabilities.linuxBackupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
         </div>
       </Panel>
       <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
@@ -4875,7 +4932,7 @@ function ProbeRuntimeSettingsCard({
   settings,
   logsDb,
   configuredDeviceKey,
-  desktopRuntime,
+  capabilities,
   onSave
 }: {
   draft: ProbeSettingsDraft;
@@ -4887,7 +4944,7 @@ function ProbeRuntimeSettingsCard({
   settings?: ProbeSettings;
   logsDb?: ProbeLogsDbStatus;
   configuredDeviceKey: boolean;
-  desktopRuntime: boolean;
+  capabilities: RuntimeCapabilityMatrix;
   onSave: () => void;
 }) {
   const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
@@ -4903,12 +4960,12 @@ function ProbeRuntimeSettingsCard({
         <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
-        {!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
+        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
         <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />
         <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
       </div>
       <div className="form-grid compact-three">
-        {!desktopRuntime && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
+        {capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
         <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
         <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
         <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>

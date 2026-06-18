@@ -1,20 +1,21 @@
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-    archive::{
-        plan_delete_archived, plan_delete_hidden, ArchiveDeletePlan, HiddenThreadDeletePlan,
-    },
+	archive::{
+	    execute_delete_archived, execute_delete_hidden, plan_delete_archived, plan_delete_hidden,
+	    ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
+	},
     claude_code::{claude_overview, ClaudeOverview, ClaudePaths},
     codex::{
         list_threads, resolve_codex_paths, set_thread_archived, set_thread_title, thread_detail,
         window_thread_detail, CodexPaths, MessageBlock, ThreadDetail, ThreadSummary,
     },
     config::{
-        patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
+        patch_probe_config_toml, CodexProbeConfigPatch,
         Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
         ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     crypto::SecretBox,
-    db::{JobRecord, PanelDb, SecuritySettings, ThreadFollowUp, ThreadGoalUpdate},
+	db::{JobRecord, PanelDb, ProbeEvent, SecuritySettings, ThreadFollowUp, ThreadGoalUpdate},
     jobs::{CodexActionResult, JobRunner},
     local::{
         default_codex_models, default_permission_profiles, local_codex_config,
@@ -22,9 +23,18 @@ use nexushub_core::{
         LocalPluginInfo,
     },
     platform::{PlatformKind, PlatformPaths},
-    probe::{ProbeLogsDbMaintenanceResult, ProbeLogsDbStatus, ProbeRuntime, ProbeStatus},
+	probe::{
+	    redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeLogsDbStatus,
+	    ProbeRuntime, ProbeStatus,
+	},
+    services::{
+        jobs as job_service,
+        settings as settings_service,
+        threads::{self as thread_service, ThreadsQuery},
+    },
     system::{system_status_with_paths, SystemStatus},
-    update::{analyze_job_failure, JobFailureAnalysis},
+	update::{analyze_job_failure, JobFailureAnalysis},
+	uploads,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,7 +45,6 @@ use std::{
 
 const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
-const CODEX_SUBMITTED_MESSAGE: &str = "已提交给 Codex";
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -206,12 +215,45 @@ pub struct DesktopProbeSettings {
     pub logs_db: nexushub_core::config::ProbeLogsDbConfig,
 }
 
+impl From<settings_service::SettingsView> for DesktopProbeSettings {
+    fn from(view: settings_service::SettingsView) -> Self {
+        Self {
+            codex: serde_json::to_value(view.codex).unwrap_or_else(|_| json!({})),
+            probe: view.probe,
+            notifications: serde_json::to_value(view.notifications).unwrap_or_else(|_| json!({})),
+            logs_db: view.logs_db,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopJobResponse {
     #[serde(flatten)]
     pub job: JobRecord,
     pub failure_analysis: Option<JobFailureAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopProbeEventsResponse {
+    pub events: Vec<ProbeEvent>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDeleteUploadResponse {
+    pub ok: bool,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopApiUpload {
+    pub name: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -343,6 +385,18 @@ pub struct DesktopJobDetailRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopProbeEventsRequest {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDeleteUploadRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopFollowupRequest {
     pub thread_id: String,
     pub limit: Option<u32>,
@@ -421,11 +475,18 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
         .ok();
     let probe = runtime.status().await.ok();
     let logs_db = Some(runtime.logs_db_status());
-    let mut threads = list_threads(&codex_paths, None, None, 40).unwrap_or_else(|err| {
+    let threads = thread_list_with_jobs(
+        state,
+        ThreadsQuery {
+            status: None,
+            q: None,
+            limit: Some(40),
+        },
+    )
+    .unwrap_or_else(|err| {
         warnings.push(format!("线程读取失败: {err}"));
         Vec::new()
     });
-    let _ = apply_running_jobs_to_threads(state, &mut threads);
     let archive_plan = plan_delete_archived(&codex_paths).ok();
     let hidden_plan = plan_delete_hidden(&codex_paths).ok();
     let goal = first_thread_goal(&config, threads.first());
@@ -456,16 +517,14 @@ pub fn desktop_threads_with_state(
     state: &DesktopState,
     request: ThreadListRequest,
 ) -> Result<Vec<ThreadSummary>> {
-    let paths = state.codex_paths();
-    let fetch_limit = thread_list_fetch_limit(request.status.as_deref(), request.limit);
-    let mut threads = list_threads(&paths, None, request.query.as_deref(), fetch_limit)?;
-    apply_running_jobs_to_threads(state, &mut threads)?;
-    Ok(filter_thread_summaries(
-        threads,
-        request.status.as_deref(),
-        request.query.as_deref(),
-        request.limit.unwrap_or(80),
-    ))
+    thread_list_with_jobs(
+        state,
+        ThreadsQuery {
+            status: request.status,
+            q: request.query,
+            limit: request.limit,
+        },
+    )
 }
 
 pub fn desktop_thread_detail(id: &str) -> Result<Option<ThreadDetail>> {
@@ -693,7 +752,11 @@ pub fn desktop_plan_accept_with_state(
     request: DesktopPlanAcceptRequest,
 ) -> Result<CodexActionResult> {
     let _ = (request.turn_id, request.item_id);
-    start_codex_resume_job(state, &request.thread_id, plan_accept_resume_message())
+    start_codex_resume_job(
+        state,
+        &request.thread_id,
+        job_service::plan_accept_resume_message(),
+    )
 }
 
 pub fn desktop_plan_revise_with_state(
@@ -708,7 +771,7 @@ pub fn desktop_plan_revise_with_state(
     start_codex_resume_job(
         state,
         &request.thread_id,
-        plan_revise_resume_message(instructions),
+        job_service::plan_revise_resume_message(instructions),
     )
 }
 
@@ -716,7 +779,7 @@ pub fn desktop_answer_elicitation_with_state(
     state: &DesktopState,
     request: DesktopElicitationAnswerRequest,
 ) -> Result<CodexActionResult> {
-    let message = elicitation_answer_resume_message(&request.answers);
+    let message = job_service::elicitation_answer_resume_message(&request.answers);
     if message.trim().is_empty() {
         anyhow::bail!("answers cannot be empty");
     }
@@ -779,7 +842,17 @@ pub fn desktop_fork_thread_with_state(request: DesktopThreadIdRequest) -> Deskto
 }
 
 pub fn desktop_probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
-    probe_settings_value(state)
+    let config = state.config();
+    let secret_state = settings_service::ProbeSecretState::from_secret_bytes(
+        state
+            .db
+            .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
+            .as_deref(),
+    );
+    Ok(DesktopProbeSettings::from(settings_service::build_settings_view(
+        &config,
+        secret_state,
+    )))
 }
 
 pub fn desktop_probe_save_settings_with_state(
@@ -795,26 +868,19 @@ pub fn desktop_probe_save_settings_with_state(
         .map(DesktopProbeSettingsPatch::into_config_patch)
         .unwrap_or_default();
     if let Some(notifications) = request.notifications {
-        if let Some(top_level_device_key) = normalized_device_key(notifications.device_key) {
+        if let Some(top_level_device_key) =
+            settings_service::normalize_bark_device_key(notifications.device_key)
+        {
             device_key = Some(top_level_device_key);
         }
         let mut nested = probe_patch.notifications.unwrap_or_default();
-        merge_probe_notification_patch(&mut nested, notifications.patch);
+        settings_service::merge_probe_notification_patch(&mut nested, notifications.patch);
         probe_patch.notifications = Some(nested);
     }
-    if let Some(notifications) = probe_patch.notifications.as_ref() {
-        if let Some(server_url) = notifications.server_url.as_deref() {
-            if !valid_probe_notification_server_url(server_url) {
-                anyhow::bail!(
-                    "probe notifications server_url must use HTTPS except localhost HTTP"
-                );
-            }
-        }
-    }
-    let patch = ProbeConfigFilePatch {
+    let patch = settings_service::normalize_probe_config_file_patch(ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
-    };
+    })?;
     let text = std::fs::read_to_string(&config_path)?;
     let updated = patch_probe_config_toml(&text, &patch)?;
     std::fs::write(&config_path, updated)?;
@@ -831,16 +897,55 @@ pub fn desktop_probe_save_settings_with_state(
 pub fn desktop_probe_logs_db_maintain_with_state(
     state: &DesktopState,
     request: DesktopLogsDbMaintainRequest,
-) -> Result<ProbeLogsDbMaintenanceResult> {
+) -> Result<DesktopActionResponse> {
     let dry_run = request.dry_run.unwrap_or(true);
     let compact = request.compact.unwrap_or(false);
-    let result = ProbeRuntime::new(state.config(), state.platform().clone())
-        .maintain_logs_db_with_compaction(dry_run, compact && !dry_run)?;
-    state.db.set_setting(
-        PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
-        &serde_json::to_string(&result)?,
-    )?;
-    Ok(result)
+    let job_id = format!(
+        "desktop-probe-logs-db-{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    let title = if dry_run {
+        "Probe logs-db dry-run"
+    } else {
+        "Probe logs-db execute"
+    };
+    state
+        .db
+        .create_job(&job_id, "probe_logs_db_maintain", title)?;
+
+    let run = (|| -> Result<ProbeLogsDbMaintenanceResult> {
+        let result = ProbeRuntime::new(state.config(), state.platform().clone())
+            .maintain_logs_db_with_compaction(dry_run, compact && !dry_run)?;
+        state.db.set_setting(
+            PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
+            &serde_json::to_string(&result)?,
+        )?;
+        Ok(result)
+    })();
+
+    match run {
+        Ok(result) => {
+            state
+                .db
+                .append_job_output(&job_id, &format!("{}\n", serde_json::to_string_pretty(&result)?))?;
+            state.db.finish_job(&job_id, "succeeded", Some(0), None)?;
+            Ok(ok_action(
+                "desktop_probe_logs_db_maintain",
+                "Probe logs-db maintenance completed",
+                None,
+                Some(job_id),
+                Some(serde_json::to_value(result)?),
+            ))
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let _ = state
+                .db
+                .append_job_output(&job_id, &format!("error: {message}\n"));
+            let _ = state.db.finish_job(&job_id, "failed", None, Some(&message));
+            Err(err)
+        }
+    }
 }
 
 pub fn desktop_probe_bark_test_with_state(state: &DesktopState) -> Result<DesktopActionResponse> {
@@ -891,16 +996,111 @@ pub fn desktop_probe_bark_test_with_state(state: &DesktopState) -> Result<Deskto
     }
 }
 
+pub fn desktop_probe_hooks_install_with_state(
+    state: &DesktopState,
+) -> Result<DesktopActionResponse> {
+    let binary = state.platform().daemon_binary();
+    if !binary.is_file() {
+        return Ok(unavailable_action(
+            "desktop_probe_hooks_install",
+            &format!(
+                "Probe Hook install requires local nexushubd binary: {}",
+                binary.display()
+            ),
+        ));
+    }
+    match fixed_probe_command_for_platform(
+        state.platform(),
+        &state.platform().config_file,
+        &["probe".to_string(), "hooks-install".to_string()],
+    ) {
+        Ok(command) => {
+            let job_id = state.jobs.start_exclusive_shell_job(
+                "probe_hooks_install",
+                "探针 Hook 安装",
+                command,
+                "probe_hooks",
+            )?;
+            Ok(ok_action(
+                "desktop_probe_hooks_install",
+                "started local Probe Hook install job",
+                None,
+                Some(job_id),
+                None,
+            ))
+        }
+        Err(err) => Ok(unavailable_action(
+            "desktop_probe_hooks_install",
+            &format!("Probe Hook install job cannot start: {err}"),
+        )),
+    }
+}
+
 pub fn desktop_archive_delete_dry_run_with_state(
     state: &DesktopState,
 ) -> Result<ArchiveDeletePlan> {
     plan_delete_archived(&state.codex_paths())
 }
 
+pub fn desktop_archive_delete_execute_with_state(
+    state: &DesktopState,
+) -> Result<ArchiveDeleteResult> {
+    execute_delete_archived(&state.codex_paths())
+}
+
 pub fn desktop_hidden_delete_dry_run_with_state(
     state: &DesktopState,
 ) -> Result<HiddenThreadDeletePlan> {
     plan_delete_hidden(&state.codex_paths())
+}
+
+pub fn desktop_hidden_delete_execute_with_state(
+    state: &DesktopState,
+) -> Result<HiddenThreadDeleteResult> {
+    execute_delete_hidden(&state.codex_paths())
+}
+
+pub fn desktop_probe_events_with_state(
+    state: &DesktopState,
+    request: DesktopProbeEventsRequest,
+) -> Result<DesktopProbeEventsResponse> {
+    let limit = request
+        .limit
+        .unwrap_or(state.config().probe.recent_limit as u32)
+        .clamp(1, 500);
+    let events = state
+        .db
+        .list_probe_events(limit)?
+        .into_iter()
+        .map(redact_probe_event_for_output)
+        .collect();
+    Ok(DesktopProbeEventsResponse { events, limit })
+}
+
+pub fn desktop_delete_upload_with_state(
+    state: &DesktopState,
+    request: DesktopDeleteUploadRequest,
+) -> Result<DesktopDeleteUploadResponse> {
+    let root = uploads::upload_root(&state.resolved_codex_paths().home);
+    let deleted = uploads::delete_upload(&root, &request.id)?;
+    Ok(DesktopDeleteUploadResponse { ok: true, deleted })
+}
+
+pub fn desktop_store_uploads_with_state(
+    state: &DesktopState,
+    files: Vec<DesktopApiUpload>,
+) -> Result<uploads::UploadOutcome> {
+    let root = uploads::upload_root(&state.resolved_codex_paths().home);
+    let mut stored = Vec::new();
+    for file in files {
+        stored.push(uploads::store_upload(
+            &root,
+            &file.name,
+            Some(&file.mime),
+            &file.bytes,
+        )?);
+    }
+    Ok(uploads::UploadOutcome { files: stored })
 }
 
 pub fn desktop_jobs_with_state(
@@ -1037,15 +1237,21 @@ pub fn desktop_native_command_names() -> Vec<&'static str> {
         "desktop_rename_thread",
         "desktop_fork_thread",
         "desktop_probe_status",
-        "desktop_probe_settings",
-        "desktop_probe_save_settings",
-        "desktop_probe_bark_test",
-        "desktop_probe_logs_db_maintain",
-        "desktop_archive_plan",
-        "desktop_hidden_plan",
-        "desktop_archive_delete_dry_run",
-        "desktop_hidden_delete_dry_run",
-        "desktop_jobs",
+	    "desktop_probe_settings",
+	    "desktop_probe_save_settings",
+	    "desktop_probe_bark_test",
+	    "desktop_probe_hooks_install",
+	    "desktop_probe_logs_db_maintain",
+	    "desktop_probe_events",
+	    "desktop_archive_plan",
+	    "desktop_hidden_plan",
+	    "desktop_archive_delete_dry_run",
+	    "desktop_archive_delete_execute",
+	    "desktop_hidden_delete_dry_run",
+	    "desktop_hidden_delete_execute",
+	    "desktop_delete_upload",
+        "desktop_upload_files_command",
+	    "desktop_jobs",
         "desktop_job_detail",
         "desktop_list_followups",
         "desktop_enqueue_followup",
@@ -1085,6 +1291,27 @@ impl DesktopSendMessageRequest {
             "attachments": &self.attachments,
         })
     }
+
+    fn into_job_action(self, kind: job_service::CodexActionKind) -> job_service::JobActionRequest {
+        job_service::JobActionRequest {
+            kind,
+            thread_id: self.thread_id,
+            message: self.message,
+            cwd: self
+                .cwd
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from),
+            model: self.model,
+            service_tier: self.service_tier,
+            reasoning_effort: self.reasoning_effort,
+            permission_profile: self.permission_profile,
+            approval_policy: self.approval_policy,
+            sandbox_mode: self.sandbox_mode,
+            network_access: self.network_access,
+            collaboration_mode: self.collaboration_mode,
+        }
+    }
 }
 
 impl DesktopProbeSettingsPatch {
@@ -1092,7 +1319,7 @@ impl DesktopProbeSettingsPatch {
         let (notifications, device_key) = match self.notifications {
             Some(notifications) => (
                 Some(notifications.patch),
-                normalized_device_key(notifications.device_key),
+                settings_service::normalize_bark_device_key(notifications.device_key),
             ),
             None => (None, None),
         };
@@ -1149,41 +1376,7 @@ fn start_codex_new_thread_job(
     state: &DesktopState,
     request: DesktopSendMessageRequest,
 ) -> Result<CodexActionResult> {
-    let message = effective_message(&request.message);
-    if message.is_empty() {
-        anyhow::bail!("message is required");
-    }
-    if !request.attachments.is_empty() {
-        anyhow::bail!("native desktop uploads are not available yet");
-    }
-    let config = state.config();
-    let cwd = request
-        .cwd
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| config.codex.workspace.clone());
-    let mut args = vec![
-        "exec".to_string(),
-        "--json".to_string(),
-        "--skip-git-repo-check".to_string(),
-        "-".to_string(),
-    ];
-    add_codex_common_args(&mut args, &request);
-    let resolved = state.resolved_codex_paths();
-    let job_id =
-        state
-            .jobs
-            .start_codex_job("Codex new thread", &resolved.home, &cwd, args, message)?;
-    state.db.link_job_thread(&job_id, None, None)?;
-    Ok(CodexActionResult {
-        bridge: false,
-        thread_id: None,
-        turn_id: None,
-        job_id: Some(job_id),
-        fallback: true,
-        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
-    })
+    start_codex_job_from_request(state, request, job_service::CodexActionKind::Exec)
 }
 
 fn start_codex_resume_job(
@@ -1191,83 +1384,65 @@ fn start_codex_resume_job(
     thread_id: &str,
     message: String,
 ) -> Result<CodexActionResult> {
-    let message = message.trim().to_string();
-    if message.is_empty() {
-        anyhow::bail!("message is required");
-    }
-    let args = codex_resume_args(thread_id);
-    let config = state.config();
+    start_codex_job_from_request(
+        state,
+        DesktopSendMessageRequest {
+            thread_id: Some(thread_id.to_string()),
+            message,
+            ..DesktopSendMessageRequest::default()
+        },
+        job_service::CodexActionKind::Resume,
+    )
+}
+
+fn start_codex_job_from_request(
+    state: &DesktopState,
+    request: DesktopSendMessageRequest,
+    kind: job_service::CodexActionKind,
+) -> Result<CodexActionResult> {
+    let spec = desktop_codex_job_spec_for_request(state, request, kind)?;
     let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
-        "Codex resume thread",
+        &spec.title,
         &resolved.home,
-        &config.codex.workspace,
-        args,
-        message,
+        &spec.cwd,
+        spec.args,
+        spec.prompt,
     )?;
-    state.db.link_job_thread(&job_id, Some(thread_id), None)?;
+    state
+        .db
+        .link_job_thread(&job_id, spec.thread_id.as_deref(), None)?;
     Ok(CodexActionResult {
         bridge: false,
-        thread_id: Some(thread_id.to_string()),
+        thread_id: spec.thread_id,
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
+        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
-fn add_codex_common_args(args: &mut Vec<String>, request: &DesktopSendMessageRequest) {
-    if let Some(model) = request
-        .model
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.splice(1..1, ["-m".to_string(), model.trim().to_string()]);
-    }
-    if let Some(reasoning) = request
-        .reasoning_effort
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.splice(
-            1..1,
-            [
-                "-c".to_string(),
-                format!(
-                    "model_reasoning_effort=\"{}\"",
-                    cli_config_string(reasoning)
-                ),
-            ],
-        );
-    }
-    if let Some(service_tier) = request
-        .service_tier
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.splice(
-            1..1,
-            [
-                "-c".to_string(),
-                format!("model_service_tier=\"{}\"", cli_config_string(service_tier)),
-            ],
-        );
-    }
+fn desktop_codex_job_spec_for_request(
+    state: &DesktopState,
+    request: DesktopSendMessageRequest,
+    kind: job_service::CodexActionKind,
+) -> Result<job_service::CodexJobSpec> {
+    let attachments = prepare_request_attachments(state, &request.attachments)?;
+    let mut action = request.into_job_action(kind);
+    action.message = uploads::prompt_with_attachment_context(&action.message, &attachments);
+    let config = state.config();
+    job_service::build_codex_job_spec(&action, config.codex.workspace.clone())
 }
 
-fn cli_config_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn codex_resume_args(thread_id: &str) -> Vec<String> {
-    vec![
-        "exec".to_string(),
-        "resume".to_string(),
-        "--all".to_string(),
-        "--json".to_string(),
-        thread_id.to_string(),
-        "-".to_string(),
-    ]
+fn prepare_request_attachments(
+    state: &DesktopState,
+    attachment_ids: &[String],
+) -> Result<Vec<uploads::PreparedAttachment>> {
+    if attachment_ids.len() > uploads::MAX_UPLOAD_FILES {
+        anyhow::bail!("一次最多发送 5 个附件");
+    }
+    let root = uploads::upload_root(&state.resolved_codex_paths().home);
+    uploads::prepare_uploads(&root, attachment_ids)
 }
 
 fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String> {
@@ -1279,142 +1454,29 @@ fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String>
         .map(|job| job.id)
 }
 
-fn plan_accept_resume_message() -> String {
-    "是，实施此计划".to_string()
-}
-
-fn plan_revise_resume_message(instructions: &str) -> String {
-    format!(
-        "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n{}",
-        instructions.trim()
-    )
-}
-
-fn elicitation_answer_resume_message(
-    answers: &std::collections::HashMap<String, Vec<String>>,
-) -> String {
-    let mut rows = answers.iter().collect::<Vec<_>>();
-    rows.sort_by_key(|(question, _)| *question);
-    rows.into_iter()
-        .map(|(question, answers)| format!("{question}: {}", answers.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn apply_running_jobs_to_threads(
+fn thread_list_with_jobs(
     state: &DesktopState,
-    threads: &mut Vec<ThreadSummary>,
-) -> Result<()> {
-    let jobs = state.db.running_thread_jobs()?;
-    for job in &jobs {
-        if let Some(thread_id) = job.thread_id.as_deref() {
-            if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
-                apply_running_job_to_summary(thread, job);
-            } else {
-                threads.push(thread_summary_from_running_job(job));
-            }
-        }
-    }
-    Ok(())
+    query: ThreadsQuery,
+) -> Result<Vec<ThreadSummary>> {
+    let paths = state.codex_paths();
+    let fetch_limit = thread_service::thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    let hidden_thread_ids = nexushub_core::codex::hidden_thread_ids(&paths).unwrap_or_default();
+    let archived_thread_ids = nexushub_core::codex::archived_thread_ids(&paths).unwrap_or_default();
+    Ok(thread_service::build_threads_overview(
+        list_threads(&paths, None, query.q.as_deref(), fetch_limit)?,
+        state.db.running_thread_jobs()?,
+        query,
+        &hidden_thread_ids,
+        &archived_thread_ids,
+    )
+    .threads)
 }
 
 fn apply_running_job_to_detail(state: &DesktopState, detail: &mut ThreadDetail) -> Result<()> {
     if let Some(job) = state.db.running_job_for_thread(&detail.summary.id)? {
-        apply_running_job_to_summary(&mut detail.summary, &job);
+        thread_service::apply_running_job_to_summary(&mut detail.summary, &job);
     }
     Ok(())
-}
-
-fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord) {
-    if matches!(summary.status, nexushub_core::codex::ThreadStatus::Archived) {
-        return;
-    }
-    summary.status = nexushub_core::codex::ThreadStatus::Running;
-    summary.active_job_id = Some(job.id.clone());
-    if summary.active_turn_id.is_none() {
-        summary.active_turn_id = job.turn_id.clone();
-    }
-    if summary.latest_message.is_none() {
-        summary.latest_message = Some(job.title.clone());
-    }
-}
-
-fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
-    ThreadSummary {
-        id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
-        title: "未命名线程".to_string(),
-        status: nexushub_core::codex::ThreadStatus::Running,
-        updated_at: timestamp_to_rfc3339(job.started_at),
-        archived_at: None,
-        message_count: 0,
-        latest_message: Some(job.title.clone()),
-        cwd: None,
-        model: None,
-        rollout_path: None,
-        active_turn_id: job.turn_id.clone(),
-        active_job_id: Some(job.id.clone()),
-        pending_elicitation: None,
-        last_event_kind: None,
-    }
-}
-
-fn filter_thread_summaries(
-    mut rows: Vec<ThreadSummary>,
-    status: Option<&str>,
-    q: Option<&str>,
-    limit: usize,
-) -> Vec<ThreadSummary> {
-    let needle = q
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    rows.retain(|row| {
-        if let Some(status) = status {
-            if status != "all" && !thread_matches_status(row, status) {
-                return false;
-            }
-        }
-        if !matches!(status, Some("archived"))
-            && matches!(row.status, nexushub_core::codex::ThreadStatus::Archived)
-        {
-            return false;
-        }
-        if let Some(needle) = &needle {
-            row.id.to_ascii_lowercase().contains(needle)
-                || row.title.to_ascii_lowercase().contains(needle)
-                || row
-                    .latest_message
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase()
-                    .contains(needle)
-        } else {
-            true
-        }
-    });
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    rows.truncate(limit.max(1));
-    rows
-}
-
-fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
-    use nexushub_core::codex::ThreadStatus;
-    matches!(
-        (status, &row.status),
-        ("running", ThreadStatus::Running)
-            | ("reply-needed", ThreadStatus::ReplyNeeded)
-            | ("recoverable", ThreadStatus::Recoverable)
-            | ("archived", ThreadStatus::Archived)
-            | ("recent", ThreadStatus::Recent)
-    )
-}
-
-fn thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
-    if matches!(status, Some("running" | "reply-needed" | "recoverable")) {
-        usize::MAX
-    } else {
-        limit.unwrap_or(80).clamp(1, 500)
-    }
 }
 
 fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
@@ -1433,81 +1495,6 @@ fn block_page_limit(limit: Option<usize>) -> usize {
     limit
         .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
         .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
-}
-
-fn timestamp_to_rfc3339(timestamp: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp(timestamp, 0).map(|value| value.to_rfc3339())
-}
-
-fn probe_settings_value(state: &DesktopState) -> Result<DesktopProbeSettings> {
-    let config = state.config();
-    let resolved = resolve_codex_paths(&config.codex.home);
-    let device_key_configured = state
-        .db
-        .get_secret_setting_bytes("probe_bark_device_key")?
-        .is_some_and(|value| !value.is_empty());
-    Ok(DesktopProbeSettings {
-        codex: json!({
-            "home": resolved.configured_codex_home.clone(),
-            "configured_codex_home": resolved.configured_codex_home,
-            "resolved_codex_home": resolved.home,
-            "codex_home_source": resolved.codex_home_source,
-            "logs_db_source": resolved.logs_db_source,
-            "discovery_warnings": resolved.discovery_warnings,
-            "workspace": config.codex.workspace,
-            "host_label": config.codex.host_label,
-        }),
-        probe: config.probe.clone(),
-        notifications: json!({
-            "device_key_configured": device_key_configured,
-            "server_url": config.probe.notifications.server_url,
-            "enabled": config.probe.notifications.enabled,
-            "sound": config.probe.notifications.sound,
-            "group": config.probe.notifications.group,
-            "url": config.probe.notifications.url,
-            "notify_completion": config.probe.notifications.notify_completion,
-            "notify_reply_needed": config.probe.notifications.notify_reply_needed,
-            "notify_recoverable": config.probe.notifications.notify_recoverable,
-        }),
-        logs_db: config.probe.logs_db,
-    })
-}
-
-fn normalized_device_key(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
-fn merge_probe_notification_patch(
-    target: &mut ProbeNotificationsConfigPatch,
-    source: ProbeNotificationsConfigPatch,
-) {
-    if source.enabled.is_some() {
-        target.enabled = source.enabled;
-    }
-    if source.server_url.is_some() {
-        target.server_url = source.server_url;
-    }
-    if source.sound.is_some() {
-        target.sound = source.sound;
-    }
-    if source.group.is_some() {
-        target.group = source.group;
-    }
-    if source.url.is_some() {
-        target.url = source.url;
-    }
-    if source.notify_completion.is_some() {
-        target.notify_completion = source.notify_completion;
-    }
-    if source.notify_reply_needed.is_some() {
-        target.notify_reply_needed = source.notify_reply_needed;
-    }
-    if source.notify_recoverable.is_some() {
-        target.notify_recoverable = source.notify_recoverable;
-    }
 }
 
 pub fn fixed_probe_command_for_platform(
@@ -1671,6 +1658,32 @@ fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, temp.path());
+        config.paths.data_dir = temp.path().join("data");
+        config.paths.db_path = temp.path().join("panel.sqlite");
+        config.paths.log_dir = temp.path().join("logs");
+        config.codex.home = temp.path().join("codex-home");
+        config.codex.workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+        std::fs::create_dir_all(&config.paths.log_dir).unwrap();
+        std::fs::create_dir_all(&config.codex.home).unwrap();
+        std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
+        std::fs::create_dir_all(&config.codex.workspace).unwrap();
+        let db = PanelDb::open_with_secret_box(
+            &config.paths.db_path,
+            SecretBox::deterministic_dev(),
+        )
+        .unwrap();
+        let state = DesktopState::new(
+            config,
+            db,
+            PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path()),
+        );
+        (temp, state)
+    }
+
     #[test]
     fn mac_style_paths_use_nexushub_application_support_and_logs() {
         let paths = nexus_paths_for_home("/Users/example");
@@ -1761,13 +1774,27 @@ mod tests {
             "desktop_probe_settings",
             "desktop_probe_save_settings",
             "desktop_probe_bark_test",
+            "desktop_probe_hooks_install",
+            "desktop_probe_logs_db_maintain",
+            "desktop_probe_events",
             "desktop_archive_plan",
             "desktop_hidden_plan",
+            "desktop_archive_delete_dry_run",
+            "desktop_archive_delete_execute",
+            "desktop_hidden_delete_dry_run",
+            "desktop_hidden_delete_execute",
+            "desktop_delete_upload",
+            "desktop_upload_files_command",
             "desktop_jobs",
             "desktop_job_detail",
+            "desktop_list_followups",
+            "desktop_enqueue_followup",
+            "desktop_cancel_followup",
             "desktop_security_status",
             "desktop_platform_status",
             "desktop_claude_code_overview",
+            "desktop_open_config_dir",
+            "desktop_open_log_dir",
         ] {
             assert!(
                 commands.contains(&expected),
@@ -1776,10 +1803,128 @@ mod tests {
         }
 
         assert!(
+            !commands.contains(&"desktop_api_command"),
+            "desktop invoke commands must not expose retired HTTP bridge"
+        );
+        assert!(
             commands
                 .iter()
-                .all(|command| !command.contains("login") && !command.contains("csrf")),
+                .all(|command| !command.contains("login")
+                    && !command.contains("csrf")
+                    && !command.contains("desktop_api")),
             "desktop invoke commands must not expose Web auth/session commands"
+        );
+    }
+
+    #[test]
+    fn desktop_typed_uploads_store_under_local_codex_home() {
+        let (_temp, state) = test_desktop_state();
+
+        let outcome = desktop_store_uploads_with_state(
+            &state,
+            vec![DesktopApiUpload {
+                name: "note.md".to_string(),
+                mime: "text/markdown".to_string(),
+                bytes: b"# hello".to_vec(),
+            }],
+        )
+        .unwrap();
+
+        let id = outcome.files[0].id.clone();
+        let root = uploads::upload_root(&state.resolved_codex_paths().home);
+        assert!(root.join(&id).join("meta.json").is_file());
+
+        let deleted = desktop_delete_upload_with_state(&state, DesktopDeleteUploadRequest { id })
+            .unwrap();
+        assert!(deleted.ok);
+        assert!(deleted.deleted);
+    }
+
+    #[test]
+    fn desktop_send_message_uses_shared_job_service_and_attachment_context() {
+        let (_temp, state) = test_desktop_state();
+        let outcome = desktop_store_uploads_with_state(
+            &state,
+            vec![DesktopApiUpload {
+                name: "plan.md".to_string(),
+                mime: "text/markdown".to_string(),
+                bytes: b"# Plan\nShip parity".to_vec(),
+            }],
+        )
+        .unwrap();
+        let cwd = state.config().paths.data_dir.join("custom-cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let spec = desktop_codex_job_spec_for_request(
+            &state,
+            DesktopSendMessageRequest {
+                message: "请读取附件".to_string(),
+                attachments: vec![outcome.files[0].id.clone()],
+                model: Some("gpt-5.5".to_string()),
+                service_tier: Some("priority".to_string()),
+                reasoning_effort: Some("xhigh".to_string()),
+                cwd: Some(cwd.display().to_string()),
+                permission_profile: Some("danger-full-access".to_string()),
+                network_access: Some(true),
+                collaboration_mode: Some("async".to_string()),
+                ..DesktopSendMessageRequest::default()
+            },
+            job_service::CodexActionKind::Exec,
+        )
+        .unwrap();
+        assert_eq!(spec.title, "Codex new thread");
+        assert_eq!(spec.thread_id, None);
+        assert_eq!(spec.cwd, cwd);
+        assert!(spec.prompt.contains("请读取附件"), "{}", spec.prompt);
+        assert!(spec.prompt.contains("Ship parity"), "{}", spec.prompt);
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-m", "gpt-5.5"]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "model_reasoning_effort=\"xhigh\""]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "model_service_tier=\"priority\""]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "sandbox_mode=\"danger-full-access\""]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "approval_policy=\"never\""]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "network_access=\"enabled\""]),
+            "{:?}",
+            spec.args
+        );
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["-c", "features.collaboration_modes=true"]),
+            "{:?}",
+            spec.args
         );
     }
 

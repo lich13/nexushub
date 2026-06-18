@@ -24,9 +24,9 @@ use nexushub_core::{
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{
-        patch_probe_config_toml, valid_probe_notification_server_url, Config, ProbeConfigFilePatch,
-        ProbeHooksConfigPatch, ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch,
-        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeHooksConfigPatch,
+        ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
+        ProbeSettingsPatch,
     },
     db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
     jobs::CodexActionResult,
@@ -35,7 +35,14 @@ use nexushub_core::{
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
+        jobs as job_service,
         probe::probe_threads_for_status_with_paths,
+        settings as settings_service,
+        threads::{
+            apply_running_job_to_summary, build_threads_overview, filter_thread_summaries,
+            merge_running_jobs, prune_hidden_thread_summaries, thread_list_fetch_limit,
+            ThreadsQuery,
+        },
         updates::{self as update_service, UpdateAction},
     },
     update,
@@ -59,7 +66,6 @@ type ApiResponse = Result<Response, ApiError>;
 const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
 const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
-const CODEX_SUBMITTED_MESSAGE: &str = "已提交给 Codex";
 
 pub struct ApiError(Box<Response>);
 
@@ -221,7 +227,7 @@ async fn claude_code_overview(State(state): State<AppState>, headers: HeaderMap)
 
 async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(PlatformPaths::current())
+    ok(PlatformPaths::for_kind(PlatformKind::Linux))
 }
 
 async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -276,7 +282,7 @@ impl ProbeSettingsRequestPatch {
         let (notifications, device_key) = match self.notifications {
             Some(notifications) => (
                 Some(notifications.patch),
-                normalized_device_key(notifications.device_key),
+                settings_service::normalize_bark_device_key(notifications.device_key),
             ),
             None => (None, None),
         };
@@ -321,23 +327,17 @@ async fn patch_probe_settings(
         .map(ProbeSettingsRequestPatch::into_config_patch)
         .unwrap_or_default();
     if let Some(notifications) = request.notifications {
-        if let Some(top_level_device_key) = normalized_device_key(notifications.device_key) {
+        if let Some(top_level_device_key) =
+            settings_service::normalize_bark_device_key(notifications.device_key)
+        {
             device_key = Some(top_level_device_key);
         }
         let mut nested = probe_patch.notifications.unwrap_or_default();
-        merge_probe_notification_patch(&mut nested, notifications.patch);
+        settings_service::merge_probe_notification_patch(&mut nested, notifications.patch);
         probe_patch.notifications = Some(nested);
     }
-    if let Some(notifications) = probe_patch.notifications.as_ref() {
-        if let Some(server_url) = notifications.server_url.as_deref() {
-            if !valid_probe_notification_server_url(server_url) {
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    "probe notifications server_url must use HTTPS except localhost HTTP",
-                ));
-            }
-        }
-    }
+    let probe_patch = settings_service::normalize_probe_settings_patch(probe_patch)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let patch = ProbeConfigFilePatch {
         codex: request.codex,
         probe: Some(probe_patch),
@@ -347,9 +347,10 @@ async fn patch_probe_settings(
     fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
     let response_config = Config::load(&config_path)?;
     if let Some(device_key) = device_key {
-        state
-            .db
-            .set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+        state.db.set_secret_setting_bytes(
+            settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
+            device_key.as_bytes(),
+        )?;
     }
     state.replace_config(response_config.clone());
     state.db.record_audit(
@@ -693,72 +694,14 @@ fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
 }
 
 fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
-    let resolved = nexushub_core::codex::resolve_codex_paths(&config.codex.home);
-    Ok(json!({
-        "codex": {
-            "home": resolved.configured_codex_home.clone(),
-            "configured_codex_home": resolved.configured_codex_home,
-            "resolved_codex_home": resolved.home,
-            "codex_home_source": resolved.codex_home_source,
-            "logs_db_source": resolved.logs_db_source,
-            "discovery_warnings": resolved.discovery_warnings,
-            "workspace": config.codex.workspace,
-            "host_label": config.codex.host_label,
-        },
-        "probe": config.probe,
-        "notifications": {
-            "device_key_configured": state
-                .db
-                .get_secret_setting_bytes("probe_bark_device_key")?
-                .is_some_and(|value| !value.is_empty()),
-            "server_url": config.probe.notifications.server_url,
-            "enabled": config.probe.notifications.enabled,
-            "sound": config.probe.notifications.sound,
-            "group": config.probe.notifications.group,
-            "url": config.probe.notifications.url,
-            "notify_completion": config.probe.notifications.notify_completion,
-            "notify_reply_needed": config.probe.notifications.notify_reply_needed,
-            "notify_recoverable": config.probe.notifications.notify_recoverable,
-        },
-        "logs_db": config.probe.logs_db,
-    }))
-}
-
-fn normalized_device_key(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
-fn merge_probe_notification_patch(
-    target: &mut ProbeNotificationsConfigPatch,
-    source: ProbeNotificationsConfigPatch,
-) {
-    if source.enabled.is_some() {
-        target.enabled = source.enabled;
-    }
-    if source.server_url.is_some() {
-        target.server_url = source.server_url;
-    }
-    if source.sound.is_some() {
-        target.sound = source.sound;
-    }
-    if source.group.is_some() {
-        target.group = source.group;
-    }
-    if source.url.is_some() {
-        target.url = source.url;
-    }
-    if source.notify_completion.is_some() {
-        target.notify_completion = source.notify_completion;
-    }
-    if source.notify_reply_needed.is_some() {
-        target.notify_reply_needed = source.notify_reply_needed;
-    }
-    if source.notify_recoverable.is_some() {
-        target.notify_recoverable = source.notify_recoverable;
-    }
+    let secret_state = settings_service::ProbeSecretState::from_secret_bytes(
+        state
+            .db
+            .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
+            .as_deref(),
+    );
+    serde_json::to_value(settings_service::build_settings_view(config, secret_state))
+        .map_err(anyhow::Error::from)
 }
 
 fn fixed_probe_shell_command(state: &AppState, args: &[String]) -> String {
@@ -802,7 +745,7 @@ pub(crate) async fn load_probe_threads(
     limit: usize,
 ) -> anyhow::Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    if thread_status_filter_needs_full_scan(Some(status)) {
+    if thread_list_fetch_limit(Some(status), Some(limit)) == usize::MAX {
         return probe_threads_for_status_with_paths(&paths, state.db.path(), status, limit);
     }
     let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
@@ -1195,13 +1138,6 @@ async fn change_password(
 }
 
 #[derive(Debug, Deserialize)]
-struct ThreadsQuery {
-    status: Option<String>,
-    q: Option<String>,
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ThreadDetailQuery {
     limit: Option<usize>,
     before: Option<String>,
@@ -1230,7 +1166,6 @@ async fn list_threads(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let paths = state.codex_paths();
-    let response_limit = requested_thread_limit(query.limit);
     let local_fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
     let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
         tracing::warn!("failed to read hidden thread metadata: {err}");
@@ -1240,17 +1175,16 @@ async fn list_threads(
         tracing::warn!("failed to read archived thread metadata: {err}");
         HashSet::new()
     });
-    let mut threads = codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?;
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    apply_running_jobs_to_threads(&state, &mut threads, &archived_thread_ids)?;
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
+    let running_jobs = state.db.running_thread_jobs()?;
+    let mut threads = build_threads_overview(
+        codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?,
+        running_jobs,
+        query,
+        &hidden_thread_ids,
+        &archived_thread_ids,
+    )
+    .threads;
     submit_ready_followups_from_list(&state, &mut threads).await;
-    threads = filter_thread_summaries(
-        threads,
-        query.status.as_deref(),
-        query.q.as_deref(),
-        response_limit,
-    );
     ok(threads)
 }
 
@@ -1413,6 +1347,11 @@ struct CreateThreadRequest {
     service_tier: Option<String>,
     reasoning_effort: Option<String>,
     cwd: Option<String>,
+    permission_profile: Option<String>,
+    approval_policy: Option<String>,
+    sandbox_mode: Option<String>,
+    network_access: Option<bool>,
+    collaboration_mode: Option<String>,
 }
 
 async fn create_thread(
@@ -1424,55 +1363,31 @@ async fn create_thread(
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
     let effective_message = effective_message(&payload.message, &prepared_attachments);
-    let cwd = payload
-        .cwd
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| state.config().codex.workspace.clone());
-    let mut args = vec![
-        "exec".to_string(),
-        "--json".to_string(),
-        "--skip-git-repo-check".to_string(),
-        "-".to_string(),
-    ];
-    if let Some(model) = payload.model.filter(|value| !value.trim().is_empty()) {
-        args.splice(1..1, ["-m".to_string(), model]);
-    }
-    if let Some(reasoning) = payload
-        .reasoning_effort
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.splice(
-            1..1,
-            [
-                "-c".to_string(),
-                format!("model_reasoning_effort=\"{reasoning}\""),
-            ],
-        );
-    }
-    if let Some(service_tier) = payload
-        .service_tier
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.splice(
-            1..1,
-            [
-                "-c".to_string(),
-                format!(
-                    "model_service_tier=\"{}\"",
-                    cli_config_string(&service_tier)
-                ),
-            ],
-        );
-    }
+    let spec = job_service::build_codex_job_spec(
+        &job_service::JobActionRequest {
+            kind: job_service::CodexActionKind::Exec,
+            thread_id: None,
+            message: prompt_with_attachment_context(&effective_message, &prepared_attachments),
+            cwd: payload.cwd.and_then(non_empty_string).map(PathBuf::from),
+            model: payload.model,
+            service_tier: payload.service_tier,
+            reasoning_effort: payload.reasoning_effort,
+            permission_profile: payload.permission_profile,
+            approval_policy: payload.approval_policy,
+            sandbox_mode: payload.sandbox_mode,
+            network_access: payload.network_access,
+            collaboration_mode: payload.collaboration_mode,
+        },
+        state.config().codex.workspace.clone(),
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
-        "Codex new thread",
+        &spec.title,
         &resolved.home,
-        &cwd,
-        args,
-        prompt_with_attachment_context(&effective_message, &prepared_attachments),
+        &spec.cwd,
+        spec.args,
+        spec.prompt,
     )?;
     state.db.link_job_thread(&job_id, None, None)?;
     state.db.record_audit(
@@ -1481,7 +1396,7 @@ async fn create_thread(
         Some("job"),
         Some(&job_id),
         None,
-        json!({"cwd": cwd.display().to_string()}),
+        json!({"cwd": spec.cwd.display().to_string()}),
     )?;
     ok(CodexActionResult {
         bridge: false,
@@ -1489,7 +1404,7 @@ async fn create_thread(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
+        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -1563,24 +1478,23 @@ async fn send_message(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let args = vec![
-        "exec".to_string(),
-        "resume".to_string(),
-        "--all".to_string(),
-        "--json".to_string(),
-        id.clone(),
-        "-".to_string(),
-    ];
-    let resolved = state.resolved_codex_paths();
-    let job_id = state.jobs.start_codex_job(
-        "Codex resume thread",
-        &resolved.home,
-        &state.config().codex.workspace,
-        args,
+    let spec = codex_resume_job_spec(
+        &state,
+        &id,
         prompt_with_attachment_context(
             &effective_message(&payload.message, &payload.prepared_attachments),
             &payload.prepared_attachments,
         ),
+        &payload,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let resolved = state.resolved_codex_paths();
+    let job_id = state.jobs.start_codex_job(
+        &spec.title,
+        &resolved.home,
+        &spec.cwd,
+        spec.args,
+        spec.prompt,
     )?;
     state.db.link_job_thread(&job_id, Some(&id), None)?;
     state.db.record_audit(
@@ -1597,7 +1511,7 @@ async fn send_message(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
+        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -1703,50 +1617,8 @@ fn apply_running_jobs_to_threads(
     archived_thread_ids: &HashSet<String>,
 ) -> anyhow::Result<()> {
     let jobs = state.db.running_thread_jobs()?;
-    let mut by_thread: HashMap<&str, &JobRecord> = HashMap::new();
-    for job in &jobs {
-        if let Some(thread_id) = job.thread_id.as_deref() {
-            by_thread.entry(thread_id).or_insert(job);
-        }
-    }
-    for thread in threads.iter_mut() {
-        if let Some(job) = by_thread.get(thread.id.as_str()) {
-            apply_running_job_to_summary(thread, job);
-        }
-    }
-    for job in by_thread.values() {
-        apply_running_job_to_thread_list(threads, job, None, archived_thread_ids);
-    }
+    merge_running_jobs(threads, &jobs, archived_thread_ids);
     Ok(())
-}
-
-fn apply_running_job_to_thread_list(
-    threads: &mut Vec<ThreadSummary>,
-    job: &JobRecord,
-    fallback: Option<&ThreadSummary>,
-    archived_thread_ids: &HashSet<String>,
-) {
-    let Some(thread_id) = job.thread_id.as_deref() else {
-        return;
-    };
-    if archived_thread_ids.contains(thread_id)
-        || fallback.is_some_and(|thread| matches!(thread.status, ThreadStatus::Archived))
-    {
-        return;
-    }
-    if let Some(thread) = threads.iter_mut().find(|thread| thread.id == thread_id) {
-        apply_running_job_to_summary(thread, job);
-        return;
-    }
-    threads.push(
-        fallback
-            .cloned()
-            .map(|mut summary| {
-                apply_running_job_to_summary(&mut summary, job);
-                summary
-            })
-            .unwrap_or_else(|| thread_summary_from_running_job(job)),
-    );
 }
 
 fn apply_running_job_to_detail(state: &AppState, detail: &mut ThreadDetail) -> anyhow::Result<()> {
@@ -1754,39 +1626,6 @@ fn apply_running_job_to_detail(state: &AppState, detail: &mut ThreadDetail) -> a
         apply_running_job_to_summary(&mut detail.summary, &job);
     }
     Ok(())
-}
-
-fn apply_running_job_to_summary(summary: &mut ThreadSummary, job: &JobRecord) {
-    if matches!(summary.status, ThreadStatus::Archived) {
-        return;
-    }
-    summary.status = ThreadStatus::Running;
-    summary.active_job_id = Some(job.id.clone());
-    if summary.active_turn_id.is_none() {
-        summary.active_turn_id = job.turn_id.clone();
-    }
-    if summary.latest_message.is_none() {
-        summary.latest_message = Some(job.title.clone());
-    }
-}
-
-fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
-    ThreadSummary {
-        id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
-        title: "未命名线程".to_string(),
-        status: ThreadStatus::Running,
-        updated_at: timestamp_to_rfc3339(job.started_at),
-        archived_at: None,
-        message_count: 0,
-        latest_message: Some(job.title.clone()),
-        cwd: None,
-        model: None,
-        rollout_path: None,
-        active_turn_id: job.turn_id.clone(),
-        active_job_id: Some(job.id.clone()),
-        pending_elicitation: None,
-        last_event_kind: None,
-    }
 }
 
 async fn submit_ready_followups_from_list(state: &AppState, threads: &mut [ThreadSummary]) {
@@ -1819,24 +1658,30 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
         return;
     };
     let request = followup_request(&followup);
-    let args = vec![
-        "exec".to_string(),
-        "resume".to_string(),
-        "--all".to_string(),
-        "--json".to_string(),
-        thread_id.clone(),
-        "-".to_string(),
-    ];
-    let resolved = state.resolved_codex_paths();
-    match state.jobs.start_codex_job(
-        "Codex queued follow-up",
-        &resolved.home,
-        &state.config().codex.workspace,
-        args,
+    let spec = match codex_resume_job_spec(
+        state,
+        &thread_id,
         prompt_with_attachment_context(
             &effective_message(&request.message, &request.prepared_attachments),
             &request.prepared_attachments,
         ),
+        &request,
+    ) {
+        Ok(spec) => spec,
+        Err(err) => {
+            let message = err.to_string();
+            let _ = state.db.mark_followup_error(&followup.id, &message);
+            tracing::warn!("failed to build follow-up codex job spec: {message}");
+            return;
+        }
+    };
+    let resolved = state.resolved_codex_paths();
+    match state.jobs.start_codex_job(
+        "Codex queued follow-up",
+        &resolved.home,
+        &spec.cwd,
+        spec.args,
+        spec.prompt,
     ) {
         Ok(job_id) => {
             let _ = state.db.link_job_thread(&job_id, Some(&thread_id), None);
@@ -1851,6 +1696,34 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
             let _ = state.db.mark_followup_error(&followup.id, &message);
         }
     }
+}
+
+fn codex_resume_job_spec(
+    state: &AppState,
+    thread_id: &str,
+    message: String,
+    request: &SendMessageRequest,
+) -> anyhow::Result<job_service::CodexJobSpec> {
+    job_service::build_codex_job_spec(
+        &job_service::JobActionRequest {
+            kind: job_service::CodexActionKind::Resume,
+            thread_id: Some(thread_id.to_string()),
+            message,
+            cwd: request.cwd.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+            }),
+            model: request.model.clone(),
+            service_tier: request.service_tier.clone(),
+            reasoning_effort: request.reasoning_effort.clone(),
+            permission_profile: request.permission_profile.clone(),
+            approval_policy: request.approval_policy.clone(),
+            sandbox_mode: request.sandbox_mode.clone(),
+            network_access: request.network_access,
+            collaboration_mode: request.collaboration_mode.clone(),
+        },
+        state.config().codex.workspace.clone(),
+    )
 }
 
 fn followup_request(followup: &ThreadFollowUp) -> SendMessageRequest {
@@ -2099,7 +1972,7 @@ async fn plan_accept(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let result = start_codex_resume_job(&state, &id, plan_accept_resume_message())?;
+    let result = start_codex_resume_job(&state, &id, job_service::plan_accept_resume_message())?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.accept",
@@ -2126,7 +1999,11 @@ async fn plan_revise(
             "revision instructions cannot be empty",
         ));
     }
-    let result = start_codex_resume_job(&state, &id, plan_revise_resume_message(instructions))?;
+    let result = start_codex_resume_job(
+        &state,
+        &id,
+        job_service::plan_revise_resume_message(instructions),
+    )?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.plan.revise",
@@ -2186,7 +2063,7 @@ async fn answer_elicitation(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let message = elicitation_answer_resume_message(&payload.answers);
+    let message = job_service::elicitation_answer_resume_message(&payload.answers);
     if message.trim().is_empty() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -2197,52 +2074,25 @@ async fn answer_elicitation(
     ok(result)
 }
 
-fn plan_accept_resume_message() -> String {
-    "是，实施此计划".to_string()
-}
-
-fn plan_revise_resume_message(instructions: &str) -> String {
-    format!(
-        "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n{}",
-        instructions.trim()
-    )
-}
-
-fn elicitation_answer_resume_message(answers: &HashMap<String, Vec<String>>) -> String {
-    let mut rows = answers.iter().collect::<Vec<_>>();
-    rows.sort_by_key(|(question, _)| *question);
-    rows.into_iter()
-        .map(|(question, answers)| format!("{question}: {}", answers.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn codex_resume_args(thread_id: &str) -> Vec<String> {
-    vec![
-        "exec".to_string(),
-        "resume".to_string(),
-        "--all".to_string(),
-        "--json".to_string(),
-        thread_id.to_string(),
-        "-".to_string(),
-    ]
-}
-
 fn start_codex_resume_job(
     state: &AppState,
     thread_id: &str,
     message: String,
 ) -> Result<CodexActionResult, ApiError> {
-    let args = codex_resume_args(thread_id);
+    let spec = job_service::build_codex_job_spec(
+        &job_service::JobActionRequest::resume(thread_id, message),
+        state.config().codex.workspace.clone(),
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let job_id = state
         .jobs
         .start_codex_job(
-            "Codex resume thread",
+            &spec.title,
             &resolved.home,
-            &state.config().codex.workspace,
-            args,
-            message,
+            &spec.cwd,
+            spec.args,
+            spec.prompt,
         )
         .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
     state
@@ -2255,7 +2105,7 @@ fn start_codex_resume_job(
         turn_id: None,
         job_id: Some(job_id),
         fallback: true,
-        message: Some(CODEX_SUBMITTED_MESSAGE.to_string()),
+        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
     })
 }
 
@@ -2318,7 +2168,11 @@ async fn thread_events(
 
 async fn system_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(nexushub_core::system::system_status(&state.config()).await?)
+    ok(nexushub_core::system::system_status_with_paths(
+        &state.config(),
+        &PlatformPaths::for_kind(PlatformKind::Linux),
+    )
+    .await?)
 }
 
 async fn system_version(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -2743,10 +2597,6 @@ fn archived_filter(status: Option<&str>) -> Option<bool> {
     }
 }
 
-fn requested_thread_limit(limit: Option<usize>) -> usize {
-    limit.unwrap_or(80).clamp(1, 500)
-}
-
 fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
     if full.unwrap_or(false) {
         None
@@ -2765,74 +2615,13 @@ fn block_page_limit(limit: Option<usize>) -> usize {
         .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
 }
 
-fn thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
-    if thread_status_filter_needs_full_scan(status) {
-        usize::MAX
-    } else {
-        requested_thread_limit(limit)
-    }
-}
-
 #[cfg(test)]
 fn app_server_thread_list_fetch_limit(status: Option<&str>, limit: Option<usize>) -> usize {
-    if thread_status_filter_needs_full_scan(status) {
+    if matches!(status, Some("running" | "reply-needed" | "recoverable")) {
         500
     } else {
-        requested_thread_limit(limit)
+        limit.unwrap_or(80).clamp(1, 500)
     }
-}
-
-fn thread_status_filter_needs_full_scan(status: Option<&str>) -> bool {
-    matches!(status, Some("running" | "reply-needed" | "recoverable"))
-}
-
-fn filter_thread_summaries(
-    mut rows: Vec<ThreadSummary>,
-    status: Option<&str>,
-    q: Option<&str>,
-    limit: usize,
-) -> Vec<ThreadSummary> {
-    let needle = q
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    rows.retain(|row| {
-        if let Some(status) = status {
-            if status != "all" && !thread_matches_status(row, status) {
-                return false;
-            }
-        }
-        if !matches!(status, Some("archived")) && matches!(row.status, ThreadStatus::Archived) {
-            return false;
-        }
-        if let Some(needle) = &needle {
-            row.id.to_ascii_lowercase().contains(needle)
-                || row.title.to_ascii_lowercase().contains(needle)
-                || row
-                    .latest_message
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase()
-                    .contains(needle)
-        } else {
-            true
-        }
-    });
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    rows.truncate(limit.max(1));
-    rows
-}
-
-fn prune_hidden_thread_summaries(
-    rows: Vec<ThreadSummary>,
-    hidden_thread_ids: &HashSet<String>,
-) -> Vec<ThreadSummary> {
-    if hidden_thread_ids.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(|row| !hidden_thread_ids.contains(&row.id))
-        .collect()
 }
 
 #[cfg(test)]
@@ -2877,16 +2666,6 @@ fn preserve_fallback_title(row: &mut ThreadSummary, fallback: &ThreadSummary) {
 fn is_placeholder_thread_title(title: &str) -> bool {
     let value = title.trim();
     value.is_empty() || matches!(value, "未命名线程" | "Untitled thread" | "Untitled")
-}
-
-fn thread_matches_status(row: &ThreadSummary, status: &str) -> bool {
-    matches!(
-        (status, &row.status),
-        ("running", ThreadStatus::Running)
-            | ("reply-needed", ThreadStatus::ReplyNeeded)
-            | ("recoverable", ThreadStatus::Recoverable)
-            | ("archived", ThreadStatus::Archived)
-    ) || (status == "recent" && matches!(row.status, ThreadStatus::Recent))
 }
 
 #[cfg(test)]
@@ -3895,8 +3674,9 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn cli_config_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn client_ip(headers: &HeaderMap, state: &AppState, source: Option<SocketAddr>) -> Option<String> {
@@ -3943,13 +3723,10 @@ mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        apply_running_job_to_thread_list, archived_filter, block_changed, codex_resume_args,
-        effective_message, elicitation_answer_resume_message, filter_thread_summaries,
-        fixed_probe_shell_command, followup_request, load_probe_threads, merge_thread_summaries,
-        normalize_goal_response, plan_accept_resume_message, plan_revise_resume_message,
-        probe_config_path, prune_hidden_thread_summaries, requested_thread_limit, router,
-        seed_thread_event_blocks, thread_block_page, thread_event_block_key,
-        thread_list_fetch_limit, thread_title, turnstile_login_action, SendMessageRequest,
+        archived_filter, block_changed, effective_message, fixed_probe_shell_command,
+        followup_request, load_probe_threads, merge_thread_summaries, normalize_goal_response,
+        probe_config_path, router, seed_thread_event_blocks, thread_block_page,
+        thread_event_block_key, thread_title, turnstile_login_action, SendMessageRequest,
         TurnstileLoginAction,
     };
     use axum::{
@@ -3960,7 +3737,10 @@ mod tests {
     use nexushub_core::{
         config::Config,
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
-        services::probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+        services::{
+            jobs as job_service, probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+            threads as thread_service,
+        },
         uploads::{PreparedAttachment, UploadKind},
     };
     use rusqlite::{params, Connection};
@@ -4526,9 +4306,9 @@ mod tests {
 
     #[test]
     fn plan_resume_messages_match_tui_intent() {
-        assert_eq!(plan_accept_resume_message(), "是，实施此计划");
+        assert_eq!(job_service::plan_accept_resume_message(), "是，实施此计划");
 
-        let revise = plan_revise_resume_message("  补充灰度验证  ");
+        let revise = job_service::plan_revise_resume_message("  补充灰度验证  ");
         assert_eq!(
             revise,
             "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n补充灰度验证"
@@ -4538,7 +4318,7 @@ mod tests {
     #[test]
     fn plan_and_elicitation_resume_args_use_controlled_json_stdin_semantics() {
         assert_eq!(
-            codex_resume_args("thread-a"),
+            job_service::codex_resume_args("thread-a"),
             vec!["exec", "resume", "--all", "--json", "thread-a", "-"]
         );
     }
@@ -4551,7 +4331,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            elicitation_answer_resume_message(&answers),
+            job_service::elicitation_answer_resume_message(&answers),
             "q1: A\nq2: B, C"
         );
     }
@@ -4904,6 +4684,54 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "job_history"));
+    }
+
+    #[tokio::test]
+    async fn system_status_exposes_linux_capabilities_without_macos_web_entries() {
+        let (state, session_token, _) = authenticated_test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/system/status")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["platform"], "linux");
+        assert_eq!(payload["capabilities"]["threads"], true);
+        assert_eq!(payload["capabilities"]["jobs"], true);
+        assert_eq!(payload["capabilities"]["probe"], true);
+        assert_eq!(payload["capabilities"]["status"], true);
+        assert_eq!(payload["capabilities"]["settings"], true);
+        assert_eq!(payload["capabilities"]["job_history"], true);
+        assert_eq!(payload["capabilities"]["web_auth"], true);
+        assert_eq!(payload["capabilities"]["security_settings"], true);
+        assert_eq!(payload["capabilities"]["turnstile"], true);
+        assert_eq!(payload["capabilities"]["systemd"], true);
+        assert_eq!(payload["capabilities"]["nginx"], true);
+        assert_eq!(payload["capabilities"]["public_endpoint"], true);
+        assert_eq!(payload["capabilities"]["admin_password"], true);
+        assert_eq!(payload["capabilities"]["linux_update_job"], true);
+        let text = serde_json::to_string(&payload).unwrap();
+        for forbidden in [
+            "LaunchAgent",
+            "launchagent",
+            "Cloudflare Tunnel",
+            "cloudflare_tunnel",
+            "macos_web_login",
+            "browser_webui",
+        ] {
+            assert!(!text.contains(forbidden), "{forbidden}");
+        }
     }
 
     #[tokio::test]
@@ -6288,7 +6116,7 @@ mod tests {
         app_thread.status = ThreadStatus::Running;
 
         let rows = merge_thread_summaries(vec![archived], vec![app_thread]);
-        let default_rows = filter_thread_summaries(rows, None, None, 10);
+        let default_rows = thread_service::filter_thread_summaries(rows, None, None, 10);
 
         assert!(default_rows.is_empty());
     }
@@ -6303,7 +6131,7 @@ mod tests {
         let rows = merge_thread_summaries(fallback, app_threads);
         let hidden = ["child-thread".to_string()].into_iter().collect();
 
-        let rows = prune_hidden_thread_summaries(rows, &hidden);
+        let rows = thread_service::prune_hidden_thread_summaries(rows, &hidden);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "main-thread");
@@ -6315,9 +6143,14 @@ mod tests {
         let mut archived = fallback_summary("archived-thread", "archived");
         archived.status = ThreadStatus::Archived;
 
-        let default_rows =
-            filter_thread_summaries(vec![recent.clone(), archived.clone()], None, None, 10);
-        let all_rows = filter_thread_summaries(vec![recent, archived], Some("all"), None, 10);
+        let default_rows = thread_service::filter_thread_summaries(
+            vec![recent.clone(), archived.clone()],
+            None,
+            None,
+            10,
+        );
+        let all_rows =
+            thread_service::filter_thread_summaries(vec![recent, archived], Some("all"), None, 10);
 
         assert_eq!(default_rows.len(), 1);
         assert_eq!(default_rows[0].id, "recent-thread");
@@ -6329,21 +6162,24 @@ mod tests {
 
     #[test]
     fn status_filtered_thread_lists_overfetch_before_final_limit() {
-        assert_eq!(requested_thread_limit(Some(120)), 120);
-        assert_eq!(requested_thread_limit(Some(0)), 1);
-        assert_eq!(requested_thread_limit(Some(900)), 500);
-        assert_eq!(thread_list_fetch_limit(None, Some(120)), 120);
-        assert_eq!(thread_list_fetch_limit(Some("all"), Some(120)), 120);
         assert_eq!(
-            thread_list_fetch_limit(Some("running"), Some(120)),
+            thread_service::thread_list_fetch_limit(None, Some(120)),
+            120
+        );
+        assert_eq!(
+            thread_service::thread_list_fetch_limit(Some("all"), Some(120)),
+            120
+        );
+        assert_eq!(
+            thread_service::thread_list_fetch_limit(Some("running"), Some(120)),
             usize::MAX
         );
         assert_eq!(
-            thread_list_fetch_limit(Some("reply-needed"), Some(120)),
+            thread_service::thread_list_fetch_limit(Some("reply-needed"), Some(120)),
             usize::MAX
         );
         assert_eq!(
-            thread_list_fetch_limit(Some("recoverable"), Some(120)),
+            thread_service::thread_list_fetch_limit(Some("recoverable"), Some(120)),
             usize::MAX
         );
         assert_eq!(
@@ -6400,7 +6236,8 @@ mod tests {
         };
         let mut rows = vec![fallback_summary("thread-visible", "visible")];
 
-        apply_running_job_to_thread_list(&mut rows, &job, Some(&archived), &HashSet::new());
+        let archived_ids = HashSet::from([archived.id.clone()]);
+        thread_service::merge_running_jobs(&mut rows, &[job], &archived_ids);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "thread-visible");
@@ -6739,7 +6576,8 @@ mod tests {
             }),
             &[fallback.clone()],
         );
-        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+        let running =
+            thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
 
         assert_eq!(rows[0].status, ThreadStatus::Recent);
         assert_eq!(rows[0].active_turn_id, None);
@@ -6804,7 +6642,8 @@ mod tests {
             &json!({ "threads": [app_thread.clone()] }),
             &[fallback.clone()],
         );
-        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+        let running =
+            thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
 
         assert_eq!(rows[0].status, ThreadStatus::Recent);
         assert_eq!(rows[0].active_turn_id, None);
@@ -7179,8 +7018,10 @@ mod tests {
                 }
             }),
         );
-        let reply_needed = filter_thread_summaries(rows.clone(), Some("reply-needed"), None, 50);
-        let running = filter_thread_summaries(rows.clone(), Some("running"), None, 50);
+        let reply_needed =
+            thread_service::filter_thread_summaries(rows.clone(), Some("reply-needed"), None, 50);
+        let running =
+            thread_service::filter_thread_summaries(rows.clone(), Some("running"), None, 50);
 
         assert_eq!(rows[0].status, ThreadStatus::ReplyNeeded);
         assert_eq!(detail.summary.status, ThreadStatus::ReplyNeeded);

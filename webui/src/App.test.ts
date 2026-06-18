@@ -1057,8 +1057,8 @@ describe("conversation helpers", () => {
   });
 
   test("probe path metrics keep Linux Codex Home while hiding it from desktop runtime", () => {
-    expect(appSource).toContain('{!desktopRuntime && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
-    expect(appSource).toContain('{!desktopRuntime && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
+    expect(appSource).toContain('{capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
+    expect(appSource).toContain('{capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
     expect(appSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
   });
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import runtimeSource from "./runtime.ts?raw";
 
 async function loadRuntime(desktop = false) {
   vi.resetModules();
@@ -56,52 +57,24 @@ describe("NexusHub runtime adapter", () => {
     });
 
     expect(result).toEqual({
-      command: "desktop_threads_command",
+      command: "desktop_threads",
       args: { request: { status: "all", query: "plan", limit: 20 } }
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("desktop api bridge invokes the native desktop_api_command", async () => {
+  test("desktop api bridge route is not available", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
     const { runtimeRpc } = await loadRuntime(true);
 
-    const result = await runtimeRpc("desktopApi", {
+    await expect(runtimeRpc("desktopApi", {
       request: { path: "/api/threads/thread-a/rename", method: "POST", body: { name: "新标题" } }
-    });
+    })).rejects.toMatchObject({ feature: "desktopApi" });
 
-    expect(result).toEqual({
-      command: "desktop_api_command",
-      args: { request: { path: "/api/threads/thread-a/rename", method: "POST", body: { name: "新标题" } } }
-    });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("desktop direct API helper delegates all routes to the native bridge", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { invokeDesktopApi } = await loadRuntime(true);
-
-    const result = await invokeDesktopApi({
-      path: "/api/probe/settings",
-      method: "PATCH",
-      body: { probe: { enabled: true } }
-    });
-
-    expect(result).toEqual({
-      command: "desktop_api_command",
-      args: {
-        request: {
-          path: "/api/probe/settings",
-          method: "PATCH",
-          body: { probe: { enabled: true } }
-        }
-      }
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
   });
 
   test("desktop upload helper delegates to native upload command", async () => {
@@ -116,7 +89,7 @@ describe("NexusHub runtime adapter", () => {
     });
   });
 
-  test("desktop runtime routes shared app capabilities through the native API bridge", async () => {
+  test("desktop runtime routes shared app capabilities through typed native commands", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
@@ -125,7 +98,7 @@ describe("NexusHub runtime adapter", () => {
     await runtimeRpc("getProbeSettings");
     await runtimeRpc("saveProbeSettings", { settings: { probe: { enabled: true } } });
     await runtimeRpc("getProbeEvents", { limit: 12 });
-    await runtimeRpc("startProbeJob", { path: "/api/probe/bark/test" });
+    await runtimeRpc("startProbeJob", { action: "bark-test" });
     await runtimeRpc("getClaudeCodeOverview");
     await runtimeRpc("getThreadBlocks", { id: "thread-a", options: { limit: 80, before: "b:200" } });
     await runtimeRpc("createThread", { payload: { message: "hello" } });
@@ -134,18 +107,26 @@ describe("NexusHub runtime adapter", () => {
     await runtimeRpc("renameThread", { threadId: "thread-a", name: "新标题" });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/probe/settings", method: "PATCH", body: { probe: { enabled: true } } } }],
-      ["desktop_api_command", { request: { path: "/api/probe/events?limit=12", method: "GET" } }],
-      ["desktop_api_command", { request: { path: "/api/probe/bark/test", method: "POST" } }],
-      ["desktop_api_command", { request: { path: "/api/providers/claude-code/overview", method: "GET" } }],
-      ["desktop_thread_blocks", { request: { id: "thread-a", limit: 80, before: "b:200" } }],
-      ["desktop_api_command", { request: { path: "/api/threads", method: "POST", body: { message: "hello" } } }],
-      ["desktop_api_command", { request: { path: "/api/threads/thread-a/messages", method: "POST", body: { message: "resume" } } }],
-      ["desktop_api_command", { request: { path: "/api/threads/thread-a/archive", method: "POST" } }],
-      ["desktop_api_command", { request: { path: "/api/threads/thread-a/rename", method: "POST", body: { name: "新标题" } } }]
+    const calls = (globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map(([command]) => command)).toEqual([
+      "desktop_probe_settings",
+      "desktop_probe_save_settings",
+      "desktop_probe_events",
+      "desktop_probe_bark_test",
+      "desktop_claude_code_overview",
+      "desktop_thread_blocks",
+      "desktop_send_message",
+      "desktop_send_message",
+      "desktop_archive_thread",
+      "desktop_rename_thread"
     ]);
+    expect(calls[1][1]).toMatchObject({ request: { probe: { enabled: true } } });
+    expect(calls[2][1]).toEqual({ request: { limit: 12 } });
+    expect(calls[5][1]).toEqual({ request: { id: "thread-a", limit: 80, before: "b:200" } });
+    expect(calls[6][1]).toMatchObject({ request: { message: "hello" } });
+    expect(calls[7][1]).toEqual({ request: { message: "resume", threadId: "thread-a" } });
+    expect(calls[8][1]).toEqual({ request: { threadId: "thread-a" } });
+    expect(calls[9][1]).toEqual({ request: { threadId: "thread-a", name: "新标题" } });
   });
 
   test("desktop update action routes to macOS updater command", async () => {
@@ -168,7 +149,7 @@ describe("NexusHub runtime adapter", () => {
       return {
         job_id: "desktop-check-job",
         status: {
-          current_version: "0.1.101",
+          current_version: "0.1.102",
           latest_version: "v0.1.102",
           update_available: true,
           channel: "stable",
@@ -184,5 +165,12 @@ describe("NexusHub runtime adapter", () => {
       job_id: "desktop-check-job",
       status: { state: "ready" }
     });
+  });
+
+  test("production runtime keeps the retired desktop API bridge out of the route table", async () => {
+    expect(runtimeSource).not.toContain("desktopApiRoute");
+    expect(runtimeSource).not.toContain("invokeDesktopApi");
+    expect(runtimeSource).not.toContain("desktop_api_command");
+    expect(runtimeSource).not.toContain('runtimeRpc("desktopApi"');
   });
 });

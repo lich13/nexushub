@@ -66,6 +66,8 @@ type DesktopHome = {
   warnings?: string[];
 };
 
+type ProbeJobAction = "bark-test" | "hooks-install" | "logs-db-dry-run" | "logs-db-execute";
+
 export function getRuntimeKind(): RuntimeKind {
   const target = globalThis as RuntimeGlobal;
   if (target.__NEXUSHUB_DESKTOP_RUNTIME__) {
@@ -247,20 +249,6 @@ function unavailableOptional(reason: string) {
   return { available: false, reason, error: reason };
 }
 
-function desktopApiRoute(
-  path: string | ((args?: RpcArgs) => string),
-  method?: string,
-  body?: (args?: RpcArgs) => unknown,
-): DesktopRoute {
-  return {
-    fallback: (args) => invokeDesktopApi({
-      path: typeof path === "function" ? path(args) : path,
-      method,
-      body: body?.(args)
-    })
-  };
-}
-
 function desktopPlatform(home: DesktopHome) {
   const overview = home.overview && typeof home.overview === "object"
     ? home.overview as Record<string, unknown>
@@ -279,19 +267,177 @@ function desktopPlatform(home: DesktopHome) {
   };
 }
 
+function objectArg(args: RpcArgs, key: string): Record<string, unknown> {
+  const value = args?.[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function camelizeProbeSettings(value: Record<string, unknown>): Record<string, unknown> {
+  const probe = objectValue(value.probe);
+  const notifications = objectValue(value.notifications);
+  const codex = objectValue(value.codex);
+  const logsDb = objectValue(value.logs_db ?? value.logsDb);
+  return {
+    codex: Object.keys(codex).length ? {
+      home: optionalString(codex.home),
+      workspace: optionalString(codex.workspace),
+      hostLabel: optionalString(codex.host_label ?? codex.hostLabel)
+    } : undefined,
+    probe: Object.keys(probe).length ? {
+      enabled: booleanOrUndefined(probe.enabled),
+      pollSeconds: numberOrUndefined(probe.poll_seconds ?? probe.pollSeconds),
+      recentLimit: numberOrUndefined(probe.recent_limit ?? probe.recentLimit),
+      hooks: camelizeKeys(objectValue(probe.hooks)),
+      notifications: normalizeProbeNotifications(objectValue(probe.notifications)),
+      observability: camelizeKeys(objectValue(probe.observability)),
+      logsDb: camelizeKeys(objectValue(probe.logs_db ?? probe.logsDb))
+    } : undefined,
+    notifications: Object.keys(notifications).length
+      ? normalizeProbeNotifications(notifications)
+      : undefined,
+    logsDb: Object.keys(logsDb).length ? camelizeKeys(logsDb) : undefined
+  };
+}
+
+function normalizeProbeNotifications(value: Record<string, unknown>): Record<string, unknown> {
+  return withoutUndefined({
+    deviceKey: optionalString(value.device_key ?? value.deviceKey),
+    enabled: booleanOrUndefined(value.enabled),
+    serverUrl: optionalString(value.server_url ?? value.serverUrl),
+    sound: value.sound,
+    group: optionalString(value.group),
+    url: value.url,
+    notifyCompletion: booleanOrUndefined(value.notify_completion ?? value.notifyCompletion),
+    notifyReplyNeeded: booleanOrUndefined(value.notify_reply_needed ?? value.notifyReplyNeeded),
+    notifyRecoverable: booleanOrUndefined(value.notify_recoverable ?? value.notifyRecoverable)
+  });
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function camelizeKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = item;
+  }
+  return out;
+}
+
+function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function threadListRequest(args?: RpcArgs) {
+  return {
+    status: args?.status,
+    query: args?.q,
+    limit: args?.limit
+  };
+}
+
+function threadDetailRequest(args?: RpcArgs) {
+  const options = objectArg(args, "options");
+  return {
+    id: argString(args, "id"),
+    limit: options.limit,
+    before: options.before,
+    full: options.full
+  };
+}
+
+function threadBlocksRequest(args?: RpcArgs) {
+  const options = objectArg(args, "options");
+  return {
+    id: argString(args, "id"),
+    limit: options.limit,
+    before: options.before
+  };
+}
+
+function threadSendRequest(args?: RpcArgs) {
+  return {
+    ...objectArg(args, "payload"),
+    threadId: argString(args, "threadId") || optionalString(objectArg(args, "payload").thread_id) || undefined
+  };
+}
+
+function planRequest(args?: RpcArgs) {
+  const payload = objectArg(args, "payload");
+  return {
+    threadId: argString(args, "threadId"),
+    turnId: payload.turn_id ?? payload.turnId,
+    itemId: payload.item_id ?? payload.itemId,
+    instructions: payload.instructions
+  };
+}
+
+function updateWebPath(action: unknown): string {
+  switch (action) {
+    case "check":
+      return "/api/system/update/precheck";
+    case "install":
+      return "/api/system/update/install";
+    case "prune":
+      return "/api/system/update/prune";
+    default:
+      throw new RuntimeUnavailableError(`Unknown update action: ${String(action)}`, "runUpdateAction");
+  }
+}
+
+function probeJobWebRoute(action: unknown): { path: string; body?: Record<string, unknown> } {
+  switch (action as ProbeJobAction) {
+    case "bark-test":
+      return { path: "/api/probe/bark/test" };
+    case "hooks-install":
+      return { path: "/api/probe/hooks/install" };
+    case "logs-db-dry-run":
+      return { path: "/api/probe/logs-db/maintain", body: { dry_run: true } };
+    case "logs-db-execute":
+      return { path: "/api/probe/logs-db/maintain", body: { dry_run: false, compact: false } };
+    default:
+      throw new RuntimeUnavailableError(`Unknown Probe job action: ${String(action)}`, "startProbeJob");
+  }
+}
+
+function probeJobDesktopRoute(action: unknown): DesktopRoute {
+  switch (action as ProbeJobAction) {
+    case "bark-test":
+      return { command: "desktop_probe_bark_test" };
+    case "hooks-install":
+      return { command: "desktop_probe_hooks_install" };
+    case "logs-db-dry-run":
+      return {
+        command: "desktop_probe_logs_db_maintain",
+        args: () => ({ request: { dryRun: true, compact: false } })
+      };
+    case "logs-db-execute":
+      return {
+        command: "desktop_probe_logs_db_maintain",
+        args: () => ({ request: { dryRun: false, compact: false } })
+      };
+    default:
+      return { unavailable: `Unknown Probe job action: ${String(action)}` };
+  }
+}
+
 const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   getPublicSettings: {
     web: { path: "/api/public/settings" },
     desktop: { fallback: desktopPublicSettings }
-  },
-  desktopApi: {
-    web: { unavailable: true },
-    desktop: {
-      command: "desktop_api_command",
-      args: (args) => args?.request && typeof args.request === "object"
-        ? { request: args.request as Record<string, unknown> }
-        : { request: { path: "/api/public/settings", method: "GET" } }
-    }
   },
   desktopUploadFiles: {
     web: { unavailable: true },
@@ -336,14 +482,8 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       }
     },
     desktop: {
-      command: "desktop_threads_command",
-      args: (args) => ({
-        request: {
-          status: args?.status,
-          query: args?.q,
-          limit: args?.limit
-        }
-      })
+      command: "desktop_threads",
+      args: (args) => ({ request: threadListRequest(args) })
     }
   },
   getThread: {
@@ -362,8 +502,8 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       }
     },
     desktop: {
-      command: "desktop_thread_detail_command",
-      args: (args) => ({ id: argString(args, "id") })
+      command: "desktop_thread_detail",
+      args: (args) => ({ request: threadDetailRequest(args) })
     }
   },
   getThreadBlocks: {
@@ -382,18 +522,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
     },
     desktop: {
       command: "desktop_thread_blocks",
-      args: (args) => {
-        const options = (args?.options && typeof args.options === "object"
-          ? args.options
-          : {}) as Record<string, unknown>;
-        return {
-          request: {
-            id: argString(args, "id"),
-            limit: options.limit,
-            before: options.before
-          }
-        };
-      }
+      args: (args) => ({ request: threadBlocksRequest(args) })
     }
   },
   getSystemStatus: {
@@ -446,7 +575,7 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getClaudeCodeOverview: {
     web: { path: "/api/providers/claude-code/overview" },
-    desktop: desktopApiRoute("/api/providers/claude-code/overview", "GET")
+    desktop: { command: "desktop_claude_code_overview" }
   },
   getPlatformOverview: {
     web: { path: "/api/platform" },
@@ -458,15 +587,18 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getProbeStatus: {
     web: { path: "/api/probe/status" },
-    desktop: { command: "desktop_probe_status_command" }
+    desktop: { command: "desktop_probe_status" }
   },
   getProbeSettings: {
     web: { path: "/api/probe/settings" },
-    desktop: desktopApiRoute("/api/probe/settings", "GET")
+    desktop: { command: "desktop_probe_settings" }
   },
   saveProbeSettings: {
     web: { path: "/api/probe/settings", method: "PATCH", csrfArg: "csrfToken", body: (args) => args?.settings ?? {} },
-    desktop: desktopApiRoute("/api/probe/settings", "PATCH", (args) => args?.settings ?? {})
+    desktop: {
+      command: "desktop_probe_save_settings",
+      args: (args) => ({ request: camelizeProbeSettings(objectArg(args, "settings")) })
+    }
   },
   getProbeLogsDbStatus: {
     web: { path: "/api/probe/logs-db/status" },
@@ -474,11 +606,14 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   getProbeEvents: {
     web: { path: (args) => `/api/probe/events?limit=${encodeURIComponent(String(args?.limit ?? 10))}` },
-    desktop: desktopApiRoute((args) => `/api/probe/events?limit=${encodeURIComponent(String(args?.limit ?? 10))}`, "GET")
+    desktop: {
+      command: "desktop_probe_events",
+      args: (args) => ({ request: { limit: args?.limit ?? 10 } })
+    }
   },
   dryRunArchiveDelete: {
     web: { path: "/api/archives/delete/dry-run", method: "POST", csrfArg: "csrfToken" },
-    desktop: { command: "desktop_archive_plan_command" }
+    desktop: { command: "desktop_archive_delete_dry_run" }
   },
   startArchiveDelete: {
     web: {
@@ -487,11 +622,11 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       csrfArg: "csrfToken",
       body: () => ({ confirmed: true })
     },
-    desktop: desktopApiRoute("/api/archives/delete/execute", "POST", () => ({ confirmed: true }))
+    desktop: { command: "desktop_archive_delete_execute" }
   },
   dryRunHiddenThreadDelete: {
     web: { path: "/api/hidden-threads/delete/dry-run", method: "POST", csrfArg: "csrfToken" },
-    desktop: { command: "desktop_hidden_plan_command" }
+    desktop: { command: "desktop_hidden_delete_dry_run" }
   },
   startHiddenThreadDelete: {
     web: {
@@ -500,30 +635,37 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
       csrfArg: "csrfToken",
       body: () => ({ confirmed: true })
     },
-    desktop: desktopApiRoute("/api/hidden-threads/delete/execute", "POST", () => ({ confirmed: true }))
-  },
-  startUpdateJob: {
-    web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken" },
-    desktop: { unavailable: "Desktop update jobs command is not implemented" }
+    desktop: { command: "desktop_hidden_delete_execute" }
   },
   getUpdateStatus: {
     web: { path: "/api/system/update/status" },
     desktop: { command: "desktop_update_status" }
   },
-  runUpdateAction: {
-    web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken" },
-    desktop: {
-      fallback: (args) => {
-        const action = args?.action;
-        return action === "install"
-          ? invokeDesktop("install_update_and_restart")
-          : invokeDesktop("check_update_status");
-      }
-    }
-  },
+	  runUpdateAction: {
+	    web: { path: (args) => updateWebPath(args?.action), method: "POST", csrfArg: "csrfToken" },
+	    desktop: {
+	      fallback: (args) => {
+	        const action = args?.action;
+	        if (action === "install") {
+	          return invokeDesktop("install_update_and_restart");
+	        }
+	        if (action === "check") {
+	          return invokeDesktop("check_update_status");
+	        }
+	        throw new RuntimeUnavailableError("macOS App 没有 Linux 备份清理动作。", "runUpdateAction");
+	      }
+	    }
+	  },
   startProbeJob: {
-    web: { path: (args) => String(args?.path ?? ""), method: "POST", csrfArg: "csrfToken", body: (args) => args?.body },
-    desktop: desktopApiRoute((args) => String(args?.path ?? ""), "POST", (args) => args?.body)
+    web: {
+      path: (args) => probeJobWebRoute(args?.action).path,
+      method: "POST",
+      csrfArg: "csrfToken",
+      body: (args) => probeJobWebRoute(args?.action).body
+    },
+    desktop: {
+      fallback: (args) => desktopRpc(probeJobDesktopRoute(args?.action), args)
+    }
   },
   uploadFiles: {
     web: { path: "/api/uploads", method: "POST", csrfArg: "csrfToken", body: (args) => args?.form, skipContentType: true },
@@ -531,47 +673,85 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   deleteUpload: {
     web: { path: (args) => `/api/uploads/${encodeURIComponent(argString(args, "id"))}`, method: "DELETE", csrfArg: "csrfToken" },
-    desktop: desktopApiRoute((args) => `/api/uploads/${encodeURIComponent(argString(args, "id"))}`, "DELETE")
+    desktop: {
+      command: "desktop_delete_upload",
+      args: (args) => ({ id: argString(args, "id") })
+    }
   },
   createThread: {
     web: { path: "/api/threads", method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute("/api/threads", "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_send_message",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
   },
   sendMessage: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/messages`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/messages`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_send_message",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
   },
   steerThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/steer`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/steer`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_continue_thread",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
   },
   listFollowUps: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups` },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, "GET")
+    desktop: {
+      command: "desktop_list_followups",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), limit: args?.limit ?? 20 } })
+    }
   },
   enqueueFollowUp: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_enqueue_followup",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
   },
   cancelFollowUp: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups/${encodeURIComponent(argString(args, "followUpId"))}/cancel`, method: "POST", csrfArg: "csrfToken" },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/follow-ups/${encodeURIComponent(argString(args, "followUpId"))}/cancel`, "POST")
+    desktop: {
+      command: "desktop_cancel_followup",
+      args: (args) => ({
+        request: {
+          threadId: argString(args, "threadId"),
+          followupId: argString(args, "followUpId")
+        }
+      })
+    }
   },
   stopThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/stop`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/stop`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_stop_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), ...objectArg(args, "payload") } })
+    }
   },
   archiveThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/archive`, method: "POST", csrfArg: "csrfToken" },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/archive`, "POST")
+    desktop: {
+      command: "desktop_archive_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
+    }
   },
   restoreThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/restore`, method: "POST", csrfArg: "csrfToken" },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/restore`, "POST")
+    desktop: {
+      command: "desktop_restore_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
+    }
   },
   renameThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/rename`, method: "POST", csrfArg: "csrfToken", body: (args) => ({ name: args?.name }) },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/rename`, "POST", (args) => ({ name: args?.name }))
+    desktop: {
+      command: "desktop_rename_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), name: args?.name } })
+    }
   },
   forkThread: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/fork`, method: "POST", csrfArg: "csrfToken" },
@@ -579,15 +759,24 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   answerElicitation: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/elicitation`, method: "POST", csrfArg: "csrfToken", body: (args) => ({ answers: args?.answers ?? {} }) },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/elicitation`, "POST", (args) => ({ answers: args?.answers ?? {} }))
+    desktop: {
+      command: "desktop_answer_elicitation",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), answers: args?.answers ?? {} } })
+    }
   },
   acceptPlan: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/accept`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/accept`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_plan_accept",
+      args: (args) => ({ request: planRequest(args) })
+    }
   },
   revisePlan: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/revise`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
-    desktop: desktopApiRoute((args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/plan/revise`, "POST", (args) => args?.payload ?? {})
+    desktop: {
+      command: "desktop_plan_revise",
+      args: (args) => ({ request: planRequest(args) })
+    }
   },
   answerApproval: {
     web: { path: (args) => `/api/threads/${encodeURIComponent(argString(args, "threadId"))}/approval`, method: "POST", csrfArg: "csrfToken", body: (args) => args?.payload ?? {} },
@@ -645,11 +834,17 @@ const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
   },
   listJobs: {
     web: { path: "/api/jobs?limit=30" },
-    desktop: desktopApiRoute("/api/jobs?limit=30", "GET")
+    desktop: {
+      command: "desktop_jobs",
+      args: () => ({ request: { limit: 30 } })
+    }
   },
   getJob: {
     web: { path: (args) => `/api/jobs/${encodeURIComponent(argString(args, "id"))}` },
-    desktop: desktopApiRoute((args) => `/api/jobs/${encodeURIComponent(argString(args, "id"))}`, "GET")
+    desktop: {
+      command: "desktop_job_detail",
+      args: (args) => ({ request: { id: argString(args, "id") } })
+    }
   }
 };
 
@@ -665,72 +860,6 @@ export async function runtimeRpc<T = unknown>(
     ? await desktopRpc(route.desktop, args)
     : await webRpc(route.web, args);
   return result as T;
-}
-
-function parseJsonBody(body?: unknown): Record<string, unknown> {
-  if (!body) return {};
-  if (typeof body === "string") {
-    try {
-      const parsed = JSON.parse(body);
-      return parsed && typeof parsed === "object"
-        ? parsed as Record<string, unknown>
-        : {};
-    } catch {
-      return {};
-    }
-  }
-  return body && typeof body === "object"
-    ? body as Record<string, unknown>
-    : {};
-}
-
-function stripQuery(path: string): { pathname: string; query: URLSearchParams } {
-  const [rawPathname, rawQuery = ""] = path.split("?", 2);
-  let pathname = rawPathname;
-  try {
-    pathname = decodeURIComponent(rawPathname);
-  } catch {
-    pathname = rawPathname;
-  }
-  return { pathname, query: new URLSearchParams(rawQuery) };
-}
-
-function desktopThreadPage(detail: unknown, threadId: string) {
-  const value = detail && typeof detail === "object"
-    ? detail as {
-      blocks?: unknown[];
-      total_blocks?: number;
-      has_more_blocks?: boolean;
-      before_cursor?: string | null;
-    }
-    : {};
-  return {
-    thread_id: threadId,
-    blocks: Array.isArray(value.blocks) ? value.blocks : [],
-    total_blocks: typeof value.total_blocks === "number"
-      ? value.total_blocks
-      : Array.isArray(value.blocks)
-        ? value.blocks.length
-        : 0,
-    has_more_blocks: Boolean(value.has_more_blocks),
-    before_cursor: value.before_cursor ?? null
-  };
-}
-
-export async function invokeDesktopApi<T = unknown>(request: {
-  path: string;
-  method?: string;
-  body?: unknown;
-}): Promise<T> {
-  const method = request.method ?? (request.body ? "POST" : "GET");
-  const body = parseJsonBody(request.body);
-  return invokeDesktop("desktop_api_command", {
-    request: {
-      path: request.path,
-      method,
-      body: Object.keys(body).length ? body : undefined
-    }
-  }) as Promise<T>;
 }
 
 export async function invokeDesktopUpload<T = unknown>(
