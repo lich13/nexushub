@@ -104,7 +104,7 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
     let temp = tempfile::tempdir().unwrap();
     let state = desktop_state(&temp);
 
-    let status = desktop_update_status_with_state(&state, Some("v0.1.102"), None).unwrap();
+    let status = desktop_update_status_with_state(&state, Some("v0.1.103"), None).unwrap();
     let serialized = serde_json::to_string(&status).unwrap();
 
     assert_eq!(
@@ -119,4 +119,37 @@ async fn desktop_update_status_uses_macos_tauri_updater_shape() {
     assert!(!serialized.contains("systemctl"));
     assert!(!serialized.contains("nginx"));
     assert!(!serialized.contains("/opt/nexushub"));
+}
+
+#[tokio::test]
+async fn desktop_update_status_remembers_recent_signed_check_result() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = desktop_state(&temp);
+
+    state
+        .db
+        .create_job(
+            "desktop-update-check-test",
+            "nexushub_update_check",
+            "NexusHub app update check",
+        )
+        .unwrap();
+    state
+        .db
+        .append_job_output(
+            "desktop-update-check-test",
+            "checking signed Tauri updater feed\nsigned app update available 0.1.104\n",
+        )
+        .unwrap();
+    state
+        .db
+        .finish_job("desktop-update-check-test", "succeeded", Some(0), None)
+        .unwrap();
+
+    let status = desktop_update_status_with_state(&state, None, None).unwrap();
+
+    assert_eq!(status.latest_version.as_deref(), Some("0.1.104"));
+    assert_eq!(status.update_available, Some(true));
+    assert_eq!(status.state, nexushub_core::services::updates::UpdateState::Ready);
+    assert!(status.recommended_action.contains("Tauri updater"));
 }

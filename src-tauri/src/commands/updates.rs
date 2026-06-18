@@ -1,5 +1,6 @@
 use crate::overview::DesktopState;
 use anyhow::Result;
+use nexushub_core::db::JobRecord;
 use nexushub_core::config::Config;
 use nexushub_core::platform::PlatformPaths;
 use nexushub_core::services::updates::{self, UpdateState, UpdateStatus};
@@ -12,12 +13,19 @@ pub fn desktop_update_status_with_state(
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> Result<UpdateStatus> {
-    desktop_update_status_for(
-        &state.config(),
-        state.platform(),
-        latest_version,
-        last_error,
-    )
+    let config = state.config();
+    let mut status = desktop_update_status_for(&config, state.platform(), latest_version, last_error)?;
+    if latest_version.is_none() && last_error.is_none() {
+        if let Some(job) = state
+            .db
+            .list_jobs(25)?
+            .into_iter()
+            .find(|job| job.kind == "nexushub_update_check")
+        {
+            apply_recent_check_job(&mut status, &job, &config, state.platform());
+        }
+    }
+    Ok(status)
 }
 
 pub fn desktop_update_status_for(
@@ -125,6 +133,41 @@ fn update_job_id(action: &str) -> String {
         chrono::Utc::now().timestamp_millis(),
         std::process::id()
     )
+}
+
+fn apply_recent_check_job(
+    status: &mut UpdateStatus,
+    job: &JobRecord,
+    config: &Config,
+    platform: &PlatformPaths,
+) {
+    if job.status == "failed" {
+        status.state = UpdateState::Failed;
+        return;
+    }
+    if job.status == "running" {
+        status.state = UpdateState::Checking;
+        return;
+    }
+    if let Some(version) = signed_update_version_from_output(&job.output) {
+        *status = updates::update_status(config, platform, Some(&version), None);
+        status.state = UpdateState::Ready;
+        return;
+    }
+    if job.output.contains("no signed app update available") {
+        status.update_available = Some(false);
+        status.state = UpdateState::Idle;
+    }
+}
+
+fn signed_update_version_from_output(output: &str) -> Option<String> {
+    output.lines().rev().find_map(|line| {
+        line.trim()
+            .strip_prefix("signed app update available ")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Result<UpdateStatus> {

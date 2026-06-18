@@ -305,7 +305,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
     return {
       current_version: "0.1.100",
-      latest_version: "v0.1.102",
+      latest_version: "v0.1.103",
       update_available: true,
       channel: "stable",
       method: isDesktopRuntime() ? "macos_tauri_updater" : "linux_systemd_job",
@@ -727,10 +727,18 @@ function jobIdFromRuntimeResult(result: { job_id?: string | null; jobId?: string
   return { job_id: result.job_id ?? result.jobId ?? fallback };
 }
 
-export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<{ job_id: string }> {
+export type UpdateActionResult = {
+  job_id: string;
+  status?: UpdateStatus;
+};
+
+export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<UpdateActionResult> {
   if (USE_DEMO) return { job_id: `update-${action}-demo` };
-  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>("runUpdateAction", { action, csrfToken });
-  return jobIdFromRuntimeResult(result, `update-${action}`);
+  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>("runUpdateAction", { action, csrfToken });
+  return {
+    ...jobIdFromRuntimeResult(result, `update-${action}`),
+    ...(result.status ? { status: result.status } : {})
+  };
 }
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {

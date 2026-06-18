@@ -4635,7 +4635,10 @@ function OpsWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
-  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "check" | "install" | "prune" }) => runUpdateAction(action, csrfToken), onSuccess: () => {
+  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "check" | "install" | "prune" }) => runUpdateAction(action, csrfToken), onSuccess: (result) => {
+    if (result.status) {
+      qc.setQueryData(["update-status"], result.status);
+    }
     qc.invalidateQueries({ queryKey: ["jobs"] });
     qc.invalidateQueries({ queryKey: ["update-status"] });
   } });

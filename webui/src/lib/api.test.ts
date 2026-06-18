@@ -378,7 +378,7 @@ describe("archive delete API compatibility", () => {
 
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       current_version: "0.1.100",
-      latest_version: "v0.1.102",
+      latest_version: "v0.1.103",
       update_available: true,
       channel: "stable",
       method: "linux_systemd_job",
@@ -845,7 +845,7 @@ describe("archive delete API compatibility", () => {
           job_id: "desktop-check-job",
           status: {
             current_version: "0.1.100",
-            latest_version: "v0.1.102",
+            latest_version: "v0.1.103",
             update_available: true,
             channel: "stable",
             method: "macos_tauri_updater",
@@ -858,7 +858,7 @@ describe("archive delete API compatibility", () => {
       expect(command).toBe("desktop_update_status");
       return {
         current_version: "0.1.100",
-        latest_version: "v0.1.102",
+        latest_version: "v0.1.103",
         update_available: true,
         channel: "stable",
         method: "macos_tauri_updater",
@@ -869,7 +869,13 @@ describe("archive delete API compatibility", () => {
     });
 
     expect((await getUpdateStatus()).method).toBe("macos_tauri_updater");
-    await expect(runUpdateAction("check", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-check-job" });
+    await expect(runUpdateAction("check", "ignored-csrf")).resolves.toEqual({
+      job_id: "desktop-check-job",
+      status: expect.objectContaining({
+        latest_version: "v0.1.103",
+        state: "ready"
+      })
+    });
     await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
 
     expect(fetchMock).not.toHaveBeenCalled();

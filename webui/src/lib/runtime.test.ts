@@ -149,8 +149,8 @@ describe("NexusHub runtime adapter", () => {
       return {
         job_id: "desktop-check-job",
         status: {
-          current_version: "0.1.102",
-          latest_version: "v0.1.102",
+          current_version: "0.1.103",
+          latest_version: "v0.1.103",
           update_available: true,
           channel: "stable",
           method: "macos_tauri_updater",
