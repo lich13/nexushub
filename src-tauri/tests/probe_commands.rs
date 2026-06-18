@@ -138,7 +138,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         .db
         .append_job_output(
             "desktop-update-check-test",
-            "checking signed Tauri updater feed\nsigned app update available 0.1.105\n",
+            "checking signed Tauri updater feed\nsigned app update available 0.1.106\n",
         )
         .unwrap();
     state
@@ -148,7 +148,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
 
     let status = desktop_update_status_with_state(&state, None, None).unwrap();
 
-    assert_eq!(status.latest_version.as_deref(), Some("0.1.105"));
+    assert_eq!(status.latest_version.as_deref(), Some("0.1.106"));
     assert_eq!(status.update_available, Some(true));
     assert_eq!(
         status.state,

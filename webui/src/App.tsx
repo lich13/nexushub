@@ -428,9 +428,11 @@ const desktopUnsupportedSlashCommands = new Set(["/fork"]);
 
 export function slashCommandsForRuntime(desktop?: RuntimeCapabilityInput): SlashCommand[] {
   const capabilities = capabilitiesForInput(desktop);
-  return !capabilities.forkAction
-    ? slashCommands.filter((item) => !desktopUnsupportedSlashCommands.has(item.command))
-    : slashCommands;
+  return slashCommands.filter((item) => {
+    if (!capabilities.forkAction && desktopUnsupportedSlashCommands.has(item.command)) return false;
+    if (!capabilities.logout && item.command === "/logout") return false;
+    return true;
+  });
 }
 
 type TurnstileWidgetId = string;
@@ -5299,7 +5301,7 @@ function JobList({ jobs, capabilities }: { jobs: JobRecord[]; capabilities: Runt
                 </ul>
               </div>
             )}
-            <pre>{job.output || job.error || "no output"}</pre>
+            <pre>{jobOutputView(job.output || job.error || "no output", capabilities)}</pre>
           </details>
         );
       })}
@@ -5380,12 +5382,22 @@ export function jobFailureAnalysisView(
 function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
   const sanitized = value
     .replace(/\bsystemd\b/gi, "服务")
-    .replace(/\bNginx\b/g, "服务")
+    .replace(/\bnginx\b/gi, "服务")
     .replace(/管理员密码/g, "权限")
     .replace(/Linux prune/gi, "清理")
+    .replace(/Linux update/gi, "更新")
+    .replace(/\bLinux\b/g, "当前宿主")
     .replace(/\bsudo\b/gi, "权限")
     .trim();
   return sanitized || fallback;
+}
+
+export function jobOutputView(value: string, capabilities?: RuntimeCapabilityInput): string {
+  const output = value.trim() || "no output";
+  const resolvedCapabilities = capabilitiesForInput(capabilities);
+  return resolvedCapabilities.linuxUpdateLabels
+    ? output
+    : sanitizeDesktopFailureCopy(output, "任务输出不可用");
 }
 
 export function optionalUnavailableMessage(

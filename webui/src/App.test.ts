@@ -191,10 +191,16 @@ describe("conversation helpers", () => {
     expect(app.canShowForkAction?.(true)).toBe(false);
     expect(app.slashCommandsForRuntime?.(false).map((item) => item.command)).toContain("/fork");
     expect(app.slashCommandsForRuntime?.(true).map((item) => item.command)).not.toContain("/fork");
+    expect(app.slashCommandsForRuntime?.(false).map((item) => item.command)).toContain("/logout");
+    expect(app.slashCommandsForRuntime?.(true).map((item) => item.command)).not.toContain("/logout");
     expect(app.slashCommandSuggestions?.("/fo", 3, true, false).map((item) => item.command)).toContain("/fork");
     expect(app.slashCommandSuggestions?.("/fo", 3, true, true).map((item) => item.command)).not.toContain("/fork");
+    expect(app.slashCommandSuggestions?.("/lo", 3, true, false).map((item) => item.command)).toContain("/logout");
+    expect(app.slashCommandSuggestions?.("/lo", 3, true, true).map((item) => item.command)).not.toContain("/logout");
     expect(app.exactSlashCommandFromDraft?.(" /fork ", true)).toBeNull();
+    expect(app.exactSlashCommandFromDraft?.(" /logout ", true)).toBeNull();
     expect(app.slashCommandForComposerSubmit?.(" /fork ", true)).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.(" /logout ", true)).toBeNull();
     expect(app.slashCommandAction?.("/fork", true, true)).toEqual({
       kind: "unknown",
       command: "/fork",
@@ -225,6 +231,14 @@ describe("conversation helpers", () => {
 
     expect(rendered).not.toMatch(/systemd|Nginx|管理员密码|Linux prune/i);
     expect(rendered).toContain("更新失败");
+    expect(app.jobOutputView?.(
+      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
+      desktopCapabilities
+    )).not.toMatch(/systemd|nginx|管理员密码|Linux prune|sudo/i);
+    expect(app.jobOutputView?.(
+      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
+      webCapabilities
+    )).toMatch(/systemd|nginx|管理员密码|Linux prune|sudo/i);
   });
 
   test("component sources use capability props instead of runtime or transport access", () => {
