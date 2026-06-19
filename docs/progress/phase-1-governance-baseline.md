@@ -5,13 +5,13 @@
 
 ## Tasks
 
-- [x] **Task 1.1**: Add `AGENTS.md` and `CLAUDE.md`
+- [x] **Task 1.1**: Add `AGENTS.md`; keep `CLAUDE.md` absent
   - Priority: P0
   - Effort: S
   - Test Expectation: Docs-only; verify files exist and final commands are listed.
   - Memory Impact: Instruction surfaces updated.
-  - Acceptance: Shared and Claude-specific rules document bridge, safety, Claude read-only, built-in Probe, and verification commands.
-  - Notes: Completed 2026-06-13.
+  - Acceptance: Shared rules document bridge, safety, Claude read-only, built-in Probe, and verification commands; `CLAUDE.md` remains absent unless the user explicitly requests it.
+  - Notes: Completed 2026-06-13; updated 2026-06-19 after the user-confirmed `CLAUDE.md` deletion.
 
 - [x] **Task 1.2**: Create analysis, plan, and progress docs
   - Priority: P0

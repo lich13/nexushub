@@ -23,6 +23,7 @@ import type {
   SecuritySettings,
   SentinelStatus,
   SessionUser,
+  SystemCapabilities,
   SystemStatus,
   SystemVersion,
   UpdateStatus,
@@ -40,9 +41,9 @@ import {
   createRuntimeThreadEventSource,
   desktopSessionUser,
   getRuntimeKind,
-  isDesktopRuntime,
-  runtimeRpc,
-  type RuntimeUploadFile
+  invokeDesktop,
+  runtimeDispatch,
+  uploadRuntimeFiles
 } from "./runtime";
 
 const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
@@ -52,6 +53,655 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+type RpcArgs = Record<string, unknown> | undefined;
+
+type WebRoute = {
+  command: string;
+  args?: (args?: RpcArgs) => RpcArgs;
+  unavailable?: string;
+};
+
+type DesktopRoute = {
+  command?: string;
+  args?: (args?: RpcArgs) => RpcArgs;
+  fromHome?: (home: DesktopHome, args?: RpcArgs) => unknown;
+  fallback?: (args?: RpcArgs) => unknown;
+  unavailable?: string;
+};
+
+type DesktopHome = {
+  overview?: unknown;
+  system?: unknown;
+  probe?: unknown;
+  logsDb?: unknown;
+  logs_db?: unknown;
+  threads?: unknown[];
+  plugins?: unknown[];
+  models?: unknown[];
+  permissionProfiles?: unknown[];
+  permission_profiles?: unknown[];
+  codexConfig?: unknown;
+  codex_config?: unknown;
+  archivePlan?: unknown;
+  archive_plan?: unknown;
+  hiddenPlan?: unknown;
+  hidden_plan?: unknown;
+  goal?: unknown;
+  warnings?: string[];
+};
+
+async function desktopHome(): Promise<DesktopHome> {
+  return invokeDesktop<DesktopHome>("desktop_home");
+}
+
+function argString(args: RpcArgs, key: string): string {
+  const value = args?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function desktopGoalFromHome(home: DesktopHome, args?: RpcArgs) {
+  return normalizeDesktopGoal(home.goal, argString(args, "threadId"));
+}
+
+function normalizeDesktopGoal(value: unknown, threadId?: string) {
+  const goal = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    available: goal.available !== false,
+    enabled: Boolean(goal.enabled),
+    objective: optionalString(goal.objective),
+    token_budget: typeof goal.tokenBudget === "number"
+      ? goal.tokenBudget
+      : typeof goal.token_budget === "number"
+        ? goal.token_budget
+        : null,
+    status: typeof goal.status === "string" ? goal.status : "idle",
+    completed_at: typeof goal.completedAt === "number"
+      ? goal.completedAt
+      : typeof goal.completed_at === "number"
+        ? goal.completed_at
+        : null,
+    blocked_reason: optionalString(goal.blockedReason ?? goal.blocked_reason),
+    raw: { ...goal, thread_id: threadId }
+  };
+}
+
+function desktopPublicSettings() {
+  return {
+    site_name: "NexusHub",
+    turnstile_enabled: false,
+    turnstile_required: false,
+    turnstile_site_key: "",
+    turnstile_action: "login",
+    admin_configured: true
+  };
+}
+
+function desktopPlatform(home: DesktopHome) {
+  const overview = home.overview && typeof home.overview === "object"
+    ? home.overview as Record<string, unknown>
+    : {};
+  const paths = overview.paths && typeof overview.paths === "object"
+    ? overview.paths as Record<string, unknown>
+    : {};
+  return {
+    kind: "macos",
+    data_dir: String(paths.appSupportDir ?? paths.app_support_dir ?? ""),
+    config_file: String(paths.configFile ?? paths.config_file ?? ""),
+    webui_dir: String(paths.appSupportDir ?? paths.app_support_dir ?? ""),
+    log_dir: String(paths.logDir ?? paths.log_dir ?? ""),
+    service_name: "NexusHub.app",
+    service_kind: "tauri"
+  };
+}
+
+function objectArg(args: RpcArgs, key: string): Record<string, unknown> {
+  const value = args?.[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function camelizeProbeSettings(value: Record<string, unknown>): Record<string, unknown> {
+  const probe = objectValue(value.probe);
+  const notifications = objectValue(value.notifications);
+  const codex = objectValue(value.codex);
+  const logsDb = objectValue(value.logs_db ?? value.logsDb);
+  return {
+    codex: Object.keys(codex).length ? {
+      home: optionalString(codex.home),
+      workspace: optionalString(codex.workspace),
+      hostLabel: optionalString(codex.host_label ?? codex.hostLabel)
+    } : undefined,
+    probe: Object.keys(probe).length ? {
+      enabled: booleanOrUndefined(probe.enabled),
+      pollSeconds: numberOrUndefined(probe.poll_seconds ?? probe.pollSeconds),
+      recentLimit: numberOrUndefined(probe.recent_limit ?? probe.recentLimit),
+      hooks: camelizeKeys(objectValue(probe.hooks)),
+      notifications: normalizeProbeNotifications(objectValue(probe.notifications)),
+      observability: camelizeKeys(objectValue(probe.observability)),
+      logsDb: camelizeKeys(objectValue(probe.logs_db ?? probe.logsDb))
+    } : undefined,
+    notifications: Object.keys(notifications).length
+      ? normalizeProbeNotifications(notifications)
+      : undefined,
+    logsDb: Object.keys(logsDb).length ? camelizeKeys(logsDb) : undefined
+  };
+}
+
+function normalizeProbeNotifications(value: Record<string, unknown>): Record<string, unknown> {
+  return withoutUndefined({
+    deviceKey: optionalString(value.device_key ?? value.deviceKey),
+    enabled: booleanOrUndefined(value.enabled),
+    serverUrl: optionalString(value.server_url ?? value.serverUrl),
+    sound: value.sound,
+    group: optionalString(value.group),
+    url: value.url,
+    notifyCompletion: booleanOrUndefined(value.notify_completion ?? value.notifyCompletion),
+    notifyReplyNeeded: booleanOrUndefined(value.notify_reply_needed ?? value.notifyReplyNeeded),
+    notifyRecoverable: booleanOrUndefined(value.notify_recoverable ?? value.notifyRecoverable)
+  });
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function booleanOrUndefined(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function camelizeKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = item;
+  }
+  return out;
+}
+
+function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function threadListRequest(args?: RpcArgs) {
+  return {
+    status: args?.status,
+    query: args?.q,
+    limit: args?.limit
+  };
+}
+
+function threadDetailRequest(args?: RpcArgs) {
+  const options = objectArg(args, "options");
+  return {
+    id: argString(args, "id"),
+    limit: options.limit,
+    before: options.before,
+    full: options.full
+  };
+}
+
+function threadBlocksRequest(args?: RpcArgs) {
+  const options = objectArg(args, "options");
+  return {
+    id: argString(args, "id"),
+    limit: options.limit,
+    before: options.before
+  };
+}
+
+function threadSendRequest(args?: RpcArgs) {
+  return {
+    ...objectArg(args, "payload"),
+    threadId: argString(args, "threadId") || optionalString(objectArg(args, "payload").thread_id) || undefined
+  };
+}
+
+function planRequest(args?: RpcArgs) {
+  const payload = objectArg(args, "payload");
+  return {
+    threadId: argString(args, "threadId"),
+    turnId: payload.turn_id ?? payload.turnId,
+    itemId: payload.item_id ?? payload.itemId,
+    instructions: payload.instructions
+  };
+}
+
+function updateWebArgs(args?: RpcArgs): RpcArgs {
+  return {
+    action: args?.action,
+    csrfToken: args?.csrfToken
+  };
+}
+
+function probeJobWebArgs(args?: RpcArgs): RpcArgs {
+  return {
+    action: args?.action,
+    csrfToken: args?.csrfToken
+  };
+}
+
+function probeJobDesktopRoute(action: unknown): DesktopRoute {
+  switch (action as ProbeJobAction) {
+    case "bark-test":
+      return { command: "desktop_probe_bark_test" };
+    case "hooks-install":
+      return { command: "desktop_probe_hooks_install" };
+    case "logs-db-dry-run":
+      return {
+        command: "desktop_probe_logs_db_maintain",
+        args: () => ({ request: { dryRun: true, compact: false } })
+      };
+    case "logs-db-execute":
+      return {
+        command: "desktop_probe_logs_db_maintain",
+        args: () => ({ request: { dryRun: false, compact: false } })
+      };
+    default:
+      return { unavailable: `Unknown Probe job action: ${String(action)}` };
+  }
+}
+
+const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
+  getPublicSettings: {
+    web: { command: "getPublicSettings" },
+    desktop: { fallback: desktopPublicSettings }
+  },
+  login: {
+    web: {
+      command: "login",
+      args: (args) => ({
+        username: args?.username,
+        password: args?.password,
+        turnstile_token: typeof args?.turnstileToken === "string" && args.turnstileToken.trim()
+          ? args.turnstileToken.trim()
+          : undefined
+      })
+    },
+    desktop: { fallback: desktopSessionUser }
+  },
+  logout: {
+    web: { command: "logout" },
+    desktop: { fallback: () => undefined }
+  },
+  me: {
+    web: { command: "me" },
+    desktop: { fallback: desktopSessionUser }
+  },
+  listThreads: {
+    web: {
+      command: "listThreads",
+      args: (args) => ({
+        status: args?.status,
+        q: args?.q,
+        limit: args?.limit
+      })
+    },
+    desktop: {
+      command: "desktop_threads",
+      args: (args) => ({ request: threadListRequest(args) })
+    }
+  },
+  getThread: {
+    web: { command: "getThread" },
+    desktop: {
+      command: "desktop_thread_detail",
+      args: (args) => ({ request: threadDetailRequest(args) })
+    }
+  },
+  getThreadBlocks: {
+    web: { command: "getThreadBlocks" },
+    desktop: {
+      command: "desktop_thread_blocks",
+      args: (args) => ({ request: threadBlocksRequest(args) })
+    }
+  },
+  getSystemStatus: {
+    web: { command: "getSystemStatus" },
+    desktop: { fromHome: (home) => home.system ?? {} }
+  },
+  getSystemVersion: {
+    web: { command: "getSystemVersion" },
+    desktop: {
+      fromHome: (home) => {
+        const overview = home.overview && typeof home.overview === "object"
+          ? home.overview as Record<string, unknown>
+          : {};
+        return {
+          panel_current: String(overview.version ?? ""),
+          panel_latest: null,
+          panel_update_available: false,
+          codex_current: null,
+          codex_latest: null,
+          codex_update_available: null
+        };
+      }
+    }
+  },
+  getSecurity: {
+    web: { command: "getSecurity" },
+    desktop: { unavailable: "该宿主不支持安全设置" }
+  },
+  saveSecurity: {
+    web: { command: "saveSecurity" },
+    desktop: { unavailable: "该宿主不支持安全设置" }
+  },
+  changePassword: {
+    web: { command: "changePassword" },
+    desktop: { unavailable: "Desktop password command is not implemented" }
+  },
+  listProviders: {
+    web: { command: "listProviders" },
+    desktop: { fromHome: (home) => home.plugins ?? [] }
+  },
+  getClaudeCodeOverview: {
+    web: { command: "getClaudeCodeOverview" },
+    desktop: { command: "desktop_claude_code_overview" }
+  },
+  getPlatformOverview: {
+    web: { command: "getPlatformOverview" },
+    desktop: { fromHome: desktopPlatform }
+  },
+  listPlugins: {
+    web: { command: "listPlugins" },
+    desktop: { fromHome: (home) => home.plugins ?? [] }
+  },
+  getProbeStatus: {
+    web: { command: "getProbeStatus" },
+    desktop: { command: "desktop_probe_status" }
+  },
+  getProbeSettings: {
+    web: { command: "getProbeSettings" },
+    desktop: { command: "desktop_probe_settings" }
+  },
+  saveProbeSettings: {
+    web: { command: "saveProbeSettings" },
+    desktop: {
+      command: "desktop_probe_save_settings",
+      args: (args) => ({ request: camelizeProbeSettings(objectArg(args, "settings")) })
+    }
+  },
+  getProbeLogsDbStatus: {
+    web: { command: "getProbeLogsDbStatus" },
+    desktop: { fromHome: (home) => ({ available: true, data: home.logsDb ?? home.logs_db ?? {} }) }
+  },
+  getProbeEvents: {
+    web: { command: "getProbeEvents" },
+    desktop: {
+      command: "desktop_probe_events",
+      args: (args) => ({ request: { limit: args?.limit ?? 10 } })
+    }
+  },
+  dryRunArchiveDelete: {
+    web: { command: "dryRunArchiveDelete" },
+    desktop: { command: "desktop_archive_delete_dry_run" }
+  },
+  startArchiveDelete: {
+    web: { command: "startArchiveDelete", args: (args) => ({ ...args, confirmed: true }) },
+    desktop: { command: "desktop_archive_delete_execute" }
+  },
+  dryRunHiddenThreadDelete: {
+    web: { command: "dryRunHiddenThreadDelete" },
+    desktop: { command: "desktop_hidden_delete_dry_run" }
+  },
+  startHiddenThreadDelete: {
+    web: { command: "startHiddenThreadDelete", args: (args) => ({ ...args, confirmed: true }) },
+    desktop: { command: "desktop_hidden_delete_execute" }
+  },
+  getUpdateStatus: {
+    web: { command: "getUpdateStatus" },
+    desktop: { command: "desktop_update_status" }
+  },
+  runUpdateAction: {
+    web: { command: "runUpdateAction", args: updateWebArgs },
+    desktop: {
+      fallback: (args) => {
+        const action = args?.action;
+        if (action === "install") {
+          return invokeDesktop("install_update_and_restart");
+        }
+        if (action === "check") {
+          return invokeDesktop("check_update_status");
+        }
+        throw new RuntimeUnavailableError("macOS App 没有 Linux 备份清理动作。", "runUpdateAction");
+      }
+    }
+  },
+  startProbeJob: {
+    web: { command: "startProbeJob", args: probeJobWebArgs },
+    desktop: {
+      fallback: (args) => runtimeRpcViaDesktopRoute(probeJobDesktopRoute(args?.action), args)
+    }
+  },
+  deleteUpload: {
+    web: { command: "deleteUpload" },
+    desktop: {
+      command: "desktop_delete_upload",
+      args: (args) => ({ id: argString(args, "id") })
+    }
+  },
+  createThread: {
+    web: { command: "createThread", args: (args) => ({ ...objectArg(args, "payload"), csrfToken: args?.csrfToken }) },
+    desktop: {
+      command: "desktop_send_message",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
+  },
+  sendMessage: {
+    web: { command: "sendMessage" },
+    desktop: {
+      command: "desktop_send_message",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
+  },
+  steerThread: {
+    web: { command: "steerThread" },
+    desktop: {
+      command: "desktop_continue_thread",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
+  },
+  listFollowUps: {
+    web: { command: "listFollowUps" },
+    desktop: {
+      command: "desktop_list_followups",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), limit: args?.limit ?? 20 } })
+    }
+  },
+  enqueueFollowUp: {
+    web: { command: "enqueueFollowUp" },
+    desktop: {
+      command: "desktop_enqueue_followup",
+      args: (args) => ({ request: threadSendRequest(args) })
+    }
+  },
+  cancelFollowUp: {
+    web: { command: "cancelFollowUp" },
+    desktop: {
+      command: "desktop_cancel_followup",
+      args: (args) => ({
+        request: {
+          threadId: argString(args, "threadId"),
+          followupId: argString(args, "followUpId")
+        }
+      })
+    }
+  },
+  stopThread: {
+    web: { command: "stopThread" },
+    desktop: {
+      command: "desktop_stop_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), ...objectArg(args, "payload") } })
+    }
+  },
+  archiveThread: {
+    web: { command: "archiveThread" },
+    desktop: {
+      command: "desktop_archive_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
+    }
+  },
+  restoreThread: {
+    web: { command: "restoreThread" },
+    desktop: {
+      command: "desktop_restore_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
+    }
+  },
+  renameThread: {
+    web: { command: "renameThread" },
+    desktop: {
+      command: "desktop_rename_thread",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), name: args?.name } })
+    }
+  },
+  forkThread: {
+    web: { command: "forkThread" },
+    desktop: { unavailable: "Desktop fork command is not implemented" }
+  },
+  answerElicitation: {
+    web: { command: "answerElicitation" },
+    desktop: {
+      command: "desktop_answer_elicitation",
+      args: (args) => ({ request: { threadId: argString(args, "threadId"), answers: args?.answers ?? {} } })
+    }
+  },
+  acceptPlan: {
+    web: { command: "acceptPlan" },
+    desktop: {
+      command: "desktop_plan_accept",
+      args: (args) => ({ request: planRequest(args) })
+    }
+  },
+  revisePlan: {
+    web: { command: "revisePlan" },
+    desktop: {
+      command: "desktop_plan_revise",
+      args: (args) => ({ request: planRequest(args) })
+    }
+  },
+  answerApproval: {
+    web: { command: "answerApproval" },
+    desktop: { unavailable: "Desktop approval command is not implemented" }
+  },
+  listModels: {
+    web: { command: "listModels" },
+    desktop: { fromHome: (home) => ({ available: true, data: home.models ?? [] }) }
+  },
+  listPermissionProfiles: {
+    web: { command: "listPermissionProfiles" },
+    desktop: { fromHome: (home) => ({ available: true, data: home.permissionProfiles ?? home.permission_profiles ?? [] }) }
+  },
+  getCodexConfig: {
+    web: { command: "getCodexConfig" },
+    desktop: { fromHome: (home) => ({ available: true, data: home.codexConfig ?? home.codex_config ?? {} }) }
+  },
+  getCodexGoal: {
+    web: { command: "getCodexGoal" },
+    desktop: { fromHome: desktopGoalFromHome }
+  },
+  saveCodexGoal: {
+    web: {
+      command: "saveCodexGoal",
+      args: (args) => ({
+        thread_id: args?.threadId,
+        objective: args?.objective,
+        token_budget: args?.tokenBudget ?? null,
+        csrfToken: args?.csrfToken
+      })
+    },
+    desktop: {
+      command: "desktop_save_goal_command",
+      args: (args) => ({
+        request: {
+          threadId: argString(args, "threadId"),
+          objective: args?.objective,
+          tokenBudget: args?.tokenBudget ?? null
+        }
+      })
+    }
+  },
+  clearCodexGoal: {
+    web: { command: "clearCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
+    desktop: { command: "desktop_clear_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
+  },
+  pauseCodexGoal: {
+    web: { command: "pauseCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
+    desktop: { command: "desktop_pause_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
+  },
+  resumeCodexGoal: {
+    web: { command: "resumeCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
+    desktop: { command: "desktop_resume_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
+  },
+  listJobs: {
+    web: { command: "listJobs", args: () => ({ limit: 30 }) },
+    desktop: {
+      command: "desktop_jobs",
+      args: () => ({ request: { limit: 30 } })
+    }
+  },
+  getJob: {
+    web: { command: "getJob" },
+    desktop: {
+      command: "desktop_job_detail",
+      args: (args) => ({ request: { id: argString(args, "id") } })
+    }
+  }
+};
+
+async function runtimeRpcViaDesktopRoute<T = unknown>(
+  route: DesktopRoute,
+  args?: RpcArgs,
+): Promise<T> {
+  if (route.unavailable) {
+    throw new RuntimeUnavailableError(route.unavailable, route.unavailable);
+  }
+  if (route.fallback) {
+    return route.fallback(args) as T;
+  }
+  if (route.fromHome) {
+    return route.fromHome(await desktopHome(), args) as T;
+  }
+  if (!route.command) {
+    throw new RuntimeUnavailableError("Desktop command is not configured", "desktop");
+  }
+  return invokeDesktop<T>(route.command, route.args?.(args));
+}
+
+async function runtimeRpc<T = unknown>(
+  name: keyof typeof ROUTES | string,
+  args?: RpcArgs,
+): Promise<T> {
+  const route = ROUTES[name];
+  if (!route) {
+    throw new RuntimeUnavailableError(`Unknown runtime RPC: ${name}`, name);
+  }
+  return runtimeDispatch<T>({
+    webCommand: route.web.command,
+    webArgs: route.web.args?.(args) ?? args,
+    webUnavailable: route.web.unavailable,
+    desktopCommand: route.desktop.command,
+    desktopArgs: route.desktop.args?.(args),
+    desktopFallback: route.desktop.fallback
+      ? () => route.desktop.fallback?.(args) as T | Promise<T>
+      : route.desktop.fromHome
+        ? async () => route.desktop.fromHome?.(await desktopHome(), args) as T
+        : undefined,
+    desktopUnavailable: route.desktop.unavailable
+  });
 }
 
 function isMissingEndpoint(error: unknown): boolean {
@@ -123,6 +773,30 @@ export function runtimeCapabilitiesForRuntime(
   return desktop ? DESKTOP_RUNTIME_CAPABILITIES : WEB_RUNTIME_CAPABILITIES;
 }
 
+export function runtimeCapabilitiesFromSystemStatus(
+  status?: Pick<SystemStatus, "capabilities"> | null,
+  fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
+): RuntimeCapabilityMatrix {
+  const core = status?.capabilities;
+  if (!core) return fallback;
+  return {
+    runtimeKind: fallback.runtimeKind,
+    webAuth: core.web_auth,
+    logout: core.web_auth,
+    securitySettings: core.security_settings || core.turnstile || core.admin_password,
+    publicEndpointStatus: core.public_endpoint,
+    codexStatePaths: core.systemd,
+    linuxBackupPrune: core.prune_backups,
+    linuxUpdateLabels: core.linux_update_job,
+    forkAction: core.web_auth,
+    approvalActions: core.web_auth
+  };
+}
+
+function currentRuntimeCapabilities(): RuntimeCapabilityMatrix {
+  return runtimeCapabilities();
+}
+
 export function desktopRuntimeSessionUser(): SessionUser {
   return desktopSessionUser();
 }
@@ -136,7 +810,7 @@ export async function getPublicSettings(): Promise<PublicSettings> {
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
   if (USE_DEMO) {
-    return isDesktopRuntime()
+    return currentRuntimeCapabilities().runtimeKind === "desktop"
       ? desktopSessionUser()
       : { id: "dev", username, csrf_token: "dev-csrf" };
   }
@@ -150,7 +824,7 @@ export async function logout(csrfToken?: string | null): Promise<void> {
 
 export async function me(): Promise<SessionUser> {
   if (USE_DEMO) {
-    return isDesktopRuntime()
+    return currentRuntimeCapabilities().runtimeKind === "desktop"
       ? desktopSessionUser()
       : { id: "dev", username: "admin", csrf_token: "dev-csrf" };
   }
@@ -255,18 +929,20 @@ export async function getSystemVersion(): Promise<SystemVersion> {
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
+    const capabilities = currentRuntimeCapabilities();
+    const desktop = capabilities.runtimeKind === "desktop";
     return {
       current_version: "0.1.100",
       latest_version: "v0.1.103",
       update_available: true,
       channel: "stable",
-      method: isDesktopRuntime() ? "macos_tauri_updater" : "linux_systemd_job",
+      method: desktop ? "macos_tauri_updater" : "linux_systemd_job",
       state: "idle",
       failure_category: null,
-      recommended_action: isDesktopRuntime()
+      recommended_action: desktop
         ? "Confirm install in the Tauri updater after signature verification."
         : "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
-      capabilities: isDesktopRuntime()
+      capabilities: desktop
         ? ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
         : ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
     };
@@ -711,19 +1387,7 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
       }))
     };
   }
-  if (isDesktopRuntime()) {
-    const uploads: RuntimeUploadFile[] = await Promise.all(files.map(async (file) => ({
-      name: file.name,
-      mime: file.type || "application/octet-stream",
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
-    })));
-    return runtimeRpc<UploadOutcome>("uploadFiles", { files: uploads });
-  }
-  const form = new FormData();
-  for (const file of files) {
-    form.append("files", file, file.name);
-  }
-  return runtimeRpc<UploadOutcome>("uploadFiles", { form, csrfToken });
+  return uploadRuntimeFiles<UploadOutcome>(files, csrfToken);
 }
 
 export async function deleteUpload(id: string, csrfToken?: string | null): Promise<{ ok: boolean; deleted: boolean }> {
@@ -1080,7 +1744,7 @@ function normalizePermissionProfiles(value: unknown): PermissionProfile[] {
 }
 
 function demoPlatformOverview(): PlatformOverview {
-  if (isDesktopRuntime()) {
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
     return {
       kind: "macos",
       data_dir: "~/Library/Application Support/NexusHub",
@@ -1103,11 +1767,50 @@ function demoPlatformOverview(): PlatformOverview {
 }
 
 function demoSystemStatus(): SystemStatus {
-  if (isDesktopRuntime()) {
+  const capabilities = currentRuntimeCapabilities();
+  const systemCapabilities: SystemCapabilities = capabilities.runtimeKind === "desktop"
+    ? {
+      threads: true,
+      jobs: true,
+      probe: true,
+      status: true,
+      settings: true,
+      job_history: true,
+      app_updater: true,
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false
+    }
+    : {
+      threads: true,
+      jobs: true,
+      probe: true,
+      status: true,
+      settings: true,
+      job_history: true,
+      app_updater: true,
+      web_auth: true,
+      security_settings: true,
+      turnstile: true,
+      systemd: true,
+      nginx: true,
+      public_endpoint: true,
+      admin_password: true,
+      linux_update_job: true,
+      prune_backups: true
+    };
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
     return {
       host_label: "local-macos",
       hostname: "macos",
       public_endpoint: null,
+      capabilities: systemCapabilities,
       codex_home: "~/.codex",
       configured_codex_home: "~/.codex",
       resolved_codex_home: "~/.codex",
@@ -1120,6 +1823,7 @@ function demoSystemStatus(): SystemStatus {
     host_label: "43.155.235.227",
     hostname: "codex-cloud-root",
     public_endpoint: "https://661313.xyz/nexushub/",
+    capabilities: systemCapabilities,
     codex_home: "/root/.codex",
     configured_codex_home: "/root/.codex",
     resolved_codex_home: "/root/.codex",
@@ -1130,7 +1834,7 @@ function demoSystemStatus(): SystemStatus {
 }
 
 function demoSecurity(): SecuritySettings {
-  if (isDesktopRuntime()) {
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
     return {
       turnstile_enabled: false,
       turnstile_required: false,
@@ -1196,7 +1900,8 @@ function demoProbeStatus(): ProbeStatus {
 function demoProbeSettings(): ProbeSettings {
   const platform = demoPlatformOverview();
   const system = demoSystemStatus();
-  const logsPath = isDesktopRuntime()
+  const desktop = currentRuntimeCapabilities().runtimeKind === "desktop";
+  const logsPath = desktop
     ? "~/Library/Application Support/NexusHub/logs_2.sqlite"
     : "/root/.codex/logs_2.sqlite";
   return {
@@ -1207,7 +1912,7 @@ function demoProbeSettings(): ProbeSettings {
       codex_home_source: system.codex_home_source,
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
-      workspace: isDesktopRuntime() ? "~/Documents" : "/home/ubuntu/codex-workspace",
+      workspace: desktop ? "~/Documents" : "/home/ubuntu/codex-workspace",
       host_label: system.host_label
     },
     probe: {

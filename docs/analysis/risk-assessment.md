@@ -54,7 +54,7 @@ Deployment safety is the second core risk. `/opt/nexushub` is now the canonical 
 
 ## Project Governance Risks
 
-The repo started without `AGENTS.md`, `CLAUDE.md`, or `docs/progress/MASTER.md`. This pass establishes those surfaces. Durable memory remains native; no repo-local memory fallback has been selected by the user.
+The repo started without `AGENTS.md` or `docs/progress/MASTER.md`. Those surfaces now exist. `CLAUDE.md` is intentionally absent because the user deleted it, and agents must not restore it unless the user explicitly requests that file. Durable memory remains native; no repo-local memory fallback has been selected by the user.
 
 ## Compatibility Concerns
 

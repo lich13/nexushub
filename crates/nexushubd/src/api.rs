@@ -24,11 +24,7 @@ use nexushub_core::{
     archive,
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
-    config::{
-        patch_probe_config_toml, Config, ProbeConfigFilePatch, ProbeHooksConfigPatch,
-        ProbeLogsDbConfigPatch, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
-        ProbeSettingsPatch,
-    },
+    config::{patch_probe_config_toml, Config},
     db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
     jobs::CodexActionResult,
     local,
@@ -52,7 +48,7 @@ use nexushub_core::{
         PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
     },
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -172,6 +168,12 @@ pub fn router(state: AppState) -> Router {
             "/api/hidden-threads/delete/execute",
             post(hidden_threads_delete_execute),
         )
+        .route("/api/rpc/threadEvents/:id", get(thread_events))
+        .route(
+            "/api/rpc/uploadFiles",
+            post(upload_files).layer(DefaultBodyLimit::max(MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024)),
+        )
+        .route("/api/rpc/:command", post(rpc_dispatch))
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/:id", get(job_detail))
         .route("/api/jobs/:id/events", get(job_events))
@@ -185,6 +187,397 @@ async fn healthz() -> ApiResponse {
 
 async fn api_not_found() -> ApiResponse {
     Err(api_error(StatusCode::NOT_FOUND, "not found"))
+}
+
+async fn rpc_dispatch(
+    State(state): State<AppState>,
+    Path(command): Path<String>,
+    connect: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(args): Json<Value>,
+) -> ApiResponse {
+    match command.as_str() {
+        "getPublicSettings" => public_settings(State(state)).await,
+        "login" => login(State(state), connect, headers, Json(rpc_payload(&args)?)).await,
+        "logout" => logout(State(state), headers).await,
+        "me" => me(State(state), headers).await,
+        "getSecurity" => get_security(State(state), headers).await,
+        "saveSecurity" => {
+            patch_security(
+                State(state),
+                headers,
+                Json(rpc_nested_payload(&args, "settings")?),
+            )
+            .await
+        }
+        "changePassword" => change_password(State(state), headers, Json(rpc_payload(&args)?)).await,
+        "listProviders" => list_providers(State(state), headers).await,
+        "getClaudeCodeOverview" => claude_code_overview(State(state), headers).await,
+        "getPlatformOverview" => platform_overview(State(state), headers).await,
+        "listPlugins" => list_plugins(State(state), headers).await,
+        "getProbeStatus" => {
+            get_probe_status(
+                State(state),
+                Query(ProbeStatusQuery {
+                    refresh: args.get("refresh").and_then(Value::as_bool),
+                }),
+                headers,
+            )
+            .await
+        }
+        "getProbeSettings" => get_probe_settings(State(state), headers).await,
+        "saveProbeSettings" => {
+            patch_probe_settings(
+                State(state),
+                headers,
+                Json(rpc_nested_payload(&args, "settings")?),
+            )
+            .await
+        }
+        "getProbeLogsDbStatus" => get_probe_logs_db_status(State(state), headers).await,
+        "getProbeEvents" => {
+            get_probe_events(
+                State(state),
+                Query(ProbeEventsQuery {
+                    limit: args
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as u32),
+                }),
+                headers,
+            )
+            .await
+        }
+        "startProbeJob" => match rpc_string(&args, "action").as_deref() {
+            Some("bark-test") => probe_bark_test(State(state), headers).await,
+            Some("hooks-install") => probe_hooks_install(State(state), headers).await,
+            Some("logs-db-dry-run") => {
+                probe_logs_db_maintain(
+                    State(state),
+                    headers,
+                    Some(Json(ProbeLogsDbMaintainRequest {
+                        dry_run: Some(true),
+                        compact: Some(false),
+                    })),
+                )
+                .await
+            }
+            Some("logs-db-execute") => {
+                probe_logs_db_maintain(
+                    State(state),
+                    headers,
+                    Some(Json(ProbeLogsDbMaintainRequest {
+                        dry_run: Some(false),
+                        compact: Some(false),
+                    })),
+                )
+                .await
+            }
+            Some(action) => Err(api_error(
+                StatusCode::BAD_REQUEST,
+                &format!("unknown probe action: {action}"),
+            )),
+            None => Err(api_error(StatusCode::BAD_REQUEST, "action is required")),
+        },
+        "dryRunArchiveDelete" => archive_delete_dry_run(State(state), headers).await,
+        "startArchiveDelete" => {
+            archive_delete_execute(
+                State(state),
+                headers,
+                Json(ArchiveExecuteRequest { confirmed: true }),
+            )
+            .await
+        }
+        "dryRunHiddenThreadDelete" => hidden_threads_delete_dry_run(State(state), headers).await,
+        "startHiddenThreadDelete" => {
+            hidden_threads_delete_execute(
+                State(state),
+                headers,
+                Json(ArchiveExecuteRequest { confirmed: true }),
+            )
+            .await
+        }
+        "getUpdateStatus" => system_update_status(State(state), headers).await,
+        "runUpdateAction" => match rpc_string(&args, "action").as_deref() {
+            Some("check") => system_update_precheck(State(state), headers).await,
+            Some("install") => system_update_install(State(state), headers).await,
+            Some("prune") => system_update_prune(State(state), headers).await,
+            Some(action) => Err(api_error(
+                StatusCode::BAD_REQUEST,
+                &format!("unknown update action: {action}"),
+            )),
+            None => Err(api_error(StatusCode::BAD_REQUEST, "action is required")),
+        },
+        "listThreads" => list_threads(State(state), headers, Query(rpc_payload(&args)?)).await,
+        "getThread" => {
+            thread_detail(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "id")?),
+                Query(rpc_nested_payload_or_empty(&args, "options")?),
+            )
+            .await
+        }
+        "getThreadBlocks" => {
+            thread_blocks(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "id")?),
+                Query(rpc_nested_payload_or_empty(&args, "options")?),
+            )
+            .await
+        }
+        "createThread" => create_thread(State(state), headers, Json(rpc_payload(&args)?)).await,
+        "sendMessage" => {
+            send_message(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "steerThread" => {
+            steer_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "listFollowUps" => {
+            list_followups(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+            )
+            .await
+        }
+        "enqueueFollowUp" => {
+            enqueue_followup(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "cancelFollowUp" => {
+            cancel_followup(
+                State(state),
+                headers,
+                Path((
+                    rpc_required_string(&args, "threadId")?,
+                    rpc_required_string(&args, "followUpId")?,
+                )),
+            )
+            .await
+        }
+        "stopThread" => {
+            stop_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Some(Json(rpc_nested_payload_or_empty(&args, "payload")?)),
+            )
+            .await
+        }
+        "archiveThread" => {
+            archive_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+            )
+            .await
+        }
+        "restoreThread" => {
+            restore_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+            )
+            .await
+        }
+        "renameThread" => {
+            rename_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_payload(&args)?),
+            )
+            .await
+        }
+        "forkThread" => {
+            fork_thread(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+            )
+            .await
+        }
+        "acceptPlan" => {
+            plan_accept(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "revisePlan" => {
+            plan_revise(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "answerElicitation" => {
+            answer_elicitation(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_payload(&args)?),
+            )
+            .await
+        }
+        "answerApproval" => {
+            answer_approval(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "threadId")?),
+                Json(rpc_nested_payload(&args, "payload")?),
+            )
+            .await
+        }
+        "deleteUpload" => {
+            delete_upload_file(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "id")?),
+            )
+            .await
+        }
+        "getSystemStatus" => system_status(State(state), headers).await,
+        "getSystemVersion" => system_version(State(state), headers).await,
+        "listModels" => codex_models(State(state), headers).await,
+        "listPermissionProfiles" => {
+            codex_permission_profiles(State(state), headers, Query(rpc_payload_or_empty(&args)?))
+                .await
+        }
+        "getCodexConfig" => {
+            codex_config(State(state), headers, Query(rpc_payload_or_empty(&args)?)).await
+        }
+        "getCodexGoal" => {
+            codex_goal_get(
+                State(state),
+                headers,
+                Query(GoalQuery {
+                    thread_id: rpc_string(&args, "threadId"),
+                }),
+            )
+            .await
+        }
+        "saveCodexGoal" => codex_goal_set(State(state), headers, Json(rpc_payload(&args)?)).await,
+        "clearCodexGoal" => {
+            codex_goal_clear(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        "pauseCodexGoal" => {
+            codex_goal_pause(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        "resumeCodexGoal" => {
+            codex_goal_resume(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        "listJobs" => {
+            list_jobs(
+                State(state),
+                headers,
+                Query(rpc_query_strings(&args, &["limit"])),
+            )
+            .await
+        }
+        "getJob" => {
+            job_detail(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "id")?),
+            )
+            .await
+        }
+        _ => Err(api_error(
+            StatusCode::NOT_FOUND,
+            &format!("unknown rpc command: {command}"),
+        )),
+    }
+}
+
+fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
+    serde_json::from_value(value.clone())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+fn rpc_payload_or_empty<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
+    if value.is_null() {
+        serde_json::from_value(json!({}))
+    } else {
+        serde_json::from_value(value.clone())
+    }
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+fn rpc_nested_payload<T: DeserializeOwned>(value: &Value, key: &str) -> Result<T, ApiError> {
+    let Some(payload) = value.get(key) else {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("{key} is required"),
+        ));
+    };
+    serde_json::from_value(payload.clone())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
+    value: &Value,
+    key: &str,
+) -> Result<T, ApiError> {
+    let payload = value.get(key).cloned().unwrap_or_else(|| json!({}));
+    serde_json::from_value(payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
+    rpc_string(value, key)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, &format!("{key} is required")))
+}
+
+fn rpc_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .or_else(|| {
+            key.strip_suffix("Id")
+                .and_then(|prefix| value.get(format!("{prefix}_id")))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
+    keys.iter()
+        .filter_map(|key| {
+            value.get(*key).and_then(|value| match value {
+                Value::String(text) if !text.trim().is_empty() => {
+                    Some(((*key).to_string(), text.trim().to_string()))
+                }
+                Value::Number(number) => Some(((*key).to_string(), number.to_string())),
+                Value::Bool(boolean) => Some(((*key).to_string(), boolean.to_string())),
+                _ => None,
+            })
+        })
+        .collect()
 }
 
 async fn public_settings(State(state): State<AppState>) -> ApiResponse {
@@ -254,59 +647,10 @@ async fn get_probe_diagnostics(State(state): State<AppState>, headers: HeaderMap
     ok(json!(probe_runtime(&state).diagnostics()))
 }
 
-#[derive(Debug, Deserialize)]
-struct ProbeSettingsRequest {
-    codex: Option<nexushub_core::config::CodexProbeConfigPatch>,
-    probe: Option<ProbeSettingsRequestPatch>,
-    notifications: Option<ProbeNotificationsRequest>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ProbeSettingsRequestPatch {
-    enabled: Option<bool>,
-    poll_seconds: Option<u64>,
-    recent_limit: Option<usize>,
-    hooks: Option<ProbeHooksConfigPatch>,
-    notifications: Option<ProbeNotificationsRequest>,
-    observability: Option<ProbeObservabilityConfigPatch>,
-    logs_db: Option<ProbeLogsDbConfigPatch>,
-}
-
-impl ProbeSettingsRequestPatch {
-    fn into_config_patch(self) -> (ProbeSettingsPatch, Option<String>) {
-        let (notifications, device_key) = match self.notifications {
-            Some(notifications) => (
-                Some(notifications.patch),
-                settings_service::normalize_bark_device_key(notifications.device_key),
-            ),
-            None => (None, None),
-        };
-        (
-            ProbeSettingsPatch {
-                enabled: self.enabled,
-                poll_seconds: self.poll_seconds,
-                recent_limit: self.recent_limit,
-                hooks: self.hooks,
-                notifications,
-                observability: self.observability,
-                logs_db: self.logs_db,
-            },
-            device_key,
-        )
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ProbeNotificationsRequest {
-    device_key: Option<String>,
-    #[serde(flatten)]
-    patch: ProbeNotificationsConfigPatch,
-}
-
 async fn patch_probe_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<ProbeSettingsRequest>,
+    Json(request): Json<settings_service::ProbeSettingsSaveRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
@@ -317,31 +661,14 @@ async fn patch_probe_settings(
             &format!("config file not found: {}", config_path.display()),
         ));
     }
-    let (mut probe_patch, mut device_key) = request
-        .probe
-        .map(ProbeSettingsRequestPatch::into_config_patch)
-        .unwrap_or_default();
-    if let Some(notifications) = request.notifications {
-        if let Some(top_level_device_key) =
-            settings_service::normalize_bark_device_key(notifications.device_key)
-        {
-            device_key = Some(top_level_device_key);
-        }
-        let mut nested = probe_patch.notifications.unwrap_or_default();
-        settings_service::merge_probe_notification_patch(&mut nested, notifications.patch);
-        probe_patch.notifications = Some(nested);
-    }
-    let probe_patch = settings_service::normalize_probe_settings_patch(probe_patch)
+    let normalized = request
+        .normalize()
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let patch = ProbeConfigFilePatch {
-        codex: request.codex,
-        probe: Some(probe_patch),
-    };
     let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
-    let updated = patch_probe_config_toml(&text, &patch)?;
+    let updated = patch_probe_config_toml(&text, &normalized.config_patch)?;
     fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
     let response_config = Config::load(&config_path)?;
-    if let Some(device_key) = device_key {
+    if let Some(device_key) = normalized.bark_device_key {
         state.db.set_secret_setting_bytes(
             settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
             device_key.as_bytes(),
@@ -4236,6 +4563,87 @@ mod tests {
         assert_eq!(resumed_after_clear["available"], true);
         assert_eq!(resumed_after_clear["enabled"], true);
         assert_eq!(resumed_after_clear["status"], "active");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn rpc_goal_wrapper_preserves_rest_goal_dto_shape() {
+        let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
+        seed_local_codex_thread(&home, "thread-a", "local title");
+        let app = router(state);
+
+        async fn request_json(
+            app: axum::Router,
+            method: &str,
+            uri: &str,
+            body: &str,
+            session_token: &str,
+            csrf_token: Option<&str>,
+        ) -> serde_json::Value {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("nexushub_session={session_token}"));
+            if !body.is_empty() {
+                builder = builder.header("content-type", "application/json");
+            }
+            if let Some(csrf_token) = csrf_token {
+                builder = builder.header("x-csrf-token", csrf_token);
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        let rest_initial = request_json(
+            app.clone(),
+            "GET",
+            "/api/codex/goal?thread_id=thread-a",
+            "",
+            &session_token,
+            None,
+        )
+        .await;
+        let rpc_initial = request_json(
+            app.clone(),
+            "POST",
+            "/api/rpc/getCodexGoal",
+            r#"{"threadId":"thread-a"}"#,
+            &session_token,
+            None,
+        )
+        .await;
+        assert_eq!(rpc_initial, rest_initial);
+
+        let rpc_saved = request_json(
+            app.clone(),
+            "POST",
+            "/api/rpc/saveCodexGoal",
+            r#"{"thread_id":"thread-a","objective":"ship rpc","token_budget":2048}"#,
+            &session_token,
+            Some(&csrf_token),
+        )
+        .await;
+        assert_eq!(rpc_saved["available"], true);
+        assert_eq!(rpc_saved["enabled"], true);
+        assert_eq!(rpc_saved["objective"], "ship rpc");
+        assert_eq!(rpc_saved["token_budget"], 2048);
+
+        let rest_after_rpc = request_json(
+            app,
+            "GET",
+            "/api/codex/goal?thread_id=thread-a",
+            "",
+            &session_token,
+            None,
+        )
+        .await;
+        assert_eq!(rest_after_rpc, rpc_saved);
         let _ = fs::remove_dir_all(home);
     }
 

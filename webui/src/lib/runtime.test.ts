@@ -11,7 +11,7 @@ async function loadRuntime(desktop = false) {
   return import("./runtime");
 }
 
-describe("NexusHub runtime adapter", () => {
+describe("NexusHub runtime transport", () => {
   afterEach(() => {
     delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
     delete globalThis.__NEXUSHUB_TEST_INVOKE__;
@@ -26,27 +26,30 @@ describe("NexusHub runtime adapter", () => {
     expect((await loadRuntime(true)).getRuntimeKind()).toBe("desktop");
   });
 
-  test("web rpc posts to the existing HTTP endpoint", async () => {
+  test("web rpc posts one command envelope to the Linux RPC endpoint", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "content-type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetchMock);
-    const { runtimeRpc } = await loadRuntime();
+    const { webJsonRpc } = await loadRuntime();
 
-    await runtimeRpc("getPublicSettings");
+    await webJsonRpc("getPublicSettings", { csrfToken: "csrf-token", q: "needle" });
 
-    const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(path).toBe("/api/public/settings");
-    expect(options.method).toBe("GET");
+    const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { headers: Headers; body: string }];
+    expect(path).toBe("/api/rpc/getPublicSettings");
+    expect(options.method).toBe("POST");
     expect(options.credentials).toBe("include");
+    expect(options.headers.get("content-type")).toBe("application/json");
+    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(JSON.parse(options.body)).toEqual({ q: "needle" });
   });
 
   test("keeps API requests at root by default when no API base is configured", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
     const { buildRuntimeApiPath } = await loadRuntime();
 
-    expect(buildRuntimeApiPath("/api/auth/login")).toBe("/api/auth/login");
+    expect(buildRuntimeApiPath("/api/rpc/login")).toBe("/api/rpc/login");
   });
 
   test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
@@ -54,22 +57,23 @@ describe("NexusHub runtime adapter", () => {
     vi.stubEnv("VITE_API_BASE", "/backend/");
     const { buildRuntimeApiPath } = await loadRuntime();
 
-    expect(buildRuntimeApiPath("/api/auth/login")).toBe("/backend/api/auth/login");
+    expect(buildRuntimeApiPath("/api/rpc/login")).toBe("/backend/api/rpc/login");
   });
 
-  test("desktop rpc invokes Tauri commands and never calls fetch", async () => {
+  test("desktop dispatch invokes typed Tauri commands and never calls fetch", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({
       command,
       args
     }));
-    const { runtimeRpc } = await loadRuntime(true);
+    const { runtimeDispatch } = await loadRuntime(true);
 
-    const result = await runtimeRpc("listThreads", {
-      status: "all",
-      q: "plan",
-      limit: 20
+    const result = await runtimeDispatch({
+      webCommand: "listThreads",
+      webArgs: { status: "all" },
+      desktopCommand: "desktop_threads",
+      desktopArgs: { request: { status: "all", query: "plan", limit: 20 } }
     });
 
     expect(result).toEqual({
@@ -77,20 +81,6 @@ describe("NexusHub runtime adapter", () => {
       args: { request: { status: "all", query: "plan", limit: 20 } }
     });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("desktop api bridge route is not available", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { runtimeRpc } = await loadRuntime(true);
-
-    await expect(runtimeRpc("desktopApi", {
-      request: { path: "/api/threads/thread-a/rename", method: "POST", body: { name: "新标题" } }
-    })).rejects.toMatchObject({ feature: "desktopApi" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
   });
 
   test("desktop upload helper delegates to native upload command", async () => {
@@ -105,7 +95,25 @@ describe("NexusHub runtime adapter", () => {
     });
   });
 
-  test("web thread event transport opens EventSource through runtime API paths", async () => {
+  test("web upload transport posts FormData to the RPC upload endpoint", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ files: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { uploadRuntimeFiles } = await loadRuntime();
+
+    await uploadRuntimeFiles([new File(["# Plan"], "plan.md", { type: "text/markdown" })], "csrf-token");
+
+    const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { headers: Headers; body: FormData }];
+    expect(path).toBe("/api/rpc/uploadFiles");
+    expect(options.method).toBe("POST");
+    expect(options.body).toBeInstanceOf(FormData);
+    expect(options.headers.get("content-type")).toBeNull();
+    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+  });
+
+  test("web thread event transport opens EventSource through the runtime RPC stream", async () => {
     const close = vi.fn();
     class MockEventSource {
       static instances: MockEventSource[] = [];
@@ -122,7 +130,7 @@ describe("NexusHub runtime adapter", () => {
     source.close();
 
     expect(MockEventSource.instances).toHaveLength(1);
-    expect(MockEventSource.instances[0].url).toBe("/api/threads/thread-a/events");
+    expect(MockEventSource.instances[0].url).toBe("/api/rpc/threadEvents/thread-a");
     expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
     expect(close).toHaveBeenCalledOnce();
   });
@@ -140,89 +148,15 @@ describe("NexusHub runtime adapter", () => {
     expect(EventSourceMock).not.toHaveBeenCalled();
   });
 
-  test("desktop runtime routes shared app capabilities through typed native commands", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { runtimeRpc } = await loadRuntime(true);
-
-    await runtimeRpc("getProbeSettings");
-    await runtimeRpc("saveProbeSettings", { settings: { probe: { enabled: true } } });
-    await runtimeRpc("getProbeEvents", { limit: 12 });
-    await runtimeRpc("startProbeJob", { action: "bark-test" });
-    await runtimeRpc("getClaudeCodeOverview");
-    await runtimeRpc("getThreadBlocks", { id: "thread-a", options: { limit: 80, before: "b:200" } });
-    await runtimeRpc("createThread", { payload: { message: "hello" } });
-    await runtimeRpc("sendMessage", { threadId: "thread-a", payload: { message: "resume" } });
-    await runtimeRpc("archiveThread", { threadId: "thread-a" });
-    await runtimeRpc("renameThread", { threadId: "thread-a", name: "新标题" });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    const calls = (globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls.map(([command]) => command)).toEqual([
-      "desktop_probe_settings",
-      "desktop_probe_save_settings",
-      "desktop_probe_events",
-      "desktop_probe_bark_test",
-      "desktop_claude_code_overview",
-      "desktop_thread_blocks",
-      "desktop_send_message",
-      "desktop_send_message",
-      "desktop_archive_thread",
-      "desktop_rename_thread"
-    ]);
-    expect(calls[1][1]).toMatchObject({ request: { probe: { enabled: true } } });
-    expect(calls[2][1]).toEqual({ request: { limit: 12 } });
-    expect(calls[5][1]).toEqual({ request: { id: "thread-a", limit: 80, before: "b:200" } });
-    expect(calls[6][1]).toMatchObject({ request: { message: "hello" } });
-    expect(calls[7][1]).toEqual({ request: { message: "resume", threadId: "thread-a" } });
-    expect(calls[8][1]).toEqual({ request: { threadId: "thread-a" } });
-    expect(calls[9][1]).toEqual({ request: { threadId: "thread-a", name: "新标题" } });
-  });
-
-  test("desktop update action routes to macOS updater command", async () => {
-    const { runtimeRpc } = await loadRuntime(true);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
-      expect(command).toBe("install_update_and_restart");
-      return { job_id: "desktop-native-job", installed: false };
-    });
-
-    await expect(runtimeRpc("runUpdateAction", { action: "install" })).resolves.toMatchObject({
-      job_id: "desktop-native-job",
-      installed: false
-    });
-  });
-
-  test("desktop update check routes to signed updater feed and job history command", async () => {
-    const { runtimeRpc } = await loadRuntime(true);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
-      expect(command).toBe("check_update_status");
-      return {
-        job_id: "desktop-check-job",
-        status: {
-          current_version: "0.1.103",
-          latest_version: "v0.1.103",
-          update_available: true,
-          channel: "stable",
-          method: "macos_tauri_updater",
-          state: "ready",
-          recommended_action: "Confirm install in the Tauri updater after signature verification.",
-          capabilities: ["signature_verification", "job_history"]
-        }
-      };
-    });
-
-    await expect(runtimeRpc("runUpdateAction", { action: "check" })).resolves.toMatchObject({
-      job_id: "desktop-check-job",
-      status: { state: "ready" }
-    });
-  });
-
-  test("production runtime keeps the retired desktop API bridge out of the route table", async () => {
+  test("production runtime stays a thin transport layer", async () => {
+    expect(runtimeSource).not.toContain("const ROUTES");
+    expect(runtimeSource).not.toContain("WebRoute");
+    expect(runtimeSource).not.toContain("DesktopRoute");
+    expect(runtimeSource).not.toContain("fromHome");
+    expect(runtimeSource).not.toContain("desktop_api_command");
     expect(runtimeSource).not.toContain("desktopApiRoute");
     expect(runtimeSource).not.toContain("invokeDesktopApi");
-    expect(runtimeSource).not.toContain("desktop_api_command");
-    expect(runtimeSource).not.toContain("DesktopApiUpload");
-    expect(runtimeSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(runtimeSource).not.toContain("systemd");
+    expect(runtimeSource).not.toContain("Nginx");
   });
 });

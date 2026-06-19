@@ -12,10 +12,10 @@ fn linux_update_status_uses_fixed_panel_job_executor() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-    let status = update_status(&config, &platform, Some("v0.1.106"), None);
+    let status = update_status(&config, &platform, Some("v0.1.107"), None);
 
     assert_eq!(status.current_version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(status.latest_version.as_deref(), Some("v0.1.106"));
+    assert_eq!(status.latest_version.as_deref(), Some("v0.1.107"));
     assert_eq!(status.update_available, Some(true));
     assert_eq!(status.channel, "stable");
     assert_eq!(status.method, UpdateExecutionMethod::LinuxSystemdJob);

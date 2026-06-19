@@ -2,8 +2,9 @@ use crate::{
     codex::resolve_codex_paths,
     config::{
         valid_probe_notification_server_url, CodexProbeConfigPatch, Config, ProbeConfig,
-        ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfig, ProbeNotificationsConfig,
-        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+        ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfig, ProbeLogsDbConfigPatch,
+        ProbeNotificationsConfig, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
+        ProbeSettingsPatch,
     },
 };
 use anyhow::{bail, Result};
@@ -140,6 +141,157 @@ pub fn merge_probe_notification_patch(
     if source.notify_recoverable.is_some() {
         target.notify_recoverable = source.notify_recoverable;
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeSettingsSaveRequest {
+    pub codex: Option<CodexProbeConfigPatch>,
+    pub probe: Option<ProbeSettingsSavePatch>,
+    pub notifications: Option<ProbeNotificationsSavePatch>,
+}
+
+impl ProbeSettingsSaveRequest {
+    pub fn normalize(self) -> Result<NormalizedProbeSettingsPatch> {
+        normalize_probe_settings_save_request(self)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeSettingsSavePatch {
+    pub enabled: Option<bool>,
+    pub poll_seconds: Option<u64>,
+    pub recent_limit: Option<usize>,
+    pub hooks: Option<ProbeHooksConfigPatch>,
+    pub notifications: Option<ProbeNotificationsSavePatch>,
+    pub observability: Option<ProbeObservabilityConfigPatch>,
+    pub logs_db: Option<ProbeLogsDbConfigPatch>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeNotificationsSavePatch {
+    pub enabled: Option<bool>,
+    pub server_url: Option<String>,
+    pub sound: Option<Option<String>>,
+    pub group: Option<String>,
+    pub url: Option<Option<String>>,
+    pub notify_completion: Option<bool>,
+    pub notify_reply_needed: Option<bool>,
+    pub notify_recoverable: Option<bool>,
+    pub device_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NormalizedProbeSettingsPatch {
+    pub config_patch: ProbeConfigFilePatch,
+    pub bark_device_key: Option<String>,
+}
+
+pub fn normalize_probe_settings_save_request(
+    request: ProbeSettingsSaveRequest,
+) -> Result<NormalizedProbeSettingsPatch> {
+    let (mut probe_patch, mut bark_device_key) = match request.probe {
+        Some(probe) => probe.into_config_patch_and_bark_key(),
+        None => (None, None),
+    };
+
+    if let Some(notifications) = request.notifications {
+        let (notifications_patch, top_level_bark_device_key) =
+            notifications.into_config_patch_and_bark_key();
+        if !is_probe_notifications_patch_empty(&notifications_patch) {
+            let probe = probe_patch.get_or_insert_with(ProbeSettingsPatch::default);
+            let target = probe
+                .notifications
+                .get_or_insert_with(ProbeNotificationsConfigPatch::default);
+            merge_probe_notification_patch(target, notifications_patch);
+        }
+        if top_level_bark_device_key.is_some() {
+            bark_device_key = top_level_bark_device_key;
+        }
+    }
+
+    if probe_patch
+        .as_ref()
+        .is_some_and(is_probe_settings_patch_empty)
+    {
+        probe_patch = None;
+    }
+
+    let config_patch = normalize_probe_config_file_patch(ProbeConfigFilePatch {
+        codex: request.codex,
+        probe: probe_patch,
+    })?;
+
+    Ok(NormalizedProbeSettingsPatch {
+        config_patch,
+        bark_device_key,
+    })
+}
+
+impl ProbeSettingsSavePatch {
+    fn into_config_patch_and_bark_key(self) -> (Option<ProbeSettingsPatch>, Option<String>) {
+        let (notifications, bark_device_key) = match self.notifications {
+            Some(notifications) => {
+                let (patch, bark_device_key) = notifications.into_config_patch_and_bark_key();
+                let patch = (!is_probe_notifications_patch_empty(&patch)).then_some(patch);
+                (patch, bark_device_key)
+            }
+            None => (None, None),
+        };
+
+        let patch = ProbeSettingsPatch {
+            enabled: self.enabled,
+            poll_seconds: self.poll_seconds,
+            recent_limit: self.recent_limit,
+            hooks: self.hooks,
+            notifications,
+            observability: self.observability,
+            logs_db: self.logs_db,
+        };
+
+        (
+            (!is_probe_settings_patch_empty(&patch)).then_some(patch),
+            bark_device_key,
+        )
+    }
+}
+
+impl ProbeNotificationsSavePatch {
+    fn into_config_patch_and_bark_key(self) -> (ProbeNotificationsConfigPatch, Option<String>) {
+        (
+            ProbeNotificationsConfigPatch {
+                enabled: self.enabled,
+                server_url: self.server_url,
+                sound: self.sound,
+                group: self.group,
+                url: self.url,
+                notify_completion: self.notify_completion,
+                notify_reply_needed: self.notify_reply_needed,
+                notify_recoverable: self.notify_recoverable,
+            },
+            normalize_bark_device_key(self.device_key),
+        )
+    }
+}
+
+fn is_probe_settings_patch_empty(patch: &ProbeSettingsPatch) -> bool {
+    patch.enabled.is_none()
+        && patch.poll_seconds.is_none()
+        && patch.recent_limit.is_none()
+        && patch.hooks.is_none()
+        && patch.notifications.is_none()
+        && patch.observability.is_none()
+        && patch.logs_db.is_none()
+}
+
+fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> bool {
+    patch.enabled.is_none()
+        && patch.server_url.is_none()
+        && patch.sound.is_none()
+        && patch.group.is_none()
+        && patch.url.is_none()
+        && patch.notify_completion.is_none()
+        && patch.notify_reply_needed.is_none()
+        && patch.notify_recoverable.is_none()
 }
 
 pub fn normalize_probe_config_file_patch(

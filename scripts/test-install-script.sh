@@ -79,6 +79,7 @@ PY
 
 python3 - "${CONFIG_EXAMPLE}" "${NGINX_LOCATION}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 config, nginx, install, update, deploy = [Path(arg).read_text() for arg in sys.argv[1:]]
@@ -129,10 +130,14 @@ PY
 python3 - "${ROOT}/Cargo.toml" "${ROOT}/package.json" "${ROOT}/webui/package.json" "${ROOT}/src-tauri/Cargo.toml" "${ROOT}/src-tauri/tauri.conf.json" "${ROOT}/Cargo.lock" "${ROOT}/src-tauri/Cargo.lock" <<'PY'
 from pathlib import Path
 import json
+import re
 import sys
 
 cargo_toml, root_package_json, webui_package_json, tauri_cargo_toml, tauri_config_json, cargo_lock, tauri_cargo_lock = [Path(arg).read_text() for arg in sys.argv[1:]]
-expected_version = "0.1.105"
+version_match = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"\s*$', cargo_toml)
+if not version_match:
+    raise SystemExit("workspace Cargo.toml missing workspace package version")
+expected_version = version_match.group(1)
 
 checks = {
     "workspace Cargo.toml": (cargo_toml, f'version = "{expected_version}"'),
@@ -145,7 +150,7 @@ checks = {
 }
 missing = [name for name, (text, needle) in checks.items() if needle not in text]
 if missing:
-    raise SystemExit("v0.1.105 version fields missing or regressed: " + ", ".join(missing))
+    raise SystemExit(f"v{expected_version} version fields missing or regressed: " + ", ".join(missing))
 
 root_package = json.loads(root_package_json)
 if root_package.get("scripts", {}).get("tauri:build") != "bash scripts/package-darwin-arm64.sh":
@@ -170,7 +175,7 @@ for forbidden in ["0.1.100", "v0.1.100"]:
         if forbidden in text:
             raise SystemExit(f"{name} must not regress to {forbidden}")
 
-print("v0.1.105 version fields and release wiring: ok")
+print(f"v{expected_version} version fields and release wiring: ok")
 PY
 
 python3 - "${CONFIG_EXAMPLE}" "${SYSTEMD_SERVICE}" <<'PY'
@@ -215,6 +220,7 @@ PY
 
 python3 - "${ROOT}/README.md" "${ROOT}/docs/cloud-deploy-runbook.md" "${ROOT}/docs/progress/MASTER.md" "${ROOT}/docs/cloudflare-tunnel.md" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 readme, runbook, master, tunnel_doc = [Path(arg) for arg in sys.argv[1:]]
@@ -256,8 +262,6 @@ checks = {
     "runbook signed updater sig": ("docs/cloud-deploy-runbook.md", "nexushub-darwin-arm64.tar.gz.sig"),
     "runbook updater latest": ("docs/cloud-deploy-runbook.md", "latest.json"),
     "runbook updater platform": ("docs/cloud-deploy-runbook.md", "darwin-aarch64"),
-    "master v0.1.104": ("docs/progress/MASTER.md", "v0.1.104"),
-    "master acceptance matrix": ("docs/progress/MASTER.md", "v0.1.104 Acceptance Matrix"),
     "master signed updater": ("docs/progress/MASTER.md", "signed updater"),
     "master latest json": ("docs/progress/MASTER.md", "latest.json"),
     "master Linux acceptance": ("docs/progress/MASTER.md", "Linux tarball `.sha256`"),
@@ -267,7 +271,9 @@ checks = {
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
-    raise SystemExit("v0.1.104 docs/static acceptance missing: " + ", ".join(missing))
+    raise SystemExit("docs/static acceptance missing: " + ", ".join(missing))
+if not re.search(r"(?m)^## v\d+\.\d+\.\d+ Acceptance Matrix$", texts["docs/progress/MASTER.md"]):
+    raise SystemExit("docs/progress/MASTER.md must keep a versioned Acceptance Matrix")
 
 for doc_name in ["README.md", "docs/cloud-deploy-runbook.md", "docs/progress/MASTER.md"]:
     text = texts[doc_name]
@@ -317,7 +323,7 @@ for doc_name, text in texts.items():
         if needle in text:
             raise SystemExit(f"{doc_name} must not contain live Cloudflare tokens or generated tunnel URLs: {needle}")
 
-print("v0.1.104 Linux WebUI/macOS Tauri docs: ok")
+print("Linux WebUI/macOS Tauri docs: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'

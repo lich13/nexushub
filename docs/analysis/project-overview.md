@@ -65,7 +65,7 @@ Rust has unit and integration tests in `nexushub-core`, `nexushubd`, and script 
 
 ## Project Governance Baseline
 
-`AGENTS.md` and `CLAUDE.md` are the active instruction surfaces. `docs/progress/MASTER.md` tracks the released Linux state. There is no repo-local memory file; durable memory remains the active agent's native memory unless the user explicitly asks for a repo fallback.
+`AGENTS.md` is the active shared instruction surface. `CLAUDE.md` is intentionally absent because the user deleted it, and agents must not restore it unless the user explicitly requests that file. `docs/progress/MASTER.md` tracks the released Linux state. There is no repo-local memory file; durable memory remains the active agent's native memory unless the user explicitly asks for a repo fallback.
 
 ## External Integrations
 

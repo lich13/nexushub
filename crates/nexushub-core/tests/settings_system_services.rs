@@ -6,7 +6,7 @@ use nexushub_core::{
     services::{
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
-            normalize_probe_settings_patch, ProbeSecretState,
+            normalize_probe_settings_patch, ProbeSecretState, ProbeSettingsSaveRequest,
         },
         system::system_capabilities,
     },
@@ -140,6 +140,38 @@ fn probe_settings_patch_validation_rejects_bad_url_and_clamps_numeric_ranges() {
 }
 
 #[test]
+fn probe_settings_patch_clamps_log_max_bytes_at_shared_frontend_boundary() {
+    let over_max = normalize_probe_settings_patch(ProbeSettingsPatch {
+        poll_seconds: Some(3_601),
+        recent_limit: Some(0),
+        observability: Some(ProbeObservabilityConfigPatch {
+            log_max_bytes: Some(8_388_609),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(over_max.poll_seconds, Some(3_600));
+    assert_eq!(over_max.recent_limit, Some(1));
+    assert_eq!(
+        over_max.observability.unwrap().log_max_bytes,
+        Some(8_388_608)
+    );
+
+    let at_max = normalize_probe_settings_patch(ProbeSettingsPatch {
+        observability: Some(ProbeObservabilityConfigPatch {
+            log_max_bytes: Some(8_388_608),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(at_max.observability.unwrap().log_max_bytes, Some(8_388_608));
+}
+
+#[test]
 fn notification_patch_merge_preserves_existing_fields_when_source_omits_them() {
     let mut target = ProbeNotificationsConfigPatch {
         enabled: Some(true),
@@ -171,6 +203,62 @@ fn notification_patch_merge_preserves_existing_fields_when_source_omits_them() {
     );
     assert_eq!(normalized.sound, Some(Some("alarm".to_string())));
     assert_eq!(normalized.group.as_deref(), Some("NexusHub"));
+}
+
+#[test]
+fn probe_settings_save_request_normalizes_bark_key_and_merges_notification_patches() {
+    let request: ProbeSettingsSaveRequest = serde_json::from_value(serde_json::json!({
+        "probe": {
+            "notifications": {
+                "enabled": true,
+                "server_url": "  https://bark.example.com  ",
+                "device_key": " nested-key ",
+                "notify_completion": true
+            }
+        },
+        "notifications": {
+            "group": " Ops ",
+            "device_key": " top-key "
+        }
+    }))
+    .unwrap();
+
+    let normalized = request.normalize().unwrap();
+
+    assert_eq!(normalized.bark_device_key.as_deref(), Some("top-key"));
+    let notifications = normalized
+        .config_patch
+        .probe
+        .unwrap()
+        .notifications
+        .unwrap();
+    assert_eq!(notifications.enabled, Some(true));
+    assert_eq!(
+        notifications.server_url.as_deref(),
+        Some("https://bark.example.com")
+    );
+    assert_eq!(notifications.group.as_deref(), Some("Ops"));
+    assert_eq!(notifications.notify_completion, Some(true));
+}
+
+#[test]
+fn probe_settings_save_request_keeps_nested_bark_key_when_top_level_is_blank() {
+    let request: ProbeSettingsSaveRequest = serde_json::from_value(serde_json::json!({
+        "probe": {
+            "notifications": {
+                "device_key": " nested-key "
+            }
+        },
+        "notifications": {
+            "device_key": "  "
+        }
+    }))
+    .unwrap();
+
+    let normalized = request.normalize().unwrap();
+
+    assert_eq!(normalized.bark_device_key.as_deref(), Some("nested-key"));
+    assert!(normalized.config_patch.probe.is_none());
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

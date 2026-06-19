@@ -26,8 +26,7 @@ pub use overview::{
     desktop_probe_logs_db_maintain_with_state, desktop_probe_save_settings_with_state,
     desktop_probe_settings_with_state, desktop_rename_thread_with_state,
     desktop_restore_thread_with_state, desktop_resume_goal_with_state,
-    desktop_save_goal_with_state, desktop_security_status_with_state,
-    desktop_send_message_with_state, desktop_stop_thread_with_state,
+    desktop_save_goal_with_state, desktop_send_message_with_state, desktop_stop_thread_with_state,
     desktop_store_uploads_with_state, desktop_thread_blocks_with_state,
     desktop_thread_detail_with_state, desktop_threads_with_state, nexus_paths_for_home,
     DesktopActionResponse, DesktopCancelFollowupRequest, DesktopDeleteUploadRequest,
@@ -36,9 +35,9 @@ pub use overview::{
     DesktopJobsRequest, DesktopLogsDbMaintainRequest, DesktopOverview, DesktopPlanAcceptRequest,
     DesktopPlanReviseRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
     DesktopProbeSettings, DesktopProbeSettingsRequest, DesktopRenameThreadRequest,
-    DesktopSecurityStatus, DesktopSendMessageRequest, DesktopState, DesktopStopRequest,
-    DesktopThreadBlockPage, DesktopThreadIdRequest, DesktopUploadFile, NexusPaths,
-    ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
+    DesktopSendMessageRequest, DesktopState, DesktopStopRequest, DesktopThreadBlockPage,
+    DesktopThreadIdRequest, DesktopUploadFile, NexusPaths, ThreadBlocksRequest,
+    ThreadDetailRequest, ThreadListRequest,
 };
 
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
@@ -531,13 +530,6 @@ fn desktop_cancel_followup(
 }
 
 #[tauri::command]
-fn desktop_security_status(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopSecurityStatus, String> {
-    desktop_security_status_with_state(&state).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 async fn desktop_platform_status(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<
@@ -631,7 +623,6 @@ pub fn run() {
             desktop_list_followups,
             desktop_enqueue_followup,
             desktop_cancel_followup,
-            desktop_security_status,
             desktop_platform_status,
             desktop_claude_code_overview,
             desktop_open_config_dir_command,

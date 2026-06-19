@@ -89,6 +89,7 @@ import {
   getProbeEvents,
   listProviders,
   runtimeCapabilities,
+  runtimeCapabilitiesFromSystemStatus,
   runtimeCapabilitiesForRuntime,
   type RuntimeCapabilityMatrix,
   type ThreadSendPayload
@@ -455,8 +456,20 @@ declare global {
 }
 
 export default function App() {
-  const capabilities = useMemo(() => runtimeCapabilities(), []);
-  const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(capabilities));
+  const bootstrapCapabilities = useMemo(() => runtimeCapabilities(), []);
+  const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(bootstrapCapabilities));
+  const systemStatus = useQuery({
+    queryKey: ["system-status"],
+    queryFn: getSystemStatus,
+    enabled: Boolean(session),
+    refetchInterval: 8000,
+    staleTime: 5000,
+    placeholderData: preservePreviousQueryData
+  });
+  const capabilities = useMemo(
+    () => runtimeCapabilitiesFromSystemStatus(systemStatus.data, bootstrapCapabilities),
+    [bootstrapCapabilities, systemStatus.data]
+  );
   const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");

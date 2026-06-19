@@ -167,10 +167,30 @@ export type FollowUpQueueState = {
   items: FollowUpQueueItem[];
 };
 
+export type SystemCapabilities = {
+  threads: boolean;
+  jobs: boolean;
+  probe: boolean;
+  status: boolean;
+  settings: boolean;
+  job_history: boolean;
+  app_updater: boolean;
+  web_auth: boolean;
+  security_settings: boolean;
+  turnstile: boolean;
+  systemd: boolean;
+  nginx: boolean;
+  public_endpoint: boolean;
+  admin_password: boolean;
+  linux_update_job: boolean;
+  prune_backups: boolean;
+};
+
 export type SystemStatus = {
   host_label: string;
   hostname?: string | null;
   public_endpoint?: string | null;
+  capabilities?: SystemCapabilities | null;
   codex_home: string;
   configured_codex_home?: string | null;
   resolved_codex_home?: string | null;

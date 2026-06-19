@@ -194,19 +194,6 @@ pub struct DesktopThreadBlockPage {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DesktopSecurityStatus {
-    pub available: bool,
-    pub mode: String,
-    pub admin_required: bool,
-    pub csrf_required: bool,
-    pub session_required: bool,
-    pub settings: Option<serde_json::Value>,
-    pub turnstile_expected_hostname: Option<String>,
-    pub turnstile_expected_action: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DesktopProbeSettings {
     pub codex: Value,
     pub probe: nexushub_core::config::ProbeConfig,
@@ -1172,20 +1159,6 @@ pub fn desktop_cancel_followup_with_state(
     ))
 }
 
-pub fn desktop_security_status_with_state(state: &DesktopState) -> Result<DesktopSecurityStatus> {
-    let _ = state;
-    Ok(DesktopSecurityStatus {
-        available: false,
-        mode: "unavailable".to_string(),
-        admin_required: false,
-        csrf_required: false,
-        session_required: false,
-        settings: None,
-        turnstile_expected_hostname: None,
-        turnstile_expected_action: None,
-    })
-}
-
 pub async fn desktop_platform_status_with_state(
     state: &DesktopState,
 ) -> Result<(PlatformPaths, Option<SystemStatus>)> {
@@ -1245,7 +1218,6 @@ pub fn desktop_native_command_names() -> Vec<&'static str> {
         "desktop_list_followups",
         "desktop_enqueue_followup",
         "desktop_cancel_followup",
-        "desktop_security_status",
         "desktop_platform_status",
         "desktop_claude_code_overview",
         "desktop_open_config_dir",
@@ -1774,7 +1746,6 @@ mod tests {
             "desktop_list_followups",
             "desktop_enqueue_followup",
             "desktop_cancel_followup",
-            "desktop_security_status",
             "desktop_platform_status",
             "desktop_claude_code_overview",
             "desktop_open_config_dir",
@@ -1790,42 +1761,17 @@ mod tests {
             !commands.contains(&"desktop_api_command"),
             "desktop invoke commands must not expose retired HTTP bridge"
         );
+        // Security and Turnstile controls live only on the Linux Web host.
+        assert!(
+            !commands.contains(&"desktop_security_status"),
+            "macOS desktop commands must not expose Web security/Turnstile entry points"
+        );
         assert!(
             commands.iter().all(|command| !command.contains("login")
                 && !command.contains("csrf")
                 && !command.contains("desktop_api")),
             "desktop invoke commands must not expose Web auth/session commands"
         );
-    }
-
-    #[test]
-    fn desktop_security_status_is_unavailable_without_turnstile_details() {
-        let (_temp, state) = test_desktop_state();
-        state.db.set_setting("turnstile_enabled", "true").unwrap();
-        state.db.set_setting("turnstile_required", "true").unwrap();
-        state
-            .db
-            .set_setting("turnstile_site_key", "site-key")
-            .unwrap();
-        state
-            .db
-            .set_secret_setting_bytes("turnstile_secret_key", b"secret-key")
-            .unwrap();
-        state
-            .db
-            .set_setting("turnstile_expected_hostname", "security.example.com")
-            .unwrap();
-
-        let status = desktop_security_status_with_state(&state).unwrap();
-        let serialized = serde_json::to_string(&status).unwrap();
-
-        assert!(!status.available);
-        assert_eq!(status.mode, "unavailable");
-        assert!(!serialized.contains("security.example.com"));
-        assert!(!serialized.contains("site-key"));
-        assert!(!serialized.contains("secret"));
-        assert!(status.turnstile_expected_hostname.is_none());
-        assert!(status.turnstile_expected_action.is_none());
     }
 
     #[test]

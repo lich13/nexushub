@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-18
-> **Mode**: V0.1.104_CC_SWITCH_ARCHITECTURE_CLOSURE
+> **Last Updated**: 2026-06-19
+> **Mode**: V0.1.106_CC_SWITCH_RUNTIME_RPC_CLOSURE
 
 ## References
 
@@ -36,23 +36,23 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.104 cc-switch architecture closure<br>
-**Active Task**: `v0.1.104` closes the remaining cc-switch alignment gaps: shared services remain the single source for cross-platform behavior, Linux WebUI stays the only Web auth/security/systemd/Nginx host, macOS stays a native Tauri App with typed commands only, frontend components read capability matrix instead of runtime branching, and update status remains unified while Linux and macOS keep separate executors.
+**Active Phase**: v0.1.106 cc-switch runtime RPC closure<br>
+**Active Task**: `v0.1.106` closes the remaining cc-switch alignment gaps: frontend runtime is a thin Web RPC/Tauri invoke transport, Linux HTTP exposes `/api/rpc/:command` as the WebUI command boundary while preserving old REST compatibility wrappers, Probe settings save normalization lives in `nexushub-core`, macOS no longer registers Web security/Turnstile command shapes, and Linux-only WebUI operations remain capability-gated.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
 
-**Shared instruction surface**: `AGENTS.md`  
-**Claude Code instruction surface**: `CLAUDE.md`  
-**Other platform rule surfaces**: none detected  
-**Memory surface**: native memory only  
+**Shared instruction surface**: `AGENTS.md`<br>
+**Deleted local instruction surface**: `CLAUDE.md` is intentionally absent and must not be restored unless the user explicitly requests it.<br>
+**Other platform rule surfaces**: none detected<br>
+**Memory surface**: native memory only<br>
 **Memory fallback path**: none
 
 ## Adaptive Control State
 
 ```yaml
 adaptive:
-  mode: V0.1.104_CC_SWITCH_ARCHITECTURE_CLOSURE
+  mode: V0.1.106_CC_SWITCH_RUNTIME_RPC_CLOSURE
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -85,7 +85,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-18"
+  last_updated: "2026-06-19"
 ```
 
 ## Task Telemetry Log
@@ -116,6 +116,7 @@ adaptive:
 | 2026-06-18 | v0.1.102 cc-switch architecture alignment | L | P/R pass locally | 0 | Added shared `threads`, `jobs`, `settings`, and `system` services; thinned Linux HTTP and macOS Tauri typed commands onto shared DTO/action contracts; removed frontend production dependence on the desktop API bridge and old panel update routes; added capability-matrix gates and static tests for Linux-only WebUI surfaces. |
 | 2026-06-18 | v0.1.103 macOS updater status closure | S | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.103`, made macOS `desktop_update_status` remember the latest signed updater check job, and kept the UI `NexusHub 更新` card from reverting to `Latest unknown` after a successful `Check`. |
 | 2026-06-18 | v0.1.104 cc-switch architecture closure | L | P/R pending | 0 | Bumped workspace/package/Tauri versions to `0.1.104`; closes remaining shared service, typed command, runtime transport, capability matrix, and static guard gaps so Linux WebUI remains a Linux-only extra host while macOS stays native Tauri. |
+| 2026-06-19 | v0.1.106 cc-switch runtime RPC closure | L | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.106`; moves frontend Web traffic to `/api/rpc/:command`, keeps runtime as a thin transport, centralizes Probe settings save normalization in core, removes macOS `desktop_security_status`, and preserves `CLAUDE.md` as intentionally deleted. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -132,7 +133,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.104
+git ls-remote --tags origin refs/tags/v0.1.106
 ```
 
 ## Next Steps
@@ -143,7 +144,7 @@ git ls-remote --tags origin refs/tags/v0.1.104
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.104 Acceptance Matrix
+## v0.1.106 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -176,3 +177,4 @@ git ls-remote --tags origin refs/tags/v0.1.104
 | 2026-06-18 | v0.1.102-cc-switch-architecture-alignment | Finished shared service convergence for threads/jobs/settings/system, routed Linux HTTP and macOS Tauri through thin adapters, removed frontend production use of `desktop_api_command` bridge/panel update aliases, and verified capability-matrix gating for Linux-only WebUI functions. |
 | 2026-06-18 | v0.1.103-macos-updater-status-closure | Fixed the macOS updater status loop discovered during native App acceptance: signed updater `Check` results are now remembered by `desktop_update_status`, and the shared `NexusHub 更新` card can show the latest signed version without falling back to `unknown`. |
 | 2026-06-18 | v0.1.104-cc-switch-architecture-closure | Closes the remaining cross-platform architecture gaps: service helpers are shared, macOS does not expose Web security/Turnstile commands, frontend domain APIs go through runtime transport, and component differences are capability-matrix driven. |
+| 2026-06-19 | v0.1.106-cc-switch-runtime-rpc-closure | Closes the remaining runtime split: WebUI domain APIs dispatch to Linux `/api/rpc/:command`, macOS keeps typed Tauri commands, runtime no longer owns business route tables, Probe settings save normalization is shared in core, and `CLAUDE.md` remains intentionally deleted. |

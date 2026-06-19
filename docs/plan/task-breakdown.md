@@ -18,7 +18,7 @@
 ## Testing and Governance Constraints
 
 - Feature work, behavior changes, API contracts, parsing, permissions, jobs, deploy scripts, and persistence changes require automated tests or a documented no-test rationale.
-- Changes that affect future agent behavior must update `AGENTS.md` or `CLAUDE.md`.
+- Changes that affect future agent behavior must update `AGENTS.md`; `CLAUDE.md` is intentionally absent and must not be restored unless the user explicitly requests that file.
 - Durable project rules stay in native memory unless the user explicitly selects a repo-local fallback.
 
 ## Phase 1: Governance Baseline
@@ -29,7 +29,7 @@
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
-| 1.1 | Add `AGENTS.md` and `CLAUDE.md` | P0 | S | - | A | P, R | Docs-only; verify files and final commands | Instruction surfaces updated | Shared and Claude-specific rules document bridge, safety, Claude read-only, built-in Probe, and verification commands |
+| 1.1 | Add `AGENTS.md`; keep `CLAUDE.md` absent | P0 | S | - | A | P, R | Docs-only; verify files and final commands | Instruction surfaces updated | Shared rules document bridge, safety, Claude read-only, built-in Probe, and verification commands; `CLAUDE.md` remains absent unless the user explicitly requests it |
 | 1.2 | Create analysis, plan, and progress docs | P0 | M | 1.1 | A | P, E | Docs-only; verify links and files | Progress surface updated | Required spec-driven docs exist and `docs/progress/MASTER.md` records current release/deploy state |
 | 1.3 | Align README/runbook with NexusHub scope | P1 | S | - | B | E, R | Docs-only; run stale-string and command checks | None | README describes provider previews, `/opt/nexushub/nexushub.sqlite`, and Linux package caveats |
 
@@ -37,7 +37,7 @@
 
 | Lane | Tasks | Combined Effort | Merge Risk | Key Files |
 |:--|:--|:--|:--|:--|
-| A | 1.1, 1.2 | M | Low | `AGENTS.md`, `CLAUDE.md`, `docs/` |
+| A | 1.1, 1.2 | M | Low | `AGENTS.md`, `docs/` |
 | B | 1.3 | S | Low | `README.md`, `docs/cloud-deploy-runbook.md` |
 
 ## Phase 2: Codex Non-Regression

@@ -16,6 +16,16 @@ async function loadDesktopApi() {
   return import("./api");
 }
 
+function rpcCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const [path, options] = fetchMock.mock.calls[index] as [string, RequestInit & { headers: Headers; body?: string | FormData }];
+  return {
+    path,
+    command: path.replace(/^.*\/api\/rpc\//, ""),
+    options,
+    body: typeof options.body === "string" ? JSON.parse(options.body) : options.body
+  };
+}
+
 describe("archive delete API compatibility", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -37,17 +47,17 @@ describe("archive delete API compatibility", () => {
 
     await startArchiveDelete("csrf-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(path).toBe("/api/archives/delete/execute");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(options.body)).toEqual({ confirmed: true });
+    const call = rpcCall(fetchMock);
+    expect(call.path).toBe("/api/rpc/startArchiveDelete");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(call.body).toEqual({ confirmed: true });
   });
 
   test("uses hidden thread cleanup endpoints with dry-run and boolean confirmation", async () => {
     const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
-      String(path).endsWith("/dry-run")
+      String(path).endsWith("/dryRunHiddenThreadDelete")
         ? {
           total_threads: 9,
           visible_threads: 7,
@@ -94,19 +104,19 @@ describe("archive delete API compatibility", () => {
     expect(plan.hidden_threads).toBe(2);
     expect(result.deleted_threads).toBe(2);
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/hidden-threads/delete/dry-run",
-      "/api/hidden-threads/delete/execute"
+      "/api/rpc/dryRunHiddenThreadDelete",
+      "/api/rpc/startHiddenThreadDelete"
     ]);
-    const [, executeOptions] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(executeOptions.method).toBe("POST");
-    expect(executeOptions.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(executeOptions.body)).toEqual({ confirmed: true });
+    const execute = rpcCall(fetchMock, 1);
+    expect(execute.options.method).toBe("POST");
+    expect(execute.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(execute.body).toEqual({ confirmed: true });
   });
 
   test("upload API posts FormData without JSON content-type and deletes uploads with csrf", async () => {
     const { uploadFiles, deleteUpload } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
-      String(path).startsWith("/api/uploads/")
+      String(path).endsWith("/deleteUpload")
         ? { ok: true, deleted: true }
         : {
           files: [{
@@ -130,16 +140,17 @@ describe("archive delete API compatibility", () => {
 
     expect(outcome.files[0].id).toBe("upload-1");
     expect(deleted.deleted).toBe(true);
-    const [, uploadOptions] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: FormData }];
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/uploads");
-    expect(uploadOptions.method).toBe("POST");
-    expect(uploadOptions.body).toBeInstanceOf(FormData);
-    expect(uploadOptions.headers.get("content-type")).toBeNull();
-    expect(uploadOptions.headers.get("x-csrf-token")).toBe("csrf-token");
-    const [, deleteOptions] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers }];
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/uploads/upload-1");
-    expect(deleteOptions.method).toBe("DELETE");
-    expect(deleteOptions.headers.get("x-csrf-token")).toBe("csrf-token");
+    const upload = rpcCall(fetchMock, 0);
+    expect(upload.path).toBe("/api/rpc/uploadFiles");
+    expect(upload.options.method).toBe("POST");
+    expect(upload.body).toBeInstanceOf(FormData);
+    expect(upload.options.headers.get("content-type")).toBeNull();
+    expect(upload.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    const deletedCall = rpcCall(fetchMock, 1);
+    expect(deletedCall.path).toBe("/api/rpc/deleteUpload");
+    expect(deletedCall.options.method).toBe("POST");
+    expect(deletedCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(deletedCall.body).toEqual({ id: "upload-1" });
   });
 
   test("stop thread posts stop payload with csrf", async () => {
@@ -152,11 +163,14 @@ describe("archive delete API compatibility", () => {
 
     await stopThread("thread-a", { turn_id: "turn-live", job_id: "job-live" }, "csrf-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(path).toBe("/api/threads/thread-a/stop");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(options.body)).toEqual({ turn_id: "turn-live", job_id: "job-live" });
+    const call = rpcCall(fetchMock);
+    expect(call.path).toBe("/api/rpc/stopThread");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(call.body).toEqual({
+      threadId: "thread-a",
+      payload: { turn_id: "turn-live", job_id: "job-live" }
+    });
   });
 
   test("codex goal helpers cover get save clear pause and resume endpoints", async () => {
@@ -186,25 +200,25 @@ describe("archive delete API compatibility", () => {
     expect(paused.status).toBe("paused");
     expect(resumed.status).toBe("active");
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/codex/goal?thread_id=thread-a",
-      "/api/codex/goal",
-      "/api/codex/goal/clear",
-      "/api/codex/goal/pause",
-      "/api/codex/goal/resume"
+      "/api/rpc/getCodexGoal",
+      "/api/rpc/saveCodexGoal",
+      "/api/rpc/clearCodexGoal",
+      "/api/rpc/pauseCodexGoal",
+      "/api/rpc/resumeCodexGoal"
     ]);
-    const [, saveOptions] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(saveOptions.method).toBe("POST");
-    expect(saveOptions.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(saveOptions.body)).toEqual({
+    const save = rpcCall(fetchMock, 1);
+    expect(save.options.method).toBe("POST");
+    expect(save.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(save.body).toEqual({
       thread_id: "thread-a",
       objective: "ship local goal",
       token_budget: 12345
     });
     for (const index of [2, 3, 4]) {
-      const [, options] = fetchMock.mock.calls[index] as [string, RequestInit & { headers: Headers; body: string }];
-      expect(options.method).toBe("POST");
-      expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-      expect(JSON.parse(options.body)).toEqual({ thread_id: "thread-a" });
+      const call = rpcCall(fetchMock, index);
+      expect(call.options.method).toBe("POST");
+      expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+      expect(call.body).toEqual({ thread_id: "thread-a" });
     }
   });
 
@@ -246,7 +260,11 @@ describe("archive delete API compatibility", () => {
 
     const detail = await getThread("thread-a", { limit: 120, before: "b:240", full: true });
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/threads/thread-a?limit=120&before=b%3A240&full=true");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getThread");
+    expect(rpcCall(fetchMock).body).toEqual({
+      id: "thread-a",
+      options: { limit: 120, before: "b:240", full: true }
+    });
     expect(detail.total_blocks).toBe(240);
     expect(detail.before_cursor).toBe("b:120");
   });
@@ -264,7 +282,8 @@ describe("archive delete API compatibility", () => {
 
     const result = await getProbeEvents(10);
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/probe/events?limit=10");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getProbeEvents");
+    expect(rpcCall(fetchMock).body).toEqual({ limit: 10 });
     expect(result.available).toBe(true);
     expect(result.data?.events[0].kind).toBe("hook-stop");
   });
@@ -334,7 +353,11 @@ describe("archive delete API compatibility", () => {
 
     const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
 
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/threads/thread-a/blocks?limit=80&before=b%3A200");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getThreadBlocks");
+    expect(rpcCall(fetchMock).body).toEqual({
+      id: "thread-a",
+      options: { limit: 80, before: "b:200" }
+    });
     expect(page.thread_id).toBe("thread-a");
     expect(page.blocks[0].id).toBe("b1");
     expect(page.before_cursor).toBe("b:120");
@@ -392,14 +415,15 @@ describe("archive delete API compatibility", () => {
     const status = await getUpdateStatus();
     const result = await runUpdateAction("install", "csrf-token");
 
-    const [statusPath] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers }];
-    const [path, options] = fetchMock.mock.calls[1] as [string, RequestInit & { headers: Headers }];
+    const statusCall = rpcCall(fetchMock, 0);
+    const actionCall = rpcCall(fetchMock, 1);
     expect(status.method).toBe("linux_systemd_job");
     expect(result).toEqual({ job_id: "panel-job" });
-    expect(statusPath).toBe("/api/system/update/status");
-    expect(path).toBe("/api/system/update/install");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(statusCall.path).toBe("/api/rpc/getUpdateStatus");
+    expect(actionCall.path).toBe("/api/rpc/runUpdateAction");
+    expect(actionCall.options.method).toBe("POST");
+    expect(actionCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(actionCall.body).toEqual({ action: "install" });
   });
 
   test("does not export legacy update job helper or codex update targets", async () => {
@@ -426,14 +450,14 @@ describe("archive delete API compatibility", () => {
       listProviders
     } = await loadRealApi();
     const responses: Record<string, unknown> = {
-      "/api/providers": [{ id: "codex", label: "Codex", status: "ready", capabilities: ["threads"] }],
-      "/api/providers/claude-code/overview": {
+      "/api/rpc/listProviders": [{ id: "codex", label: "Codex", status: "ready", capabilities: ["threads"] }],
+      "/api/rpc/getClaudeCodeOverview": {
         home: "/Users/gosu/.claude",
         settings_exists: true,
         settings_preview: { apiKey: "[redacted]" },
         projects: [{ id: "-Users-gosu-demo", display_name: "/Users/gosu/demo", session_count: 1, sessions: [] }]
       },
-      "/api/platform": {
+      "/api/rpc/getPlatformOverview": {
         kind: "linux",
         data_dir: "/opt/nexushub",
         config_file: "/opt/nexushub/config.toml",
@@ -442,7 +466,7 @@ describe("archive delete API compatibility", () => {
         service_name: "nexushub",
         service_kind: "systemd"
       },
-      "/api/probe/status": {
+      "/api/rpc/getProbeStatus": {
         label: "Probe",
         enabled: true,
         platform: "linux",
@@ -462,7 +486,7 @@ describe("archive delete API compatibility", () => {
         recoverable_threads: [],
         config_path: "/opt/nexushub/config.toml"
       },
-      "/api/probe/settings": {
+      "/api/rpc/getProbeSettings": {
         codex: {
           home: "/root/.codex",
           workspace: "/home/ubuntu/codex-workspace",
@@ -485,11 +509,11 @@ describe("archive delete API compatibility", () => {
     await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "builtin", service_name: "nexushub" } });
     await expect(getProbeSettings()).resolves.toMatchObject({ available: true, data: { probe: { poll_seconds: 15 } } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/providers",
-      "/api/providers/claude-code/overview",
-      "/api/platform",
-      "/api/probe/status",
-      "/api/probe/settings"
+      "/api/rpc/listProviders",
+      "/api/rpc/getClaudeCodeOverview",
+      "/api/rpc/getPlatformOverview",
+      "/api/rpc/getProbeStatus",
+      "/api/rpc/getProbeSettings"
     ]);
   });
 
@@ -568,13 +592,13 @@ describe("archive delete API compatibility", () => {
 
     const fetchMock = vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
       const textPath = String(path);
-      if (textPath.endsWith("/settings")) {
+      if (textPath.endsWith("/saveProbeSettings")) {
         return new Response(JSON.stringify({ saved: true }), {
           status: 200,
           headers: { "content-type": "application/json" }
         });
       }
-      if (textPath.endsWith("/logs-db/status")) {
+      if (textPath.endsWith("/getProbeLogsDbStatus")) {
         return new Response(JSON.stringify({
           status: "maintenance_ready",
           path: "/root/.codex/logs_2.sqlite",
@@ -619,18 +643,20 @@ describe("archive delete API compatibility", () => {
       (options as RequestInit & { body?: string }).body ? JSON.parse(String((options as RequestInit & { body?: string }).body)) : null
     ]);
     expect(calls).toEqual([
-      ["/api/probe/logs-db/status", "GET", null, null],
-      ["/api/probe/bark/test", "POST", "csrf-token", null],
-      ["/api/probe/hooks/install", "POST", "csrf-token", null],
-      ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: true }],
-      ["/api/probe/logs-db/maintain", "POST", "csrf-token", { dry_run: false, compact: false }],
-      ["/api/probe/settings", "PATCH", "csrf-token", {
+      ["/api/rpc/getProbeLogsDbStatus", "POST", null, {}],
+      ["/api/rpc/startProbeJob", "POST", "csrf-token", { action: "bark-test" }],
+      ["/api/rpc/startProbeJob", "POST", "csrf-token", { action: "hooks-install" }],
+      ["/api/rpc/startProbeJob", "POST", "csrf-token", { action: "logs-db-dry-run" }],
+      ["/api/rpc/startProbeJob", "POST", "csrf-token", { action: "logs-db-execute" }],
+      ["/api/rpc/saveProbeSettings", "POST", "csrf-token", {
+        settings: {
         codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
         notifications: { device_key: "secret" },
         probe: {
           poll_seconds: 20,
           notifications: { enabled: true, device_key: "secret" },
           logs_db: { enabled: true, retention_days: 2 }
+        }
         }
       }]
     ]);
@@ -677,8 +703,8 @@ describe("archive delete API compatibility", () => {
       retained_rows: 34
     };
     const responses: Record<string, unknown> = {
-      "/api/probe/status": probeStatus,
-      "/api/probe/logs-db/status": logsDbStatus
+      "/api/rpc/getProbeStatus": probeStatus,
+      "/api/rpc/getProbeLogsDbStatus": logsDbStatus
     };
     vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
       status: 200,
@@ -728,6 +754,61 @@ describe("archive delete API compatibility", () => {
     expect(app.codexHomeStatusValue({ codex_home: "" })).toBe("未知");
   });
 
+  test("runtime UI capabilities derive from core system capabilities", async () => {
+    const { runtimeCapabilitiesFromSystemStatus, runtimeCapabilitiesForRuntime } = await loadRealApi();
+    const linuxCore: SystemStatus["capabilities"] = {
+      threads: true,
+      jobs: true,
+      probe: true,
+      status: true,
+      settings: true,
+      job_history: true,
+      app_updater: true,
+      web_auth: true,
+      security_settings: true,
+      turnstile: true,
+      systemd: true,
+      nginx: true,
+      public_endpoint: true,
+      admin_password: true,
+      linux_update_job: true,
+      prune_backups: true
+    };
+    const macCore: SystemStatus["capabilities"] = {
+      ...linuxCore,
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false
+    };
+
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, runtimeCapabilitiesForRuntime("web"))).toMatchObject({
+      runtimeKind: "web",
+      webAuth: true,
+      securitySettings: true,
+      publicEndpointStatus: true,
+      linuxBackupPrune: true,
+      linuxUpdateLabels: true,
+      forkAction: true,
+      approvalActions: true
+    });
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore }, runtimeCapabilitiesForRuntime("desktop"))).toMatchObject({
+      runtimeKind: "desktop",
+      webAuth: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      linuxBackupPrune: false,
+      linuxUpdateLabels: false,
+      forkAction: false,
+      approvalActions: false
+    });
+  });
+
   test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
     const { saveProbeSettings } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ saved: true }), {
@@ -745,19 +826,20 @@ describe("archive delete API compatibility", () => {
       }
     }, "csrf-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
-    const body = JSON.parse(options.body);
-    expect(path).toBe("/api/probe/settings");
-    expect(options.method).toBe("PATCH");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(Object.keys(body).sort()).toEqual(["codex", "notifications", "probe"]);
-    expect(body.probe.notifications).toEqual({
+    const call = rpcCall(fetchMock);
+    const body = call.body as Record<string, any>;
+    expect(call.path).toBe("/api/rpc/saveProbeSettings");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(Object.keys(body).sort()).toEqual(["settings"]);
+    expect(Object.keys(body.settings).sort()).toEqual(["codex", "notifications", "probe"]);
+    expect(body.settings.probe.notifications).toEqual({
       enabled: true,
       device_key: "secret",
       server_url: "https://api.day.app"
     });
-    expect(body.notifications).toEqual({ device_key: "secret" });
-    expect(body.probe.logs_db).toEqual({ enabled: true, retention_days: 2 });
+    expect(body.settings.notifications).toEqual({ device_key: "secret" });
+    expect(body.settings.probe.logs_db).toEqual({ enabled: true, retention_days: 2 });
   });
 
   test("retired provider job helper is no longer exported", async () => {
@@ -795,9 +877,9 @@ describe("archive delete API compatibility", () => {
 
     await login("admin", "password", "turnstile-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { body: string }];
-    expect(path).toBe("/api/auth/login");
-    expect(JSON.parse(options.body)).toEqual({
+    const call = rpcCall(fetchMock);
+    expect(call.path).toBe("/api/rpc/login");
+    expect(call.body).toEqual({
       username: "admin",
       password: "password",
       turnstile_token: "turnstile-token"
@@ -821,7 +903,7 @@ describe("archive delete API compatibility", () => {
     await login("admin", "password");
 
     const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/nexushub/api/auth/login");
+    expect(path).toBe("/nexushub/api/rpc/login");
   });
 
   test("desktop auth helpers never call Web auth endpoints", async () => {
@@ -1085,23 +1167,32 @@ describe("archive delete API compatibility", () => {
     await answerApproval("thread-1", { turn_id: "turn-1", item_id: "approval-1", decision: "approved" }, "csrf-token");
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/threads/thread-1/plan/accept",
-      "/api/threads/thread-1/plan/revise",
-      "/api/threads/thread-1/approval"
+      "/api/rpc/acceptPlan",
+      "/api/rpc/revisePlan",
+      "/api/rpc/answerApproval"
     ]);
-    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
-      turn_id: "turn-1",
-      item_id: "plan-1"
+    expect(rpcCall(fetchMock, 0).body).toEqual({
+      threadId: "thread-1",
+      payload: {
+        turn_id: "turn-1",
+        item_id: "plan-1"
+      }
     });
-    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
-      turn_id: "turn-1",
-      item_id: "plan-1",
-      instructions: "缩小范围"
+    expect(rpcCall(fetchMock, 1).body).toEqual({
+      threadId: "thread-1",
+      payload: {
+        turn_id: "turn-1",
+        item_id: "plan-1",
+        instructions: "缩小范围"
+      }
     });
-    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
-      turn_id: "turn-1",
-      item_id: "approval-1",
-      decision: "approved"
+    expect(rpcCall(fetchMock, 2).body).toEqual({
+      threadId: "thread-1",
+      payload: {
+        turn_id: "turn-1",
+        item_id: "approval-1",
+        decision: "approved"
+      }
     });
   });
 
@@ -1126,7 +1217,7 @@ describe("archive delete API compatibility", () => {
   test("follow-up API posts thread payload with csrf and supports listing and cancel", async () => {
     const { enqueueFollowUp, listFollowUps, cancelFollowUp } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
-      if (String(path).endsWith("/cancel")) {
+      if (String(path).endsWith("/cancelFollowUp")) {
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "content-type": "application/json" }
@@ -1149,13 +1240,17 @@ describe("archive delete API compatibility", () => {
     await listFollowUps("thread-a");
     await cancelFollowUp("thread-a", "fu-1", "csrf-token");
 
-    const [postPath, postOptions] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
-    expect(postPath).toBe("/api/threads/thread-a/follow-ups");
-    expect(postOptions.method).toBe("POST");
-    expect(postOptions.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(postOptions.body)).toEqual({ message: "继续检查", model: "gpt-5.5" });
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/threads/thread-a/follow-ups");
-    expect(fetchMock.mock.calls[2][0]).toBe("/api/threads/thread-a/follow-ups/fu-1/cancel");
+    const post = rpcCall(fetchMock, 0);
+    expect(post.path).toBe("/api/rpc/enqueueFollowUp");
+    expect(post.options.method).toBe("POST");
+    expect(post.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(post.body).toEqual({
+      threadId: "thread-a",
+      payload: { message: "继续检查", model: "gpt-5.5" }
+    });
+    expect(rpcCall(fetchMock, 1).path).toBe("/api/rpc/listFollowUps");
+    expect(rpcCall(fetchMock, 2).path).toBe("/api/rpc/cancelFollowUp");
+    expect(rpcCall(fetchMock, 2).body).toEqual({ threadId: "thread-a", followUpId: "fu-1" });
   });
 
   test("steer API posts official follow-up endpoint with csrf and full run payload", async () => {
@@ -1180,12 +1275,12 @@ describe("archive delete API compatibility", () => {
     };
     const result = await steerThread("thread-a", payload, "csrf-token");
 
-    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Headers; body: string }];
+    const call = rpcCall(fetchMock);
     expect(result).toMatchObject({ turn_id: "turn-live", fallback: false });
-    expect(path).toBe("/api/threads/thread-a/steer");
-    expect(options.method).toBe("POST");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(options.body)).toEqual(payload);
+    expect(call.path).toBe("/api/rpc/steerThread");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(call.body).toEqual({ threadId: "thread-a", payload });
   });
 
   test("permission preset payloads match Codex-style compact choices", async () => {
@@ -2249,7 +2344,7 @@ describe("archive delete API compatibility", () => {
     listeners.get("error")?.(new Event("error") as MessageEvent);
     unsubscribe();
 
-    expect(MockEventSource.instances[0].url).toBe("/api/threads/thread-a/events");
+    expect(MockEventSource.instances[0].url).toBe("/api/rpc/threadEvents/thread-a");
     expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
     expect(onBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }), "thread-a");
     expect(onSummary).toHaveBeenCalledWith(expect.objectContaining({ status: "Running" }), "thread-a");
