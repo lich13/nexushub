@@ -1,6 +1,7 @@
 use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
+    system::{compare_semver, extract_semver},
     update::{analyze_job_failure, JobFailureCategory},
 };
 use serde::{Deserialize, Serialize};
@@ -78,8 +79,8 @@ pub fn update_status(
 ) -> UpdateStatus {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let normalized_latest = latest_version.and_then(non_empty_string);
-    let update_available =
-        normalized_latest.map(|latest| version_tag_value(latest) != current_version);
+    let update_available = normalized_latest
+        .and_then(|latest| update_available_for_versions(&current_version, latest));
     let failure_category = last_error.and_then(|error| {
         analyze_job_failure("nexushub_update", "", Some(error), Some(1))
             .map(|analysis| analysis.category.into())
@@ -120,8 +121,14 @@ fn non_empty_string(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn version_tag_value(value: &str) -> &str {
-    value.trim_start_matches('v')
+pub fn update_available_for_versions(current_version: &str, latest_version: &str) -> Option<bool> {
+    Some(
+        compare_semver(
+            extract_semver(latest_version)?.as_str(),
+            extract_semver(current_version)?.as_str(),
+        )?
+        .is_gt(),
+    )
 }
 
 fn execution_method(platform: PlatformKind) -> UpdateExecutionMethod {

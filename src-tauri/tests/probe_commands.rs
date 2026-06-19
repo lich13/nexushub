@@ -138,7 +138,7 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
         .db
         .append_job_output(
             "desktop-update-check-test",
-            "checking signed Tauri updater feed\nsigned app update available 0.1.107\n",
+            "checking signed Tauri updater feed\nsigned app update available 999.0.0\n",
         )
         .unwrap();
     state
@@ -148,11 +148,46 @@ async fn desktop_update_status_remembers_recent_signed_check_result() {
 
     let status = desktop_update_status_with_state(&state, None, None).unwrap();
 
-    assert_eq!(status.latest_version.as_deref(), Some("0.1.107"));
+    assert_eq!(status.latest_version.as_deref(), Some("999.0.0"));
     assert_eq!(status.update_available, Some(true));
     assert_eq!(
         status.state,
         nexushub_core::services::updates::UpdateState::Ready
     );
     assert!(status.recommended_action.contains("Tauri updater"));
+}
+
+#[tokio::test]
+async fn desktop_update_status_ignores_stale_older_signed_check_result() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = desktop_state(&temp);
+
+    state
+        .db
+        .create_job(
+            "desktop-update-check-old",
+            "nexushub_update_check",
+            "NexusHub app update check",
+        )
+        .unwrap();
+    state
+        .db
+        .append_job_output(
+            "desktop-update-check-old",
+            "checking signed Tauri updater feed\nsigned app update available 0.1.105\n",
+        )
+        .unwrap();
+    state
+        .db
+        .finish_job("desktop-update-check-old", "succeeded", Some(0), None)
+        .unwrap();
+
+    let status = desktop_update_status_with_state(&state, None, None).unwrap();
+
+    assert_eq!(status.latest_version.as_deref(), Some("0.1.105"));
+    assert_eq!(status.update_available, Some(false));
+    assert_eq!(
+        status.state,
+        nexushub_core::services::updates::UpdateState::Idle
+    );
 }

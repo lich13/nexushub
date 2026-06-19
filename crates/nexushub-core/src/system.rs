@@ -179,7 +179,7 @@ fn codex_update_available(current: Option<&str>, latest: Option<&str>) -> Option
     )
 }
 
-fn extract_semver(value: &str) -> Option<String> {
+pub(crate) fn extract_semver(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     for start in 0..bytes.len() {
         let first = bytes[start] as char;
@@ -233,7 +233,7 @@ fn extract_semver(value: &str) -> Option<String> {
     None
 }
 
-fn compare_semver(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+pub(crate) fn compare_semver(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     let left = ParsedVersion::parse(left)?;
     let right = ParsedVersion::parse(right)?;
     Some(left.cmp(&right))

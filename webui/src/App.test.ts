@@ -1136,6 +1136,15 @@ describe("conversation helpers", () => {
     expect(appSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
   });
 
+  test("probe workspace tolerates partial desktop settings DTOs without white-screen assumptions", () => {
+    const probeSource = extractProbeWorkspaceSource();
+
+    expect(probeSource).toContain("currentSettings?.notifications?.device_key_configured");
+    expect(probeSource).toContain("currentSettings?.probe?.enabled");
+    expect(probeSource).toContain("currentSettings?.codex?.host_label");
+    expect(appSource).toContain("settings?.codex?.discovery_warnings");
+  });
+
   test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {
     const app = await loadApp();
     const current = {

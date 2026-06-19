@@ -152,7 +152,11 @@ fn apply_recent_check_job(
     }
     if let Some(version) = signed_update_version_from_output(&job.output) {
         *status = updates::update_status(config, platform, Some(&version), None);
-        status.state = UpdateState::Ready;
+        status.state = if status.update_available == Some(true) {
+            UpdateState::Ready
+        } else {
+            UpdateState::Idle
+        };
         return;
     }
     if job.output.contains("no signed app update available") {
@@ -188,13 +192,19 @@ async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Re
                 &format!("signed app update available {}\n", update.version),
             )?;
             status.latest_version = Some(update.version.clone());
-            status.update_available = Some(true);
-            status.state = UpdateState::Ready;
+            status.update_available =
+                updates::update_available_for_versions(&status.current_version, &update.version);
+            status.state = if status.update_available == Some(true) {
+                UpdateState::Ready
+            } else {
+                UpdateState::Idle
+            };
         }
         None => {
             state
                 .db
                 .append_job_output(job_id, "no signed app update available\n")?;
+            status.latest_version = None;
             status.update_available = Some(false);
             status.state = UpdateState::Idle;
         }

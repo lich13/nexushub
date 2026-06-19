@@ -4399,9 +4399,9 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
   const recentEvents = events.data?.data?.events ?? [];
   const logsDbStatusText = logsDb?.logs_db_status ?? logsDb?.status ?? data?.logs_db_status;
   const logsDbTone = probeLogsDbTone(logsDbStatusText);
-  const barkConfigured = Boolean(currentSettings?.notifications.device_key_configured || draft?.notifications.device_key_configured);
+  const barkConfigured = Boolean(currentSettings?.notifications?.device_key_configured || draft?.notifications.device_key_configured);
   const probeThreads = probeThreadsByStatus(data);
-  const probeEnabled = data?.enabled ?? currentSettings?.probe.enabled ?? false;
+  const probeEnabled = data?.enabled ?? currentSettings?.probe?.enabled ?? false;
   const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
   const availability = probeAvailabilityView({
     available,
@@ -4594,7 +4594,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
       <section className={`probe-status-banner tone-${statusTone}`}>
         <div>
           <strong>{availability.headline}</strong>
-          <span>{serviceText} · {data?.host_label ?? currentSettings?.codex.host_label ?? "未知主机"}</span>
+          <span>{serviceText} · {data?.host_label ?? currentSettings?.codex?.host_label ?? "未知主机"}</span>
         </div>
         <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(logsDbStatusText)}</span>
       </section>
@@ -4963,7 +4963,7 @@ function ProbeRuntimeSettingsCard({
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
         {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
         <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />
-        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
+        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex?.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
       </div>
       <div className="form-grid compact-three">
         {capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
