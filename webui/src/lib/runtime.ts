@@ -29,6 +29,11 @@ export type RuntimeDispatchOptions<T = unknown> = {
   webUnavailable?: string;
 };
 
+export type RuntimeValueOptions<T> = {
+  web: T | (() => T);
+  desktop: T | (() => T);
+};
+
 export class RuntimeUnavailableError extends Error {
   constructor(message: string, readonly feature: string) {
     super(message);
@@ -66,6 +71,14 @@ export function isDesktopRuntime(): boolean {
 
 export function isWebRuntime(): boolean {
   return getRuntimeKind() === "web";
+}
+
+function resolveRuntimeValue<T>(value: T | (() => T)): T {
+  return typeof value === "function" ? (value as () => T)() : value;
+}
+
+export function runtimeValue<T>(options: RuntimeValueOptions<T>): T {
+  return resolveRuntimeValue(isDesktopRuntime() ? options.desktop : options.web);
 }
 
 export function desktopSessionUser() {

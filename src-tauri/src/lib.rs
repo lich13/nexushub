@@ -182,9 +182,7 @@ pub fn run() {
             commands::threads::acceptPlan,
             commands::threads::revisePlan,
             commands::threads::answerApproval,
-            commands::threads::desktop_threads_command,
             commands::threads::desktop_threads,
-            commands::threads::desktop_thread_detail_command,
             commands::threads::desktop_thread_detail,
             commands::threads::desktop_thread_blocks,
             commands::threads::desktop_send_message,
@@ -193,7 +191,6 @@ pub fn run() {
             commands::threads::desktop_plan_accept,
             commands::threads::desktop_plan_revise,
             commands::threads::desktop_answer_elicitation,
-            commands::probe::desktop_probe_status_command,
             commands::probe::desktop_probe_status,
             commands::probe::getProbeStatus,
             commands::updates::desktop_update_status,
@@ -201,9 +198,7 @@ pub fn run() {
             commands::updates::runUpdateAction,
             commands::updates::check_update_status,
             commands::updates::install_update_and_restart,
-            commands::settings::desktop_archive_plan_command,
             commands::settings::desktop_archive_plan,
-            commands::settings::desktop_hidden_plan_command,
             commands::settings::desktop_hidden_plan,
             commands::settings::desktop_save_goal_command,
             commands::settings::desktop_save_goal,
@@ -253,8 +248,6 @@ pub fn run() {
             commands::threads::desktop_cancel_followup,
             commands::system::desktop_platform_status,
             commands::system::desktop_claude_code_overview,
-            commands::settings::desktop_open_config_dir_command,
-            commands::settings::desktop_open_log_dir_command,
             commands::settings::desktop_upload_files_command
         ])
         .setup(|app| {
@@ -385,6 +378,70 @@ log_dir = "{}"
             assert!(
                 !lib_source.contains(forbidden),
                 "desktop command wrappers must live in src-tauri/src/commands/*, not lib.rs"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_invoke_handler_excludes_retired_desktop_command_compat_wrappers() {
+        let lib_source = include_str!("lib.rs");
+        let production_source = lib_source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("lib source must include production section");
+        for retired in [
+            "commands::threads::desktop_threads_command",
+            "commands::threads::desktop_thread_detail_command",
+            "commands::probe::desktop_probe_status_command",
+            "commands::settings::desktop_archive_plan_command",
+            "commands::settings::desktop_hidden_plan_command",
+            "commands::settings::desktop_open_config_dir_command",
+            "commands::settings::desktop_open_log_dir_command",
+        ] {
+            assert!(
+                !production_source.contains(retired),
+                "unused desktop compatibility command must not be registered: {retired}"
+            );
+        }
+        for still_used in [
+            "commands::settings::desktop_save_goal_command",
+            "commands::settings::desktop_clear_goal_command",
+            "commands::settings::desktop_pause_goal_command",
+            "commands::settings::desktop_resume_goal_command",
+            "commands::settings::desktop_upload_files_command",
+        ] {
+            assert!(
+                production_source.contains(still_used),
+                "compatibility command still used by the desktop frontend is intentionally retained: {still_used}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_invoke_handler_excludes_linux_web_host_command_surfaces() {
+        let lib_source = include_str!("lib.rs");
+        let production_source = lib_source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("lib source must include production section");
+        for forbidden in [
+            "getSecurity",
+            "saveSecurity",
+            "changePassword",
+            "login",
+            "logout",
+            "csrf",
+            "turnstile",
+            "admin",
+            "systemd",
+            "nginx",
+            "system_update_prune",
+            "desktop_update_prune",
+            "prune_backups",
+        ] {
+            assert!(
+                !production_source.contains(forbidden),
+                "macOS desktop invoke handler must not register Linux Web host command surface: {forbidden}"
             );
         }
     }

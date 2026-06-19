@@ -5,28 +5,17 @@ use crate::overview::{
     desktop_archive_plan_with_state, desktop_clear_goal_with_state,
     desktop_delete_upload_with_state, desktop_hidden_delete_dry_run_with_state,
     desktop_hidden_delete_execute_with_state, desktop_hidden_plan_with_state,
-    desktop_open_config_dir, desktop_open_log_dir, desktop_pause_goal_with_state,
-    desktop_probe_bark_test_with_state, desktop_probe_events_with_state,
-    desktop_probe_hooks_install_with_state, desktop_probe_logs_db_maintain_with_state,
-    desktop_probe_save_settings_with_state, desktop_probe_settings_with_state,
-    desktop_resume_goal_with_state, desktop_save_goal_with_state, desktop_store_uploads_with_state,
-    DesktopActionResponse, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopGoal,
-    DesktopGoalRequest, DesktopLogsDbMaintainRequest, DesktopProbeEventsRequest,
-    DesktopProbeEventsResponse, DesktopProbeNotificationsRequest, DesktopProbeSettings,
-    DesktopProbeSettingsPatch, DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
+    desktop_pause_goal_with_state, desktop_probe_bark_test_with_state,
+    desktop_probe_events_with_state, desktop_probe_hooks_install_with_state,
+    desktop_probe_logs_db_maintain_with_state, desktop_probe_save_settings_with_state,
+    desktop_probe_settings_with_state, desktop_resume_goal_with_state,
+    desktop_save_goal_with_state, desktop_store_uploads_with_state, DesktopActionResponse,
+    DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopGoal, DesktopGoalRequest,
+    DesktopLogsDbMaintainRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
+    DesktopProbeNotificationsRequest, DesktopProbeSettings, DesktopProbeSettingsPatch,
+    DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
 };
 use nexushub_core::services::{goals as goal_service, settings::ProbeSettingsSaveRequest};
-
-#[tauri::command]
-pub fn desktop_archive_plan_command() -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
-    overview::desktop_archive_plan().map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_hidden_plan_command(
-) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
-    overview::desktop_hidden_plan().map_err(|err| err.to_string())
-}
 
 #[tauri::command]
 pub fn desktop_archive_plan(
@@ -304,16 +293,6 @@ pub fn uploadFiles(
     files: Vec<DesktopUploadFile>,
 ) -> Result<nexushub_core::uploads::UploadOutcome, String> {
     desktop_store_uploads_with_state(&state, files).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_open_config_dir_command() -> Result<(), String> {
-    desktop_open_config_dir().map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_open_log_dir_command() -> Result<(), String> {
-    desktop_open_log_dir().map_err(|err| err.to_string())
 }
 
 #[tauri::command]

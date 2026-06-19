@@ -163,14 +163,11 @@ export { runtimeCapabilitiesForRuntime } from "./lib/api";
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
-type RuntimeCapabilityInput = RuntimeCapabilityMatrix | boolean | undefined;
-
-function isRuntimeCapabilities(input: RuntimeCapabilityInput): input is RuntimeCapabilityMatrix {
-  return typeof input === "object" && input !== null;
-}
+type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
+const DEFAULT_RUNTIME_CAPABILITIES = runtimeCapabilities();
 
 function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
-  return isRuntimeCapabilities(input) ? input : runtimeCapabilitiesForRuntime(input);
+  return input ?? DEFAULT_RUNTIME_CAPABILITIES;
 }
 
 const OPS_PANEL_TITLES = {
@@ -456,7 +453,7 @@ declare global {
 }
 
 export default function App() {
-  const bootstrapCapabilities = useMemo(() => runtimeCapabilities(), []);
+  const bootstrapCapabilities = DEFAULT_RUNTIME_CAPABILITIES;
   const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(bootstrapCapabilities));
   const systemStatus = useQuery({
     queryKey: ["system-status"],
@@ -2113,7 +2110,7 @@ function SlashCommandTextarea({
   hasThread,
   plugins,
   pluginsUnavailable = false,
-  capabilities = runtimeCapabilitiesForRuntime(false),
+  capabilities = DEFAULT_RUNTIME_CAPABILITIES,
   onSlashCommand,
   onSubmitShortcut,
   disabled = false

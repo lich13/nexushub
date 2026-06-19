@@ -4366,6 +4366,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_system_status_preserves_rest_capabilities_dto_shape() {
+        let (state, session_token, _) = authenticated_test_state();
+        let app = router(state);
+
+        async fn request_json(
+            app: axum::Router,
+            method: &str,
+            uri: &str,
+            body: &str,
+            session_token: &str,
+        ) -> serde_json::Value {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("nexushub_session={session_token}"));
+            if !body.is_empty() {
+                builder = builder.header("content-type", "application/json");
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        let rest = request_json(app.clone(), "GET", "/api/system/status", "", &session_token).await;
+        let rpc = request_json(
+            app,
+            "POST",
+            "/api/rpc/getSystemStatus",
+            "{}",
+            &session_token,
+        )
+        .await;
+
+        assert_eq!(rpc["capabilities"], rest["capabilities"]);
+        assert_eq!(rpc["capabilities"]["threads"], true);
+        assert_eq!(rpc["capabilities"]["web_auth"], true);
+        assert_eq!(rpc["capabilities"]["turnstile"], true);
+        assert_eq!(rpc["capabilities"]["systemd"], true);
+        assert_eq!(rpc["capabilities"]["nginx"], true);
+        assert_eq!(rpc["capabilities"]["linux_update_job"], true);
+        assert_eq!(rpc, rest);
+    }
+
+    #[tokio::test]
+    async fn rpc_update_action_preserves_rest_update_job_dto_shape() {
+        for (action, rest_uri) in [
+            ("check", "/api/system/update/precheck"),
+            ("install", "/api/system/update/install"),
+            ("prune", "/api/system/update/prune"),
+        ] {
+            let (rest_state, rest_session_token, rest_csrf_token) = authenticated_test_state();
+            let rest_app = router(rest_state);
+            let rest_response = rest_app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(rest_uri)
+                        .header("cookie", format!("nexushub_session={rest_session_token}"))
+                        .header("x-csrf-token", rest_csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rest_response.status(), StatusCode::OK, "{rest_uri}");
+            let rest_body = to_bytes(rest_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let mut rest: serde_json::Value = serde_json::from_slice(&rest_body).unwrap();
+
+            let (rpc_state, rpc_session_token, rpc_csrf_token) = authenticated_test_state();
+            let rpc_app = router(rpc_state);
+            let rpc_response = rpc_app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/rpc/runUpdateAction")
+                        .header("cookie", format!("nexushub_session={rpc_session_token}"))
+                        .header("x-csrf-token", rpc_csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"payload":{{"action":"{action}"}}}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rpc_response.status(), StatusCode::OK, "{action}");
+            let rpc_body = to_bytes(rpc_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let mut rpc: serde_json::Value = serde_json::from_slice(&rpc_body).unwrap();
+
+            assert!(rest["job_id"].as_str().is_some(), "{rest_uri}");
+            assert!(rpc["job_id"].as_str().is_some(), "{action}");
+            rest["job_id"] = json!("<job-id>");
+            rpc["job_id"] = json!("<job-id>");
+            assert_eq!(rpc, rest, "{action}");
+        }
+    }
+
+    #[tokio::test]
     async fn rpc_enqueue_followup_accepts_thread_id_and_payload_wrappers() {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());

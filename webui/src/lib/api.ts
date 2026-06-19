@@ -23,7 +23,6 @@ import type {
   SecuritySettings,
   SentinelStatus,
   SessionUser,
-  SystemCapabilities,
   SystemStatus,
   SystemVersion,
   UpdateStatus,
@@ -40,11 +39,25 @@ import {
   RuntimeUnavailableError,
   createRuntimeThreadEventSource,
   desktopSessionUser,
-  getRuntimeKind,
   runtimeDispatch,
   runtimeRpc,
+  runtimeValue,
   uploadRuntimeFiles
-} from "./runtime";
+} from "./api/transport";
+import {
+  runtimeCapabilities,
+  runtimeCapabilitiesForRuntime,
+  runtimeCapabilitiesFromSystemStatus,
+  type RuntimeCapabilityMatrix
+} from "./domain/capabilities";
+import {
+  demoDesktopPlatformOverview,
+  demoDesktopSecurity,
+  demoDesktopSystemStatus,
+  demoWebPlatformOverview,
+  demoWebSecurity,
+  demoWebSystemStatus
+} from "./domain/demoCore";
 
 const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
 
@@ -125,83 +138,12 @@ function normalizeOptionalResult<T>(payload: unknown): OptionalResult<T> {
   return { available: true, data: payload as T };
 }
 
-export type RuntimeCapabilityMatrix = {
-  runtimeKind: "web" | "desktop";
-  webAuth: boolean;
-  logout: boolean;
-  securitySettings: boolean;
-  publicEndpointStatus: boolean;
-  codexStatePaths: boolean;
-  linuxBackupPrune: boolean;
-  linuxUpdateLabels: boolean;
-  forkAction: boolean;
-  approvalActions: boolean;
+export {
+  runtimeCapabilities,
+  runtimeCapabilitiesForRuntime,
+  runtimeCapabilitiesFromSystemStatus,
+  type RuntimeCapabilityMatrix
 };
-
-function systemCapabilitiesForRuntime(kind: RuntimeCapabilityMatrix["runtimeKind"]): SystemCapabilities {
-  const linuxWebHost = kind === "web";
-  return {
-    threads: true,
-    jobs: true,
-    probe: true,
-    status: true,
-    settings: true,
-    job_history: true,
-    app_updater: true,
-    web_auth: linuxWebHost,
-    security_settings: linuxWebHost,
-    turnstile: linuxWebHost,
-    systemd: linuxWebHost,
-    nginx: linuxWebHost,
-    public_endpoint: linuxWebHost,
-    admin_password: linuxWebHost,
-    linux_update_job: linuxWebHost,
-    prune_backups: linuxWebHost
-  };
-}
-
-function runtimeCapabilitiesFromCore(
-  core: SystemCapabilities,
-  runtimeKind: RuntimeCapabilityMatrix["runtimeKind"],
-): RuntimeCapabilityMatrix {
-  return {
-    runtimeKind,
-    webAuth: core.web_auth,
-    logout: core.web_auth,
-    securitySettings: core.security_settings || core.turnstile || core.admin_password,
-    publicEndpointStatus: core.public_endpoint,
-    codexStatePaths: core.systemd,
-    linuxBackupPrune: core.prune_backups,
-    linuxUpdateLabels: core.linux_update_job,
-    forkAction: core.web_auth,
-    approvalActions: core.web_auth
-  };
-}
-
-export function runtimeCapabilities(): RuntimeCapabilityMatrix {
-  const runtimeKind = getRuntimeKind();
-  return runtimeCapabilitiesFromCore(systemCapabilitiesForRuntime(runtimeKind), runtimeKind);
-}
-
-export function runtimeCapabilitiesForRuntime(
-  desktop: boolean | RuntimeCapabilityMatrix["runtimeKind"] = false,
-): RuntimeCapabilityMatrix {
-  const runtimeKind = desktop === true || desktop === "desktop" ? "desktop" : "web";
-  return runtimeCapabilitiesFromCore(systemCapabilitiesForRuntime(runtimeKind), runtimeKind);
-}
-
-export function runtimeCapabilitiesFromSystemStatus(
-  status?: Pick<SystemStatus, "capabilities"> | null,
-  fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
-): RuntimeCapabilityMatrix {
-  const core = status?.capabilities;
-  if (!core) return fallback;
-  return runtimeCapabilitiesFromCore(core, fallback.runtimeKind);
-}
-
-function currentRuntimeCapabilities(): RuntimeCapabilityMatrix {
-  return runtimeCapabilities();
-}
 
 export function desktopRuntimeSessionUser(): SessionUser {
   return desktopSessionUser();
@@ -211,40 +153,46 @@ export async function getPublicSettings(): Promise<PublicSettings> {
   if (USE_DEMO) {
     return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
   }
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
-  }
-  return runtimeRpc<PublicSettings>("getPublicSettings");
+  return runtimeDispatch<PublicSettings>({
+    command: "getPublicSettings",
+    desktopFallback: () => ({ site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true })
+  });
 }
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
   if (USE_DEMO) {
-    return currentRuntimeCapabilities().runtimeKind === "desktop"
-      ? desktopSessionUser()
-      : { id: "dev", username, csrf_token: "dev-csrf" };
+    return runtimeValue<SessionUser>({
+      web: { id: "dev", username, csrf_token: "dev-csrf" },
+      desktop: () => desktopSessionUser()
+    });
   }
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return desktopSessionUser();
-  }
-  return runtimeRpc<SessionUser>("login", { username, password, turnstile_token: turnstileToken ?? null });
+  return runtimeDispatch<SessionUser>({
+    command: "login",
+    webArgs: { username, password, turnstile_token: turnstileToken ?? null },
+    desktopFallback: () => desktopSessionUser()
+  });
 }
 
 export async function logout(csrfToken?: string | null): Promise<void> {
   if (USE_DEMO) return;
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") return;
-  await runtimeRpc("logout", { csrfToken });
+  await runtimeDispatch<void>({
+    command: "logout",
+    webArgs: { csrfToken },
+    desktopFallback: () => undefined
+  });
 }
 
 export async function me(): Promise<SessionUser> {
   if (USE_DEMO) {
-    return currentRuntimeCapabilities().runtimeKind === "desktop"
-      ? desktopSessionUser()
-      : { id: "dev", username: "admin", csrf_token: "dev-csrf" };
+    return runtimeValue<SessionUser>({
+      web: { id: "dev", username: "admin", csrf_token: "dev-csrf" },
+      desktop: () => desktopSessionUser()
+    });
   }
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return desktopSessionUser();
-  }
-  return runtimeRpc<SessionUser>("me");
+  return runtimeDispatch<SessionUser>({
+    command: "me",
+    desktopFallback: () => desktopSessionUser()
+  });
 }
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
@@ -360,23 +308,30 @@ export async function getSystemVersion(): Promise<SystemVersion> {
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
-    const capabilities = currentRuntimeCapabilities();
-    const desktop = capabilities.runtimeKind === "desktop";
-    return {
-      current_version: "0.1.100",
-      latest_version: "v0.1.103",
-      update_available: true,
-      channel: "stable",
-      method: desktop ? "macos_tauri_updater" : "linux_systemd_job",
-      state: "idle",
-      failure_category: null,
-      recommended_action: desktop
-        ? "Confirm install in the Tauri updater after signature verification."
-        : "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
-      capabilities: desktop
-        ? ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
-        : ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
-    };
+    return runtimeValue({
+      desktop: {
+        current_version: "0.1.100",
+        latest_version: "v0.1.103",
+        update_available: true,
+        channel: "stable",
+        method: "macos_tauri_updater",
+        state: "idle",
+        failure_category: null,
+        recommended_action: "Confirm install in the Tauri updater after signature verification.",
+        capabilities: ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
+      },
+      web: {
+        current_version: "0.1.100",
+        latest_version: "v0.1.103",
+        update_available: true,
+        channel: "stable",
+        method: "linux_systemd_job",
+        state: "idle",
+        failure_category: null,
+        recommended_action: "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
+        capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
+      }
+    });
   }
   return runtimeDispatch<UpdateStatus>({
     command: "getUpdateStatus",
@@ -861,7 +816,7 @@ export type UpdateActionResult = {
 export async function runUpdateAction(
   action: UnifiedUpdateAction,
   csrfToken?: string | null,
-  capabilities: RuntimeCapabilityMatrix = currentRuntimeCapabilities(),
+  capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
 ): Promise<UpdateActionResult> {
   if (USE_DEMO) return { job_id: `update-${action}-demo` };
   if (action === "prune" && !capabilities.linuxBackupPrune) {
@@ -1186,13 +1141,15 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
 
 export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    const home = await runtimeDispatch<{ goal?: CodexGoal | null }>({
-      desktopCommand: "desktop_home"
-    });
-    return home.goal ?? demoCodexGoal(threadId);
-  }
-  return runtimeRpc<CodexGoal>("getCodexGoal", { thread_id: threadId });
+  const result = await runtimeDispatch<CodexGoal | { goal?: CodexGoal | null }>({
+    command: "getCodexGoal",
+    webArgs: { thread_id: threadId },
+    desktopCommand: "desktop_home",
+    desktopArgs: undefined
+  });
+  return result && typeof result === "object" && "goal" in result
+    ? result.goal ?? demoCodexGoal(threadId)
+    : result as CodexGoal;
 }
 
 export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1399,116 +1356,24 @@ function normalizePermissionProfiles(value: unknown): PermissionProfile[] {
 }
 
 function demoPlatformOverview(): PlatformOverview {
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return {
-      kind: "macos",
-      data_dir: "~/Library/Application Support/NexusHub",
-      config_file: "~/Library/Application Support/NexusHub/config.toml",
-      webui_dir: "~/Library/Application Support/NexusHub/webui",
-      log_dir: "~/Library/Logs/NexusHub",
-      service_name: "NexusHub.app",
-      service_kind: "tauri"
-    };
-  }
-  return {
-    kind: "linux",
-    data_dir: "/opt/nexushub",
-    config_file: "/opt/nexushub/config.toml",
-    webui_dir: "/opt/nexushub/webui",
-    log_dir: "/opt/nexushub/logs",
-    service_name: "nexushub",
-    service_kind: "systemd"
-  };
+  return runtimeValue({
+    web: demoWebPlatformOverview,
+    desktop: demoDesktopPlatformOverview
+  });
 }
 
 function demoSystemStatus(): SystemStatus {
-  const capabilities = currentRuntimeCapabilities();
-  const systemCapabilities: SystemCapabilities = capabilities.runtimeKind === "desktop"
-    ? {
-      threads: true,
-      jobs: true,
-      probe: true,
-      status: true,
-      settings: true,
-      job_history: true,
-      app_updater: true,
-      web_auth: false,
-      security_settings: false,
-      turnstile: false,
-      systemd: false,
-      nginx: false,
-      public_endpoint: false,
-      admin_password: false,
-      linux_update_job: false,
-      prune_backups: false
-    }
-    : {
-      threads: true,
-      jobs: true,
-      probe: true,
-      status: true,
-      settings: true,
-      job_history: true,
-      app_updater: true,
-      web_auth: true,
-      security_settings: true,
-      turnstile: true,
-      systemd: true,
-      nginx: true,
-      public_endpoint: true,
-      admin_password: true,
-      linux_update_job: true,
-      prune_backups: true
-    };
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return {
-      host_label: "local-macos",
-      hostname: "macos",
-      public_endpoint: null,
-      capabilities: systemCapabilities,
-      codex_home: "~/.codex",
-      configured_codex_home: "~/.codex",
-      resolved_codex_home: "~/.codex",
-      codex_home_source: "default",
-      panel_db: "~/Library/Application Support/NexusHub/panel.sqlite",
-      state_db_integrity: "ok"
-    };
-  }
-  return {
-    host_label: "43.155.235.227",
-    hostname: "codex-cloud-root",
-    public_endpoint: "https://661313.xyz/nexushub/",
-    capabilities: systemCapabilities,
-    codex_home: "/root/.codex",
-    configured_codex_home: "/root/.codex",
-    resolved_codex_home: "/root/.codex",
-    codex_home_source: "config",
-    panel_db: "/opt/nexushub/panel.sqlite",
-    state_db_integrity: "ok"
-  };
+  return runtimeValue({
+    web: demoWebSystemStatus,
+    desktop: demoDesktopSystemStatus
+  });
 }
 
 function demoSecurity(): SecuritySettings {
-  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
-    return {
-      turnstile_enabled: false,
-      turnstile_required: false,
-      turnstile_site_key: "",
-      turnstile_secret_configured: false,
-      session_ttl_seconds: 31536000,
-      turnstile_expected_hostname: null,
-      turnstile_expected_action: null
-    };
-  }
-  return {
-    turnstile_enabled: false,
-    turnstile_required: false,
-    turnstile_site_key: "",
-    turnstile_secret_configured: false,
-    session_ttl_seconds: 31536000,
-    turnstile_expected_hostname: "661313.xyz",
-    turnstile_expected_action: "login"
-  };
+  return runtimeValue({
+    web: demoWebSecurity,
+    desktop: demoDesktopSecurity
+  });
 }
 
 function demoProbeStatus(): ProbeStatus {
@@ -1555,10 +1420,16 @@ function demoProbeStatus(): ProbeStatus {
 function demoProbeSettings(): ProbeSettings {
   const platform = demoPlatformOverview();
   const system = demoSystemStatus();
-  const desktop = currentRuntimeCapabilities().runtimeKind === "desktop";
-  const logsPath = desktop
-    ? "~/Library/Application Support/NexusHub/logs_2.sqlite"
-    : "/root/.codex/logs_2.sqlite";
+  const runtimeProbeSettings = runtimeValue({
+    web: {
+      logsPath: "/root/.codex/logs_2.sqlite",
+      workspace: "/home/ubuntu/codex-workspace"
+    },
+    desktop: {
+      logsPath: "~/Library/Application Support/NexusHub/logs_2.sqlite",
+      workspace: "~/Documents"
+    }
+  });
   return {
     codex: {
       home: system.codex_home,
@@ -1567,7 +1438,7 @@ function demoProbeSettings(): ProbeSettings {
       codex_home_source: system.codex_home_source,
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
-      workspace: desktop ? "~/Documents" : "/home/ubuntu/codex-workspace",
+      workspace: runtimeProbeSettings.workspace,
       host_label: system.host_label
     },
     probe: {
@@ -1582,8 +1453,8 @@ function demoProbeSettings(): ProbeSettings {
       group: "NexusHub"
     },
     logs_db: {
-      path: logsPath,
-      resolved_path: logsPath,
+      path: runtimeProbeSettings.logsPath,
+      resolved_path: runtimeProbeSettings.logsPath,
       logs_db_source: "resolved_codex_home",
       config_file: platform.config_file,
       enabled: true,

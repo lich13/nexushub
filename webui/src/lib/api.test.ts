@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
+import runtimeSource from "./runtime.ts?raw";
+import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
+import demoCoreSource from "./domain/demoCore.ts?raw";
 import type { MessageBlock, ProbeLogsDbStatus, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
 
 async function loadRealApi() {
@@ -11,6 +14,13 @@ async function loadRealApi() {
 
 async function loadDesktopApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
+  vi.resetModules();
+  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  return import("./api");
+}
+
+async function loadDesktopDemoApi() {
+  vi.stubEnv("VITE_USE_REAL_API", "0");
   vi.resetModules();
   globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
   return import("./api");
@@ -836,7 +846,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("runtime UI capabilities derive from core system capabilities", async () => {
-    const { runtimeCapabilitiesFromSystemStatus, runtimeCapabilitiesForRuntime } = await loadRealApi();
+    const { runtimeCapabilities, runtimeCapabilitiesFromSystemStatus, runtimeCapabilitiesForRuntime } = await loadRealApi();
     const linuxCore: SystemStatus["capabilities"] = {
       threads: true,
       jobs: true,
@@ -867,8 +877,36 @@ describe("archive delete API compatibility", () => {
       linux_update_job: false,
       prune_backups: false
     };
+    const webBootstrap = runtimeCapabilitiesForRuntime("web");
+    const desktopBootstrap = runtimeCapabilitiesForRuntime("desktop");
 
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, runtimeCapabilitiesForRuntime("web"))).toMatchObject({
+    expect(runtimeCapabilities()).toEqual(webBootstrap);
+    expect(webBootstrap).toMatchObject({
+      runtimeKind: "web",
+      webAuth: true,
+      logout: true,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
+      linuxBackupPrune: false,
+      linuxUpdateLabels: false,
+      forkAction: false,
+      approvalActions: false
+    });
+    expect(desktopBootstrap).toMatchObject({
+      runtimeKind: "desktop",
+      webAuth: false,
+      logout: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
+      linuxBackupPrune: false,
+      linuxUpdateLabels: false,
+      forkAction: false,
+      approvalActions: false
+    });
+
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap)).toMatchObject({
       runtimeKind: "web",
       webAuth: true,
       securitySettings: true,
@@ -878,7 +916,7 @@ describe("archive delete API compatibility", () => {
       forkAction: true,
       approvalActions: true
     });
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore }, runtimeCapabilitiesForRuntime("desktop"))).toMatchObject({
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
       webAuth: false,
       securitySettings: false,
@@ -888,6 +926,40 @@ describe("archive delete API compatibility", () => {
       forkAction: false,
       approvalActions: false
     });
+  });
+
+  test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
+    const { getPublicSettings, getSystemStatus, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
+
+    const publicSettings = await getPublicSettings();
+    const systemStatus = await getSystemStatus();
+    const updateStatus = await getUpdateStatus();
+    const platformOverview = await getPlatformOverview();
+    const visibleValues = [
+      publicSettings.site_name,
+      systemStatus.host_label,
+      systemStatus.hostname,
+      systemStatus.public_endpoint,
+      systemStatus.codex_home,
+      systemStatus.configured_codex_home,
+      systemStatus.resolved_codex_home,
+      systemStatus.codex_home_source,
+      systemStatus.panel_db,
+      systemStatus.state_db_integrity,
+      updateStatus.method,
+      updateStatus.recommended_action,
+      ...(updateStatus.capabilities ?? []),
+      platformOverview.kind,
+      platformOverview.data_dir,
+      platformOverview.config_file,
+      platformOverview.webui_dir,
+      platformOverview.log_dir,
+      platformOverview.service_name,
+      platformOverview.service_kind
+    ].filter((value): value is string => typeof value === "string").join("\n");
+
+    expect(visibleValues).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune|prune_backups|linux_systemd_job/i);
+    expect(visibleValues).toMatch(/macos_tauri_updater|signature_verification|restart_after_install/);
   });
 
   test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
@@ -1265,20 +1337,35 @@ describe("archive delete API compatibility", () => {
   });
 
   test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
+    const forbiddenDomainTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "@tauri-apps/api",
+      "isDesktopRuntime(",
+      "desktop_api_command",
+      "desktopApiRoute",
+      "invokeDesktopApi"
+    ];
+
     expect(apiSource).not.toContain("const ROUTES");
     expect(apiSource).not.toContain("WebRoute");
     expect(apiSource).not.toContain("DesktopRoute");
-    expect(apiSource).not.toContain("desktopApiRoute");
     expect(apiSource).not.toContain('runtimeRpc("desktopApi"');
-    expect(apiSource).not.toContain("invokeDesktopApi");
     expect(apiSource).not.toContain("invokeDesktop");
-    expect(apiSource).not.toContain("desktop_api_command");
     expect(apiSource).not.toContain("DesktopApiUpload");
-    expect(apiSource).not.toContain('"/api/');
-    expect(apiSource).not.toContain("'/api/");
-    expect(apiSource).not.toContain("`/api/");
     expect(apiSource).not.toContain("new EventSource");
     expect(apiSource).not.toContain("/api/system/panel/update");
+    expect(apiSource).not.toContain("getRuntimeKind");
+    expect(apiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
+    expect(apiSource).not.toContain("systemCapabilitiesForRuntime");
+    expect(apiSource).not.toContain("SystemCapabilities =");
+    for (const token of forbiddenDomainTokens) {
+      expect(apiSource, `api.ts must not contain ${token}`).not.toContain(token);
+      expect(domainCapabilitiesSource, `domain/capabilities.ts must not contain ${token}`).not.toContain(token);
+      expect(demoCoreSource, `domain/demoCore.ts must not contain ${token}`).not.toContain(token);
+    }
+    expect(runtimeSource).not.toContain("SystemCapabilities");
     expect(appSource).not.toContain("desktopApiRoute");
     expect(appSource).not.toContain('runtimeRpc("desktopApi"');
     expect(appSource).not.toContain("invoke(");

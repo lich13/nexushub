@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
 import appSource from "./App.tsx?raw";
+import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
 type AppExports = typeof import("./App") & {
@@ -10,7 +11,7 @@ type AppExports = typeof import("./App") & {
   defaultRunConfig?: () => Record<string, unknown>;
   segmentInternalReferences?: (text: string) => Array<{ type: "text" | "internal_reference"; text: string; copyText?: string; kind?: string }>;
   slashCommands?: Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
-  slashCommandSuggestions?: (draft: string, cursor: number, hasThread?: boolean) => Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
+  slashCommandSuggestions?: (draft: string, cursor: number, hasThread?: boolean, capabilities?: RuntimeCapabilityMatrix) => Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
   applySlashCommandSelection?: (draft: string, cursor: number, command: string) => { value: string; cursor: number };
   renderSlashCommandMenuHtml?: (draft: string, cursor: number, hasThread?: boolean, selected?: number) => string;
   nextSlashCommandSelection?: (current: number, total: number, key: string) => number;
@@ -24,8 +25,8 @@ type AppExports = typeof import("./App") & {
   applyPluginMentionSelection?: (draft: string, cursor: number, plugin: Pick<PluginInfo, "id" | "label" | "invocation_template">) => { value: string; cursor: number };
   renderPluginMentionMenuHtml?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean, selected?: number) => string;
   activeComposerMenuKind?: (draft: string, cursor: number, plugins?: PluginInfo[] | null) => "slash" | "plugin" | null;
-  exactSlashCommandFromDraft?: (draft: string) => string | null;
-  slashCommandForComposerSubmit?: (draft: string) => string | null;
+  exactSlashCommandFromDraft?: (draft: string, capabilities?: RuntimeCapabilityMatrix) => string | null;
+  slashCommandForComposerSubmit?: (draft: string, capabilities?: RuntimeCapabilityMatrix) => string | null;
   composerSubmitDraftValue?: (stateValue: string, domValue?: string | null) => string;
   composerMenuKeyAction?: (input: {
     key: string;
@@ -35,7 +36,7 @@ type AppExports = typeof import("./App") & {
     selected: number;
     suggestions: Array<{ command?: string; id?: string }>;
   }) => { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" };
-  slashCommandAction?: (command: string, hasThread?: boolean) => { kind: string; message?: string; command?: string };
+  slashCommandAction?: (command: string, hasThread?: boolean, capabilities?: RuntimeCapabilityMatrix) => { kind: string; message?: string; command?: string };
   planModeButtonState?: (nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan?: boolean, hasPendingQuestion?: boolean) => { pressed: boolean; label: string; statusText: string };
   mergeRunConfigFromDefaults?: <T extends { collaborationMode: string }>(current: T, defaults: T) => T;
   runConfigAfterSuccessfulSend?: <T extends { collaborationMode: string }>(config: T) => T;
@@ -92,26 +93,26 @@ type AppExports = typeof import("./App") & {
   };
   formatGoalTimestamp?: (value: number | string | null | undefined) => string;
   codexVisibleCopy?: () => Record<string, string>;
-  failureCategoryLabel?: (category: string, capabilities?: unknown) => string;
+  failureCategoryLabel?: (category: string, capabilities?: RuntimeCapabilityMatrix) => string;
   jobFailureAnalysisView?: (
     analysis: NonNullable<import("./types").JobRecord["failure_analysis"]>,
-    capabilities?: unknown
+    capabilities?: RuntimeCapabilityMatrix
   ) => { label: string; explanation: string; suggestions: string[] };
   optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
   renderConversationHeaderHtml?: (summary: ThreadSummary) => string;
   preservePreviousQueryData?: <T>(previous: T | undefined) => T | undefined;
   threadCopyId?: (threadId?: string | null) => string | null;
-  opsWorkspacePanelTitles?: () => string[];
-  opsWorkspaceVisibleCopy?: () => string[];
+  opsWorkspacePanelTitles?: (capabilities?: RuntimeCapabilityMatrix) => string[];
+  opsWorkspaceVisibleCopy?: (capabilities?: RuntimeCapabilityMatrix) => string[];
   archivePlanAfterExecute?: (
     current: import("./types").ArchiveDeletePlan | null,
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
   desktopRuntimeVisibleCopy?: () => string[];
-  runtimeCapabilitiesForRuntime?: (desktop?: boolean) => { runtimeKind: "web" | "desktop"; [key: string]: unknown };
-  navigationLabelsForRuntime?: (desktop?: boolean) => string[];
-  shouldShowLogoutForRuntime?: (desktop?: boolean) => boolean;
-  initialSessionForRuntime?: (desktop?: boolean) => import("./types").SessionUser | null;
+  runtimeCapabilitiesForRuntime?: (runtime?: boolean | "web" | "desktop") => RuntimeCapabilityMatrix;
+  navigationLabelsForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => string[];
+  shouldShowLogoutForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => boolean;
+  initialSessionForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => import("./types").SessionUser | null;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -158,15 +159,65 @@ function extractFunctionSource(name: string): string {
   return source.slice(start, next === -1 ? source.length : next);
 }
 
+const forbiddenComponentTokens = [
+  '"/api/',
+  "'/api/",
+  "`/api/",
+  "@tauri-apps/api",
+  "isDesktopRuntime(",
+  "desktop_api_command",
+  "desktopApiRoute",
+  "invokeDesktopApi",
+  "runtimeCapabilities(",
+  "runtimeCapabilitiesForRuntime("
+];
+
+function expectSourceToAvoidTokens(source: string, label: string, tokens: string[]) {
+  for (const token of tokens) {
+    expect(source, `${label} must not contain ${token}`).not.toContain(token);
+  }
+  expect(source, `${label} must not call invoke directly`).not.toMatch(/\binvoke\s*\(/);
+}
+
+const linuxWebCapabilities: RuntimeCapabilityMatrix = {
+  runtimeKind: "web",
+  webAuth: true,
+  logout: true,
+  securitySettings: true,
+  publicEndpointStatus: true,
+  codexStatePaths: true,
+  linuxBackupPrune: true,
+  linuxUpdateLabels: true,
+  forkAction: true,
+  approvalActions: true
+};
+
+const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
+  runtimeKind: "desktop",
+  webAuth: false,
+  logout: false,
+  securitySettings: false,
+  publicEndpointStatus: false,
+  codexStatePaths: false,
+  linuxBackupPrune: false,
+  linuxUpdateLabels: false,
+  forkAction: false,
+  approvalActions: false
+};
+
 describe("conversation helpers", () => {
   test("desktop runtime hides Web-only auth and security navigation", async () => {
     const app = await loadApp();
+    const webCapabilities = linuxWebCapabilities;
+    const desktopCapabilities = macosDesktopCapabilities;
 
-    expect(app.navigationLabelsForRuntime?.(false)).toContain("安全");
-    expect(app.navigationLabelsForRuntime?.(true)).toEqual(["Codex", "Claude Code", "探针", "运维"]);
-    expect(app.shouldShowLogoutForRuntime?.(false)).toBe(true);
-    expect(app.shouldShowLogoutForRuntime?.(true)).toBe(false);
-    expect(app.initialSessionForRuntime?.(true)).toMatchObject({
+    expect(webCapabilities).toBeDefined();
+    expect(desktopCapabilities).toBeDefined();
+    expect(app.navigationLabelsForRuntime?.(webCapabilities)).toContain("安全");
+    expect(app.navigationLabelsForRuntime?.(desktopCapabilities)).toEqual(["Codex", "Claude Code", "探针", "运维"]);
+    expect(app.shouldShowLogoutForRuntime?.(webCapabilities)).toBe(true);
+    expect(app.shouldShowLogoutForRuntime?.(desktopCapabilities)).toBe(false);
+    expect(app.initialSessionForRuntime?.(desktopCapabilities)).toMatchObject({
       username: "desktop",
       csrf_token: null
     });
@@ -174,47 +225,54 @@ describe("conversation helpers", () => {
 
   test("desktop runtime keeps shared update entry but removes Linux-only update actions", async () => {
     const app = await loadApp();
+    const webCapabilities = linuxWebCapabilities;
+    const desktopCapabilities = macosDesktopCapabilities;
 
-    expect(app.navigationLabelsForRuntime?.(true)).toEqual(expect.arrayContaining(["Codex", "探针", "运维"]));
-    expect(app.opsWorkspacePanelTitles?.(false)).toContain("NexusHub 更新");
-    expect(app.opsWorkspacePanelTitles?.(true)).toContain("NexusHub 更新");
-    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["Precheck", "Prune", "Public endpoint"]));
-    expect(app.opsWorkspaceVisibleCopy?.(true)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
-    expect(app.opsWorkspaceVisibleCopy?.(true).join("\n")).not.toMatch(/systemd|Nginx|管理员密码|Linux prune/i);
-    expect(app.opsWorkspaceVisibleCopy?.(true)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
+    expect(app.navigationLabelsForRuntime?.(desktopCapabilities)).toEqual(expect.arrayContaining(["Codex", "探针", "运维"]));
+    expect(app.opsWorkspacePanelTitles?.(webCapabilities)).toContain("NexusHub 更新");
+    expect(app.opsWorkspacePanelTitles?.(desktopCapabilities)).toContain("NexusHub 更新");
+    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).not.toEqual(expect.arrayContaining(["Precheck", "Prune", "Public endpoint"]));
+    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
+    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities).join("\n")).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune/i);
+    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
+    expect(app.opsWorkspaceVisibleCopy?.(webCapabilities)).toEqual(expect.arrayContaining(["Public endpoint", "state DB", "Codex Home", "State DB", "Precheck", "Update", "Prune", "systemd 失败", "Nginx 失败"]));
   });
 
   test("desktop runtime hides unsupported fork and approval actions", async () => {
     const app = await loadApp();
+    const webCapabilities = linuxWebCapabilities;
+    const desktopCapabilities = macosDesktopCapabilities;
 
-    expect(app.canShowForkAction?.(false)).toBe(true);
-    expect(app.canShowForkAction?.(true)).toBe(false);
-    expect(app.slashCommandsForRuntime?.(false).map((item) => item.command)).toContain("/fork");
-    expect(app.slashCommandsForRuntime?.(true).map((item) => item.command)).not.toContain("/fork");
-    expect(app.slashCommandsForRuntime?.(false).map((item) => item.command)).toContain("/logout");
-    expect(app.slashCommandsForRuntime?.(true).map((item) => item.command)).not.toContain("/logout");
-    expect(app.slashCommandSuggestions?.("/fo", 3, true, false).map((item) => item.command)).toContain("/fork");
-    expect(app.slashCommandSuggestions?.("/fo", 3, true, true).map((item) => item.command)).not.toContain("/fork");
-    expect(app.slashCommandSuggestions?.("/lo", 3, true, false).map((item) => item.command)).toContain("/logout");
-    expect(app.slashCommandSuggestions?.("/lo", 3, true, true).map((item) => item.command)).not.toContain("/logout");
-    expect(app.exactSlashCommandFromDraft?.(" /fork ", true)).toBeNull();
-    expect(app.exactSlashCommandFromDraft?.(" /logout ", true)).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.(" /fork ", true)).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.(" /logout ", true)).toBeNull();
-    expect(app.slashCommandAction?.("/fork", true, true)).toEqual({
+    expect(webCapabilities).toBeDefined();
+    expect(desktopCapabilities).toBeDefined();
+    expect(app.canShowForkAction?.(webCapabilities)).toBe(true);
+    expect(app.canShowForkAction?.(desktopCapabilities)).toBe(false);
+    expect(app.slashCommandsForRuntime?.(webCapabilities).map((item) => item.command)).toContain("/fork");
+    expect(app.slashCommandsForRuntime?.(desktopCapabilities).map((item) => item.command)).not.toContain("/fork");
+    expect(app.slashCommandsForRuntime?.(webCapabilities).map((item) => item.command)).toContain("/logout");
+    expect(app.slashCommandsForRuntime?.(desktopCapabilities).map((item) => item.command)).not.toContain("/logout");
+    expect(app.slashCommandSuggestions?.("/fo", 3, true, webCapabilities).map((item) => item.command)).toContain("/fork");
+    expect(app.slashCommandSuggestions?.("/fo", 3, true, desktopCapabilities).map((item) => item.command)).not.toContain("/fork");
+    expect(app.slashCommandSuggestions?.("/lo", 3, true, webCapabilities).map((item) => item.command)).toContain("/logout");
+    expect(app.slashCommandSuggestions?.("/lo", 3, true, desktopCapabilities).map((item) => item.command)).not.toContain("/logout");
+    expect(app.exactSlashCommandFromDraft?.(" /fork ", desktopCapabilities)).toBeNull();
+    expect(app.exactSlashCommandFromDraft?.(" /logout ", desktopCapabilities)).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.(" /fork ", desktopCapabilities)).toBeNull();
+    expect(app.slashCommandForComposerSubmit?.(" /logout ", desktopCapabilities)).toBeNull();
+    expect(app.slashCommandAction?.("/fork", true, desktopCapabilities)).toEqual({
       kind: "unknown",
       command: "/fork",
       message: expect.stringContaining("未知")
     });
-    expect(app.approvalActionMode?.(false)).toBe("interactive");
-    expect(app.approvalActionMode?.(true)).toBe("unsupported");
+    expect(app.approvalActionMode?.(webCapabilities)).toBe("interactive");
+    expect(app.approvalActionMode?.(desktopCapabilities)).toBe("unsupported");
   });
 
   test("desktop runtime maps Linux-only job failure categories to generic copy", async () => {
     const app = await loadApp();
 
-    const webCapabilities = app.runtimeCapabilitiesForRuntime?.(false);
-    const desktopCapabilities = app.runtimeCapabilitiesForRuntime?.(true);
+    const webCapabilities = linuxWebCapabilities;
+    const desktopCapabilities = macosDesktopCapabilities;
 
     expect(app.failureCategoryLabel?.("systemd_failure", webCapabilities)).toBe("systemd 失败");
     expect(app.failureCategoryLabel?.("nginx_failure", webCapabilities)).toBe("Nginx 失败");
@@ -243,11 +301,13 @@ describe("conversation helpers", () => {
 
   test("component sources use capability props instead of runtime or transport access", () => {
     const guardedComponents = [
+      "App",
       "SideNav",
       "MobileTopBar",
       "ChatWorkspace",
       "Conversation",
       "EmptyConversation",
+      "SlashCommandTextarea",
       "ProbeWorkspace",
       "OpsWorkspace",
       "JobList"
@@ -255,10 +315,7 @@ describe("conversation helpers", () => {
 
     for (const component of guardedComponents) {
       const source = extractFunctionSource(component);
-      expect(source, component).not.toContain("isDesktopRuntime(");
-      expect(source, component).not.toContain('"/api/');
-      expect(source, component).not.toContain("'/api/");
-      expect(source, component).not.toMatch(/\binvoke\s*\(/);
+      expectSourceToAvoidTokens(source, component, forbiddenComponentTokens);
     }
   });
 
@@ -314,7 +371,7 @@ describe("conversation helpers", () => {
     const app = await loadApp();
     const removedGoalResume = ["/goal", "resume"].join(" ");
 
-    expect(app.slashCommandSuggestions?.("/", 1).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
+    expect(app.slashCommandSuggestions?.("/", 1, true, linuxWebCapabilities).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
     expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([]);
     expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([]);
     expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([]);
@@ -452,7 +509,7 @@ describe("conversation helpers", () => {
     const app = await loadApp();
 
     expect(app.exactSlashCommandFromDraft?.("/plan")).toBe("/plan");
-    expect(app.exactSlashCommandFromDraft?.(" /fork ")).toBe("/fork");
+    expect(app.exactSlashCommandFromDraft?.(" /fork ", linuxWebCapabilities)).toBe("/fork");
     expect(app.exactSlashCommandFromDraft?.("/go")).toBeNull();
     expect(app.exactSlashCommandFromDraft?.("/goal r")).toBeNull();
   });

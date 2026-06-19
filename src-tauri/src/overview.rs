@@ -638,10 +638,7 @@ pub fn desktop_save_goal_with_state(
         status: None,
         enabled: None,
     })?;
-    upsert_desktop_goal_with_state(
-        state,
-        plan.as_thread_goal_update(),
-    )
+    upsert_desktop_goal_with_state(state, plan.as_thread_goal_update())
 }
 
 pub fn desktop_clear_goal(thread_id: &str) -> Result<DesktopGoal> {
@@ -673,14 +670,6 @@ pub fn desktop_resume_goal_with_state(
     thread_id: &str,
 ) -> Result<DesktopGoal> {
     update_existing_desktop_goal_status_with_state(state, thread_id, "active")
-}
-
-pub fn desktop_open_config_dir() -> Result<()> {
-    open_path(build_desktop_overview()?.paths.app_support_dir)
-}
-
-pub fn desktop_open_log_dir() -> Result<()> {
-    open_path(build_desktop_overview()?.paths.log_dir)
 }
 
 pub fn desktop_send_message_with_state(
@@ -1209,8 +1198,6 @@ pub fn desktop_native_command_names() -> Vec<&'static str> {
         "desktop_cancel_followup",
         "desktop_platform_status",
         "desktop_claude_code_overview",
-        "desktop_open_config_dir",
-        "desktop_open_log_dir",
     ]
 }
 
@@ -1519,12 +1506,6 @@ fn goal_response(goal: &nexushub_core::db::ThreadGoal) -> DesktopGoal {
     desktop_goal_from_view(goal_service::goal_response(Some(goal)))
 }
 
-fn open_path(path: PathBuf) -> Result<()> {
-    std::fs::create_dir_all(&path)?;
-    opener::open(path)?;
-    Ok(())
-}
-
 fn desktop_goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
     desktop_goal_with_thread_id(view, None)
 }
@@ -1695,8 +1676,6 @@ mod tests {
             "desktop_cancel_followup",
             "desktop_platform_status",
             "desktop_claude_code_overview",
-            "desktop_open_config_dir",
-            "desktop_open_log_dir",
         ] {
             assert!(
                 commands.contains(&expected),

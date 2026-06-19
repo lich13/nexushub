@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::overview::{
-    self, desktop_answer_elicitation_with_state, desktop_archive_thread_with_state,
+    desktop_answer_elicitation_with_state, desktop_archive_thread_with_state,
     desktop_cancel_followup_with_state, desktop_continue_thread_with_state,
     desktop_enqueue_followup_with_state, desktop_fork_thread_with_state,
     desktop_list_followups_with_state, desktop_plan_accept_with_state,
@@ -239,8 +239,11 @@ pub fn answerElicitation(
     thread_id: String,
     answers: std::collections::HashMap<String, Vec<String>>,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    desktop_answer_elicitation_with_state(&state, DesktopElicitationAnswerRequest { thread_id, answers })
-        .map_err(|err| err.to_string())
+    desktop_answer_elicitation_with_state(
+        &state,
+        DesktopElicitationAnswerRequest { thread_id, answers },
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -289,25 +292,11 @@ pub fn answerApproval(thread_id: String) -> DesktopActionResponse {
 }
 
 #[tauri::command]
-pub fn desktop_threads_command(
-    request: ThreadListRequest,
-) -> Result<Vec<nexushub_core::codex::ThreadSummary>, String> {
-    overview::desktop_threads(request).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub fn desktop_threads(
     state: tauri::State<'_, DesktopState>,
     request: ThreadListRequest,
 ) -> Result<Vec<nexushub_core::codex::ThreadSummary>, String> {
     desktop_threads_with_state(&state, request).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_thread_detail_command(
-    id: String,
-) -> Result<Option<nexushub_core::codex::ThreadDetail>, String> {
-    overview::desktop_thread_detail(&id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
