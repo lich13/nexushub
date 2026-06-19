@@ -114,6 +114,11 @@ button { cursor: pointer; }
 .nav-logout { margin-top: auto; width: 100%; }
 
 .main-workspace { min-width: 0; }
+.fatal-screen {
+  min-height: 100vh;
+  padding: 22px;
+  background: var(--canvas);
+}
 .chat-layout {
   height: 100vh;
   min-height: 0;

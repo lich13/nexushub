@@ -41,8 +41,8 @@ import {
   createRuntimeThreadEventSource,
   desktopSessionUser,
   getRuntimeKind,
-  invokeDesktop,
   runtimeDispatch,
+  runtimeRpc,
   uploadRuntimeFiles
 } from "./runtime";
 
@@ -55,159 +55,8 @@ export class ApiError extends Error {
   }
 }
 
-type RpcArgs = Record<string, unknown> | undefined;
-
-type WebRoute = {
-  command: string;
-  args?: (args?: RpcArgs) => RpcArgs;
-  unavailable?: string;
-};
-
-type DesktopRoute = {
-  command?: string;
-  args?: (args?: RpcArgs) => RpcArgs;
-  fromHome?: (home: DesktopHome, args?: RpcArgs) => unknown;
-  fallback?: (args?: RpcArgs) => unknown;
-  unavailable?: string;
-};
-
-type DesktopHome = {
-  overview?: unknown;
-  system?: unknown;
-  probe?: unknown;
-  logsDb?: unknown;
-  logs_db?: unknown;
-  threads?: unknown[];
-  plugins?: unknown[];
-  models?: unknown[];
-  permissionProfiles?: unknown[];
-  permission_profiles?: unknown[];
-  codexConfig?: unknown;
-  codex_config?: unknown;
-  archivePlan?: unknown;
-  archive_plan?: unknown;
-  hiddenPlan?: unknown;
-  hidden_plan?: unknown;
-  goal?: unknown;
-  warnings?: string[];
-};
-
-async function desktopHome(): Promise<DesktopHome> {
-  return invokeDesktop<DesktopHome>("desktop_home");
-}
-
-function argString(args: RpcArgs, key: string): string {
-  const value = args?.[key];
-  return typeof value === "string" ? value : "";
-}
-
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function desktopGoalFromHome(home: DesktopHome, args?: RpcArgs) {
-  return normalizeDesktopGoal(home.goal, argString(args, "threadId"));
-}
-
-function normalizeDesktopGoal(value: unknown, threadId?: string) {
-  const goal = value && typeof value === "object"
-    ? value as Record<string, unknown>
-    : {};
-  return {
-    available: goal.available !== false,
-    enabled: Boolean(goal.enabled),
-    objective: optionalString(goal.objective),
-    token_budget: typeof goal.tokenBudget === "number"
-      ? goal.tokenBudget
-      : typeof goal.token_budget === "number"
-        ? goal.token_budget
-        : null,
-    status: typeof goal.status === "string" ? goal.status : "idle",
-    completed_at: typeof goal.completedAt === "number"
-      ? goal.completedAt
-      : typeof goal.completed_at === "number"
-        ? goal.completed_at
-        : null,
-    blocked_reason: optionalString(goal.blockedReason ?? goal.blocked_reason),
-    raw: { ...goal, thread_id: threadId }
-  };
-}
-
-function desktopPublicSettings() {
-  return {
-    site_name: "NexusHub",
-    turnstile_enabled: false,
-    turnstile_required: false,
-    turnstile_site_key: "",
-    turnstile_action: "login",
-    admin_configured: true
-  };
-}
-
-function desktopPlatform(home: DesktopHome) {
-  const overview = home.overview && typeof home.overview === "object"
-    ? home.overview as Record<string, unknown>
-    : {};
-  const paths = overview.paths && typeof overview.paths === "object"
-    ? overview.paths as Record<string, unknown>
-    : {};
-  return {
-    kind: "macos",
-    data_dir: String(paths.appSupportDir ?? paths.app_support_dir ?? ""),
-    config_file: String(paths.configFile ?? paths.config_file ?? ""),
-    webui_dir: String(paths.appSupportDir ?? paths.app_support_dir ?? ""),
-    log_dir: String(paths.logDir ?? paths.log_dir ?? ""),
-    service_name: "NexusHub.app",
-    service_kind: "tauri"
-  };
-}
-
-function objectArg(args: RpcArgs, key: string): Record<string, unknown> {
-  const value = args?.[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function camelizeProbeSettings(value: Record<string, unknown>): Record<string, unknown> {
-  const probe = objectValue(value.probe);
-  const notifications = objectValue(value.notifications);
-  const codex = objectValue(value.codex);
-  const logsDb = objectValue(value.logs_db ?? value.logsDb);
-  return {
-    codex: Object.keys(codex).length ? {
-      home: optionalString(codex.home),
-      workspace: optionalString(codex.workspace),
-      hostLabel: optionalString(codex.host_label ?? codex.hostLabel)
-    } : undefined,
-    probe: Object.keys(probe).length ? {
-      enabled: booleanOrUndefined(probe.enabled),
-      pollSeconds: numberOrUndefined(probe.poll_seconds ?? probe.pollSeconds),
-      recentLimit: numberOrUndefined(probe.recent_limit ?? probe.recentLimit),
-      hooks: camelizeKeys(objectValue(probe.hooks)),
-      notifications: normalizeProbeNotifications(objectValue(probe.notifications)),
-      observability: camelizeKeys(objectValue(probe.observability)),
-      logsDb: camelizeKeys(objectValue(probe.logs_db ?? probe.logsDb))
-    } : undefined,
-    notifications: Object.keys(notifications).length
-      ? normalizeProbeNotifications(notifications)
-      : undefined,
-    logsDb: Object.keys(logsDb).length ? camelizeKeys(logsDb) : undefined
-  };
-}
-
-function normalizeProbeNotifications(value: Record<string, unknown>): Record<string, unknown> {
-  return withoutUndefined({
-    deviceKey: optionalString(value.device_key ?? value.deviceKey),
-    enabled: booleanOrUndefined(value.enabled),
-    serverUrl: optionalString(value.server_url ?? value.serverUrl),
-    sound: value.sound,
-    group: optionalString(value.group),
-    url: value.url,
-    notifyCompletion: booleanOrUndefined(value.notify_completion ?? value.notifyCompletion),
-    notifyReplyNeeded: booleanOrUndefined(value.notify_reply_needed ?? value.notifyReplyNeeded),
-    notifyRecoverable: booleanOrUndefined(value.notify_recoverable ?? value.notifyRecoverable)
-  });
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -216,508 +65,64 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function booleanOrUndefined(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function snakeCaseKey(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
-
-function camelizeKeys(value: Record<string, unknown>): Record<string, unknown> {
+function snakeCaseKeys(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    out[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = item;
+    out[snakeCaseKey(key)] = item;
   }
   return out;
 }
 
-function withoutUndefined(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function threadListRequest(args?: RpcArgs) {
+function normalizeProbeRuntimePayload(value: unknown): Record<string, unknown> {
+  const raw = objectValue(value);
+  const top = snakeCaseKeys(raw);
+  const codex = snakeCaseKeys(objectValue(raw.codex));
+  const probe = snakeCaseKeys(objectValue(raw.probe));
+  const notifications = snakeCaseKeys(objectValue(raw.notifications));
+  const logsDb = snakeCaseKeys(objectValue(raw.logs_db ?? raw.logsDb));
+  const nestedLogsDb = snakeCaseKeys(objectValue(probe.logs_db ?? probe.logsDb));
+  const nestedNotifications = snakeCaseKeys(objectValue(probe.notifications));
+  const nestedObservability = snakeCaseKeys(objectValue(probe.observability));
+  const hooks = snakeCaseKeys(objectValue(probe.hooks));
   return {
-    status: args?.status,
-    query: args?.q,
-    limit: args?.limit
-  };
-}
-
-function threadDetailRequest(args?: RpcArgs) {
-  const options = objectArg(args, "options");
-  return {
-    id: argString(args, "id"),
-    limit: options.limit,
-    before: options.before,
-    full: options.full
-  };
-}
-
-function threadBlocksRequest(args?: RpcArgs) {
-  const options = objectArg(args, "options");
-  return {
-    id: argString(args, "id"),
-    limit: options.limit,
-    before: options.before
-  };
-}
-
-function threadSendRequest(args?: RpcArgs) {
-  return {
-    ...objectArg(args, "payload"),
-    threadId: argString(args, "threadId") || optionalString(objectArg(args, "payload").thread_id) || undefined
-  };
-}
-
-function planRequest(args?: RpcArgs) {
-  const payload = objectArg(args, "payload");
-  return {
-    threadId: argString(args, "threadId"),
-    turnId: payload.turn_id ?? payload.turnId,
-    itemId: payload.item_id ?? payload.itemId,
-    instructions: payload.instructions
-  };
-}
-
-function updateWebArgs(args?: RpcArgs): RpcArgs {
-  return {
-    action: args?.action,
-    csrfToken: args?.csrfToken
-  };
-}
-
-function probeJobWebArgs(args?: RpcArgs): RpcArgs {
-  return {
-    action: args?.action,
-    csrfToken: args?.csrfToken
-  };
-}
-
-function probeJobDesktopRoute(action: unknown): DesktopRoute {
-  switch (action as ProbeJobAction) {
-    case "bark-test":
-      return { command: "desktop_probe_bark_test" };
-    case "hooks-install":
-      return { command: "desktop_probe_hooks_install" };
-    case "logs-db-dry-run":
-      return {
-        command: "desktop_probe_logs_db_maintain",
-        args: () => ({ request: { dryRun: true, compact: false } })
-      };
-    case "logs-db-execute":
-      return {
-        command: "desktop_probe_logs_db_maintain",
-        args: () => ({ request: { dryRun: false, compact: false } })
-      };
-    default:
-      return { unavailable: `Unknown Probe job action: ${String(action)}` };
-  }
-}
-
-const ROUTES: Record<string, { web: WebRoute; desktop: DesktopRoute }> = {
-  getPublicSettings: {
-    web: { command: "getPublicSettings" },
-    desktop: { fallback: desktopPublicSettings }
-  },
-  login: {
-    web: {
-      command: "login",
-      args: (args) => ({
-        username: args?.username,
-        password: args?.password,
-        turnstile_token: typeof args?.turnstileToken === "string" && args.turnstileToken.trim()
-          ? args.turnstileToken.trim()
-          : undefined
-      })
+    ...top,
+    codex,
+    probe: {
+      ...probe,
+      hooks,
+      notifications: nestedNotifications,
+      observability: nestedObservability,
+      logs_db: nestedLogsDb
     },
-    desktop: { fallback: desktopSessionUser }
-  },
-  logout: {
-    web: { command: "logout" },
-    desktop: { fallback: () => undefined }
-  },
-  me: {
-    web: { command: "me" },
-    desktop: { fallback: desktopSessionUser }
-  },
-  listThreads: {
-    web: {
-      command: "listThreads",
-      args: (args) => ({
-        status: args?.status,
-        q: args?.q,
-        limit: args?.limit
-      })
-    },
-    desktop: {
-      command: "desktop_threads",
-      args: (args) => ({ request: threadListRequest(args) })
-    }
-  },
-  getThread: {
-    web: { command: "getThread" },
-    desktop: {
-      command: "desktop_thread_detail",
-      args: (args) => ({ request: threadDetailRequest(args) })
-    }
-  },
-  getThreadBlocks: {
-    web: { command: "getThreadBlocks" },
-    desktop: {
-      command: "desktop_thread_blocks",
-      args: (args) => ({ request: threadBlocksRequest(args) })
-    }
-  },
-  getSystemStatus: {
-    web: { command: "getSystemStatus" },
-    desktop: { fromHome: (home) => home.system ?? {} }
-  },
-  getSystemVersion: {
-    web: { command: "getSystemVersion" },
-    desktop: {
-      fromHome: (home) => {
-        const overview = home.overview && typeof home.overview === "object"
-          ? home.overview as Record<string, unknown>
-          : {};
-        return {
-          panel_current: String(overview.version ?? ""),
-          panel_latest: null,
-          panel_update_available: false,
-          codex_current: null,
-          codex_latest: null,
-          codex_update_available: null
-        };
-      }
-    }
-  },
-  getSecurity: {
-    web: { command: "getSecurity" },
-    desktop: { unavailable: "该宿主不支持安全设置" }
-  },
-  saveSecurity: {
-    web: { command: "saveSecurity" },
-    desktop: { unavailable: "该宿主不支持安全设置" }
-  },
-  changePassword: {
-    web: { command: "changePassword" },
-    desktop: { unavailable: "Desktop password command is not implemented" }
-  },
-  listProviders: {
-    web: { command: "listProviders" },
-    desktop: { fromHome: (home) => home.plugins ?? [] }
-  },
-  getClaudeCodeOverview: {
-    web: { command: "getClaudeCodeOverview" },
-    desktop: { command: "desktop_claude_code_overview" }
-  },
-  getPlatformOverview: {
-    web: { command: "getPlatformOverview" },
-    desktop: { fromHome: desktopPlatform }
-  },
-  listPlugins: {
-    web: { command: "listPlugins" },
-    desktop: { fromHome: (home) => home.plugins ?? [] }
-  },
-  getProbeStatus: {
-    web: { command: "getProbeStatus" },
-    desktop: { command: "desktop_probe_status" }
-  },
-  getProbeSettings: {
-    web: { command: "getProbeSettings" },
-    desktop: { command: "desktop_probe_settings" }
-  },
-  saveProbeSettings: {
-    web: { command: "saveProbeSettings" },
-    desktop: {
-      command: "desktop_probe_save_settings",
-      args: (args) => ({ request: camelizeProbeSettings(objectArg(args, "settings")) })
-    }
-  },
-  getProbeLogsDbStatus: {
-    web: { command: "getProbeLogsDbStatus" },
-    desktop: { fromHome: (home) => ({ available: true, data: home.logsDb ?? home.logs_db ?? {} }) }
-  },
-  getProbeEvents: {
-    web: { command: "getProbeEvents" },
-    desktop: {
-      command: "desktop_probe_events",
-      args: (args) => ({ request: { limit: args?.limit ?? 10 } })
-    }
-  },
-  dryRunArchiveDelete: {
-    web: { command: "dryRunArchiveDelete" },
-    desktop: { command: "desktop_archive_delete_dry_run" }
-  },
-  startArchiveDelete: {
-    web: { command: "startArchiveDelete", args: (args) => ({ ...args, confirmed: true }) },
-    desktop: { command: "desktop_archive_delete_execute" }
-  },
-  dryRunHiddenThreadDelete: {
-    web: { command: "dryRunHiddenThreadDelete" },
-    desktop: { command: "desktop_hidden_delete_dry_run" }
-  },
-  startHiddenThreadDelete: {
-    web: { command: "startHiddenThreadDelete", args: (args) => ({ ...args, confirmed: true }) },
-    desktop: { command: "desktop_hidden_delete_execute" }
-  },
-  getUpdateStatus: {
-    web: { command: "getUpdateStatus" },
-    desktop: { command: "desktop_update_status" }
-  },
-  runUpdateAction: {
-    web: { command: "runUpdateAction", args: updateWebArgs },
-    desktop: {
-      fallback: (args) => {
-        const action = args?.action;
-        if (action === "install") {
-          return invokeDesktop("install_update_and_restart");
-        }
-        if (action === "check") {
-          return invokeDesktop("check_update_status");
-        }
-        throw new RuntimeUnavailableError("macOS App 没有 Linux 备份清理动作。", "runUpdateAction");
-      }
-    }
-  },
-  startProbeJob: {
-    web: { command: "startProbeJob", args: probeJobWebArgs },
-    desktop: {
-      fallback: (args) => runtimeRpcViaDesktopRoute(probeJobDesktopRoute(args?.action), args)
-    }
-  },
-  deleteUpload: {
-    web: { command: "deleteUpload" },
-    desktop: {
-      command: "desktop_delete_upload",
-      args: (args) => ({ id: argString(args, "id") })
-    }
-  },
-  createThread: {
-    web: { command: "createThread", args: (args) => ({ ...objectArg(args, "payload"), csrfToken: args?.csrfToken }) },
-    desktop: {
-      command: "desktop_send_message",
-      args: (args) => ({ request: threadSendRequest(args) })
-    }
-  },
-  sendMessage: {
-    web: { command: "sendMessage" },
-    desktop: {
-      command: "desktop_send_message",
-      args: (args) => ({ request: threadSendRequest(args) })
-    }
-  },
-  steerThread: {
-    web: { command: "steerThread" },
-    desktop: {
-      command: "desktop_continue_thread",
-      args: (args) => ({ request: threadSendRequest(args) })
-    }
-  },
-  listFollowUps: {
-    web: { command: "listFollowUps" },
-    desktop: {
-      command: "desktop_list_followups",
-      args: (args) => ({ request: { threadId: argString(args, "threadId"), limit: args?.limit ?? 20 } })
-    }
-  },
-  enqueueFollowUp: {
-    web: { command: "enqueueFollowUp" },
-    desktop: {
-      command: "desktop_enqueue_followup",
-      args: (args) => ({ request: threadSendRequest(args) })
-    }
-  },
-  cancelFollowUp: {
-    web: { command: "cancelFollowUp" },
-    desktop: {
-      command: "desktop_cancel_followup",
-      args: (args) => ({
-        request: {
-          threadId: argString(args, "threadId"),
-          followupId: argString(args, "followUpId")
-        }
-      })
-    }
-  },
-  stopThread: {
-    web: { command: "stopThread" },
-    desktop: {
-      command: "desktop_stop_thread",
-      args: (args) => ({ request: { threadId: argString(args, "threadId"), ...objectArg(args, "payload") } })
-    }
-  },
-  archiveThread: {
-    web: { command: "archiveThread" },
-    desktop: {
-      command: "desktop_archive_thread",
-      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
-    }
-  },
-  restoreThread: {
-    web: { command: "restoreThread" },
-    desktop: {
-      command: "desktop_restore_thread",
-      args: (args) => ({ request: { threadId: argString(args, "threadId") } })
-    }
-  },
-  renameThread: {
-    web: { command: "renameThread" },
-    desktop: {
-      command: "desktop_rename_thread",
-      args: (args) => ({ request: { threadId: argString(args, "threadId"), name: args?.name } })
-    }
-  },
-  forkThread: {
-    web: { command: "forkThread" },
-    desktop: { unavailable: "Desktop fork command is not implemented" }
-  },
-  answerElicitation: {
-    web: { command: "answerElicitation" },
-    desktop: {
-      command: "desktop_answer_elicitation",
-      args: (args) => ({ request: { threadId: argString(args, "threadId"), answers: args?.answers ?? {} } })
-    }
-  },
-  acceptPlan: {
-    web: { command: "acceptPlan" },
-    desktop: {
-      command: "desktop_plan_accept",
-      args: (args) => ({ request: planRequest(args) })
-    }
-  },
-  revisePlan: {
-    web: { command: "revisePlan" },
-    desktop: {
-      command: "desktop_plan_revise",
-      args: (args) => ({ request: planRequest(args) })
-    }
-  },
-  answerApproval: {
-    web: { command: "answerApproval" },
-    desktop: { unavailable: "Desktop approval command is not implemented" }
-  },
-  listModels: {
-    web: { command: "listModels" },
-    desktop: { fromHome: (home) => ({ available: true, data: home.models ?? [] }) }
-  },
-  listPermissionProfiles: {
-    web: { command: "listPermissionProfiles" },
-    desktop: { fromHome: (home) => ({ available: true, data: home.permissionProfiles ?? home.permission_profiles ?? [] }) }
-  },
-  getCodexConfig: {
-    web: { command: "getCodexConfig" },
-    desktop: { fromHome: (home) => ({ available: true, data: home.codexConfig ?? home.codex_config ?? {} }) }
-  },
-  getCodexGoal: {
-    web: { command: "getCodexGoal" },
-    desktop: { fromHome: desktopGoalFromHome }
-  },
-  saveCodexGoal: {
-    web: {
-      command: "saveCodexGoal",
-      args: (args) => ({
-        thread_id: args?.threadId,
-        objective: args?.objective,
-        token_budget: args?.tokenBudget ?? null,
-        csrfToken: args?.csrfToken
-      })
-    },
-    desktop: {
-      command: "desktop_save_goal_command",
-      args: (args) => ({
-        request: {
-          threadId: argString(args, "threadId"),
-          objective: args?.objective,
-          tokenBudget: args?.tokenBudget ?? null
-        }
-      })
-    }
-  },
-  clearCodexGoal: {
-    web: { command: "clearCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
-    desktop: { command: "desktop_clear_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
-  },
-  pauseCodexGoal: {
-    web: { command: "pauseCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
-    desktop: { command: "desktop_pause_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
-  },
-  resumeCodexGoal: {
-    web: { command: "resumeCodexGoal", args: (args) => ({ thread_id: args?.threadId, csrfToken: args?.csrfToken }) },
-    desktop: { command: "desktop_resume_goal_command", args: (args) => ({ threadId: argString(args, "threadId") }) }
-  },
-  listJobs: {
-    web: { command: "listJobs", args: () => ({ limit: 30 }) },
-    desktop: {
-      command: "desktop_jobs",
-      args: () => ({ request: { limit: 30 } })
-    }
-  },
-  getJob: {
-    web: { command: "getJob" },
-    desktop: {
-      command: "desktop_job_detail",
-      args: (args) => ({ request: { id: argString(args, "id") } })
-    }
-  }
-};
-
-async function runtimeRpcViaDesktopRoute<T = unknown>(
-  route: DesktopRoute,
-  args?: RpcArgs,
-): Promise<T> {
-  if (route.unavailable) {
-    throw new RuntimeUnavailableError(route.unavailable, route.unavailable);
-  }
-  if (route.fallback) {
-    return route.fallback(args) as T;
-  }
-  if (route.fromHome) {
-    return route.fromHome(await desktopHome(), args) as T;
-  }
-  if (!route.command) {
-    throw new RuntimeUnavailableError("Desktop command is not configured", "desktop");
-  }
-  return invokeDesktop<T>(route.command, route.args?.(args));
-}
-
-async function runtimeRpc<T = unknown>(
-  name: keyof typeof ROUTES | string,
-  args?: RpcArgs,
-): Promise<T> {
-  const route = ROUTES[name];
-  if (!route) {
-    throw new RuntimeUnavailableError(`Unknown runtime RPC: ${name}`, name);
-  }
-  return runtimeDispatch<T>({
-    webCommand: route.web.command,
-    webArgs: route.web.args?.(args) ?? args,
-    webUnavailable: route.web.unavailable,
-    desktopCommand: route.desktop.command,
-    desktopArgs: route.desktop.args?.(args),
-    desktopFallback: route.desktop.fallback
-      ? () => route.desktop.fallback?.(args) as T | Promise<T>
-      : route.desktop.fromHome
-        ? async () => route.desktop.fromHome?.(await desktopHome(), args) as T
-        : undefined,
-    desktopUnavailable: route.desktop.unavailable
-  });
+    notifications,
+    logs_db: logsDb
+  };
 }
 
 function isMissingEndpoint(error: unknown): boolean {
   return error instanceof RuntimeUnavailableError || error instanceof ApiError && [404, 405, 501].includes(error.status);
 }
 
-function normalizeOptionalResult<T>(payload: T): OptionalResult<T> {
-  if (payload && typeof payload === "object" && "available" in payload && (payload as { available?: unknown }).available === false) {
-    const unavailable = payload as { reason?: unknown; error?: unknown };
+function normalizeOptionalResult<T>(payload: unknown): OptionalResult<T> {
+  if (payload && typeof payload === "object" && "available" in payload && ("data" in payload || "error" in payload || "reason" in payload)) {
+    const wrapped = payload as { available?: unknown; data?: T; reason?: unknown; error?: unknown };
+    if (wrapped.available === false) {
+      return {
+        available: false,
+        reason: typeof wrapped.reason === "string" ? wrapped.reason : null,
+        error: typeof wrapped.error === "string" ? wrapped.error : undefined
+      };
+    }
     return {
-      available: false,
-      reason: typeof unavailable.reason === "string" ? unavailable.reason : null,
-      error: typeof unavailable.error === "string" ? unavailable.error : undefined
+        available: true,
+        data: wrapped.data as T
     };
   }
-  return { available: true, data: payload };
+  return { available: true, data: payload as T };
 }
 
 export type RuntimeCapabilityMatrix = {
@@ -733,54 +138,34 @@ export type RuntimeCapabilityMatrix = {
   approvalActions: boolean;
 };
 
-const DESKTOP_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
-  runtimeKind: "desktop",
-  webAuth: false,
-  logout: false,
-  securitySettings: false,
-  publicEndpointStatus: false,
-  codexStatePaths: false,
-  linuxBackupPrune: false,
-  linuxUpdateLabels: false,
-  forkAction: false,
-  approvalActions: false
-};
-
-const WEB_RUNTIME_CAPABILITIES: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  webAuth: true,
-  logout: true,
-  securitySettings: true,
-  publicEndpointStatus: true,
-  codexStatePaths: true,
-  linuxBackupPrune: true,
-  linuxUpdateLabels: true,
-  forkAction: true,
-  approvalActions: true
-};
-
-export function runtimeCapabilities(): RuntimeCapabilityMatrix {
-  return getRuntimeKind() === "desktop"
-    ? DESKTOP_RUNTIME_CAPABILITIES
-    : WEB_RUNTIME_CAPABILITIES;
-}
-
-export function runtimeCapabilitiesForRuntime(
-  desktop: boolean | RuntimeCapabilityMatrix["runtimeKind"] = false,
-): RuntimeCapabilityMatrix {
-  if (desktop === "desktop") return DESKTOP_RUNTIME_CAPABILITIES;
-  if (desktop === "web") return WEB_RUNTIME_CAPABILITIES;
-  return desktop ? DESKTOP_RUNTIME_CAPABILITIES : WEB_RUNTIME_CAPABILITIES;
-}
-
-export function runtimeCapabilitiesFromSystemStatus(
-  status?: Pick<SystemStatus, "capabilities"> | null,
-  fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
-): RuntimeCapabilityMatrix {
-  const core = status?.capabilities;
-  if (!core) return fallback;
+function systemCapabilitiesForRuntime(kind: RuntimeCapabilityMatrix["runtimeKind"]): SystemCapabilities {
+  const linuxWebHost = kind === "web";
   return {
-    runtimeKind: fallback.runtimeKind,
+    threads: true,
+    jobs: true,
+    probe: true,
+    status: true,
+    settings: true,
+    job_history: true,
+    app_updater: true,
+    web_auth: linuxWebHost,
+    security_settings: linuxWebHost,
+    turnstile: linuxWebHost,
+    systemd: linuxWebHost,
+    nginx: linuxWebHost,
+    public_endpoint: linuxWebHost,
+    admin_password: linuxWebHost,
+    linux_update_job: linuxWebHost,
+    prune_backups: linuxWebHost
+  };
+}
+
+function runtimeCapabilitiesFromCore(
+  core: SystemCapabilities,
+  runtimeKind: RuntimeCapabilityMatrix["runtimeKind"],
+): RuntimeCapabilityMatrix {
+  return {
+    runtimeKind,
     webAuth: core.web_auth,
     logout: core.web_auth,
     securitySettings: core.security_settings || core.turnstile || core.admin_password,
@@ -791,6 +176,27 @@ export function runtimeCapabilitiesFromSystemStatus(
     forkAction: core.web_auth,
     approvalActions: core.web_auth
   };
+}
+
+export function runtimeCapabilities(): RuntimeCapabilityMatrix {
+  const runtimeKind = getRuntimeKind();
+  return runtimeCapabilitiesFromCore(systemCapabilitiesForRuntime(runtimeKind), runtimeKind);
+}
+
+export function runtimeCapabilitiesForRuntime(
+  desktop: boolean | RuntimeCapabilityMatrix["runtimeKind"] = false,
+): RuntimeCapabilityMatrix {
+  const runtimeKind = desktop === true || desktop === "desktop" ? "desktop" : "web";
+  return runtimeCapabilitiesFromCore(systemCapabilitiesForRuntime(runtimeKind), runtimeKind);
+}
+
+export function runtimeCapabilitiesFromSystemStatus(
+  status?: Pick<SystemStatus, "capabilities"> | null,
+  fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
+): RuntimeCapabilityMatrix {
+  const core = status?.capabilities;
+  if (!core) return fallback;
+  return runtimeCapabilitiesFromCore(core, fallback.runtimeKind);
 }
 
 function currentRuntimeCapabilities(): RuntimeCapabilityMatrix {
@@ -805,6 +211,9 @@ export async function getPublicSettings(): Promise<PublicSettings> {
   if (USE_DEMO) {
     return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
   }
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
+    return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
+  }
   return runtimeRpc<PublicSettings>("getPublicSettings");
 }
 
@@ -814,11 +223,15 @@ export async function login(username: string, password: string, turnstileToken?:
       ? desktopSessionUser()
       : { id: "dev", username, csrf_token: "dev-csrf" };
   }
-  return runtimeRpc<SessionUser>("login", { username, password, turnstileToken });
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
+    return desktopSessionUser();
+  }
+  return runtimeRpc<SessionUser>("login", { username, password, turnstile_token: turnstileToken ?? null });
 }
 
 export async function logout(csrfToken?: string | null): Promise<void> {
   if (USE_DEMO) return;
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") return;
   await runtimeRpc("logout", { csrfToken });
 }
 
@@ -828,12 +241,20 @@ export async function me(): Promise<SessionUser> {
       ? desktopSessionUser()
       : { id: "dev", username: "admin", csrf_token: "dev-csrf" };
   }
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
+    return desktopSessionUser();
+  }
   return runtimeRpc<SessionUser>("me");
 }
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);
-  return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
+  return runtimeDispatch<ThreadSummary[]>({
+    command: "listThreads",
+    webArgs: { status, q, limit: 120 },
+    desktopCommand: "desktop_threads",
+    desktopArgs: { request: { status, query: q, limit: 120 } }
+  });
 }
 
 export type ThreadDetailOptions = {
@@ -886,7 +307,12 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
       ]
     };
   }
-  return runtimeRpc<ThreadDetail>("getThread", { id, options });
+  return runtimeDispatch<ThreadDetail>({
+    command: "getThread",
+    webArgs: { id, options },
+    desktopCommand: "desktop_thread_detail",
+    desktopArgs: desktopThreadRequest(id, options)
+  });
 }
 
 export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOptions, "limit" | "before"> = {}): Promise<ThreadBlockPage> {
@@ -900,7 +326,12 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
       before_cursor: detail.before_cursor ?? null
     };
   }
-  return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
+  return runtimeDispatch<ThreadBlockPage>({
+    command: "getThreadBlocks",
+    webArgs: { id, options },
+    desktopCommand: "desktop_thread_blocks",
+    desktopArgs: { request: { id, limit: options.limit, before: options.before } }
+  });
 }
 
 export async function getSystemStatus(): Promise<SystemStatus> {
@@ -947,7 +378,10 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
         : ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
     };
   }
-  return runtimeRpc<UpdateStatus>("getUpdateStatus");
+  return runtimeDispatch<UpdateStatus>({
+    command: "getUpdateStatus",
+    desktopCommand: "desktop_update_status"
+  });
 }
 
 export async function getSecurity(): Promise<SecuritySettings> {
@@ -1112,7 +546,7 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
       data: demoProbeStatus()
     };
   }
-  return normalizeOptionalResult(await runtimeRpc<ProbeStatus>("getProbeStatus"));
+  return normalizeOptionalResult<ProbeStatus>(await runtimeRpc<ProbeStatus | OptionalResult<ProbeStatus>>("getProbeStatus"));
 }
 
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
@@ -1122,7 +556,14 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
       data: demoProbeSettings()
     };
   }
-  return normalizeOptionalResult(await runtimeRpc<ProbeSettings>("getProbeSettings"));
+  const payload = await runtimeDispatch<ProbeSettings | OptionalResult<ProbeSettings>>({
+    command: "getProbeSettings",
+    desktopCommand: "desktop_probe_settings"
+  });
+  const result = normalizeOptionalResult<ProbeSettings>(payload);
+  return result.available
+    ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeSettings }
+    : result;
 }
 
 function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Partial<ProbeSettings> {
@@ -1139,12 +580,61 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
   };
 }
 
+function codexGoalWebArgs(threadId: string, csrfToken?: string | null) {
+  return { thread_id: threadId, csrfToken };
+}
+
+function codexGoalThreadArg(threadId: string) {
+  return { threadId };
+}
+
+function codexGoalSaveWebArgs(threadId: string, goal: CodexGoalSaveInput, csrfToken?: string | null) {
+  return {
+    thread_id: threadId,
+    objective: goal.objective,
+    token_budget: goal.token_budget ?? null,
+    csrfToken
+  };
+}
+
+function codexGoalSaveDesktopArgs(threadId: string, goal: CodexGoalSaveInput) {
+  return {
+    request: {
+      threadId,
+      objective: goal.objective,
+      tokenBudget: goal.token_budget ?? null
+    }
+  };
+}
+
+function desktopThreadRequest(id: string, options: ThreadDetailOptions = {}) {
+  return {
+    request: {
+      id,
+      limit: options.limit,
+      before: options.before,
+      full: options.full
+    }
+  };
+}
+
+function desktopThreadIdArg(threadId: string) {
+  return { threadId };
+}
+
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
-  return runtimeRpc<ProbeSettings>("saveProbeSettings", {
-    settings: normalizeProbeSettingsSavePayload(settings),
-    csrfToken
+  const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
+  const payload = await runtimeDispatch<ProbeSettings>({
+    command: "saveProbeSettings",
+    webArgs: {
+      settings: normalizedSettings,
+      csrfToken
+    },
+    desktopCommand: "desktop_probe_save_settings",
+    desktopArgs: { request: normalizedSettings }
   });
+  return normalizeProbeRuntimePayload(payload) as ProbeSettings;
 }
 
 export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
@@ -1176,7 +666,11 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
       recent_result: "dry-run: would_delete_rows=6"
     }
   };
-  return normalizeOptionalResult(await runtimeRpc<ProbeLogsDbStatus>("getProbeLogsDbStatus"));
+  const payload = await runtimeRpc<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("getProbeLogsDbStatus");
+  const result = normalizeOptionalResult<ProbeLogsDbStatus>(payload);
+  return result.available
+    ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeLogsDbStatus }
+    : result;
 }
 
 export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEventsResponse>> {
@@ -1269,7 +763,7 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
       }
     };
   }
-  return normalizeOptionalResult(await runtimeRpc<ProbeEventsResponse>("getProbeEvents", { limit }));
+  return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("getProbeEvents", { limit }));
 }
 
 export async function saveSecurity(settings: Partial<SecuritySettings> & { turnstile_secret_key?: string }, csrfToken?: string | null) {
@@ -1280,11 +774,21 @@ export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<Ar
   if (USE_DEMO) {
     return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };
   }
-  return runtimeRpc<ArchiveDeletePlan>("dryRunArchiveDelete", { csrfToken });
+  return runtimeDispatch<ArchiveDeletePlan>({
+    command: "dryRunArchiveDelete",
+    webArgs: { csrfToken },
+    desktopCommand: "desktop_archive_delete_dry_run",
+    desktopArgs: undefined
+  });
 }
 
 export async function startArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeleteResult> {
-  return runtimeRpc<ArchiveDeleteResult>("startArchiveDelete", { csrfToken });
+  return runtimeDispatch<ArchiveDeleteResult>({
+    command: "startArchiveDelete",
+    webArgs: { confirmed: true, csrfToken },
+    desktopCommand: "desktop_archive_delete_execute",
+    desktopArgs: undefined
+  });
 }
 
 export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
@@ -1301,7 +805,12 @@ export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promi
       integrity: "ok"
     };
   }
-  return runtimeRpc<HiddenThreadDeletePlan>("dryRunHiddenThreadDelete", { csrfToken });
+  return runtimeDispatch<HiddenThreadDeletePlan>({
+    command: "dryRunHiddenThreadDelete",
+    webArgs: { csrfToken },
+    desktopCommand: "desktop_hidden_delete_dry_run",
+    desktopArgs: undefined
+  });
 }
 
 export async function startHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeleteResult> {
@@ -1330,7 +839,12 @@ export async function startHiddenThreadDelete(csrfToken?: string | null): Promis
       deleted_rollout_files: 4
     };
   }
-  return runtimeRpc<HiddenThreadDeleteResult>("startHiddenThreadDelete", { csrfToken });
+  return runtimeDispatch<HiddenThreadDeleteResult>({
+    command: "startHiddenThreadDelete",
+    webArgs: { confirmed: true, csrfToken },
+    desktopCommand: "desktop_hidden_delete_execute",
+    desktopArgs: undefined
+  });
 }
 
 export type UnifiedUpdateAction = "check" | "install" | "prune";
@@ -1346,7 +860,19 @@ export type UpdateActionResult = {
 
 export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<UpdateActionResult> {
   if (USE_DEMO) return { job_id: `update-${action}-demo` };
-  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>("runUpdateAction", { action, csrfToken });
+  if (currentRuntimeCapabilities().runtimeKind === "desktop" && action === "prune") {
+    throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
+  }
+  const desktopCommand = action === "install"
+    ? "install_update_and_restart"
+    : action === "check"
+      ? "check_update_status"
+      : undefined;
+  const result = await runtimeDispatch<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>({
+    command: "runUpdateAction",
+    webArgs: { action, csrfToken },
+    desktopCommand,
+  });
   return {
     ...jobIdFromRuntimeResult(result, `update-${action}`),
     ...(result.status ? { status: result.status } : {})
@@ -1355,7 +881,22 @@ export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: s
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>("startProbeJob", { action, csrfToken });
+  const result = await runtimeDispatch<{ job_id?: string | null; jobId?: string | null }>({
+    command: "startProbeJob",
+    webArgs: { action, csrfToken },
+    desktopCommand: action === "bark-test"
+      ? "desktop_probe_bark_test"
+      : action === "hooks-install"
+        ? "desktop_probe_hooks_install"
+        : action === "logs-db-dry-run" || action === "logs-db-execute"
+          ? "desktop_probe_logs_db_maintain"
+          : undefined,
+    desktopArgs: action === "logs-db-dry-run"
+      ? { request: { dryRun: true, compact: false } }
+      : action === "logs-db-execute"
+        ? { request: { dryRun: false, compact: true } }
+        : undefined
+  });
   return jobIdFromRuntimeResult(result, `probe-${action}`);
 }
 
@@ -1392,27 +933,52 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
 
 export async function deleteUpload(id: string, csrfToken?: string | null): Promise<{ ok: boolean; deleted: boolean }> {
   if (USE_DEMO) return { ok: true, deleted: true };
-  return runtimeRpc<{ ok: boolean; deleted: boolean }>("deleteUpload", { id, csrfToken });
+  return runtimeDispatch<{ ok: boolean; deleted: boolean }>({
+    command: "deleteUpload",
+    webArgs: { id, csrfToken },
+    desktopCommand: "desktop_delete_upload",
+    desktopArgs: { id }
+  });
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("createThread", { payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "createThread",
+    webArgs: { payload, csrfToken },
+    desktopCommand: "desktop_send_message",
+    desktopArgs: { request: { ...payload, threadId: null } }
+  });
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("sendMessage", { threadId, payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "sendMessage",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_send_message",
+    desktopArgs: { request: { ...payload, threadId } }
+  });
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("steerThread", { threadId, payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "steerThread",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_continue_thread",
+    desktopArgs: { request: { ...payload, threadId } }
+  });
 }
 
 export async function listFollowUps(threadId: string): Promise<FollowUpQueueState> {
   if (USE_DEMO) return { items: [] };
-  const result = await runtimeRpc<FollowUpQueueState | FollowUpQueueItem[]>("listFollowUps", { threadId });
+  const result = await runtimeDispatch<FollowUpQueueState | FollowUpQueueItem[]>({
+    command: "listFollowUps",
+    webArgs: { threadId },
+    desktopCommand: "desktop_list_followups",
+    desktopArgs: { request: { threadId, limit: 20 } }
+  });
   return Array.isArray(result) ? { items: result } : result;
 }
 
@@ -1427,37 +993,76 @@ export async function enqueueFollowUp(threadId: string, payload: ThreadSendPaylo
       created_at: Math.floor(Date.now() / 1000)
     };
   }
-  return runtimeRpc<FollowUpQueueItem>("enqueueFollowUp", { threadId, payload, csrfToken });
+  return runtimeDispatch<FollowUpQueueItem>({
+    command: "enqueueFollowUp",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_enqueue_followup",
+    desktopArgs: { request: { ...payload, threadId } }
+  });
 }
 
 export async function cancelFollowUp(threadId: string, followUpId: string, csrfToken?: string | null): Promise<{ ok: boolean }> {
   if (USE_DEMO) return { ok: true };
-  return runtimeRpc<{ ok: boolean }>("cancelFollowUp", { threadId, followUpId, csrfToken });
+  return runtimeDispatch<{ ok: boolean }>({
+    command: "cancelFollowUp",
+    webArgs: { threadId, followUpId, csrfToken },
+    desktopCommand: "desktop_cancel_followup",
+    desktopArgs: { request: { threadId, followUpId } }
+  });
 }
 
 export async function stopThread(threadId: string, payload: { turn_id?: string | null; job_id?: string | null }, csrfToken?: string | null) {
   if (USE_DEMO) return { ok: true };
-  return runtimeRpc("stopThread", { threadId, payload, csrfToken });
+  return runtimeDispatch({
+    command: "stopThread",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_stop_thread",
+    desktopArgs: { request: { threadId, turn_id: payload.turn_id, job_id: payload.job_id } }
+  });
 }
 
 export async function archiveThread(threadId: string, csrfToken?: string | null) {
-  return runtimeRpc("archiveThread", { threadId, csrfToken });
+  return runtimeDispatch({
+    command: "archiveThread",
+    webArgs: { threadId, csrfToken },
+    desktopCommand: "desktop_archive_thread",
+    desktopArgs: desktopThreadIdArg(threadId)
+  });
 }
 
 export async function restoreThread(threadId: string, csrfToken?: string | null) {
-  return runtimeRpc("restoreThread", { threadId, csrfToken });
+  return runtimeDispatch({
+    command: "restoreThread",
+    webArgs: { threadId, csrfToken },
+    desktopCommand: "desktop_restore_thread",
+    desktopArgs: desktopThreadIdArg(threadId)
+  });
 }
 
 export async function renameThread(threadId: string, name: string, csrfToken?: string | null) {
-  return runtimeRpc("renameThread", { threadId, name, csrfToken });
+  return runtimeDispatch({
+    command: "renameThread",
+    webArgs: { threadId, name, csrfToken },
+    desktopCommand: "desktop_rename_thread",
+    desktopArgs: { threadId, name }
+  });
 }
 
 export async function forkThread(threadId: string, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("forkThread", { threadId, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "forkThread",
+    webArgs: { threadId, csrfToken },
+    desktopUnavailable: "Desktop fork command is not implemented"
+  });
 }
 
 export async function answerElicitation(threadId: string, answers: Record<string, string[]>, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("answerElicitation", { threadId, answers, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "answerElicitation",
+    webArgs: { threadId, answers, csrfToken },
+    desktopCommand: "desktop_answer_elicitation",
+    desktopArgs: { request: { threadId, answers } }
+  });
 }
 
 export async function acceptPlan(
@@ -1465,7 +1070,12 @@ export async function acceptPlan(
   payload: { turn_id?: string | null; item_id?: string | null },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("acceptPlan", { threadId, payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "acceptPlan",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_plan_accept",
+    desktopArgs: { request: { threadId, turn_id: payload.turn_id, item_id: payload.item_id } }
+  });
 }
 
 export async function revisePlan(
@@ -1473,7 +1083,12 @@ export async function revisePlan(
   payload: { turn_id?: string | null; item_id?: string | null; instructions: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("revisePlan", { threadId, payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "revisePlan",
+    webArgs: { threadId, payload, csrfToken },
+    desktopCommand: "desktop_plan_revise",
+    desktopArgs: { request: { threadId, turn_id: payload.turn_id, item_id: payload.item_id, instructions: payload.instructions } }
+  });
 }
 
 export async function answerApproval(
@@ -1481,7 +1096,11 @@ export async function answerApproval(
   payload: { turn_id?: string | null; item_id?: string | null; request_id?: string | null; decision: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("answerApproval", { threadId, payload, csrfToken });
+  return runtimeDispatch<BridgeActionResult>({
+    command: "answerApproval",
+    webArgs: { threadId, payload, csrfToken },
+    desktopUnavailable: "Desktop approval command is not implemented"
+  });
 }
 
 export async function changePassword(current_password: string, new_password: string, csrfToken?: string | null) {
@@ -1563,7 +1182,13 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
 
 export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
-  return runtimeRpc<CodexGoal>("getCodexGoal", { threadId });
+  if (currentRuntimeCapabilities().runtimeKind === "desktop") {
+    const home = await runtimeDispatch<{ goal?: CodexGoal | null }>({
+      desktopCommand: "desktop_home"
+    });
+    return home.goal ?? demoCodexGoal(threadId);
+  }
+  return runtimeRpc<CodexGoal>("getCodexGoal", { thread_id: threadId });
 }
 
 export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1576,11 +1201,11 @@ export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, 
       status: "active"
     };
   }
-  return runtimeRpc<CodexGoal>("saveCodexGoal", {
-    threadId,
-    objective: goal.objective,
-    tokenBudget: goal.token_budget ?? null,
-    csrfToken
+  return runtimeDispatch<CodexGoal>({
+    command: "saveCodexGoal",
+    webArgs: codexGoalSaveWebArgs(threadId, goal, csrfToken),
+    desktopCommand: "desktop_save_goal_command",
+    desktopArgs: codexGoalSaveDesktopArgs(threadId, goal)
   });
 }
 
@@ -1594,7 +1219,12 @@ export async function clearCodexGoal(threadId: string, csrfToken?: string | null
       status: "cleared"
     };
   }
-  return runtimeRpc<CodexGoal>("clearCodexGoal", { threadId, csrfToken });
+  return runtimeDispatch<CodexGoal>({
+    command: "clearCodexGoal",
+    webArgs: codexGoalWebArgs(threadId, csrfToken),
+    desktopCommand: "desktop_clear_goal_command",
+    desktopArgs: codexGoalThreadArg(threadId)
+  });
 }
 
 export async function pauseCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1605,7 +1235,12 @@ export async function pauseCodexGoal(threadId: string, csrfToken?: string | null
       status: "paused"
     };
   }
-  return runtimeRpc<CodexGoal>("pauseCodexGoal", { threadId, csrfToken });
+  return runtimeDispatch<CodexGoal>({
+    command: "pauseCodexGoal",
+    webArgs: codexGoalWebArgs(threadId, csrfToken),
+    desktopCommand: "desktop_pause_goal_command",
+    desktopArgs: codexGoalThreadArg(threadId)
+  });
 }
 
 export async function resumeCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -1616,7 +1251,12 @@ export async function resumeCodexGoal(threadId: string, csrfToken?: string | nul
       status: "active"
     };
   }
-  return runtimeRpc<CodexGoal>("resumeCodexGoal", { threadId, csrfToken });
+  return runtimeDispatch<CodexGoal>({
+    command: "resumeCodexGoal",
+    webArgs: codexGoalWebArgs(threadId, csrfToken),
+    desktopCommand: "desktop_resume_goal_command",
+    desktopArgs: codexGoalThreadArg(threadId)
+  });
 }
 
 export function subscribeThreadEvents(
@@ -1666,7 +1306,13 @@ export async function listJobs(): Promise<JobRecord[]> {
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }
-  return runtimeRpc<JobRecord[]>("listJobs");
+  const payload = await runtimeDispatch<JobRecord[] | OptionalResult<JobRecord[]>>({
+    command: "listJobs",
+    desktopCommand: "desktop_jobs",
+    desktopArgs: { request: { limit: 30 } }
+  });
+  const result = normalizeOptionalResult<JobRecord[]>(payload);
+  return result.available && Array.isArray(result.data) ? result.data : [];
 }
 
 export async function getJob(id: string): Promise<JobRecord> {
@@ -1681,7 +1327,12 @@ export async function getJob(id: string): Promise<JobRecord> {
       error: "demo job not found"
     };
   }
-  return runtimeRpc<JobRecord>("getJob", { id });
+  return runtimeDispatch<JobRecord>({
+    command: "getJob",
+    webArgs: { id },
+    desktopCommand: "desktop_job_detail",
+    desktopArgs: { request: { id } }
+  });
 }
 
 function normalizeModels(value: unknown): CodexModel[] {

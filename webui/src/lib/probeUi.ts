@@ -89,52 +89,56 @@ export const PROBE_MAC_DEFAULTS = {
 } as const;
 
 export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsDraft {
+  const codex = settings.codex ?? {};
+  const probe = settings.probe ?? {};
+  const notifications = settings.notifications ?? {};
+  const logsDb = settings.logs_db ?? {};
   return {
     codex: {
       home: configuredCodexHomeDraftValue(settings),
-      workspace: settings.codex.workspace ?? "",
-      host_label: settings.codex.host_label ?? ""
+      workspace: stringOrEmpty(codex.workspace),
+      host_label: stringOrEmpty(codex.host_label)
     },
     probe: {
-      enabled: Boolean(settings.probe.enabled),
-      poll_seconds: toBoundedInteger(settings.probe.poll_seconds, 15) ?? 15,
-      recent_limit: toBoundedInteger(settings.probe.recent_limit, 50) ?? 50
+      enabled: Boolean(probe.enabled),
+      poll_seconds: toBoundedInteger(probe.poll_seconds, 15) ?? 15,
+      recent_limit: toBoundedInteger(probe.recent_limit, 50) ?? 50
     },
     hooks: {
-      manage_stop_hook: settings.probe.hooks?.manage_stop_hook !== false
+      manage_stop_hook: probe.hooks?.manage_stop_hook !== false
     },
     notifications: {
-      enabled: Boolean(settings.notifications.enabled || settings.notifications.device_key_configured),
+      enabled: Boolean(notifications.enabled || notifications.device_key_configured),
       device_key: "",
-      device_key_configured: Boolean(settings.notifications.device_key_configured),
-      server_url: settings.notifications.server_url ?? "https://api.day.app",
-      sound: stringOrEmpty(settings.notifications.sound),
-      group: typeof settings.notifications.group === "string" ? settings.notifications.group : "NexusHub",
-      url: stringOrEmpty(settings.notifications.url),
-      notify_completion: settings.notifications.notify_completion !== false,
-      notify_reply_needed: settings.notifications.notify_reply_needed !== false,
-      notify_recoverable: settings.notifications.notify_recoverable !== false
+      device_key_configured: Boolean(notifications.device_key_configured),
+      server_url: notifications.server_url ?? "https://api.day.app",
+      sound: stringOrEmpty(notifications.sound),
+      group: typeof notifications.group === "string" ? notifications.group : "NexusHub",
+      url: stringOrEmpty(notifications.url),
+      notify_completion: notifications.notify_completion !== false,
+      notify_reply_needed: notifications.notify_reply_needed !== false,
+      notify_recoverable: notifications.notify_recoverable !== false
     },
     observability: {
-      hook_event_max_lines: toBoundedInteger(settings.probe.observability?.hook_event_max_lines, PROBE_MAC_DEFAULTS.observability.hook_event_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_event_max_lines,
-      hook_cooldown_max_lines: toBoundedInteger(settings.probe.observability?.hook_cooldown_max_lines, PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines,
-      log_max_bytes: toBoundedInteger(settings.probe.observability?.log_max_bytes, PROBE_MAC_DEFAULTS.observability.log_max_bytes) ?? PROBE_MAC_DEFAULTS.observability.log_max_bytes
+      hook_event_max_lines: toBoundedInteger(probe.observability?.hook_event_max_lines, PROBE_MAC_DEFAULTS.observability.hook_event_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_event_max_lines,
+      hook_cooldown_max_lines: toBoundedInteger(probe.observability?.hook_cooldown_max_lines, PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines) ?? PROBE_MAC_DEFAULTS.observability.hook_cooldown_max_lines,
+      log_max_bytes: toBoundedInteger(probe.observability?.log_max_bytes, PROBE_MAC_DEFAULTS.observability.log_max_bytes) ?? PROBE_MAC_DEFAULTS.observability.log_max_bytes
     },
     logs_db: {
-      enabled: Boolean(settings.logs_db.enabled),
-      retention_days: toBoundedInteger(settings.logs_db.retention_days, PROBE_MAC_DEFAULTS.logs_db.retention_days) ?? PROBE_MAC_DEFAULTS.logs_db.retention_days,
-      maintenance_interval_hours: toBoundedInteger(settings.logs_db.maintenance_interval_hours, PROBE_MAC_DEFAULTS.logs_db.maintenance_interval_hours) ?? PROBE_MAC_DEFAULTS.logs_db.maintenance_interval_hours,
-      maintain_on_codex_exit: settings.logs_db.maintain_on_codex_exit !== false,
-      codex_exit_grace_seconds: toBoundedInteger(settings.logs_db.codex_exit_grace_seconds, PROBE_MAC_DEFAULTS.logs_db.codex_exit_grace_seconds) ?? PROBE_MAC_DEFAULTS.logs_db.codex_exit_grace_seconds,
-      codex_exit_max_wait_seconds: toBoundedInteger(settings.logs_db.codex_exit_max_wait_seconds, PROBE_MAC_DEFAULTS.logs_db.codex_exit_max_wait_seconds) ?? PROBE_MAC_DEFAULTS.logs_db.codex_exit_max_wait_seconds,
-      delete_chunk_rows: toBoundedInteger(settings.logs_db.delete_chunk_rows, PROBE_MAC_DEFAULTS.logs_db.delete_chunk_rows) ?? PROBE_MAC_DEFAULTS.logs_db.delete_chunk_rows,
-      max_delete_rows_per_run: toBoundedInteger(settings.logs_db.max_delete_rows_per_run, PROBE_MAC_DEFAULTS.logs_db.max_delete_rows_per_run) ?? PROBE_MAC_DEFAULTS.logs_db.max_delete_rows_per_run,
-      busy_timeout_ms: toBoundedInteger(settings.logs_db.busy_timeout_ms, PROBE_MAC_DEFAULTS.logs_db.busy_timeout_ms) ?? PROBE_MAC_DEFAULTS.logs_db.busy_timeout_ms,
-      auto_compact_when_codex_closed: settings.logs_db.auto_compact_when_codex_closed !== false,
-      compact_interval_hours: toBoundedInteger(settings.logs_db.compact_interval_hours, PROBE_MAC_DEFAULTS.logs_db.compact_interval_hours) ?? PROBE_MAC_DEFAULTS.logs_db.compact_interval_hours,
-      compact_min_freelist_mb: toBoundedInteger(settings.logs_db.compact_min_freelist_mb, PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_mb) ?? PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_mb,
-      compact_min_freelist_ratio_percent: toBoundedInteger(settings.logs_db.compact_min_freelist_ratio_percent, PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_ratio_percent) ?? PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_ratio_percent,
-      minimum_free_space_mb: toBoundedInteger(settings.logs_db.minimum_free_space_mb, PROBE_MAC_DEFAULTS.logs_db.minimum_free_space_mb) ?? PROBE_MAC_DEFAULTS.logs_db.minimum_free_space_mb
+      enabled: Boolean(logsDb.enabled),
+      retention_days: toBoundedInteger(logsDb.retention_days, PROBE_MAC_DEFAULTS.logs_db.retention_days) ?? PROBE_MAC_DEFAULTS.logs_db.retention_days,
+      maintenance_interval_hours: toBoundedInteger(logsDb.maintenance_interval_hours, PROBE_MAC_DEFAULTS.logs_db.maintenance_interval_hours) ?? PROBE_MAC_DEFAULTS.logs_db.maintenance_interval_hours,
+      maintain_on_codex_exit: logsDb.maintain_on_codex_exit !== false,
+      codex_exit_grace_seconds: toBoundedInteger(logsDb.codex_exit_grace_seconds, PROBE_MAC_DEFAULTS.logs_db.codex_exit_grace_seconds) ?? PROBE_MAC_DEFAULTS.logs_db.codex_exit_grace_seconds,
+      codex_exit_max_wait_seconds: toBoundedInteger(logsDb.codex_exit_max_wait_seconds, PROBE_MAC_DEFAULTS.logs_db.codex_exit_max_wait_seconds) ?? PROBE_MAC_DEFAULTS.logs_db.codex_exit_max_wait_seconds,
+      delete_chunk_rows: toBoundedInteger(logsDb.delete_chunk_rows, PROBE_MAC_DEFAULTS.logs_db.delete_chunk_rows) ?? PROBE_MAC_DEFAULTS.logs_db.delete_chunk_rows,
+      max_delete_rows_per_run: toBoundedInteger(logsDb.max_delete_rows_per_run, PROBE_MAC_DEFAULTS.logs_db.max_delete_rows_per_run) ?? PROBE_MAC_DEFAULTS.logs_db.max_delete_rows_per_run,
+      busy_timeout_ms: toBoundedInteger(logsDb.busy_timeout_ms, PROBE_MAC_DEFAULTS.logs_db.busy_timeout_ms) ?? PROBE_MAC_DEFAULTS.logs_db.busy_timeout_ms,
+      auto_compact_when_codex_closed: logsDb.auto_compact_when_codex_closed !== false,
+      compact_interval_hours: toBoundedInteger(logsDb.compact_interval_hours, PROBE_MAC_DEFAULTS.logs_db.compact_interval_hours) ?? PROBE_MAC_DEFAULTS.logs_db.compact_interval_hours,
+      compact_min_freelist_mb: toBoundedInteger(logsDb.compact_min_freelist_mb, PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_mb) ?? PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_mb,
+      compact_min_freelist_ratio_percent: toBoundedInteger(logsDb.compact_min_freelist_ratio_percent, PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_ratio_percent) ?? PROBE_MAC_DEFAULTS.logs_db.compact_min_freelist_ratio_percent,
+      minimum_free_space_mb: toBoundedInteger(logsDb.minimum_free_space_mb, PROBE_MAC_DEFAULTS.logs_db.minimum_free_space_mb) ?? PROBE_MAC_DEFAULTS.logs_db.minimum_free_space_mb
     }
   };
 }
@@ -462,7 +466,7 @@ function stringOrEmpty(value: unknown): string {
 }
 
 function configuredCodexHomeDraftValue(settings: ProbeSettings): string {
-  const codex = settings.codex as ProbeSettings["codex"] & Record<string, unknown>;
+  const codex = (settings.codex ?? {}) as ProbeSettings["codex"] & Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(codex, "configured_codex_home")) {
     return stringOrEmpty(codex.configured_codex_home);
   }

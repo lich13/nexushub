@@ -115,8 +115,10 @@ pub struct ThreadListRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopGoalRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
     pub objective: Option<String>,
+    #[serde(alias = "tokenBudget", alias = "token_budget")]
     pub token_budget: Option<u64>,
 }
 
@@ -262,38 +264,51 @@ pub struct ThreadBlocksRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSendMessageRequest {
+    #[serde(default, alias = "threadId", alias = "thread_id")]
     pub thread_id: Option<String>,
     pub message: String,
     #[serde(default)]
     pub attachments: Vec<String>,
     pub model: Option<String>,
+    #[serde(alias = "service_tier")]
     pub service_tier: Option<String>,
+    #[serde(alias = "reasoning_effort")]
     pub reasoning_effort: Option<String>,
     pub cwd: Option<String>,
+    #[serde(alias = "permission_profile")]
     pub permission_profile: Option<String>,
+    #[serde(alias = "approval_policy")]
     pub approval_policy: Option<String>,
+    #[serde(alias = "sandbox_mode")]
     pub sandbox_mode: Option<String>,
+    #[serde(alias = "network_access")]
     pub network_access: Option<bool>,
+    #[serde(alias = "collaboration_mode")]
     pub collaboration_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopStopRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
+    #[serde(alias = "turn_id")]
     pub turn_id: Option<String>,
+    #[serde(alias = "job_id")]
     pub job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopThreadIdRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRenameThreadRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
     pub name: String,
 }
@@ -301,16 +316,22 @@ pub struct DesktopRenameThreadRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPlanAcceptRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
+    #[serde(alias = "turn_id")]
     pub turn_id: Option<String>,
+    #[serde(alias = "item_id")]
     pub item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPlanReviseRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
+    #[serde(alias = "turn_id")]
     pub turn_id: Option<String>,
+    #[serde(alias = "item_id")]
     pub item_id: Option<String>,
     pub instructions: String,
 }
@@ -318,6 +339,7 @@ pub struct DesktopPlanReviseRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopElicitationAnswerRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
     pub answers: std::collections::HashMap<String, Vec<String>>,
 }
@@ -353,6 +375,7 @@ pub struct DesktopProbeNotificationsRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopLogsDbMaintainRequest {
+    #[serde(alias = "dry_run")]
     pub dry_run: Option<bool>,
     pub compact: Option<bool>,
 }
@@ -391,7 +414,9 @@ pub struct DesktopFollowupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopCancelFollowupRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
     pub thread_id: String,
+    #[serde(alias = "followUpId", alias = "followupId", alias = "followup_id")]
     pub followup_id: String,
 }
 
@@ -1766,6 +1791,12 @@ mod tests {
             !commands.contains(&"desktop_security_status"),
             "macOS desktop commands must not expose Web security/Turnstile entry points"
         );
+        for forbidden in ["getSecurity", "saveSecurity", "changePassword"] {
+            assert!(
+                !commands.contains(&forbidden),
+                "macOS desktop commands must not expose Web security command: {forbidden}"
+            );
+        }
         assert!(
             commands.iter().all(|command| !command.contains("login")
                 && !command.contains("csrf")

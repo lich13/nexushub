@@ -450,6 +450,39 @@ describe("Probe UI helpers", () => {
     expect(buildProbeSettingsPayload(autoDraft, settings).codex.home).toBeNull();
   });
 
+  test("builds a safe draft from partial desktop Probe settings", () => {
+    const partialSettings = {
+      codex: {
+        host_label: "macbook"
+      }
+    } as ProbeSettings;
+
+    expect(() => buildProbeSettingsDraft(partialSettings)).not.toThrow();
+    expect(buildProbeSettingsDraft(partialSettings)).toMatchObject({
+      codex: {
+        home: "",
+        workspace: "",
+        host_label: "macbook"
+      },
+      probe: {
+        enabled: false,
+        poll_seconds: 15,
+        recent_limit: 50
+      },
+      notifications: {
+        enabled: false,
+        device_key_configured: false,
+        server_url: "https://api.day.app",
+        group: "NexusHub"
+      },
+      logs_db: {
+        enabled: false,
+        retention_days: 2,
+        maintenance_interval_hours: 6
+      }
+    });
+  });
+
   test("omits a blank Bark device_key whether or not a key is already configured", () => {
     const configuredDraft = buildProbeSettingsDraft(settings);
     configuredDraft.notifications.device_key = "   ";

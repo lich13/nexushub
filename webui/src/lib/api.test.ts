@@ -734,6 +734,87 @@ describe("archive delete API compatibility", () => {
     });
   });
 
+  test("Probe OptionalResult wrappers are unwrapped without confusing ProbeStatus availability", async () => {
+    const { getProbeEvents, getProbeStatus } = await loadRealApi();
+    const probeStatus: ProbeStatus = {
+      label: "Probe",
+      enabled: true,
+      available: true,
+      platform: "macos",
+      service_kind: "tauri",
+      service_name: "NexusHub.app",
+      flavor: "builtin",
+      hook_status: "managed",
+      bark_status: "configured",
+      logs_db_status: "maintenance_ready",
+      recent_event_count: 1,
+      running_count: 0,
+      reply_needed_count: 0,
+      recoverable_count: 0,
+      running_threads: [],
+      reply_needed_threads: [],
+      recoverable_threads: [],
+      config_path: "/Users/gosu/Library/Application Support/NexusHub/config.toml"
+    };
+    const responses: Record<string, unknown> = {
+      "/api/rpc/getProbeStatus": probeStatus,
+      "/api/rpc/getProbeEvents": {
+        available: true,
+        data: {
+          limit: 10,
+          events: [{
+            id: "event-a",
+            kind: "reply-needed",
+            thread_id: "thread-a",
+            title: "Reply",
+            message: "Need input",
+            source: "probe",
+            payload: {},
+            created_at: "2026-06-19T00:00:00Z",
+            handled_at: null
+          }]
+        }
+      }
+    };
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        available: true,
+        service_kind: "tauri",
+        service_name: "NexusHub.app"
+      }
+    });
+    await expect(getProbeEvents(10)).resolves.toMatchObject({
+      available: true,
+      data: {
+        limit: 10,
+        events: [{ id: "event-a", kind: "reply-needed" }]
+      }
+    });
+  });
+
+  test("listJobs unwraps OptionalResult responses into a stable array contract", async () => {
+    const { listJobs } = await loadRealApi();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      available: true,
+      data: [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1, output: "" }]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listJobs()).resolves.toEqual([
+      expect.objectContaining({ id: "job-a", kind: "probe" })
+    ]);
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/listJobs");
+  });
+
   test("status path display helpers prefer resolved backend paths and source labels", async () => {
     const app = await import("../App");
     const status: SystemStatus = {
@@ -973,6 +1054,13 @@ describe("archive delete API compatibility", () => {
       })
     });
     await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
+    await expect(runUpdateAction("prune", "ignored-csrf")).rejects.toThrow("当前运行时不支持备份清理动作");
+    try {
+      await runUpdateAction("prune", "ignored-csrf");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toMatch(/Linux|systemd|Nginx|sudo/i);
+    }
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
@@ -1043,7 +1131,19 @@ describe("archive delete API compatibility", () => {
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
         case "desktop_probe_settings":
           expect(args).toBeUndefined();
-          return { probe: { enabled: true }, notifications: {}, logs_db: {} };
+          return {
+            codex: { hostLabel: "macbook", configuredCodexHome: "/Users/gosu/.codex" },
+            probe: {
+              enabled: true,
+              pollSeconds: 20,
+              recentLimit: 30,
+              hooks: { manageStopHook: true },
+              observability: { hookEventMaxLines: 200, logMaxBytes: 1048576 },
+              logsDb: { enabled: true, retentionDays: 3 }
+            },
+            notifications: { deviceKeyConfigured: true, serverUrl: "https://api.day.app", notifyReplyNeeded: true },
+            logsDb: { enabled: true, retentionDays: 3, maintenanceIntervalHours: 4 }
+          };
         case "desktop_probe_save_settings":
           expect(args).toMatchObject({ request: { probe: { enabled: false } } });
           return { probe: { enabled: false }, notifications: {}, logs_db: {} };
@@ -1088,7 +1188,22 @@ describe("archive delete API compatibility", () => {
     await startArchiveDelete("ignored-csrf");
     await dryRunHiddenThreadDelete("ignored-csrf");
     await startHiddenThreadDelete("ignored-csrf");
-    await getProbeSettings();
+    await expect(getProbeSettings()).resolves.toMatchObject({
+      available: true,
+      data: {
+        codex: { host_label: "macbook", configured_codex_home: "/Users/gosu/.codex" },
+        probe: {
+          enabled: true,
+          poll_seconds: 20,
+          recent_limit: 30,
+          hooks: { manage_stop_hook: true },
+          observability: { hook_event_max_lines: 200, log_max_bytes: 1048576 },
+          logs_db: { enabled: true, retention_days: 3 }
+        },
+        notifications: { device_key_configured: true, server_url: "https://api.day.app", notify_reply_needed: true },
+        logs_db: { enabled: true, retention_days: 3, maintenance_interval_hours: 4 }
+      }
+    });
     await saveProbeSettings({ probe: { enabled: false } }, "ignored-csrf");
     await startProbeJob("bark-test", "ignored-csrf");
     await startProbeJob("logs-db-dry-run", "ignored-csrf");
@@ -1132,9 +1247,13 @@ describe("archive delete API compatibility", () => {
   });
 
   test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
+    expect(apiSource).not.toContain("const ROUTES");
+    expect(apiSource).not.toContain("WebRoute");
+    expect(apiSource).not.toContain("DesktopRoute");
     expect(apiSource).not.toContain("desktopApiRoute");
     expect(apiSource).not.toContain('runtimeRpc("desktopApi"');
     expect(apiSource).not.toContain("invokeDesktopApi");
+    expect(apiSource).not.toContain("invokeDesktop");
     expect(apiSource).not.toContain("desktop_api_command");
     expect(apiSource).not.toContain("DesktopApiUpload");
     expect(apiSource).not.toContain('"/api/');

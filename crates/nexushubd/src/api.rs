@@ -198,7 +198,15 @@ async fn rpc_dispatch(
 ) -> ApiResponse {
     match command.as_str() {
         "getPublicSettings" => public_settings(State(state)).await,
-        "login" => login(State(state), connect, headers, Json(rpc_payload(&args)?)).await,
+        "login" => {
+            login(
+                State(state),
+                connect,
+                headers,
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
+            )
+            .await
+        }
         "logout" => logout(State(state), headers).await,
         "me" => me(State(state), headers).await,
         "getSecurity" => get_security(State(state), headers).await,
@@ -230,7 +238,10 @@ async fn rpc_dispatch(
             patch_probe_settings(
                 State(state),
                 headers,
-                Json(rpc_nested_payload(&args, "settings")?),
+                Json(rpc_wrapped_payload(
+                    &args,
+                    &["settings", "payload", "request"],
+                )?),
             )
             .await
         }
@@ -327,13 +338,20 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "createThread" => create_thread(State(state), headers, Json(rpc_payload(&args)?)).await,
+        "createThread" => {
+            create_thread(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
+            )
+            .await
+        }
         "sendMessage" => {
             send_message(
                 State(state),
                 headers,
                 Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
             )
             .await
         }
@@ -342,7 +360,7 @@ async fn rpc_dispatch(
                 State(state),
                 headers,
                 Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
             )
             .await
         }
@@ -359,7 +377,7 @@ async fn rpc_dispatch(
                 State(state),
                 headers,
                 Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
             )
             .await
         }
@@ -480,15 +498,37 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "saveCodexGoal" => codex_goal_set(State(state), headers, Json(rpc_payload(&args)?)).await,
+        "saveCodexGoal" => {
+            codex_goal_set(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
+            )
+            .await
+        }
         "clearCodexGoal" => {
-            codex_goal_clear(State(state), headers, Json(rpc_payload(&args)?)).await
+            codex_goal_clear(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
+            )
+            .await
         }
         "pauseCodexGoal" => {
-            codex_goal_pause(State(state), headers, Json(rpc_payload(&args)?)).await
+            codex_goal_pause(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
+            )
+            .await
         }
         "resumeCodexGoal" => {
-            codex_goal_resume(State(state), headers, Json(rpc_payload(&args)?)).await
+            codex_goal_resume(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
+            )
+            .await
         }
         "listJobs" => {
             list_jobs(
@@ -538,6 +578,20 @@ fn rpc_nested_payload<T: DeserializeOwned>(value: &Value, key: &str) -> Result<T
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
 }
 
+fn rpc_wrapped_payload<T: DeserializeOwned>(value: &Value, keys: &[&str]) -> Result<T, ApiError> {
+    let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
+    rpc_payload(&rpc_compat_value(payload))
+}
+
+#[cfg(test)]
+fn rpc_wrapped_payload_or_empty<T: DeserializeOwned>(
+    value: &Value,
+    keys: &[&str],
+) -> Result<T, ApiError> {
+    let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
+    rpc_payload_or_empty(&rpc_compat_value(payload))
+}
+
 fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
     value: &Value,
     key: &str,
@@ -553,17 +607,94 @@ fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
 }
 
 fn rpc_string(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .or_else(|| {
-            key.strip_suffix("Id")
-                .and_then(|prefix| value.get(format!("{prefix}_id")))
-        })
+    rpc_value(value, key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
+
+fn rpc_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    rpc_direct_value(value, key).or_else(|| {
+        ["payload", "request", "settings"]
+            .iter()
+            .filter_map(|wrapper| value.get(*wrapper))
+            .find_map(|nested| rpc_direct_value(nested, key))
+    })
+}
+
+fn rpc_direct_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.get(key).or_else(|| {
+        key.strip_suffix("Id")
+            .and_then(|prefix| value.get(format!("{prefix}_id")))
+    })
+}
+
+fn rpc_compat_value(value: &Value) -> Value {
+    let mut value = value.clone();
+    rpc_normalize_value(&mut value);
+    value
+}
+
+fn rpc_normalize_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                rpc_normalize_value(value);
+            }
+            for (from, to) in RPC_COMPAT_FIELD_ALIASES {
+                if object.contains_key(*to) {
+                    continue;
+                }
+                if let Some(value) = object.get(*from).cloned() {
+                    object.insert((*to).to_string(), value);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                rpc_normalize_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+const RPC_COMPAT_FIELD_ALIASES: &[(&str, &str)] = &[
+    ("turnstileToken", "turnstile_token"),
+    ("threadId", "thread_id"),
+    ("followUpId", "followup_id"),
+    ("tokenBudget", "token_budget"),
+    ("serviceTier", "service_tier"),
+    ("reasoningEffort", "reasoning_effort"),
+    ("permissionProfile", "permission_profile"),
+    ("approvalPolicy", "approval_policy"),
+    ("sandboxMode", "sandbox_mode"),
+    ("networkAccess", "network_access"),
+    ("collaborationMode", "collaboration_mode"),
+    ("preparedAttachments", "prepared_attachments"),
+    ("turnId", "turn_id"),
+    ("itemId", "item_id"),
+    ("jobId", "job_id"),
+    ("requestId", "request_id"),
+    ("currentPassword", "current_password"),
+    ("newPassword", "new_password"),
+    ("sessionTtlSeconds", "session_ttl_seconds"),
+    ("turnstileEnabled", "turnstile_enabled"),
+    ("turnstileRequired", "turnstile_required"),
+    ("turnstileSiteKey", "turnstile_site_key"),
+    ("turnstileSecretKey", "turnstile_secret_key"),
+    ("turnstileExpectedHostname", "turnstile_expected_hostname"),
+    ("turnstileExpectedAction", "turnstile_expected_action"),
+    ("pollSeconds", "poll_seconds"),
+    ("recentLimit", "recent_limit"),
+    ("serverUrl", "server_url"),
+    ("deviceKey", "device_key"),
+    ("notifyCompletion", "notify_completion"),
+    ("notifyReplyNeeded", "notify_reply_needed"),
+    ("notifyRecoverable", "notify_recoverable"),
+    ("logsDb", "logs_db"),
+];
 
 fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
     keys.iter()
@@ -4110,9 +4241,11 @@ mod tests {
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, effective_message, fixed_probe_shell_command,
         followup_request, linux_update_job_spec, load_probe_threads, merge_thread_summaries,
-        normalize_goal_response, probe_config_path, router, seed_thread_event_blocks,
+        normalize_goal_response, probe_config_path, router, rpc_required_string,
+        rpc_wrapped_payload, rpc_wrapped_payload_or_empty, seed_thread_event_blocks,
         thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
-        update_service, SendMessageRequest, TurnstileLoginAction, UpdateAction,
+        update_service, CreateThreadRequest, GoalUpdateRequest, LoginRequest, SendMessageRequest,
+        TurnstileLoginAction, UpdateAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4125,7 +4258,7 @@ mod tests {
         platform::{PlatformKind, PlatformPaths},
         services::{
             jobs as job_service, probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
-            threads as thread_service,
+            settings as settings_service, threads as thread_service,
         },
         uploads::{PreparedAttachment, UploadKind},
     };
@@ -4331,6 +4464,13 @@ mod tests {
         config.codex.app_server_socket = Some(home.join("missing-app-server.sock"));
         state.replace_config(config);
         (state, session_token, csrf_token, home)
+    }
+
+    fn must<T>(result: Result<T, super::ApiError>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(_) => panic!("expected rpc compatibility conversion to succeed"),
+        }
     }
 
     #[tokio::test]
@@ -4624,7 +4764,7 @@ mod tests {
             app.clone(),
             "POST",
             "/api/rpc/saveCodexGoal",
-            r#"{"thread_id":"thread-a","objective":"ship rpc","token_budget":2048}"#,
+            r#"{"request":{"threadId":"thread-a","objective":"ship rpc","tokenBudget":2048}}"#,
             &session_token,
             Some(&csrf_token),
         )
@@ -4645,6 +4785,190 @@ mod tests {
         .await;
         assert_eq!(rest_after_rpc, rpc_saved);
         let _ = fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn rpc_update_action_accepts_nested_payload_action() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/rpc/runUpdateAction")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"payload":{"action":"check"}}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let job_id = payload["job_id"].as_str().unwrap();
+        let job = state.db.job(job_id).unwrap().unwrap();
+        assert_eq!(job.kind, "nexushub_update_check");
+    }
+
+    #[tokio::test]
+    async fn rpc_enqueue_followup_accepts_thread_id_and_payload_wrappers() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/rpc/enqueueFollowUp")
+                    .header("cookie", format!("nexushub_session={session_token}"))
+                    .header("x-csrf-token", csrf_token.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"payload":{"threadId":"thread-a","message":"continue","serviceTier":"priority"}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["thread_id"], "thread-a");
+        assert_eq!(payload["message"], "continue");
+        assert_eq!(payload["options"]["service_tier"], "priority");
+    }
+
+    #[test]
+    fn rpc_payload_compat_accepts_camel_case_login_token() {
+        let payload: LoginRequest = must(rpc_wrapped_payload(
+            &json!({
+                "username": "admin",
+                "password": "secret",
+                "turnstileToken": "token-a"
+            }),
+            &[],
+        ));
+
+        assert_eq!(payload.username, "admin");
+        assert_eq!(payload.turnstile_token.as_deref(), Some("token-a"));
+    }
+
+    #[test]
+    fn rpc_payload_compat_accepts_nested_and_top_level_thread_payloads() {
+        let nested: CreateThreadRequest = must(rpc_wrapped_payload(
+            &json!({
+                "payload": {
+                    "message": "start",
+                    "serviceTier": "priority",
+                    "reasoningEffort": "xhigh",
+                    "permissionProfile": "danger-full-access",
+                    "approvalPolicy": "never",
+                    "sandboxMode": "danger-full-access",
+                    "networkAccess": true,
+                    "collaborationMode": "async"
+                },
+                "csrfToken": "ignored"
+            }),
+            &["payload"],
+        ));
+        assert_eq!(nested.message, "start");
+        assert_eq!(nested.service_tier.as_deref(), Some("priority"));
+        assert_eq!(nested.reasoning_effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            nested.permission_profile.as_deref(),
+            Some("danger-full-access")
+        );
+        assert_eq!(nested.approval_policy.as_deref(), Some("never"));
+        assert_eq!(nested.sandbox_mode.as_deref(), Some("danger-full-access"));
+        assert_eq!(nested.network_access, Some(true));
+        assert_eq!(nested.collaboration_mode.as_deref(), Some("async"));
+
+        let top_level: SendMessageRequest = must(rpc_wrapped_payload(
+            &json!({
+                "message": "continue",
+                "preparedAttachments": [],
+                "serviceTier": "default"
+            }),
+            &["payload"],
+        ));
+        assert_eq!(top_level.message, "continue");
+        assert_eq!(top_level.service_tier.as_deref(), Some("default"));
+        assert!(top_level.prepared_attachments.is_empty());
+    }
+
+    #[test]
+    fn rpc_payload_compat_accepts_goal_request_wrapper_and_aliases() {
+        let payload: GoalUpdateRequest = must(rpc_wrapped_payload(
+            &json!({
+                "request": {
+                    "threadId": "thread-a",
+                    "objective": "ship",
+                    "tokenBudget": 4096
+                }
+            }),
+            &["request", "payload"],
+        ));
+
+        assert_eq!(payload.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(payload.objective.as_deref(), Some("ship"));
+        assert_eq!(payload.token_budget, Some(4096));
+    }
+
+    #[test]
+    fn rpc_payload_compat_accepts_probe_settings_wrapper() {
+        let payload: settings_service::ProbeSettingsSaveRequest = must(rpc_wrapped_payload(
+            &json!({
+            "settings": {
+                "probe": {
+                    "pollSeconds": 20,
+                    "recentLimit": 50
+                    },
+                    "notifications": {
+                        "serverUrl": "https://example.invalid",
+                        "deviceKey": "bark",
+                        "notifyReplyNeeded": true
+                    }
+                }
+            }),
+            &["settings", "payload"],
+        ));
+
+        assert_eq!(payload.probe.unwrap().poll_seconds, Some(20));
+        let notifications = payload.notifications.unwrap();
+        assert_eq!(
+            notifications.server_url.as_deref(),
+            Some("https://example.invalid")
+        );
+        assert_eq!(notifications.device_key.as_deref(), Some("bark"));
+        assert_eq!(notifications.notify_reply_needed, Some(true));
+    }
+
+    #[test]
+    fn rpc_payload_compat_extracts_thread_id_from_payload_or_top_level() {
+        assert_eq!(
+            must(rpc_required_string(
+                &json!({"payload": {"threadId": "nested-thread"}}),
+                "threadId"
+            )),
+            "nested-thread"
+        );
+        assert_eq!(
+            must(rpc_required_string(
+                &json!({"thread_id": "snake-thread"}),
+                "threadId"
+            )),
+            "snake-thread"
+        );
+        let empty: serde_json::Value = must(rpc_wrapped_payload_or_empty(
+            &serde_json::Value::Null,
+            &["payload"],
+        ));
+        assert_eq!(empty, json!({}));
     }
 
     #[tokio::test]

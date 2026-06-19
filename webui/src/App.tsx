@@ -33,7 +33,7 @@ import {
   Undo2,
   X
 } from "lucide-react";
-import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   acceptPlan,
   answerApproval,
@@ -505,22 +505,57 @@ export default function App() {
       )}
       <main className="main-workspace">
         <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} capabilities={capabilities} />
-        {view === "codex" && (
-          <ChatWorkspace
-            csrfToken={session.csrf_token}
-            mobileThreadsOpen={mobileThreadsOpen}
-            setMobileThreadsOpen={setMobileThreadsOpen}
-            setView={setView}
-            capabilities={capabilities}
-          />
-        )}
-        {view === "claude" && <ClaudeWorkspace />}
-        {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
-        {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
-        {capabilities.securitySettings && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+        <WorkspaceErrorBoundary resetKey={view}>
+          {view === "codex" && (
+            <ChatWorkspace
+              csrfToken={session.csrf_token}
+              mobileThreadsOpen={mobileThreadsOpen}
+              setMobileThreadsOpen={setMobileThreadsOpen}
+              setView={setView}
+              capabilities={capabilities}
+            />
+          )}
+          {view === "claude" && <ClaudeWorkspace />}
+          {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
+          {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
+          {capabilities.securitySettings && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+        </WorkspaceErrorBoundary>
       </main>
     </div>
   );
+}
+
+class WorkspaceErrorBoundary extends Component<
+  { children: ReactNode; resetKey: string },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("NexusHub workspace render failed", error, info.componentStack);
+  }
+
+  componentDidUpdate(previous: { resetKey: string }) {
+    if (previous.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <section className="panel wide-panel">
+          <header><TriangleAlert size={18} /><strong>视图载入失败</strong></header>
+          <div className="form-error">{this.state.error.message || "未知错误"}</div>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {

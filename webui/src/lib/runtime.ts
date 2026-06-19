@@ -19,7 +19,8 @@ export type RuntimeThreadEventSource = {
 };
 
 export type RuntimeDispatchOptions<T = unknown> = {
-  webCommand: string;
+  command?: string;
+  webCommand?: string;
   webArgs?: RpcArgs;
   desktopCommand?: string;
   desktopArgs?: RpcArgs;
@@ -204,6 +205,10 @@ export async function invokeDesktop<T = unknown>(
 export async function runtimeDispatch<T = unknown>(
   options: RuntimeDispatchOptions<T>,
 ): Promise<T> {
+  const webCommand = options.webCommand ?? options.command;
+  const desktopCommand = options.desktopCommand ?? options.command;
+  const hasDesktopArgs = Object.prototype.hasOwnProperty.call(options, "desktopArgs");
+  const hasWebArgs = Object.prototype.hasOwnProperty.call(options, "webArgs");
   if (isDesktopRuntime()) {
     if (options.desktopUnavailable) {
       throw new RuntimeUnavailableError(options.desktopUnavailable, options.desktopUnavailable);
@@ -211,24 +216,25 @@ export async function runtimeDispatch<T = unknown>(
     if (options.desktopFallback) {
       return options.desktopFallback();
     }
-    if (!options.desktopCommand) {
+    if (!desktopCommand) {
       throw new RuntimeUnavailableError("Desktop command is not configured", "desktop");
     }
-    return invokeDesktop<T>(options.desktopCommand, options.desktopArgs);
+    return invokeDesktop<T>(desktopCommand, hasDesktopArgs ? options.desktopArgs : options.webArgs);
   }
   if (options.webUnavailable) {
     throw new RuntimeUnavailableError(options.webUnavailable, options.webUnavailable);
   }
-  return webJsonRpc<T>(options.webCommand, options.webArgs);
+  if (!webCommand) {
+    throw new RuntimeUnavailableError("Web command is not configured", "web");
+  }
+  return webJsonRpc<T>(webCommand, hasWebArgs ? options.webArgs : options.desktopArgs);
 }
 
 export async function runtimeRpc<T = unknown>(
   command: string,
   args?: RpcArgs,
 ): Promise<T> {
-  return isDesktopRuntime()
-    ? invokeDesktop<T>(command, args)
-    : webJsonRpc<T>(command, args);
+  return runtimeDispatch<T>({ command, webArgs: args, desktopArgs: args });
 }
 
 export async function uploadRuntimeFiles<T = unknown>(

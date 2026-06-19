@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::config::Config;
@@ -27,6 +29,20 @@ pub fn desktop_update_status_with_state(
         }
     }
     Ok(status)
+}
+
+#[tauri::command]
+pub fn desktop_update_status(
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<UpdateStatus, String> {
+    desktop_update_status_with_state(&state, None, None).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn getUpdateStatus(
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<UpdateStatus, String> {
+    desktop_update_status_with_state(&state, None, None).map_err(|err| err.to_string())
 }
 
 pub fn desktop_update_status_for(
@@ -125,6 +141,26 @@ pub async fn install_update_and_restart(
             let _ = state.db.finish_job(&job_id, "failed", None, Some(&message));
             Err(message)
         }
+    }
+}
+
+#[tauri::command]
+pub async fn runUpdateAction(
+    app: AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    action: String,
+) -> std::result::Result<serde_json::Value, String> {
+    match action.as_str() {
+        "check" => {
+            let response = check_update_status(app, state).await?;
+            serde_json::to_value(response).map_err(|err| err.to_string())
+        }
+        "install" => {
+            let response = install_update_and_restart(app, state).await?;
+            serde_json::to_value(response).map_err(|err| err.to_string())
+        }
+        "prune" => Err("当前运行时不支持备份清理动作。".to_string()),
+        _ => Err(format!("unknown update action: {action}")),
     }
 }
 

@@ -77,6 +77,23 @@ find_tauri_signature_artifact() {
   printf '%s\n' "${found}"
 }
 
+find_optional_tauri_artifact() {
+  local pattern="$1"
+  local root
+  local found=""
+
+  for root in \
+    "${TAURI_TARGET_DIR}/release/bundle" \
+    "${TAURI_TARGET_DIR}/aarch64-apple-darwin/release/bundle"
+  do
+    [[ -d "${root}" ]] || continue
+    found="$(find "${root}" -name "${pattern}" -print 2>/dev/null | sort | tail -n 1)"
+    [[ -n "${found}" ]] && break
+  done
+
+  printf '%s\n' "${found}"
+}
+
 assert_app_only_archive() {
   local root="$1"
   local entries=()
@@ -195,7 +212,7 @@ fi
 
 APP_BUNDLE="$(find_tauri_artifact "NexusHub.app")"
 TAURI_DMG="$(find_tauri_artifact "*.dmg")"
-TAURI_UPDATER_ARCHIVE="$(find_tauri_artifact "*.app.tar.gz" 2>/dev/null || true)"
+TAURI_UPDATER_ARCHIVE="$(find_optional_tauri_artifact "*.app.tar.gz")"
 TAURI_UPDATER_SIGNATURE="$(find_tauri_signature_artifact "${TAURI_UPDATER_ARCHIVE}" 2>/dev/null || true)"
 
 if [[ "${SIGNED_RELEASE_CONTEXT}" == "1" && -z "${TAURI_UPDATER_SIGNATURE}" ]]; then

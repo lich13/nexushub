@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::{
@@ -8,9 +10,34 @@ use nexushub_core::{
     probe::{ProbeRuntime, ProbeStatus},
 };
 
-pub async fn desktop_probe_status() -> Result<nexushub_core::probe::ProbeStatus> {
+pub async fn desktop_probe_status_current() -> Result<nexushub_core::probe::ProbeStatus> {
     let state = DesktopState::current()?;
     desktop_probe_status_with_state(&state).await
+}
+
+#[tauri::command]
+pub async fn desktop_probe_status_command() -> std::result::Result<ProbeStatus, String> {
+    desktop_probe_status_current()
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn desktop_probe_status(
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<ProbeStatus, String> {
+    desktop_probe_status_with_state(&state)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn getProbeStatus(
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<ProbeStatus, String> {
+    desktop_probe_status_with_state(&state)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
