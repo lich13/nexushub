@@ -1010,7 +1010,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("desktop update helpers use macOS updater command instead of Linux panel routes", async () => {
-    const { getUpdateStatus, runUpdateAction } = await loadDesktopApi();
+    const { getUpdateStatus, runUpdateAction, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
@@ -1054,9 +1054,11 @@ describe("archive delete API compatibility", () => {
       })
     });
     await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
-    await expect(runUpdateAction("prune", "ignored-csrf")).rejects.toThrow("当前运行时不支持备份清理动作");
+    const macCapabilities = runtimeCapabilitiesForRuntime("desktop");
+    expect(macCapabilities.linuxBackupPrune).toBe(false);
+    await expect(runUpdateAction("prune", "ignored-csrf", macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
     try {
-      await runUpdateAction("prune", "ignored-csrf");
+      await runUpdateAction("prune", "ignored-csrf", macCapabilities);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).not.toMatch(/Linux|systemd|Nginx|sudo/i);
@@ -1064,6 +1066,22 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
+  });
+
+  test("update prune is gated by capability matrix instead of runtime kind", async () => {
+    const { runUpdateAction, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args, job_id: "desktop-prune-job" }));
+
+    const desktopWithPrune = {
+      ...runtimeCapabilitiesForRuntime("desktop"),
+      linuxBackupPrune: true
+    };
+
+    await expect(runUpdateAction("prune", "ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "prune", csrfToken: "ignored-csrf" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test("desktop archive cleanup uses a typed native command instead of a route bridge", async () => {

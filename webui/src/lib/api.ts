@@ -858,9 +858,13 @@ export type UpdateActionResult = {
   status?: UpdateStatus;
 };
 
-export async function runUpdateAction(action: UnifiedUpdateAction, csrfToken?: string | null): Promise<UpdateActionResult> {
+export async function runUpdateAction(
+  action: UnifiedUpdateAction,
+  csrfToken?: string | null,
+  capabilities: RuntimeCapabilityMatrix = currentRuntimeCapabilities(),
+): Promise<UpdateActionResult> {
   if (USE_DEMO) return { job_id: `update-${action}-demo` };
-  if (currentRuntimeCapabilities().runtimeKind === "desktop" && action === "prune") {
+  if (action === "prune" && !capabilities.linuxBackupPrune) {
     throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
   }
   const desktopCommand = action === "install"

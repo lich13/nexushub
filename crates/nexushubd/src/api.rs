@@ -25,16 +25,15 @@ use nexushub_core::{
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{patch_probe_config_toml, Config},
-    db::{JobRecord, NewSession, ThreadFollowUp, ThreadGoal, ThreadGoalUpdate},
-    jobs::CodexActionResult,
+    db::{JobRecord, NewSession},
     local,
     platform::{PlatformKind, PlatformPaths},
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        jobs as job_service,
+        goals as goal_service, jobs as job_service,
         probe::probe_threads_for_status_with_paths,
-        settings as settings_service,
+        security as security_service, settings as settings_service,
         threads::{
             apply_running_job_to_summary, build_threads_overview, filter_thread_summaries,
             merge_running_jobs, prune_hidden_thread_summaries, thread_list_fetch_limit,
@@ -44,8 +43,8 @@ use nexushub_core::{
     },
     update,
     uploads::{
-        self, cleanup_upload_ids, prepare_uploads, prompt_with_attachment_context,
-        PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
+        self, cleanup_upload_ids, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES,
+        MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
     },
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -646,7 +645,7 @@ fn rpc_normalize_value(value: &mut Value) {
                 if object.contains_key(*to) {
                     continue;
                 }
-                if let Some(value) = object.get(*from).cloned() {
+                if let Some(value) = object.remove(*from) {
                     object.insert((*to).to_string(), value);
                 }
             }
@@ -715,20 +714,13 @@ async fn public_settings(State(state): State<AppState>) -> ApiResponse {
     let security = state
         .db
         .security_settings(state.config().security.session_ttl_seconds)?;
-    let turnstile_action = state
-        .db
-        .get_setting("turnstile_expected_action")?
-        .or_else(|| state.config().security.turnstile_expected_action.clone())
-        .unwrap_or_else(|| "login".to_string());
-    ok(json!({
-        "site_name": "NexusHub",
-        "turnstile_enabled": security.turnstile_enabled,
-        "turnstile_required": security.turnstile_required,
-        "turnstile_site_key": security.turnstile_site_key.unwrap_or_else(|| nexushub_core::config::DEFAULT_TURNSTILE_SITE_KEY.to_string()),
-        "turnstile_action": turnstile_action,
-        "admin_configured": state.db.admin_count()? > 0,
-        "base_url": state.config().server.public_base_url,
-    }))
+    ok(security_service::public_security_view(
+        security,
+        &state.config().security,
+        state.db.get_setting("turnstile_expected_action")?,
+        state.db.admin_count()? > 0,
+        state.config().server.public_base_url.clone(),
+    ))
 }
 
 async fn list_providers(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -1475,67 +1467,20 @@ async fn get_security(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     ok(security_response(&state)?)
 }
 
-#[derive(Debug, Deserialize)]
-struct SecurityPatch {
-    turnstile_enabled: Option<bool>,
-    turnstile_required: Option<bool>,
-    turnstile_site_key: Option<String>,
-    turnstile_secret_key: Option<String>,
-    session_ttl_seconds: Option<u64>,
-    turnstile_expected_hostname: Option<String>,
-    turnstile_expected_action: Option<String>,
-}
-
 async fn patch_security(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<SecurityPatch>,
+    Json(payload): Json<security_service::SecurityPatch>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if let Some(value) = payload.turnstile_enabled {
-        state
-            .db
-            .set_setting("turnstile_enabled", if value { "true" } else { "false" })?;
+    let plan = security_service::plan_security_patch(payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    for write in &plan.settings {
+        state.db.set_setting(write.key, &write.value)?;
     }
-    if let Some(value) = payload.turnstile_required {
-        state
-            .db
-            .set_setting("turnstile_required", if value { "true" } else { "false" })?;
-    }
-    if let Some(value) = payload.turnstile_site_key {
-        state.db.set_setting("turnstile_site_key", &value)?;
-    }
-    let secret_key_changed = payload
-        .turnstile_secret_key
-        .as_ref()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if let Some(value) = payload.turnstile_secret_key.as_ref() {
-        if !value.trim().is_empty() {
-            state.db.set_turnstile_secret(value)?;
-        }
-    }
-    if let Some(ttl) = payload.session_ttl_seconds {
-        if ttl < 300 {
-            return Err(api_error(
-                StatusCode::BAD_REQUEST,
-                "session ttl must be at least 300 seconds",
-            ));
-        }
-        state
-            .db
-            .set_setting("session_ttl_seconds", &ttl.to_string())?;
-    }
-    if let Some(value) = payload.turnstile_expected_hostname {
-        state
-            .db
-            .set_setting("turnstile_expected_hostname", value.trim())?;
-    }
-    if let Some(value) = payload.turnstile_expected_action {
-        state
-            .db
-            .set_setting("turnstile_expected_action", value.trim())?;
+    if let Some(secret_key) = plan.turnstile_secret_key.as_deref() {
+        state.db.set_turnstile_secret(secret_key)?;
     }
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -1543,21 +1488,15 @@ async fn patch_security(
         Some("security"),
         Some("settings"),
         None,
-        json!({"turnstile_secret_key": if secret_key_changed { Some("[configured]") } else { None }}),
+        plan.audit_detail,
     )?;
     ok(security_response(&state)?)
-}
-
-#[derive(Debug, Deserialize)]
-struct PasswordChange {
-    current_password: String,
-    new_password: String,
 }
 
 async fn change_password(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<PasswordChange>,
+    Json(payload): Json<security_service::PasswordChangeRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
@@ -1565,19 +1504,19 @@ async fn change_password(
         .db
         .admin_by_id(&auth.admin_id)?
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthorized"))?;
-    if !verify_password(&payload.current_password, &admin.password_hash) {
-        return Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid current password",
-        ));
-    }
-    if payload.new_password.len() < 12 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "new password must be at least 12 characters",
-        ));
-    }
-    let hash = crate::auth::hash_password(&payload.new_password)?;
+    let current_password_matches = verify_password(&payload.current_password, &admin.password_hash);
+    let plan = security_service::plan_password_change(payload, current_password_matches).map_err(
+        |err| {
+            let message = err.to_string();
+            let status = if message.contains("invalid current password") {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            api_error(status, &message)
+        },
+    )?;
+    let hash = crate::auth::hash_password(&plan.new_password)?;
     state.db.upsert_admin(&admin.id, &admin.username, &hash)?;
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -1791,46 +1730,16 @@ fn file_signature(path: &FsPath) -> Option<FileSignature> {
     })
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateThreadRequest {
-    message: String,
-    #[serde(default)]
-    attachments: Vec<String>,
-    model: Option<String>,
-    service_tier: Option<String>,
-    reasoning_effort: Option<String>,
-    cwd: Option<String>,
-    permission_profile: Option<String>,
-    approval_policy: Option<String>,
-    sandbox_mode: Option<String>,
-    network_access: Option<bool>,
-    collaboration_mode: Option<String>,
-}
-
 async fn create_thread(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<CreateThreadRequest>,
+    Json(mut payload): Json<job_service::ThreadMessageRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let effective_message = effective_message(&payload.message, &prepared_attachments);
+    payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
     let spec = job_service::build_codex_job_spec(
-        &job_service::JobActionRequest {
-            kind: job_service::CodexActionKind::Exec,
-            thread_id: None,
-            message: prompt_with_attachment_context(&effective_message, &prepared_attachments),
-            cwd: payload.cwd.and_then(non_empty_string).map(PathBuf::from),
-            model: payload.model,
-            service_tier: payload.service_tier,
-            reasoning_effort: payload.reasoning_effort,
-            permission_profile: payload.permission_profile,
-            approval_policy: payload.approval_policy,
-            sandbox_mode: payload.sandbox_mode,
-            network_access: payload.network_access,
-            collaboration_mode: payload.collaboration_mode,
-        },
+        &payload.into_job_action(job_service::CodexActionKind::Exec),
         state.config().codex.workspace.clone(),
     )
     .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
@@ -1851,59 +1760,7 @@ async fn create_thread(
         None,
         json!({"cwd": spec.cwd.display().to_string()}),
     )?;
-    ok(CodexActionResult {
-        bridge: false,
-        thread_id: None,
-        turn_id: None,
-        job_id: Some(job_id),
-        fallback: true,
-        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct SendMessageRequest {
-    message: String,
-    #[serde(default)]
-    attachments: Vec<String>,
-    #[serde(default)]
-    prepared_attachments: Vec<PreparedAttachment>,
-    model: Option<String>,
-    service_tier: Option<String>,
-    reasoning_effort: Option<String>,
-    cwd: Option<String>,
-    permission_profile: Option<String>,
-    approval_policy: Option<String>,
-    sandbox_mode: Option<String>,
-    network_access: Option<bool>,
-    collaboration_mode: Option<String>,
-}
-
-impl SendMessageRequest {
-    fn options_json(&self) -> Value {
-        json!({
-            "model": &self.model,
-            "service_tier": &self.service_tier,
-            "reasoning_effort": &self.reasoning_effort,
-            "cwd": &self.cwd,
-            "permission_profile": &self.permission_profile,
-            "approval_policy": &self.approval_policy,
-            "sandbox_mode": &self.sandbox_mode,
-            "network_access": self.network_access,
-            "collaboration_mode": &self.collaboration_mode,
-            "attachments": &self.attachments,
-            "prepared_attachments": &self.prepared_attachments,
-        })
-    }
-}
-
-fn effective_message(message: &str, attachments: &[PreparedAttachment]) -> String {
-    let message = message.trim();
-    if message.is_empty() && !attachments.is_empty() {
-        "请根据以下附件内容继续处理。".to_string()
-    } else {
-        message.to_string()
-    }
+    ok(job_service::codex_action_submitted(None, Some(job_id)))
 }
 
 fn prepare_request_attachments(
@@ -1926,21 +1783,14 @@ async fn send_message(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(mut payload): Json<SendMessageRequest>,
+    Json(mut payload): Json<job_service::ThreadMessageRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let spec = codex_resume_job_spec(
-        &state,
-        &id,
-        prompt_with_attachment_context(
-            &effective_message(&payload.message, &payload.prepared_attachments),
-            &payload.prepared_attachments,
-        ),
-        &payload,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    payload.thread_id = Some(id.clone());
+    let spec = codex_resume_job_spec(&state, payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
         &spec.title,
@@ -1958,36 +1808,23 @@ async fn send_message(
         None,
         json!({"job_id": job_id}),
     )?;
-    ok(CodexActionResult {
-        bridge: false,
-        thread_id: Some(id),
-        turn_id: None,
-        job_id: Some(job_id),
-        fallback: true,
-        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
-    })
+    ok(job_service::codex_action_submitted(Some(id), Some(job_id)))
 }
 
 async fn steer_thread(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(mut payload): Json<SendMessageRequest>,
+    Json(mut payload): Json<job_service::ThreadMessageRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let message = effective_message(&payload.message, &payload.prepared_attachments);
-    if message.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "follow-up message is required",
-        ));
-    }
+    let (message, options) = payload
+        .into_followup_message_and_options()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
 
-    let followup = state
-        .db
-        .enqueue_followup(&id, &message, payload.options_json())?;
+    let followup = state.db.enqueue_followup(&id, &message, options)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued_after_steer_fallback",
@@ -1996,14 +1833,7 @@ async fn steer_thread(
         None,
         json!({"followup_id": followup.id}),
     )?;
-    ok(CodexActionResult {
-        bridge: false,
-        thread_id: Some(id),
-        turn_id: None,
-        job_id: None,
-        fallback: true,
-        message: Some("queued follow-up for the next idle turn".to_string()),
-    })
+    ok(job_service::codex_action_submitted(Some(id), None))
 }
 
 async fn list_followups(
@@ -2012,28 +1842,22 @@ async fn list_followups(
     Path(id): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!({ "items": followup_responses(state.db.list_followups(&id, 20)?) }))
+    ok(json!({ "items": job_service::followup_views(state.db.list_followups(&id, 20)?) }))
 }
 
 async fn enqueue_followup(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(mut payload): Json<SendMessageRequest>,
+    Json(mut payload): Json<job_service::ThreadMessageRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let message = effective_message(&payload.message, &payload.prepared_attachments);
-    if message.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "follow-up message is required",
-        ));
-    }
-    let followup = state
-        .db
-        .enqueue_followup(&id, &message, payload.options_json())?;
+    let (message, options) = payload
+        .into_followup_message_and_options()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let followup = state.db.enqueue_followup(&id, &message, options)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued",
@@ -2042,7 +1866,7 @@ async fn enqueue_followup(
         None,
         json!({"followup_id": followup.id}),
     )?;
-    ok(followup_response(followup))
+    ok(job_service::followup_view(followup))
 }
 
 async fn cancel_followup(
@@ -2061,7 +1885,12 @@ async fn cancel_followup(
         None,
         json!({"followup_id": followup_id, "cancelled": cancelled}),
     )?;
-    ok(json!({"ok": cancelled}))
+    ok(job_service::cancel_followup_response(
+        "cancelFollowUp",
+        id,
+        followup_id,
+        cancelled,
+    ))
 }
 
 fn apply_running_jobs_to_threads(
@@ -2110,16 +1939,9 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
     let Ok(Some(followup)) = state.db.claim_next_pending_followup(&thread_id) else {
         return;
     };
-    let request = followup_request(&followup);
-    let spec = match codex_resume_job_spec(
-        state,
-        &thread_id,
-        prompt_with_attachment_context(
-            &effective_message(&request.message, &request.prepared_attachments),
-            &request.prepared_attachments,
-        ),
-        &request,
-    ) {
+    let mut request = job_service::followup_request(&followup);
+    request.thread_id = Some(thread_id.clone());
+    let spec = match codex_resume_job_spec(state, request) {
         Ok(spec) => spec,
         Err(err) => {
             let message = err.to_string();
@@ -2153,109 +1975,12 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
 
 fn codex_resume_job_spec(
     state: &AppState,
-    thread_id: &str,
-    message: String,
-    request: &SendMessageRequest,
+    request: job_service::ThreadMessageRequest,
 ) -> anyhow::Result<job_service::CodexJobSpec> {
     job_service::build_codex_job_spec(
-        &job_service::JobActionRequest {
-            kind: job_service::CodexActionKind::Resume,
-            thread_id: Some(thread_id.to_string()),
-            message,
-            cwd: request.cwd.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
-            }),
-            model: request.model.clone(),
-            service_tier: request.service_tier.clone(),
-            reasoning_effort: request.reasoning_effort.clone(),
-            permission_profile: request.permission_profile.clone(),
-            approval_policy: request.approval_policy.clone(),
-            sandbox_mode: request.sandbox_mode.clone(),
-            network_access: request.network_access,
-            collaboration_mode: request.collaboration_mode.clone(),
-        },
+        &request.into_job_action(job_service::CodexActionKind::Resume),
         state.config().codex.workspace.clone(),
     )
-}
-
-fn followup_request(followup: &ThreadFollowUp) -> SendMessageRequest {
-    let options = serde_json::from_str::<Value>(&followup.options_json).unwrap_or(Value::Null);
-    let attachments = options
-        .get("attachments")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let prepared_attachments = options
-        .get("prepared_attachments")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<PreparedAttachment>>(value).ok())
-        .unwrap_or_default();
-    SendMessageRequest {
-        message: followup.message.clone(),
-        attachments,
-        prepared_attachments,
-        model: options
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        service_tier: options
-            .get("service_tier")
-            .or_else(|| options.get("serviceTier"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        reasoning_effort: options
-            .get("reasoning_effort")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        cwd: options
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        permission_profile: options
-            .get("permission_profile")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        approval_policy: options
-            .get("approval_policy")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        sandbox_mode: options
-            .get("sandbox_mode")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        network_access: options.get("network_access").and_then(Value::as_bool),
-        collaboration_mode: options
-            .get("collaboration_mode")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    }
-}
-
-fn followup_responses(items: Vec<ThreadFollowUp>) -> Vec<Value> {
-    items.into_iter().map(followup_response).collect()
-}
-
-fn followup_response(item: ThreadFollowUp) -> Value {
-    json!({
-        "id": item.id,
-        "thread_id": item.thread_id,
-        "status": item.status,
-        "message": item.message,
-        "options": serde_json::from_str::<Value>(&item.options_json).unwrap_or(Value::Null),
-        "created_at": item.created_at,
-        "updated_at": item.updated_at,
-        "submitted_at": item.submitted_at,
-        "cancelled_at": item.cancelled_at,
-        "result": item.result_json.and_then(|value| serde_json::from_str::<Value>(&value).ok()),
-        "error": item.error,
-    })
 }
 
 fn derive_active_job_id(state: &AppState, thread_id: &str) -> Option<String> {
@@ -2531,7 +2256,7 @@ fn start_codex_resume_job(
     state: &AppState,
     thread_id: &str,
     message: String,
-) -> Result<CodexActionResult, ApiError> {
+) -> Result<nexushub_core::jobs::CodexActionResult, ApiError> {
     let spec = job_service::build_codex_job_spec(
         &job_service::JobActionRequest::resume(thread_id, message),
         state.config().codex.workspace.clone(),
@@ -2552,14 +2277,10 @@ fn start_codex_resume_job(
         .db
         .link_job_thread(&job_id, Some(thread_id), None)
         .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
-    Ok(CodexActionResult {
-        bridge: false,
-        thread_id: Some(thread_id.to_string()),
-        turn_id: None,
-        job_id: Some(job_id),
-        fallback: true,
-        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
-    })
+    Ok(job_service::codex_action_submitted(
+        Some(thread_id.to_string()),
+        Some(job_id),
+    ))
 }
 
 async fn thread_events(
@@ -2731,15 +2452,6 @@ struct GoalQuery {
     thread_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoalUpdateRequest {
-    thread_id: Option<String>,
-    objective: Option<String>,
-    token_budget: Option<u64>,
-    status: Option<String>,
-    enabled: Option<bool>,
-}
-
 async fn codex_goal_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2747,9 +2459,9 @@ async fn codex_goal_get(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let Some(thread_id) = non_empty(query.thread_id.as_deref()) else {
-        return ok(goal_empty("missing_thread"));
+        return ok(goal_service::goal_empty("missing_thread"));
     };
-    ok(local_goal_response(
+    ok(goal_service::goal_response(
         state.db.get_thread_goal(thread_id)?.as_ref(),
     ))
 }
@@ -2757,97 +2469,59 @@ async fn codex_goal_get(
 async fn codex_goal_set(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<GoalUpdateRequest>,
+    Json(payload): Json<goal_service::GoalUpdateRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
-    };
-    let objective = payload
-        .objective
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let status = normalize_local_goal_status(payload.status.as_deref(), payload.enabled, objective);
-    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
-        thread_id,
-        objective,
-        token_budget: payload.token_budget,
-        status: &status,
-        completed_at: None,
-        blocked_reason: None,
-    })?;
-    ok(local_goal_response(Some(&goal)))
+    let plan = goal_service::plan_save_goal(payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
+    ok(goal_service::goal_response(Some(&goal)))
 }
 
 async fn codex_goal_clear(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<GoalUpdateRequest>,
+    Json(payload): Json<goal_service::GoalUpdateRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
-    };
-    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
-        thread_id,
-        objective: None,
-        token_budget: None,
-        status: "cleared",
-        completed_at: None,
-        blocked_reason: None,
-    })?;
-    ok(local_goal_response(Some(&goal)))
+    let plan = goal_service::plan_clear_goal(payload.thread_id.as_deref().unwrap_or_default())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
+    ok(goal_service::goal_response(Some(&goal)))
 }
 
 async fn codex_goal_pause(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<GoalUpdateRequest>,
+    Json(payload): Json<goal_service::GoalUpdateRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
-    };
-    let existing = state.db.get_thread_goal(thread_id)?;
-    let objective = existing.as_ref().and_then(|goal| goal.objective.as_deref());
-    let token_budget = existing.as_ref().and_then(|goal| goal.token_budget);
-    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
-        thread_id,
-        objective,
-        token_budget,
-        status: "paused",
-        completed_at: None,
-        blocked_reason: None,
-    })?;
-    ok(local_goal_response(Some(&goal)))
+    let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let existing = state.db.get_thread_goal(&thread_id)?;
+    let plan = goal_service::plan_goal_status_for_thread(&thread_id, existing.as_ref(), "paused")
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
+    ok(goal_service::goal_response(Some(&goal)))
 }
 
 async fn codex_goal_resume(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<GoalUpdateRequest>,
+    Json(payload): Json<goal_service::GoalUpdateRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let Some(thread_id) = non_empty(payload.thread_id.as_deref()) else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "thread_id is required"));
-    };
-    let existing = state.db.get_thread_goal(thread_id)?;
-    let objective = existing.as_ref().and_then(|goal| goal.objective.as_deref());
-    let token_budget = existing.as_ref().and_then(|goal| goal.token_budget);
-    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
-        thread_id,
-        objective,
-        token_budget,
-        status: "active",
-        completed_at: None,
-        blocked_reason: None,
-    })?;
-    ok(local_goal_response(Some(&goal)))
+    let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let existing = state.db.get_thread_goal(&thread_id)?;
+    let plan = goal_service::plan_goal_status_for_thread(&thread_id, existing.as_ref(), "active")
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
+    ok(goal_service::goal_response(Some(&goal)))
 }
 
 async fn system_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -2893,7 +2567,7 @@ async fn start_update_action(
         )?;
     }
     let plan = update_service::update_action_plan(&http_update_platform(), action);
-    let spec = linux_update_job_spec(&state.config(), plan)?;
+    let spec = update_service::linux_update_job_spec(&state.config(), plan)?;
     let id = if let Some(group) = spec.exclusive_group.as_deref() {
         state
             .jobs
@@ -2908,43 +2582,6 @@ async fn start_update_action(
 
 fn http_update_platform() -> PlatformPaths {
     PlatformPaths::for_kind(PlatformKind::Linux)
-}
-
-struct LinuxUpdateJobSpec {
-    kind: String,
-    title: String,
-    command: String,
-    exclusive_group: Option<String>,
-}
-
-fn linux_update_job_spec(
-    config: &Config,
-    plan: update_service::UpdateJobPlan,
-) -> AnyhowResult<LinuxUpdateJobSpec> {
-    if plan.platform != PlatformKind::Linux {
-        anyhow::bail!("only Linux WebUI can start server update jobs");
-    }
-    let exclusive_group = plan.exclusive.then(|| "nexushub-update".to_string());
-    match plan.action {
-        UpdateAction::Check => Ok(LinuxUpdateJobSpec {
-            kind: "nexushub_update_check".to_string(),
-            title: "NexusHub update precheck".to_string(),
-            command: config.update.panel_precheck_command.clone(),
-            exclusive_group,
-        }),
-        UpdateAction::Install => Ok(LinuxUpdateJobSpec {
-            kind: "nexushub_update_install".to_string(),
-            title: "NexusHub update install".to_string(),
-            command: update::panel_update_command(&config.update.panel_update_command),
-            exclusive_group,
-        }),
-        UpdateAction::Prune => Ok(LinuxUpdateJobSpec {
-            kind: "nexushub_update_prune".to_string(),
-            title: "NexusHub update backup prune".to_string(),
-            command: update::panel_prune_command(),
-            exclusive_group,
-        }),
-    }
 }
 
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -3085,23 +2722,13 @@ fn security_response(state: &AppState) -> anyhow::Result<Value> {
     let security = state
         .db
         .security_settings(state.config().security.session_ttl_seconds)?;
-    let expected_hostname = state
-        .db
-        .get_setting("turnstile_expected_hostname")?
-        .or_else(|| state.config().security.turnstile_expected_hostname.clone());
-    let expected_action = state
-        .db
-        .get_setting("turnstile_expected_action")?
-        .or_else(|| state.config().security.turnstile_expected_action.clone());
-    Ok(json!({
-        "turnstile_enabled": security.turnstile_enabled,
-        "turnstile_required": security.turnstile_required,
-        "turnstile_site_key": security.turnstile_site_key.unwrap_or_else(|| nexushub_core::config::DEFAULT_TURNSTILE_SITE_KEY.to_string()),
-        "turnstile_secret_configured": security.turnstile_secret_configured,
-        "session_ttl_seconds": security.session_ttl_seconds,
-        "turnstile_expected_hostname": expected_hostname,
-        "turnstile_expected_action": expected_action,
-    }))
+    serde_json::to_value(security_service::security_view(
+        security,
+        &state.config().security,
+        state.db.get_setting("turnstile_expected_hostname")?,
+        state.db.get_setting("turnstile_expected_action")?,
+    ))
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -4055,11 +3682,11 @@ fn job_response(job: JobRecord) -> Value {
 fn normalize_goal_response(value: &Value) -> Value {
     let goal = value.get("goal").unwrap_or(value);
     if goal.is_null() {
-        return goal_empty("idle");
+        return serde_json::to_value(goal_service::goal_empty("idle")).unwrap_or(Value::Null);
     }
     let status = goal_status(goal).unwrap_or_else(|| "active".to_string());
     json!({
-        "enabled": goal_enabled(goal, &status),
+        "enabled": goal_enabled_from_value(goal, &status),
         "objective": goal.get("objective").and_then(Value::as_str),
         "token_budget": goal.get("tokenBudget").or_else(|| goal.get("token_budget")).and_then(Value::as_u64),
         "status": status,
@@ -4085,7 +3712,7 @@ fn goal_status(goal: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-fn goal_enabled(goal: &Value, status: &str) -> bool {
+fn goal_enabled_from_value(goal: &Value, status: &str) -> bool {
     if matches!(status, "idle" | "missing_thread" | "cleared") {
         return false;
     }
@@ -4104,76 +3731,6 @@ fn goal_enabled(goal: &Value, status: &str) -> bool {
             ))
 }
 
-fn goal_empty(status: &str) -> Value {
-    json!({
-        "available": !matches!(status, "missing_thread" | "unavailable"),
-        "enabled": false,
-        "objective": null,
-        "token_budget": null,
-        "status": status,
-    })
-}
-
-fn local_goal_response(goal: Option<&ThreadGoal>) -> Value {
-    let Some(goal) = goal else {
-        return goal_empty("idle");
-    };
-    let enabled = local_goal_enabled(goal);
-    json!({
-        "available": true,
-        "enabled": enabled,
-        "objective": goal.objective,
-        "token_budget": goal.token_budget,
-        "status": goal.status,
-        "completed_at": goal.completed_at,
-        "blocked_reason": goal.blocked_reason,
-        "raw": {
-            "source": "local",
-            "thread_id": goal.thread_id,
-            "created_at": goal.created_at,
-            "updated_at": goal.updated_at,
-        },
-    })
-}
-
-fn local_goal_enabled(goal: &ThreadGoal) -> bool {
-    if matches!(goal.status.as_str(), "idle" | "missing_thread" | "cleared") {
-        return false;
-    }
-    goal.objective
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || matches!(
-            goal.status.as_str(),
-            "active" | "running" | "complete" | "completed" | "blocked" | "paused"
-        )
-}
-
-fn normalize_local_goal_status(
-    status: Option<&str>,
-    enabled: Option<bool>,
-    objective: Option<&str>,
-) -> String {
-    let normalized = status
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase());
-    match normalized.as_deref() {
-        Some("complete" | "completed") => "complete".to_string(),
-        Some("blocked") => "blocked".to_string(),
-        Some("paused") => "paused".to_string(),
-        Some("cleared" | "clear") => "cleared".to_string(),
-        Some("idle") => "idle".to_string(),
-        Some("active" | "running") => "active".to_string(),
-        Some(_) => "active".to_string(),
-        None if enabled == Some(false) && objective.is_none() => "cleared".to_string(),
-        None if enabled == Some(false) => "paused".to_string(),
-        None if objective.is_some() || enabled == Some(true) => "active".to_string(),
-        None => "idle".to_string(),
-    }
-}
-
 #[allow(dead_code)]
 fn goal_unavailable(status: &str) -> Value {
     json!({
@@ -4188,11 +3745,6 @@ fn goal_unavailable(status: &str) -> Value {
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn client_ip(headers: &HeaderMap, state: &AppState, source: Option<SocketAddr>) -> Option<String> {
@@ -4239,13 +3791,11 @@ mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        archived_filter, block_changed, effective_message, fixed_probe_shell_command,
-        followup_request, linux_update_job_spec, load_probe_threads, merge_thread_summaries,
-        normalize_goal_response, probe_config_path, router, rpc_required_string,
-        rpc_wrapped_payload, rpc_wrapped_payload_or_empty, seed_thread_event_blocks,
-        thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
-        update_service, CreateThreadRequest, GoalUpdateRequest, LoginRequest, SendMessageRequest,
-        TurnstileLoginAction, UpdateAction,
+        archived_filter, block_changed, fixed_probe_shell_command, load_probe_threads,
+        merge_thread_summaries, normalize_goal_response, probe_config_path, router,
+        rpc_required_string, rpc_wrapped_payload, rpc_wrapped_payload_or_empty,
+        seed_thread_event_blocks, thread_block_page, thread_event_block_key, thread_title,
+        turnstile_login_action, update_service, LoginRequest, TurnstileLoginAction, UpdateAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4257,8 +3807,9 @@ mod tests {
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
         platform::{PlatformKind, PlatformPaths},
         services::{
-            jobs as job_service, probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
-            settings as settings_service, threads as thread_service,
+            goals as goal_service, jobs as job_service, jobs::ThreadMessageRequest,
+            probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS, settings as settings_service,
+            threads as thread_service,
         },
         uploads::{PreparedAttachment, UploadKind},
     };
@@ -4860,7 +4411,7 @@ mod tests {
 
     #[test]
     fn rpc_payload_compat_accepts_nested_and_top_level_thread_payloads() {
-        let nested: CreateThreadRequest = must(rpc_wrapped_payload(
+        let nested: ThreadMessageRequest = must(rpc_wrapped_payload(
             &json!({
                 "payload": {
                     "message": "start",
@@ -4888,7 +4439,7 @@ mod tests {
         assert_eq!(nested.network_access, Some(true));
         assert_eq!(nested.collaboration_mode.as_deref(), Some("async"));
 
-        let top_level: SendMessageRequest = must(rpc_wrapped_payload(
+        let top_level: ThreadMessageRequest = must(rpc_wrapped_payload(
             &json!({
                 "message": "continue",
                 "preparedAttachments": [],
@@ -4903,7 +4454,7 @@ mod tests {
 
     #[test]
     fn rpc_payload_compat_accepts_goal_request_wrapper_and_aliases() {
-        let payload: GoalUpdateRequest = must(rpc_wrapped_payload(
+        let payload: goal_service::GoalUpdateRequest = must(rpc_wrapped_payload(
             &json!({
                 "request": {
                     "threadId": "thread-a",
@@ -5155,7 +4706,8 @@ mod tests {
                 truncated: false,
             },
         ];
-        let request = SendMessageRequest {
+        let request = ThreadMessageRequest {
+            thread_id: None,
             message: String::new(),
             attachments: vec!["upload-md".to_string(), "upload-image".to_string()],
             prepared_attachments: prepared_attachments.clone(),
@@ -5173,7 +4725,10 @@ mod tests {
             id: "follow-up-1".to_string(),
             thread_id: "thread-a".to_string(),
             status: "pending".to_string(),
-            message: effective_message(&request.message, &request.prepared_attachments),
+            message: job_service::effective_message(
+                &request.message,
+                &request.prepared_attachments,
+            ),
             options_json: request.options_json().to_string(),
             created_at: 1,
             updated_at: 1,
@@ -5183,7 +4738,7 @@ mod tests {
             error: None,
         };
 
-        let restored = followup_request(&followup);
+        let restored = job_service::followup_request(&followup);
 
         assert_eq!(restored.message, "请根据以下附件内容继续处理。".to_string());
         assert_eq!(restored.attachments, request.attachments);
@@ -5453,7 +5008,7 @@ mod tests {
         config.update.panel_update_command = "nexushub-update --install".to_string();
         let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
-        let precheck = linux_update_job_spec(
+        let precheck = update_service::linux_update_job_spec(
             &config,
             update_service::update_action_plan(&platform, UpdateAction::Check),
         )
@@ -5461,7 +5016,7 @@ mod tests {
         assert_eq!(precheck.kind, "nexushub_update_check");
         assert_eq!(precheck.command, "nexushub-update --precheck");
 
-        let install = linux_update_job_spec(
+        let install = update_service::linux_update_job_spec(
             &config,
             update_service::update_action_plan(&platform, UpdateAction::Install),
         )
@@ -5469,7 +5024,7 @@ mod tests {
         assert_eq!(install.kind, "nexushub_update_install");
         assert_eq!(install.command, "nexushub-update --install");
 
-        let prune = linux_update_job_spec(
+        let prune = update_service::linux_update_job_spec(
             &config,
             update_service::update_action_plan(&platform, UpdateAction::Prune),
         )

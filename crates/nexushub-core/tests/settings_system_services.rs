@@ -2,8 +2,17 @@ use nexushub_core::{
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
+    db::SecuritySettings,
     platform::{PlatformKind, PlatformPaths},
     services::{
+        goals::{
+            goal_empty, goal_response, plan_clear_goal, plan_pause_goal, plan_resume_goal,
+            plan_save_goal, GoalUpdateRequest,
+        },
+        security::{
+            plan_password_change, plan_security_patch, public_security_view, security_view,
+            PasswordChangeRequest, SecurityPatch,
+        },
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
             normalize_probe_settings_patch, ProbeSecretState, ProbeSettingsSaveRequest,
@@ -63,6 +72,63 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
     assert!(!capabilities.prune_backups);
 
     std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn goal_service_normalizes_status_and_shared_response_shape() {
+    let active = plan_save_goal(GoalUpdateRequest {
+        thread_id: Some("thread-a".to_string()),
+        objective: Some(" ship ".to_string()),
+        token_budget: Some(1000),
+        status: None,
+        enabled: None,
+    })
+    .unwrap();
+    assert_eq!(active.thread_id, "thread-a");
+    assert_eq!(active.objective, Some("ship".to_string()));
+    assert_eq!(active.token_budget, Some(1000));
+    assert_eq!(active.status, "active");
+
+    let disabled = plan_save_goal(GoalUpdateRequest {
+        thread_id: Some("thread-a".to_string()),
+        objective: None,
+        token_budget: Some(1000),
+        status: None,
+        enabled: Some(false),
+    })
+    .unwrap();
+    assert_eq!(disabled.status, "cleared");
+    assert_eq!(disabled.objective, None);
+    assert_eq!(disabled.token_budget, None);
+
+    let goal = nexushub_core::db::ThreadGoal {
+        thread_id: "thread-a".to_string(),
+        objective: Some("ship".to_string()),
+        token_budget: Some(1000),
+        status: "completed".to_string(),
+        created_at: 1,
+        updated_at: 2,
+        completed_at: Some(3),
+        blocked_reason: None,
+    };
+    let view = goal_response(Some(&goal));
+    assert!(view.available);
+    assert!(view.enabled);
+    assert_eq!(view.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(view.status, "completed");
+    assert_eq!(view.completed_at, Some(3));
+    assert_eq!(
+        view.raw.as_ref().and_then(|raw| raw.source.as_deref()),
+        Some("local")
+    );
+
+    assert!(!goal_empty("missing_thread").available);
+    assert_eq!(goal_response(None).status, "idle");
+
+    let cleared = plan_clear_goal(" thread-a ").unwrap();
+    assert_eq!(cleared.status, "cleared");
+    assert_eq!(plan_pause_goal(&goal).status, "paused");
+    assert_eq!(plan_resume_goal(&goal).status, "active");
 }
 
 #[test]
@@ -259,6 +325,125 @@ fn probe_settings_save_request_keeps_nested_bark_key_when_top_level_is_blank() {
 
     assert_eq!(normalized.bark_device_key.as_deref(), Some("nested-key"));
     assert!(normalized.config_patch.probe.is_none());
+}
+
+#[test]
+fn security_views_use_core_defaults_and_linux_web_host_shape() {
+    let config = Config::for_platform_kind(PlatformKind::Linux);
+    let settings = SecuritySettings {
+        turnstile_enabled: true,
+        turnstile_required: false,
+        turnstile_site_key: None,
+        turnstile_secret_configured: true,
+        session_ttl_seconds: 900,
+    };
+
+    let view = security_view(
+        settings.clone(),
+        &config.security,
+        Some("example.com".to_string()),
+        None,
+    );
+    assert_eq!(
+        view.turnstile_site_key,
+        nexushub_core::config::DEFAULT_TURNSTILE_SITE_KEY
+    );
+    assert_eq!(
+        view.turnstile_expected_hostname.as_deref(),
+        Some("example.com")
+    );
+    assert_eq!(view.turnstile_expected_action.as_deref(), Some("login"));
+    assert!(view.turnstile_secret_configured);
+
+    let public = public_security_view(
+        settings,
+        &config.security,
+        Some("signin".to_string()),
+        true,
+        Some("https://661313.xyz/nexushub/".to_string()),
+    );
+    assert_eq!(public.site_name, "NexusHub");
+    assert_eq!(public.turnstile_action, "signin");
+    assert!(public.admin_configured);
+}
+
+#[test]
+fn security_patch_plan_validates_ttl_and_redacts_secret_in_audit_detail() {
+    let plan = plan_security_patch(SecurityPatch {
+        turnstile_enabled: Some(true),
+        turnstile_required: Some(false),
+        turnstile_site_key: Some("site-key".to_string()),
+        turnstile_secret_key: Some(" secret-key ".to_string()),
+        session_ttl_seconds: Some(600),
+        turnstile_expected_hostname: Some(" 661313.xyz ".to_string()),
+        turnstile_expected_action: Some(" login ".to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(
+        plan.settings
+            .iter()
+            .map(|write| (write.key, write.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("turnstile_enabled", "true"),
+            ("turnstile_required", "false"),
+            ("turnstile_site_key", "site-key"),
+            ("session_ttl_seconds", "600"),
+            ("turnstile_expected_hostname", "661313.xyz"),
+            ("turnstile_expected_action", "login"),
+        ]
+    );
+    assert_eq!(plan.turnstile_secret_key.as_deref(), Some("secret-key"));
+    assert_eq!(plan.audit_detail["turnstile_secret_key"], "[configured]");
+
+    assert!(plan_security_patch(SecurityPatch {
+        session_ttl_seconds: Some(299),
+        ..SecurityPatch {
+            turnstile_enabled: None,
+            turnstile_required: None,
+            turnstile_site_key: None,
+            turnstile_secret_key: None,
+            session_ttl_seconds: None,
+            turnstile_expected_hostname: None,
+            turnstile_expected_action: None,
+        }
+    })
+    .unwrap_err()
+    .to_string()
+    .contains("session ttl"));
+}
+
+#[test]
+fn password_change_plan_keeps_auth_hashing_in_adapter_but_centralizes_validation() {
+    let request = PasswordChangeRequest {
+        current_password: "old password".to_string(),
+        new_password: "new-password-123".to_string(),
+    };
+    let plan = plan_password_change(request, true).unwrap();
+    assert_eq!(plan.new_password, "new-password-123");
+
+    let invalid_current = plan_password_change(
+        PasswordChangeRequest {
+            current_password: "bad".to_string(),
+            new_password: "new-password-123".to_string(),
+        },
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(invalid_current.contains("invalid current password"));
+
+    let short_password = plan_password_change(
+        PasswordChangeRequest {
+            current_password: "old".to_string(),
+            new_password: "short".to_string(),
+        },
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(short_password.contains("at least 12"));
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

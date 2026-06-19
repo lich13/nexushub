@@ -2,8 +2,9 @@ use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
     system::{compare_semver, extract_semver},
-    update::{analyze_job_failure, JobFailureCategory},
+    update::{self, analyze_job_failure, JobFailureCategory},
 };
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +72,14 @@ pub struct UpdateJobPlan {
     pub exclusive: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LinuxUpdateJobSpec {
+    pub kind: String,
+    pub title: String,
+    pub command: String,
+    pub exclusive_group: Option<String>,
+}
+
 pub fn update_status(
     _config: &Config,
     platform: &PlatformPaths,
@@ -113,6 +122,33 @@ pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> Upd
         method: execution_method(platform.kind),
         platform: platform.kind,
         exclusive: platform.kind == PlatformKind::Linux,
+    }
+}
+
+pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
+    if plan.platform != PlatformKind::Linux {
+        anyhow::bail!("only Linux WebUI can start server update jobs");
+    }
+    let exclusive_group = plan.exclusive.then(|| "nexushub-update".to_string());
+    match plan.action {
+        UpdateAction::Check => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_check".to_string(),
+            title: "NexusHub update precheck".to_string(),
+            command: config.update.panel_precheck_command.clone(),
+            exclusive_group,
+        }),
+        UpdateAction::Install => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_install".to_string(),
+            title: "NexusHub update install".to_string(),
+            command: update::panel_update_command(&config.update.panel_update_command),
+            exclusive_group,
+        }),
+        UpdateAction::Prune => Ok(LinuxUpdateJobSpec {
+            kind: "nexushub_update_prune".to_string(),
+            title: "NexusHub update backup prune".to_string(),
+            command: update::panel_prune_command(),
+            exclusive_group,
+        }),
     }
 }
 

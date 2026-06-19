@@ -1,5 +1,7 @@
+pub mod goals;
 pub mod jobs;
 pub mod probe;
+pub mod security;
 pub mod settings;
 pub mod system;
 pub mod threads;

@@ -15,7 +15,7 @@ use crate::overview::{
     DesktopProbeEventsResponse, DesktopProbeNotificationsRequest, DesktopProbeSettings,
     DesktopProbeSettingsPatch, DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
 };
-use nexushub_core::services::settings::ProbeSettingsSaveRequest;
+use nexushub_core::services::{goals as goal_service, settings::ProbeSettingsSaveRequest};
 
 #[tauri::command]
 pub fn desktop_archive_plan_command() -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
@@ -124,21 +124,18 @@ pub fn saveProbeSettings(
     let normalized = settings.normalize().map_err(|err| err.to_string())?;
     let request = DesktopProbeSettingsRequest {
         codex: normalized.config_patch.codex,
-        probe: normalized.config_patch.probe.map(DesktopProbeSettingsPatch::from),
-        notifications: None,
+        probe: normalized
+            .config_patch
+            .probe
+            .map(DesktopProbeSettingsPatch::from),
+        notifications: normalized.bark_device_key.map(|device_key| {
+            DesktopProbeNotificationsRequest {
+                device_key: Some(device_key),
+                patch: Default::default(),
+            }
+        }),
     };
-    let response = desktop_probe_save_settings_with_state(&state, request)
-        .map_err(|err| err.to_string())?;
-    if let Some(device_key) = normalized.bark_device_key {
-        state
-            .db
-            .set_secret_setting_bytes(
-                nexushub_core::services::settings::PROBE_BARK_DEVICE_KEY_SETTING,
-                device_key.as_bytes(),
-            )
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(response)
+    desktop_probe_save_settings_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -167,8 +164,10 @@ pub fn desktop_probe_logs_db_maintain(
 pub fn getProbeLogsDbStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::probe::ProbeLogsDbStatus, String> {
-    Ok(nexushub_core::probe::ProbeRuntime::new(state.config(), state.platform().clone())
-        .logs_db_status())
+    Ok(
+        nexushub_core::probe::ProbeRuntime::new(state.config(), state.platform().clone())
+            .logs_db_status(),
+    )
 }
 
 #[tauri::command]
@@ -322,34 +321,24 @@ pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
     thread_id: String,
 ) -> Result<DesktopGoal, String> {
-    match state
+    let view = match state
         .db
         .get_thread_goal(&thread_id)
         .map_err(|err| err.to_string())?
     {
-        Some(goal) => Ok(DesktopGoal {
-            available: true,
-            enabled: !matches!(goal.status.as_str(), "idle" | "missing_thread" | "cleared")
-                && (goal.objective.as_ref().is_some_and(|value| !value.trim().is_empty())
-                    || matches!(goal.status.as_str(), "active" | "paused" | "blocked")),
-            thread_id: Some(goal.thread_id),
-            objective: goal.objective,
-            token_budget: goal.token_budget,
-            status: goal.status,
-            completed_at: goal.completed_at,
-            blocked_reason: goal.blocked_reason,
-        }),
-        None => Ok(DesktopGoal {
-            available: true,
-            enabled: false,
-            thread_id: Some(thread_id),
-            objective: None,
-            token_budget: None,
-            status: "idle".to_string(),
-            completed_at: None,
-            blocked_reason: None,
-        }),
-    }
+        Some(goal) => goal_service::goal_response(Some(&goal)),
+        None => goal_service::goal_empty("idle"),
+    };
+    Ok(DesktopGoal {
+        available: view.available,
+        enabled: view.enabled,
+        thread_id: view.thread_id.or(Some(thread_id)),
+        objective: view.objective,
+        token_budget: view.token_budget,
+        status: view.status,
+        completed_at: view.completed_at,
+        blocked_reason: view.blocked_reason,
+    })
 }
 
 #[tauri::command]
@@ -401,10 +390,12 @@ impl From<nexushub_core::config::ProbeSettingsPatch> for DesktopProbeSettingsPat
             poll_seconds: value.poll_seconds,
             recent_limit: value.recent_limit,
             hooks: value.hooks,
-            notifications: value.notifications.map(|patch| DesktopProbeNotificationsRequest {
-                device_key: None,
-                patch,
-            }),
+            notifications: value
+                .notifications
+                .map(|patch| DesktopProbeNotificationsRequest {
+                    device_key: None,
+                    patch,
+                }),
             observability: value.observability,
             logs_db: value.logs_db,
         }

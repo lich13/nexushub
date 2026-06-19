@@ -15,7 +15,7 @@ use nexushub_core::{
         ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     crypto::SecretBox,
-    db::{JobRecord, PanelDb, ProbeEvent, ThreadFollowUp, ThreadGoalUpdate},
+    db::{JobRecord, PanelDb, ProbeEvent, ThreadFollowUp},
     jobs::{CodexActionResult, JobRunner},
     local::{
         default_codex_models, default_permission_profiles, local_codex_config,
@@ -28,7 +28,7 @@ use nexushub_core::{
         ProbeRuntime, ProbeStatus,
     },
     services::{
-        jobs as job_service, settings as settings_service,
+        goals as goal_service, jobs as job_service, settings as settings_service,
         threads::{self as thread_service, ThreadsQuery},
     },
     system::{system_status_with_paths, SystemStatus},
@@ -631,22 +631,16 @@ pub fn desktop_save_goal_with_state(
     state: &DesktopState,
     request: DesktopGoalRequest,
 ) -> Result<DesktopGoal> {
-    let objective = request
-        .objective
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let token_budget = objective.and(request.token_budget);
+    let plan = goal_service::plan_save_goal(goal_service::GoalUpdateRequest {
+        thread_id: Some(request.thread_id),
+        objective: request.objective,
+        token_budget: request.token_budget,
+        status: None,
+        enabled: None,
+    })?;
     upsert_desktop_goal_with_state(
         state,
-        ThreadGoalUpdate {
-            thread_id: &request.thread_id,
-            objective,
-            token_budget,
-            status: objective.map_or("cleared", |_| "active"),
-            completed_at: None,
-            blocked_reason: None,
-        },
+        plan.as_thread_goal_update(),
     )
 }
 
@@ -656,17 +650,8 @@ pub fn desktop_clear_goal(thread_id: &str) -> Result<DesktopGoal> {
 }
 
 pub fn desktop_clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    upsert_desktop_goal_with_state(
-        state,
-        ThreadGoalUpdate {
-            thread_id,
-            objective: None,
-            token_budget: None,
-            status: "cleared",
-            completed_at: None,
-            blocked_reason: None,
-        },
-    )
+    let plan = goal_service::plan_clear_goal(thread_id)?;
+    upsert_desktop_goal_with_state(state, plan.as_thread_goal_update())
 }
 
 pub fn desktop_pause_goal(thread_id: &str) -> Result<DesktopGoal> {
@@ -700,7 +685,7 @@ pub fn desktop_open_log_dir() -> Result<()> {
 
 pub fn desktop_send_message_with_state(
     state: &DesktopState,
-    request: DesktopSendMessageRequest,
+    mut request: DesktopSendMessageRequest,
 ) -> Result<CodexActionResult> {
     let Some(thread_id) = request
         .thread_id
@@ -710,12 +695,13 @@ pub fn desktop_send_message_with_state(
     else {
         return start_codex_new_thread_job(state, request);
     };
-    start_codex_resume_job(state, thread_id, effective_message(&request.message))
+    request.thread_id = Some(thread_id.to_string());
+    start_codex_job_from_request(state, request, job_service::CodexActionKind::Resume)
 }
 
 pub fn desktop_continue_thread_with_state(
     state: &DesktopState,
-    request: DesktopSendMessageRequest,
+    mut request: DesktopSendMessageRequest,
 ) -> Result<CodexActionResult> {
     let Some(thread_id) = request
         .thread_id
@@ -725,7 +711,8 @@ pub fn desktop_continue_thread_with_state(
     else {
         anyhow::bail!("thread_id is required");
     };
-    start_codex_resume_job(state, thread_id, effective_message(&request.message))
+    request.thread_id = Some(thread_id.to_string());
+    start_codex_job_from_request(state, request, job_service::CodexActionKind::Resume)
 }
 
 pub fn desktop_stop_thread_with_state(
@@ -802,13 +789,7 @@ pub fn desktop_archive_thread_with_state(
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
     set_thread_archived(&state.codex_paths(), &request.thread_id, true)?;
-    Ok(ok_action(
-        "desktop_archive_thread",
-        "thread archived in local Codex state",
-        Some(request.thread_id),
-        None,
-        None,
-    ))
+    Ok(job_service::archive_thread_response(request.thread_id, true).into())
 }
 
 pub fn desktop_restore_thread_with_state(
@@ -816,13 +797,7 @@ pub fn desktop_restore_thread_with_state(
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
     set_thread_archived(&state.codex_paths(), &request.thread_id, false)?;
-    Ok(ok_action(
-        "desktop_restore_thread",
-        "thread restored in local Codex state",
-        Some(request.thread_id),
-        None,
-        None,
-    ))
+    Ok(job_service::archive_thread_response(request.thread_id, false).into())
 }
 
 pub fn desktop_rename_thread_with_state(
@@ -834,13 +809,7 @@ pub fn desktop_rename_thread_with_state(
         anyhow::bail!("name cannot be empty");
     }
     set_thread_title(&state.codex_paths(), &request.thread_id, name)?;
-    Ok(ok_action(
-        "desktop_rename_thread",
-        "thread renamed in local Codex state",
-        Some(request.thread_id),
-        None,
-        Some(json!({"name": name})),
-    ))
+    job_service::rename_thread_response(request.thread_id, name).map(Into::into)
 }
 
 pub fn desktop_fork_thread_with_state(request: DesktopThreadIdRequest) -> DesktopActionResponse {
@@ -1147,6 +1116,7 @@ pub fn desktop_enqueue_followup_with_state(
     state: &DesktopState,
     request: DesktopSendMessageRequest,
 ) -> Result<ThreadFollowUp> {
+    let attachments = prepare_request_attachments(state, &request.attachments)?;
     let Some(thread_id) = request
         .thread_id
         .as_deref()
@@ -1155,13 +1125,11 @@ pub fn desktop_enqueue_followup_with_state(
     else {
         anyhow::bail!("thread_id is required");
     };
-    let message = effective_message(&request.message);
-    if message.is_empty() {
-        anyhow::bail!("follow-up message is required");
-    }
-    state
-        .db
-        .enqueue_followup(thread_id, &message, request.options_json())
+    let thread_id = thread_id.to_string();
+    let (message, options) = request
+        .into_thread_message(attachments)
+        .into_followup_message_and_options()?;
+    state.db.enqueue_followup(&thread_id, &message, options)
 }
 
 pub fn desktop_cancel_followup_with_state(
@@ -1171,17 +1139,13 @@ pub fn desktop_cancel_followup_with_state(
     let cancelled = state
         .db
         .cancel_followup(&request.thread_id, &request.followup_id)?;
-    Ok(ok_action(
+    Ok(job_service::cancel_followup_response(
         "desktop_cancel_followup",
-        if cancelled {
-            "follow-up cancelled"
-        } else {
-            "follow-up was not pending"
-        },
-        Some(request.thread_id),
-        None,
-        Some(json!({"followup_id": request.followup_id, "cancelled": cancelled})),
-    ))
+        request.thread_id,
+        request.followup_id,
+        cancelled,
+    )
+    .into())
 }
 
 pub async fn desktop_platform_status_with_state(
@@ -1262,41 +1226,44 @@ impl DesktopActionResponse {
     }
 }
 
-impl DesktopSendMessageRequest {
-    fn options_json(&self) -> Value {
-        json!({
-            "model": &self.model,
-            "service_tier": &self.service_tier,
-            "reasoning_effort": &self.reasoning_effort,
-            "cwd": &self.cwd,
-            "permission_profile": &self.permission_profile,
-            "approval_policy": &self.approval_policy,
-            "sandbox_mode": &self.sandbox_mode,
-            "network_access": self.network_access,
-            "collaboration_mode": &self.collaboration_mode,
-            "attachments": &self.attachments,
-        })
+impl From<job_service::ActionResponse> for DesktopActionResponse {
+    fn from(value: job_service::ActionResponse) -> Self {
+        Self {
+            ok: value.ok,
+            available: value.available,
+            command: value.command,
+            message: value.message,
+            thread_id: value.thread_id,
+            job_id: value.job_id,
+            data: value.data,
+        }
     }
+}
 
-    fn into_job_action(self, kind: job_service::CodexActionKind) -> job_service::JobActionRequest {
-        job_service::JobActionRequest {
-            kind,
+impl DesktopSendMessageRequest {
+    fn into_thread_message(
+        self,
+        prepared_attachments: Vec<uploads::PreparedAttachment>,
+    ) -> job_service::ThreadMessageRequest {
+        job_service::ThreadMessageRequest {
             thread_id: self.thread_id,
             message: self.message,
-            cwd: self
-                .cwd
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from),
+            attachments: self.attachments,
+            prepared_attachments,
             model: self.model,
             service_tier: self.service_tier,
             reasoning_effort: self.reasoning_effort,
+            cwd: self.cwd,
             permission_profile: self.permission_profile,
             approval_policy: self.approval_policy,
             sandbox_mode: self.sandbox_mode,
             network_access: self.network_access,
             collaboration_mode: self.collaboration_mode,
         }
+    }
+
+    fn into_job_action(self, kind: job_service::CodexActionKind) -> job_service::JobActionRequest {
+        self.into_thread_message(Vec::new()).into_job_action(kind)
     }
 }
 
@@ -1331,31 +1298,11 @@ fn ok_action(
     job_id: Option<String>,
     data: Option<Value>,
 ) -> DesktopActionResponse {
-    DesktopActionResponse {
-        ok: true,
-        available: true,
-        command: command.to_string(),
-        message: message.to_string(),
-        thread_id,
-        job_id,
-        data,
-    }
+    job_service::action_ok(command, message, thread_id, job_id, data).into()
 }
 
 pub fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
-    DesktopActionResponse {
-        ok: false,
-        available: false,
-        command: command.to_string(),
-        message: message.to_string(),
-        thread_id: None,
-        job_id: None,
-        data: None,
-    }
-}
-
-fn effective_message(message: &str) -> String {
-    message.trim().to_string()
+    job_service::action_unavailable(command, message).into()
 }
 
 fn start_codex_new_thread_job(
@@ -1398,14 +1345,10 @@ fn start_codex_job_from_request(
     state
         .db
         .link_job_thread(&job_id, spec.thread_id.as_deref(), None)?;
-    Ok(CodexActionResult {
-        bridge: false,
-        thread_id: spec.thread_id,
-        turn_id: None,
-        job_id: Some(job_id),
-        fallback: true,
-        message: Some(job_service::CODEX_SUBMITTED_MESSAGE.to_string()),
-    })
+    Ok(job_service::codex_action_submitted(
+        spec.thread_id,
+        Some(job_id),
+    ))
 }
 
 fn desktop_codex_job_spec_for_request(
@@ -1414,8 +1357,9 @@ fn desktop_codex_job_spec_for_request(
     kind: job_service::CodexActionKind,
 ) -> Result<job_service::CodexJobSpec> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let mut action = request.into_job_action(kind);
-    action.message = uploads::prompt_with_attachment_context(&action.message, &attachments);
+    let action = request
+        .into_thread_message(attachments)
+        .into_job_action(kind);
     let config = state.config();
     job_service::build_codex_job_spec(&action, config.codex.workspace.clone())
 }
@@ -1520,7 +1464,7 @@ fn job_response(job: JobRecord) -> DesktopJobResponse {
 
 fn first_thread_goal(config: &Config, first_thread: Option<&ThreadSummary>) -> DesktopGoal {
     let Some(thread) = first_thread else {
-        return empty_goal("missing_thread", None);
+        return desktop_goal_from_view(goal_service::goal_empty("missing_thread"));
     };
     get_desktop_goal(config, &thread.id).unwrap_or_else(|err| DesktopGoal {
         available: false,
@@ -1537,17 +1481,20 @@ fn first_thread_goal(config: &Config, first_thread: Option<&ThreadSummary>) -> D
 fn get_desktop_goal(config: &Config, thread_id: &str) -> Result<DesktopGoal> {
     let db = open_panel_db(config)?;
     let Some(goal) = db.get_thread_goal(thread_id)? else {
-        return Ok(empty_goal("idle", Some(thread_id.to_string())));
+        return Ok(desktop_goal_with_thread_id(
+            goal_service::goal_empty("idle"),
+            Some(thread_id.to_string()),
+        ));
     };
-    Ok(goal_response(goal))
+    Ok(goal_response(&goal))
 }
 
 fn upsert_desktop_goal_with_state(
     state: &DesktopState,
-    update: ThreadGoalUpdate<'_>,
+    update: nexushub_core::db::ThreadGoalUpdate<'_>,
 ) -> Result<DesktopGoal> {
     let goal = state.db.upsert_thread_goal(update)?;
-    Ok(goal_response(goal))
+    Ok(goal_response(&goal))
 }
 
 fn update_existing_desktop_goal_status_with_state(
@@ -1556,17 +1503,9 @@ fn update_existing_desktop_goal_status_with_state(
     status: &'static str,
 ) -> Result<DesktopGoal> {
     let existing = state.db.get_thread_goal(thread_id)?;
-    let objective = existing.as_ref().and_then(|goal| goal.objective.as_deref());
-    let token_budget = existing.as_ref().and_then(|goal| goal.token_budget);
-    let goal = state.db.upsert_thread_goal(ThreadGoalUpdate {
-        thread_id,
-        objective,
-        token_budget,
-        status,
-        completed_at: None,
-        blocked_reason: None,
-    })?;
-    Ok(goal_response(goal))
+    let plan = goal_service::plan_goal_status_for_thread(thread_id, existing.as_ref(), status)?;
+    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
+    Ok(goal_response(&goal))
 }
 
 fn open_panel_db(config: &Config) -> Result<PanelDb> {
@@ -1576,31 +1515,8 @@ fn open_panel_db(config: &Config) -> Result<PanelDb> {
     PanelDb::open_with_secret_box(&config.paths.db_path, secret_box)
 }
 
-fn empty_goal(status: &str, thread_id: Option<String>) -> DesktopGoal {
-    DesktopGoal {
-        available: true,
-        enabled: false,
-        thread_id,
-        objective: None,
-        token_budget: None,
-        status: status.to_string(),
-        completed_at: None,
-        blocked_reason: None,
-    }
-}
-
-fn goal_response(goal: nexushub_core::db::ThreadGoal) -> DesktopGoal {
-    let enabled = goal_enabled(&goal);
-    DesktopGoal {
-        available: true,
-        enabled,
-        thread_id: Some(goal.thread_id),
-        objective: goal.objective,
-        token_budget: goal.token_budget,
-        status: goal.status,
-        completed_at: goal.completed_at,
-        blocked_reason: goal.blocked_reason,
-    }
+fn goal_response(goal: &nexushub_core::db::ThreadGoal) -> DesktopGoal {
+    desktop_goal_from_view(goal_service::goal_response(Some(goal)))
 }
 
 fn open_path(path: PathBuf) -> Result<()> {
@@ -1609,18 +1525,24 @@ fn open_path(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn goal_enabled(goal: &nexushub_core::db::ThreadGoal) -> bool {
-    if matches!(goal.status.as_str(), "idle" | "missing_thread" | "cleared") {
-        return false;
+fn desktop_goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
+    desktop_goal_with_thread_id(view, None)
+}
+
+fn desktop_goal_with_thread_id(
+    view: goal_service::GoalView,
+    thread_id: Option<String>,
+) -> DesktopGoal {
+    DesktopGoal {
+        available: view.available,
+        enabled: view.enabled,
+        thread_id: view.thread_id.or(thread_id),
+        objective: view.objective,
+        token_budget: view.token_budget,
+        status: view.status,
+        completed_at: view.completed_at,
+        blocked_reason: view.blocked_reason,
     }
-    goal.objective
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || matches!(
-            goal.status.as_str(),
-            "active" | "running" | "complete" | "completed" | "blocked" | "paused"
-        )
 }
 
 fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
@@ -1701,7 +1623,7 @@ mod tests {
 
     #[test]
     fn desktop_goal_response_tracks_enabled_state() {
-        let active = goal_response(nexushub_core::db::ThreadGoal {
+        let active = goal_response(&nexushub_core::db::ThreadGoal {
             thread_id: "thread-a".to_string(),
             objective: Some("ship".to_string()),
             token_budget: Some(1000),
@@ -1716,7 +1638,7 @@ mod tests {
         assert_eq!(active.thread_id.as_deref(), Some("thread-a"));
         assert_eq!(active.objective.as_deref(), Some("ship"));
 
-        let cleared = goal_response(nexushub_core::db::ThreadGoal {
+        let cleared = goal_response(&nexushub_core::db::ThreadGoal {
             thread_id: "thread-a".to_string(),
             objective: None,
             token_budget: None,
