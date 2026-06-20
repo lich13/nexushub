@@ -1,6 +1,7 @@
 use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
+    services::system::{require_capability, Capability},
     system::{compare_semver, extract_semver},
     update::{self, analyze_job_failure, JobFailureCategory},
 };
@@ -80,6 +81,15 @@ pub struct LinuxUpdateJobSpec {
     pub exclusive_group: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateActionPlan {
+    pub required_capability: Capability,
+    pub action: UpdateAction,
+    pub method: UpdateExecutionMethod,
+    pub platform: PlatformKind,
+    pub linux_job: Option<LinuxUpdateJobSpec>,
+}
+
 pub fn update_status(
     _config: &Config,
     platform: &PlatformPaths,
@@ -125,7 +135,27 @@ pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> Upd
     }
 }
 
+pub fn plan_update_action(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: UpdateAction,
+) -> Result<UpdateActionPlan> {
+    require_capability(platform, Capability::LinuxUpdateJob)?;
+    let job_plan = update_action_plan(platform, action);
+    let linux_job = Some(linux_update_job_spec(config, job_plan)?);
+    Ok(UpdateActionPlan {
+        required_capability: Capability::LinuxUpdateJob,
+        action,
+        method: job_plan.method,
+        platform: job_plan.platform,
+        linux_job,
+    })
+}
+
 pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
+    if plan.method != UpdateExecutionMethod::LinuxSystemdJob {
+        anyhow::bail!("only Linux WebUI can start server update jobs");
+    }
     if plan.platform != PlatformKind::Linux {
         anyhow::bail!("only Linux WebUI can start server update jobs");
     }
@@ -240,5 +270,46 @@ impl From<JobFailureCategory> for UpdateFailureCategory {
             JobFailureCategory::CodexLocalStateUnavailable => Self::CodexLocalStateUnavailable,
             JobFailureCategory::Unknown => Self::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{plan_update_action, UpdateAction, UpdateExecutionMethod};
+    use crate::{
+        config::Config,
+        platform::{PlatformKind, PlatformPaths},
+        services::system::Capability,
+    };
+
+    #[test]
+    fn linux_update_action_plan_includes_capability_and_job_spec() {
+        let config = Config::for_platform_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+
+        let plan = plan_update_action(&config, &platform, UpdateAction::Install)
+            .expect("Linux should allow update shell jobs");
+
+        assert_eq!(plan.required_capability, Capability::LinuxUpdateJob);
+        assert_eq!(plan.method, UpdateExecutionMethod::LinuxSystemdJob);
+        let job = plan
+            .linux_job
+            .expect("Linux update action should create a shell job spec");
+        assert_eq!(job.kind, "nexushub_update_install");
+        assert_eq!(job.exclusive_group.as_deref(), Some("nexushub-update"));
+        assert!(job.command.contains("nexushub-update"));
+    }
+
+    #[test]
+    fn non_linux_update_action_plan_does_not_create_linux_job() {
+        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+
+        let err = plan_update_action(&config, &platform, UpdateAction::Install)
+            .expect_err("macOS should not plan Linux update jobs");
+
+        assert!(err
+            .to_string()
+            .contains("linux_update_job is unavailable on macos"));
     }
 }

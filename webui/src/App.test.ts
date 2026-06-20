@@ -186,8 +186,8 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: true,
   publicEndpointStatus: true,
   codexStatePaths: true,
-  linuxBackupPrune: true,
-  linuxUpdateLabels: true,
+  backupPrune: true,
+  updateServiceLabels: true,
   forkAction: true,
   approvalActions: true
 };
@@ -199,8 +199,8 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  linuxBackupPrune: false,
-  linuxUpdateLabels: false,
+  backupPrune: false,
+  updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
 };
@@ -222,6 +222,21 @@ describe("conversation helpers", () => {
       csrf_token: null
     });
   }, 15000);
+
+  test("security workspace is gated by web security capability and derives endpoint copy", () => {
+    const securityWorkspaceSource = extractFunctionSource("SecurityWorkspace");
+    const shellSource = appSource.slice(
+      appSource.indexOf("function App()"),
+      appSource.indexOf("class WorkspaceErrorBoundary")
+    );
+
+    expect(shellSource).toContain('capabilities.securitySettings && view === "security"');
+    expect(securityWorkspaceSource).toContain("getSystemStatus");
+    expect(securityWorkspaceSource).toContain('value={expectedHostname ?? "未配置"}');
+    expect(securityWorkspaceSource).toContain('placeholder={defaultExpectedHostname ?? "未配置"}');
+    expect(securityWorkspaceSource).not.toContain('|| "661313.xyz"');
+    expect(securityWorkspaceSource).not.toContain("661313.xyz");
+  });
 
   test("desktop runtime keeps shared update entry but removes Linux-only update actions", async () => {
     const app = await loadApp();

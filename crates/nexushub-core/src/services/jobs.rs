@@ -98,6 +98,25 @@ pub struct ThreadMessageRequest {
     pub collaboration_mode: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadCommandKind {
+    #[default]
+    Create,
+    Resume,
+    #[serde(alias = "followup", alias = "steer")]
+    FollowUp,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCommandRequest {
+    pub command: ThreadCommandKind,
+    #[serde(default, alias = "thread_id")]
+    pub thread_id: Option<String>,
+    pub message: ThreadMessageRequest,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FollowUpView {
     pub id: String,
@@ -123,6 +142,23 @@ pub struct ActionResponse {
     pub thread_id: Option<String>,
     pub job_id: Option<String>,
     pub data: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadFollowUpPlan {
+    pub thread_id: String,
+    pub message: String,
+    pub options: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCommandPlan {
+    pub command: ThreadCommandKind,
+    pub thread_id: Option<String>,
+    pub action: JobActionRequest,
+    pub followup: Option<ThreadFollowUpPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +249,59 @@ impl ThreadMessageRequest {
             return Err(anyhow!(FOLLOW_UP_REQUIRED_MESSAGE));
         }
         Ok((message, self.options_json()))
+    }
+}
+
+pub fn normalize_thread_command_request(
+    request: ThreadCommandRequest,
+) -> Result<ThreadCommandPlan> {
+    match request.command {
+        ThreadCommandKind::Create => {
+            let mut message = request.message;
+            message.thread_id = None;
+            let action = message.into_job_action(CodexActionKind::Exec);
+            Ok(ThreadCommandPlan {
+                command: ThreadCommandKind::Create,
+                thread_id: None,
+                action,
+                followup: None,
+            })
+        }
+        ThreadCommandKind::Resume => {
+            let thread_id = required_command_thread_id(
+                request.thread_id.as_deref(),
+                request.message.thread_id.as_deref(),
+            )?;
+            let mut message = request.message;
+            message.thread_id = Some(thread_id.clone());
+            let action = message.into_job_action(CodexActionKind::Resume);
+            Ok(ThreadCommandPlan {
+                command: ThreadCommandKind::Resume,
+                thread_id: Some(thread_id),
+                action,
+                followup: None,
+            })
+        }
+        ThreadCommandKind::FollowUp => {
+            let thread_id = required_command_thread_id(
+                request.thread_id.as_deref(),
+                request.message.thread_id.as_deref(),
+            )?;
+            let mut message = request.message;
+            message.thread_id = Some(thread_id.clone());
+            let action = message.clone().into_job_action(CodexActionKind::Resume);
+            let (followup_message, options) = message.into_followup_message_and_options()?;
+            Ok(ThreadCommandPlan {
+                command: ThreadCommandKind::FollowUp,
+                thread_id: Some(thread_id.clone()),
+                action,
+                followup: Some(ThreadFollowUpPlan {
+                    thread_id,
+                    message: followup_message,
+                    options,
+                }),
+            })
+        }
     }
 }
 
@@ -594,6 +683,16 @@ fn non_empty_owned(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn required_command_thread_id(
+    request_thread_id: Option<&str>,
+    message_thread_id: Option<&str>,
+) -> Result<String> {
+    non_empty(request_thread_id)
+        .or_else(|| non_empty(message_thread_id))
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("thread_id is required"))
+}
+
 fn string_option(options: &Value, key: &str) -> Option<String> {
     options.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -623,9 +722,10 @@ mod tests {
     use crate::services::jobs::{
         archive_thread_response, build_codex_job_spec, cancel_followup_response,
         codex_action_submitted, effective_message, elicitation_answer_resume_message,
-        followup_request, followup_view, plan_accept_resume_message, plan_revise_resume_message,
-        rename_thread_response, thread_message_options_json, CodexActionKind, JobActionRequest,
-        ThreadMessageRequest,
+        followup_request, followup_view, normalize_thread_command_request,
+        plan_accept_resume_message, plan_revise_resume_message, rename_thread_response,
+        thread_message_options_json, CodexActionKind, JobActionRequest, ThreadCommandKind,
+        ThreadCommandRequest, ThreadMessageRequest,
     };
     use crate::{
         db::ThreadFollowUp,
@@ -826,6 +926,84 @@ mod tests {
         assert_eq!(action.cwd, Some(PathBuf::from("/tmp/work")));
         assert_eq!(action.model.as_deref(), Some("gpt-5.5"));
         assert!(action.message.contains("请根据以下附件内容继续处理。"));
+    }
+
+    #[test]
+    fn thread_command_request_normalizes_exec_resume_and_followup_paths() {
+        let create = normalize_thread_command_request(ThreadCommandRequest {
+            command: ThreadCommandKind::Create,
+            thread_id: Some("ignored".to_string()),
+            message: ThreadMessageRequest {
+                message: "  start  ".to_string(),
+                cwd: Some(" /tmp/work ".to_string()),
+                ..ThreadMessageRequest::default()
+            },
+        })
+        .unwrap();
+        assert_eq!(create.action.kind, CodexActionKind::Exec);
+        assert_eq!(create.action.thread_id, None);
+        assert_eq!(create.action.message, "start");
+        assert_eq!(create.action.cwd, Some(PathBuf::from("/tmp/work")));
+        assert!(create.followup.is_none());
+
+        let resume = normalize_thread_command_request(ThreadCommandRequest {
+            command: ThreadCommandKind::Resume,
+            thread_id: Some(" thread-a ".to_string()),
+            message: ThreadMessageRequest {
+                message: " continue ".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                ..ThreadMessageRequest::default()
+            },
+        })
+        .unwrap();
+        assert_eq!(resume.action.kind, CodexActionKind::Resume);
+        assert_eq!(resume.action.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(resume.action.message, "continue");
+        assert_eq!(resume.action.model.as_deref(), Some("gpt-5.5"));
+
+        let steer = normalize_thread_command_request(ThreadCommandRequest {
+            command: ThreadCommandKind::FollowUp,
+            thread_id: Some(" thread-a ".to_string()),
+            message: ThreadMessageRequest {
+                message: "  queue this  ".to_string(),
+                attachments: vec!["upload-a".to_string()],
+                ..ThreadMessageRequest::default()
+            },
+        })
+        .unwrap();
+        let followup = steer.followup.expect("followup plan");
+        assert_eq!(followup.thread_id, "thread-a");
+        assert_eq!(followup.message, "queue this");
+        assert_eq!(followup.options["attachments"][0], "upload-a");
+    }
+
+    #[test]
+    fn thread_command_request_rejects_missing_thread_for_resume_and_followup() {
+        let missing_resume = normalize_thread_command_request(ThreadCommandRequest {
+            command: ThreadCommandKind::Resume,
+            thread_id: Some(" ".to_string()),
+            message: ThreadMessageRequest {
+                message: "continue".to_string(),
+                ..ThreadMessageRequest::default()
+            },
+        });
+        assert!(missing_resume
+            .unwrap_err()
+            .to_string()
+            .contains("thread_id is required"));
+
+        let missing_followup = normalize_thread_command_request(ThreadCommandRequest {
+            command: ThreadCommandKind::FollowUp,
+            thread_id: None,
+            message: ThreadMessageRequest {
+                message: "queue".to_string(),
+                ..ThreadMessageRequest::default()
+            },
+        });
+        assert!(missing_followup
+            .unwrap_err()
+            .to_string()
+            .contains("thread_id is required"));
     }
 
     #[test]

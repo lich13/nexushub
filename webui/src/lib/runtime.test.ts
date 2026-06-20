@@ -70,15 +70,13 @@ describe("NexusHub runtime transport", () => {
     const { runtimeDispatch } = await loadRuntime(true);
 
     const result = await runtimeDispatch({
-      webCommand: "listThreads",
-      webArgs: { status: "all" },
-      desktopCommand: "desktop_threads",
-      desktopArgs: { request: { status: "all", query: "plan", limit: 20 } }
+      command: "listThreads",
+      args: { status: "all", q: "plan", limit: 20 }
     });
 
     expect(result).toEqual({
-      command: "desktop_threads",
-      args: { request: { status: "all", query: "plan", limit: 20 } }
+      command: "listThreads",
+      args: { status: "all", q: "plan", limit: 20 }
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -90,7 +88,7 @@ describe("NexusHub runtime transport", () => {
     const result = await invokeDesktopUpload([{ name: "note.md", mime: "text/markdown", bytes: [35] }]);
 
     expect(result).toEqual({
-      command: "desktop_upload_files_command",
+      command: "uploadFiles",
       args: { files: [{ name: "note.md", mime: "text/markdown", bytes: [35] }] }
     });
   });

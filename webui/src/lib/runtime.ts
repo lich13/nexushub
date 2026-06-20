@@ -19,11 +19,8 @@ export type RuntimeThreadEventSource = {
 };
 
 export type RuntimeDispatchOptions<T = unknown> = {
-  command?: string;
-  webCommand?: string;
-  webArgs?: RpcArgs;
-  desktopCommand?: string;
-  desktopArgs?: RpcArgs;
+  command: string;
+  args?: RpcArgs;
   desktopFallback?: () => T | Promise<T>;
   desktopUnavailable?: string;
   webUnavailable?: string;
@@ -218,10 +215,6 @@ export async function invokeDesktop<T = unknown>(
 export async function runtimeDispatch<T = unknown>(
   options: RuntimeDispatchOptions<T>,
 ): Promise<T> {
-  const webCommand = options.webCommand ?? options.command;
-  const desktopCommand = options.desktopCommand ?? options.command;
-  const hasDesktopArgs = Object.prototype.hasOwnProperty.call(options, "desktopArgs");
-  const hasWebArgs = Object.prototype.hasOwnProperty.call(options, "webArgs");
   if (isDesktopRuntime()) {
     if (options.desktopUnavailable) {
       throw new RuntimeUnavailableError(options.desktopUnavailable, options.desktopUnavailable);
@@ -229,25 +222,19 @@ export async function runtimeDispatch<T = unknown>(
     if (options.desktopFallback) {
       return options.desktopFallback();
     }
-    if (!desktopCommand) {
-      throw new RuntimeUnavailableError("Desktop command is not configured", "desktop");
-    }
-    return invokeDesktop<T>(desktopCommand, hasDesktopArgs ? options.desktopArgs : options.webArgs);
+    return invokeDesktop<T>(options.command, options.args);
   }
   if (options.webUnavailable) {
     throw new RuntimeUnavailableError(options.webUnavailable, options.webUnavailable);
   }
-  if (!webCommand) {
-    throw new RuntimeUnavailableError("Web command is not configured", "web");
-  }
-  return webJsonRpc<T>(webCommand, hasWebArgs ? options.webArgs : options.desktopArgs);
+  return webJsonRpc<T>(options.command, options.args);
 }
 
 export async function runtimeRpc<T = unknown>(
   command: string,
   args?: RpcArgs,
 ): Promise<T> {
-  return runtimeDispatch<T>({ command, webArgs: args, desktopArgs: args });
+  return runtimeDispatch<T>({ command, args });
 }
 
 export async function uploadRuntimeFiles<T = unknown>(
@@ -260,7 +247,7 @@ export async function uploadRuntimeFiles<T = unknown>(
       mime: file.type || "application/octet-stream",
       bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
     })));
-    return invokeDesktop<T>("desktop_upload_files_command", { files: uploads });
+    return invokeDesktop<T>("uploadFiles", { files: uploads });
   }
 
   const form = new FormData();
@@ -273,5 +260,5 @@ export async function uploadRuntimeFiles<T = unknown>(
 export async function invokeDesktopUpload<T = unknown>(
   uploads: RuntimeUploadFile[],
 ): Promise<T> {
-  return invokeDesktop<T>("desktop_upload_files_command", { files: uploads });
+  return invokeDesktop<T>("uploadFiles", { files: uploads });
 }

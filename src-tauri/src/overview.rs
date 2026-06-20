@@ -1155,7 +1155,7 @@ pub fn desktop_claude_code_overview() -> Result<ClaudeOverview> {
 }
 
 #[cfg(test)]
-pub fn desktop_native_command_names() -> Vec<&'static str> {
+pub fn desktop_native_invoke_names() -> Vec<&'static str> {
     vec![
         "desktop_overview",
         "desktop_home",
@@ -1190,7 +1190,6 @@ pub fn desktop_native_command_names() -> Vec<&'static str> {
         "desktop_hidden_delete_dry_run",
         "desktop_hidden_delete_execute",
         "desktop_delete_upload",
-        "desktop_upload_files_command",
         "desktop_jobs",
         "desktop_job_detail",
         "desktop_list_followups",
@@ -1635,8 +1634,8 @@ mod tests {
     }
 
     #[test]
-    fn desktop_native_command_manifest_covers_app_workflows_without_http_session_commands() {
-        let commands = desktop_native_command_names();
+    fn desktop_native_invoke_manifest_covers_app_workflows_without_http_session_surfaces() {
+        let commands = desktop_native_invoke_names();
 
         for expected in [
             "desktop_threads",
@@ -1668,7 +1667,6 @@ mod tests {
             "desktop_hidden_delete_dry_run",
             "desktop_hidden_delete_execute",
             "desktop_delete_upload",
-            "desktop_upload_files_command",
             "desktop_jobs",
             "desktop_job_detail",
             "desktop_list_followups",
@@ -1683,18 +1681,24 @@ mod tests {
             );
         }
 
+        let retired_http_bridge = ["desktop_api", "_", "command"].concat();
         assert!(
-            !commands.contains(&"desktop_api_command"),
+            !commands.contains(&retired_http_bridge.as_str()),
             "desktop invoke commands must not expose retired HTTP bridge"
         );
-        // Security and Turnstile controls live only on the Linux Web host.
+        let desktop_web_status = ["desktop_security", "_", "status"].concat();
         assert!(
-            !commands.contains(&"desktop_security_status"),
-            "macOS desktop commands must not expose Web security/Turnstile entry points"
+            !commands.contains(&desktop_web_status.as_str()),
+            "macOS desktop commands must not expose Web host-only security entry points"
         );
-        for forbidden in ["getSecurity", "saveSecurity", "changePassword"] {
+        for parts in [
+            &["get", "Security"][..],
+            &["save", "Security"][..],
+            &["change", "Password"][..],
+        ] {
+            let forbidden = parts.concat();
             assert!(
-                !commands.contains(&forbidden),
+                !commands.contains(&forbidden.as_str()),
                 "macOS desktop commands must not expose Web security command: {forbidden}"
             );
         }

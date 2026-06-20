@@ -25,14 +25,6 @@ pub struct ThreadDetailOptions {
     pub full: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadSendArgs {
-    #[serde(alias = "thread_id")]
-    pub thread_id: Option<String>,
-    pub payload: DesktopSendMessageRequest,
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopStopPayload {
@@ -54,13 +46,6 @@ pub struct PlanActionPayload {
 
 fn thread_id_request(thread_id: String) -> DesktopThreadIdRequest {
     DesktopThreadIdRequest { thread_id }
-}
-
-fn send_request(mut args: ThreadSendArgs) -> DesktopSendMessageRequest {
-    if args.payload.thread_id.is_none() {
-        args.payload.thread_id = args.thread_id;
-    }
-    args.payload
 }
 
 #[tauri::command]
@@ -130,28 +115,36 @@ pub fn createThread(
 #[tauri::command]
 pub fn sendMessage(
     state: tauri::State<'_, DesktopState>,
-    args: ThreadSendArgs,
+    threadId: Option<String>,
+    mut payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    desktop_send_message_with_state(&state, send_request(args)).map_err(|err| err.to_string())
+    if payload.thread_id.is_none() {
+        payload.thread_id = threadId;
+    }
+    desktop_send_message_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn steerThread(
     state: tauri::State<'_, DesktopState>,
-    args: ThreadSendArgs,
+    threadId: Option<String>,
+    mut payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    desktop_continue_thread_with_state(&state, send_request(args)).map_err(|err| err.to_string())
+    if payload.thread_id.is_none() {
+        payload.thread_id = threadId;
+    }
+    desktop_continue_thread_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn listFollowUps(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
 ) -> Result<Vec<nexushub_core::db::ThreadFollowUp>, String> {
     desktop_list_followups_with_state(
         &state,
         DesktopFollowupRequest {
-            thread_id,
+            thread_id: threadId,
             limit: Some(20),
         },
     )
@@ -161,22 +154,26 @@ pub fn listFollowUps(
 #[tauri::command]
 pub fn enqueueFollowUp(
     state: tauri::State<'_, DesktopState>,
-    args: ThreadSendArgs,
+    threadId: Option<String>,
+    mut payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::db::ThreadFollowUp, String> {
-    desktop_enqueue_followup_with_state(&state, send_request(args)).map_err(|err| err.to_string())
+    if payload.thread_id.is_none() {
+        payload.thread_id = threadId;
+    }
+    desktop_enqueue_followup_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn cancelFollowUp(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
-    follow_up_id: String,
+    threadId: String,
+    followUpId: String,
 ) -> Result<DesktopActionResponse, String> {
     desktop_cancel_followup_with_state(
         &state,
         DesktopCancelFollowupRequest {
-            thread_id,
-            followup_id: follow_up_id,
+            thread_id: threadId,
+            followup_id: followUpId,
         },
     )
     .map_err(|err| err.to_string())
@@ -185,14 +182,14 @@ pub fn cancelFollowUp(
 #[tauri::command]
 pub fn stopThread(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
     payload: Option<DesktopStopPayload>,
 ) -> Result<DesktopActionResponse, String> {
     let payload = payload.unwrap_or_default();
     desktop_stop_thread_with_state(
         &state,
         DesktopStopRequest {
-            thread_id,
+            thread_id: threadId,
             turn_id: payload.turn_id,
             job_id: payload.job_id,
         },
@@ -203,45 +200,45 @@ pub fn stopThread(
 #[tauri::command]
 pub fn archiveThread(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    desktop_archive_thread_with_state(&state, thread_id_request(thread_id))
+    desktop_archive_thread_with_state(&state, thread_id_request(threadId))
         .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn restoreThread(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    desktop_restore_thread_with_state(&state, thread_id_request(thread_id))
+    desktop_restore_thread_with_state(&state, thread_id_request(threadId))
         .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn renameThread(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
     name: String,
 ) -> Result<DesktopActionResponse, String> {
-    desktop_rename_thread_with_state(&state, DesktopRenameThreadRequest { thread_id, name })
+    desktop_rename_thread_with_state(&state, DesktopRenameThreadRequest { thread_id: threadId, name })
         .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-pub fn forkThread(thread_id: String) -> DesktopActionResponse {
-    desktop_fork_thread_with_state(thread_id_request(thread_id))
+pub fn forkThread(threadId: String) -> DesktopActionResponse {
+    desktop_fork_thread_with_state(thread_id_request(threadId))
 }
 
 #[tauri::command]
 pub fn answerElicitation(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
     answers: std::collections::HashMap<String, Vec<String>>,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
     desktop_answer_elicitation_with_state(
         &state,
-        DesktopElicitationAnswerRequest { thread_id, answers },
+        DesktopElicitationAnswerRequest { thread_id: threadId, answers },
     )
     .map_err(|err| err.to_string())
 }
@@ -249,13 +246,13 @@ pub fn answerElicitation(
 #[tauri::command]
 pub fn acceptPlan(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
     payload: PlanActionPayload,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
     desktop_plan_accept_with_state(
         &state,
         DesktopPlanAcceptRequest {
-            thread_id,
+            thread_id: threadId,
             turn_id: payload.turn_id,
             item_id: payload.item_id,
         },
@@ -266,13 +263,13 @@ pub fn acceptPlan(
 #[tauri::command]
 pub fn revisePlan(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: String,
     payload: PlanActionPayload,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
     desktop_plan_revise_with_state(
         &state,
         DesktopPlanReviseRequest {
-            thread_id,
+            thread_id: threadId,
             turn_id: payload.turn_id,
             item_id: payload.item_id,
             instructions: payload.instructions.unwrap_or_default(),
@@ -282,12 +279,12 @@ pub fn revisePlan(
 }
 
 #[tauri::command]
-pub fn answerApproval(thread_id: String) -> DesktopActionResponse {
+pub fn answerApproval(threadId: String) -> DesktopActionResponse {
     let mut response = crate::overview::unavailable_action(
         "answerApproval",
         "approval actions are unavailable in the local Codex read model",
     );
-    response.thread_id = Some(thread_id);
+    response.thread_id = Some(threadId);
     response
 }
 

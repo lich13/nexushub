@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::overview::{
-    self, desktop_archive_delete_dry_run_with_state, desktop_archive_delete_execute_with_state,
+    desktop_archive_delete_dry_run_with_state, desktop_archive_delete_execute_with_state,
     desktop_archive_plan_with_state, desktop_clear_goal_with_state,
     desktop_delete_upload_with_state, desktop_hidden_delete_dry_run_with_state,
     desktop_hidden_delete_execute_with_state, desktop_hidden_plan_with_state,
@@ -32,21 +32,11 @@ pub fn desktop_hidden_plan(
 }
 
 #[tauri::command]
-pub fn desktop_save_goal_command(request: DesktopGoalRequest) -> Result<DesktopGoal, String> {
-    overview::desktop_save_goal(request).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub fn desktop_save_goal(
     state: tauri::State<'_, DesktopState>,
     request: DesktopGoalRequest,
 ) -> Result<DesktopGoal, String> {
     desktop_save_goal_with_state(&state, request).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_clear_goal_command(thread_id: String) -> Result<DesktopGoal, String> {
-    overview::desktop_clear_goal(&thread_id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -58,21 +48,11 @@ pub fn desktop_clear_goal(
 }
 
 #[tauri::command]
-pub fn desktop_pause_goal_command(thread_id: String) -> Result<DesktopGoal, String> {
-    overview::desktop_pause_goal(&thread_id).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub fn desktop_pause_goal(
     state: tauri::State<'_, DesktopState>,
     thread_id: String,
 ) -> Result<DesktopGoal, String> {
     desktop_pause_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn desktop_resume_goal_command(thread_id: String) -> Result<DesktopGoal, String> {
-    overview::desktop_resume_goal(&thread_id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -280,14 +260,6 @@ pub fn deleteUpload(
 }
 
 #[tauri::command]
-pub fn desktop_upload_files_command(
-    state: tauri::State<'_, DesktopState>,
-    files: Vec<DesktopUploadFile>,
-) -> Result<nexushub_core::uploads::UploadOutcome, String> {
-    desktop_store_uploads_with_state(&state, files).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub fn uploadFiles(
     state: tauri::State<'_, DesktopState>,
     files: Vec<DesktopUploadFile>,
@@ -298,8 +270,12 @@ pub fn uploadFiles(
 #[tauri::command]
 pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
+    let thread_id = threadId
+        .or(thread_id)
+        .ok_or_else(|| "threadId is required".to_string())?;
     let view = match state
         .db
         .get_thread_goal(&thread_id)
@@ -323,16 +299,21 @@ pub fn getCodexGoal(
 #[tauri::command]
 pub fn saveCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: Option<String>,
+    thread_id: Option<String>,
     objective: Option<String>,
+    tokenBudget: Option<u64>,
     token_budget: Option<u64>,
 ) -> Result<DesktopGoal, String> {
+    let thread_id = threadId
+        .or(thread_id)
+        .ok_or_else(|| "threadId is required".to_string())?;
     desktop_save_goal_with_state(
         &state,
         DesktopGoalRequest {
             thread_id,
             objective,
-            token_budget,
+            token_budget: tokenBudget.or(token_budget),
         },
     )
     .map_err(|err| err.to_string())
@@ -341,24 +322,36 @@ pub fn saveCodexGoal(
 #[tauri::command]
 pub fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
+    let thread_id = threadId
+        .or(thread_id)
+        .ok_or_else(|| "threadId is required".to_string())?;
     desktop_clear_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
+    let thread_id = threadId
+        .or(thread_id)
+        .ok_or_else(|| "threadId is required".to_string())?;
     desktop_pause_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 pub fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    thread_id: String,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
+    let thread_id = threadId
+        .or(thread_id)
+        .ok_or_else(|| "threadId is required".to_string())?;
     desktop_resume_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 

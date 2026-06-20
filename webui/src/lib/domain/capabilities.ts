@@ -8,8 +8,8 @@ export type RuntimeCapabilityMatrix = {
   securitySettings: boolean;
   publicEndpointStatus: boolean;
   codexStatePaths: boolean;
-  linuxBackupPrune: boolean;
-  linuxUpdateLabels: boolean;
+  backupPrune: boolean;
+  updateServiceLabels: boolean;
   forkAction: boolean;
   approvalActions: boolean;
 };
@@ -21,8 +21,8 @@ const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  linuxBackupPrune: false,
-  linuxUpdateLabels: false,
+  backupPrune: false,
+  updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
 };
@@ -34,8 +34,8 @@ const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  linuxBackupPrune: false,
-  linuxUpdateLabels: false,
+  backupPrune: false,
+  updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
 };
@@ -51,8 +51,8 @@ function runtimeCapabilitiesFromCore(
     securitySettings: core.security_settings || core.turnstile || core.admin_password,
     publicEndpointStatus: core.public_endpoint,
     codexStatePaths: core.systemd,
-    linuxBackupPrune: core.prune_backups,
-    linuxUpdateLabels: core.linux_update_job,
+    backupPrune: core.prune_backups,
+    updateServiceLabels: core.linux_update_job,
     forkAction: core.web_auth,
     approvalActions: core.web_auth
   };

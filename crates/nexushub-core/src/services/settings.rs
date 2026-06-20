@@ -6,6 +6,8 @@ use crate::{
         ProbeNotificationsConfig, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
         ProbeSettingsPatch,
     },
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -184,6 +186,26 @@ pub struct ProbeNotificationsSavePatch {
 pub struct NormalizedProbeSettingsPatch {
     pub config_patch: ProbeConfigFilePatch,
     pub bark_device_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeSettingsSavePlan {
+    pub required_capability: Capability,
+    pub config_patch: ProbeConfigFilePatch,
+    pub bark_device_key: Option<String>,
+}
+
+pub fn plan_probe_settings_save(
+    platform: &PlatformPaths,
+    request: ProbeSettingsSaveRequest,
+) -> Result<ProbeSettingsSavePlan> {
+    require_capability(platform, Capability::Settings)?;
+    let normalized = normalize_probe_settings_save_request(request)?;
+    Ok(ProbeSettingsSavePlan {
+        required_capability: Capability::Settings,
+        config_patch: normalized.config_patch,
+        bark_device_key: normalized.bark_device_key,
+    })
 }
 
 pub fn normalize_probe_settings_save_request(
@@ -413,4 +435,62 @@ fn normalize_optional_nullable_string(value: Option<Option<String>>) -> Option<O
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        plan_probe_settings_save, ProbeNotificationsSavePatch, ProbeSettingsSavePatch,
+        ProbeSettingsSaveRequest,
+    };
+    use crate::{
+        platform::{PlatformKind, PlatformPaths},
+        services::system::Capability,
+    };
+
+    #[test]
+    fn probe_settings_save_plan_normalizes_nested_bark_key_and_patch() {
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+        let plan = plan_probe_settings_save(
+            &platform,
+            ProbeSettingsSaveRequest {
+                probe: Some(ProbeSettingsSavePatch {
+                    poll_seconds: Some(1),
+                    recent_limit: Some(999),
+                    notifications: Some(ProbeNotificationsSavePatch {
+                        device_key: Some("  bark-key  ".to_string()),
+                        server_url: Some(" https://api.day.app ".to_string()),
+                        group: Some("  ".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("settings save should be allowed on Linux");
+
+        assert_eq!(plan.required_capability, Capability::Settings);
+        assert_eq!(plan.bark_device_key.as_deref(), Some("bark-key"));
+        let probe = plan.config_patch.probe.expect("probe patch");
+        assert_eq!(probe.poll_seconds, Some(5));
+        assert_eq!(probe.recent_limit, Some(500));
+        let notifications = probe.notifications.expect("notifications patch");
+        assert_eq!(
+            notifications.server_url.as_deref(),
+            Some("https://api.day.app")
+        );
+        assert_eq!(notifications.group.as_deref(), Some("NexusHub"));
+    }
+
+    #[test]
+    fn probe_settings_save_plan_requires_shared_settings_capability() {
+        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
+        let err = plan_probe_settings_save(&platform, ProbeSettingsSaveRequest::default())
+            .expect_err("Windows should not allow settings facade");
+
+        assert!(err
+            .to_string()
+            .contains("settings is unavailable on windows"));
+    }
 }

@@ -4,12 +4,14 @@ use serde_json::{json, Value};
 use crate::{
     config::{SecurityConfig, DEFAULT_TURNSTILE_SITE_KEY},
     db::SecuritySettings,
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
 };
 
 pub const MIN_SESSION_TTL_SECONDS: u64 = 300;
 pub const MIN_ADMIN_PASSWORD_LEN: usize = 12;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SecurityPatch {
     pub turnstile_enabled: Option<bool>,
@@ -28,6 +30,13 @@ pub struct SecurityPatchPlan {
     pub turnstile_secret_key: Option<String>,
     pub secret_key_changed: bool,
     pub audit_detail: Value,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityPatchFacadePlan {
+    pub required_capability: Capability,
+    pub patch: SecurityPatchPlan,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -93,6 +102,22 @@ pub fn security_view(
         turnstile_expected_action: stored_expected_action
             .or_else(|| config.turnstile_expected_action.clone()),
     }
+}
+
+pub fn security_view_with_capability(
+    platform: &PlatformPaths,
+    settings: SecuritySettings,
+    config: &SecurityConfig,
+    stored_expected_hostname: Option<String>,
+    stored_expected_action: Option<String>,
+) -> anyhow::Result<SecurityView> {
+    require_capability(platform, Capability::SecuritySettings)?;
+    Ok(security_view(
+        settings,
+        config,
+        stored_expected_hostname,
+        stored_expected_action,
+    ))
 }
 
 pub fn public_security_view(
@@ -167,6 +192,17 @@ pub fn plan_security_patch(patch: SecurityPatch) -> anyhow::Result<SecurityPatch
     })
 }
 
+pub fn plan_security_patch_with_capability(
+    platform: &PlatformPaths,
+    patch: SecurityPatch,
+) -> anyhow::Result<SecurityPatchFacadePlan> {
+    require_capability(platform, Capability::SecuritySettings)?;
+    Ok(SecurityPatchFacadePlan {
+        required_capability: Capability::SecuritySettings,
+        patch: plan_security_patch(patch)?,
+    })
+}
+
 pub fn plan_password_change(
     request: PasswordChangeRequest,
     current_password_matches: bool,
@@ -192,4 +228,66 @@ fn bool_setting(key: &'static str, value: bool) -> SecuritySettingWrite {
 fn non_empty_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        plan_security_patch_with_capability, security_view_with_capability, SecurityPatch,
+    };
+    use crate::{
+        config::{Config, DEFAULT_TURNSTILE_SITE_KEY},
+        db::SecuritySettings,
+        platform::{PlatformKind, PlatformPaths},
+        services::system::Capability,
+    };
+
+    #[test]
+    fn security_view_plan_requires_linux_security_settings_capability() {
+        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let settings = SecuritySettings {
+            turnstile_enabled: true,
+            turnstile_required: true,
+            turnstile_site_key: None,
+            turnstile_secret_configured: false,
+            session_ttl_seconds: 900,
+        };
+
+        let err = security_view_with_capability(&platform, settings, &config.security, None, None)
+            .expect_err("macOS should not expose server security settings");
+
+        assert!(err
+            .to_string()
+            .contains("security_settings is unavailable on macos"));
+    }
+
+    #[test]
+    fn security_patch_plan_requires_linux_and_records_capability() {
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+        let plan = plan_security_patch_with_capability(
+            &platform,
+            SecurityPatch {
+                turnstile_enabled: Some(true),
+                turnstile_required: Some(false),
+                turnstile_site_key: Some(DEFAULT_TURNSTILE_SITE_KEY.to_string()),
+                turnstile_secret_key: Some(" secret ".to_string()),
+                session_ttl_seconds: Some(300),
+                turnstile_expected_hostname: Some(" example.com ".to_string()),
+                turnstile_expected_action: Some(" login ".to_string()),
+            },
+        )
+        .expect("Linux should allow security settings");
+
+        assert_eq!(plan.required_capability, Capability::SecuritySettings);
+        assert_eq!(plan.patch.turnstile_secret_key.as_deref(), Some("secret"));
+        assert!(plan.patch.secret_key_changed);
+
+        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let err = plan_security_patch_with_capability(&macos, SecurityPatch::default())
+            .expect_err("macOS should not allow security settings");
+        assert!(err
+            .to_string()
+            .contains("security_settings is unavailable on macos"));
+    }
 }

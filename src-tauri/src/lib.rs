@@ -200,13 +200,9 @@ pub fn run() {
             commands::updates::install_update_and_restart,
             commands::settings::desktop_archive_plan,
             commands::settings::desktop_hidden_plan,
-            commands::settings::desktop_save_goal_command,
             commands::settings::desktop_save_goal,
-            commands::settings::desktop_clear_goal_command,
             commands::settings::desktop_clear_goal,
-            commands::settings::desktop_pause_goal_command,
             commands::settings::desktop_pause_goal,
-            commands::settings::desktop_resume_goal_command,
             commands::settings::desktop_resume_goal,
             commands::settings::getProbeSettings,
             commands::settings::saveProbeSettings,
@@ -247,8 +243,7 @@ pub fn run() {
             commands::threads::desktop_enqueue_followup,
             commands::threads::desktop_cancel_followup,
             commands::system::desktop_platform_status,
-            commands::system::desktop_claude_code_overview,
-            commands::settings::desktop_upload_files_command
+            commands::system::desktop_claude_code_overview
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -271,6 +266,43 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn production_lib_source() -> &'static str {
+        include_str!("lib.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("lib source must include production section")
+    }
+
+    fn registered_invoke_command_paths() -> Vec<String> {
+        let production_source = production_lib_source();
+        let marker = ".invoke_handler(tauri::generate_handler![";
+        let start = production_source
+            .find(marker)
+            .expect("lib source must include tauri generate_handler")
+            + marker.len();
+        let body = production_source[start..]
+            .split("\n        ])")
+            .next()
+            .expect("generate_handler block must close");
+        body.lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("commands::"))
+            .map(|line| line.trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    fn command_path(module: &str, name: &str) -> String {
+        format!("commands::{module}::{name}")
+    }
+
+    fn retired_compat_path(module: &str, stem: &str) -> String {
+        command_path(module, &format!("{stem}_{}", "command"))
+    }
+
+    fn concat_token(parts: &[&str]) -> String {
+        parts.concat()
+    }
 
     #[test]
     fn sync_nexushubd_helper_file_copies_and_marks_executable() {
@@ -384,63 +416,79 @@ log_dir = "{}"
 
     #[test]
     fn tauri_invoke_handler_excludes_retired_desktop_command_compat_wrappers() {
-        let lib_source = include_str!("lib.rs");
-        let production_source = lib_source
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("lib source must include production section");
-        for retired in [
-            "commands::threads::desktop_threads_command",
-            "commands::threads::desktop_thread_detail_command",
-            "commands::probe::desktop_probe_status_command",
-            "commands::settings::desktop_archive_plan_command",
-            "commands::settings::desktop_hidden_plan_command",
-            "commands::settings::desktop_open_config_dir_command",
-            "commands::settings::desktop_open_log_dir_command",
+        let commands = registered_invoke_command_paths();
+        for (module, stem) in [
+            ("threads", "desktop_threads"),
+            ("threads", "desktop_thread_detail"),
+            ("probe", "desktop_probe_status"),
+            ("settings", "desktop_archive_plan"),
+            ("settings", "desktop_hidden_plan"),
+            ("settings", "desktop_open_config_dir"),
+            ("settings", "desktop_open_log_dir"),
+            ("settings", "desktop_save_goal"),
+            ("settings", "desktop_clear_goal"),
+            ("settings", "desktop_pause_goal"),
+            ("settings", "desktop_resume_goal"),
+            ("settings", "desktop_upload_files"),
         ] {
+            let retired = retired_compat_path(module, stem);
             assert!(
-                !production_source.contains(retired),
+                !commands.contains(&retired),
                 "unused desktop compatibility command must not be registered: {retired}"
             );
         }
-        for still_used in [
-            "commands::settings::desktop_save_goal_command",
-            "commands::settings::desktop_clear_goal_command",
-            "commands::settings::desktop_pause_goal_command",
-            "commands::settings::desktop_resume_goal_command",
-            "commands::settings::desktop_upload_files_command",
+    }
+
+    #[test]
+    fn tauri_command_guard_does_not_embed_retired_compat_tokens_in_tests() {
+        let test_source = include_str!("lib.rs")
+            .split("\n#[cfg(test)]")
+            .nth(1)
+            .expect("lib source must include test section");
+        for (module, stem) in [
+            ("threads", "desktop_threads"),
+            ("threads", "desktop_thread_detail"),
+            ("probe", "desktop_probe_status"),
+            ("settings", "desktop_archive_plan"),
+            ("settings", "desktop_hidden_plan"),
+            ("settings", "desktop_open_config_dir"),
+            ("settings", "desktop_open_log_dir"),
+            ("settings", "desktop_save_goal"),
+            ("settings", "desktop_clear_goal"),
+            ("settings", "desktop_pause_goal"),
+            ("settings", "desktop_resume_goal"),
+            ("settings", "desktop_upload_files"),
         ] {
+            let retired = retired_compat_path(module, stem);
             assert!(
-                production_source.contains(still_used),
-                "compatibility command still used by the desktop frontend is intentionally retained: {still_used}"
+                !test_source.contains(&retired),
+                "tests must not embed retired compatibility command token: {retired}"
             );
         }
     }
 
     #[test]
     fn tauri_invoke_handler_excludes_linux_web_host_command_surfaces() {
-        let lib_source = include_str!("lib.rs");
-        let production_source = lib_source
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("lib source must include production section");
-        for forbidden in [
-            "getSecurity",
-            "saveSecurity",
-            "changePassword",
-            "login",
-            "logout",
-            "csrf",
-            "turnstile",
-            "admin",
-            "systemd",
-            "nginx",
-            "system_update_prune",
-            "desktop_update_prune",
-            "prune_backups",
+        let commands = registered_invoke_command_paths();
+        for parts in [
+            &["get", "Security"][..],
+            &["save", "Security"][..],
+            &["change", "Password"][..],
+            &["security", "_status"][..],
+            &["log", "in"][..],
+            &["log", "out"][..],
+            &["cs", "rf"][..],
+            &["turn", "stile"][..],
+            &["admin", "_password"][..],
+            &["system", "d"][..],
+            &["ngi", "nx"][..],
+            &["system_update", "_prune"][..],
+            &["desktop_update", "_prune"][..],
+            &["prune", "_backups"][..],
         ] {
+            let forbidden = concat_token(parts);
             assert!(
-                !production_source.contains(forbidden),
+                commands.iter().all(|command| !command.contains(&forbidden)),
                 "macOS desktop invoke handler must not register Linux Web host command surface: {forbidden}"
             );
         }

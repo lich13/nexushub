@@ -1,10 +1,29 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
+import apiAuthSource from "./api/auth.ts?raw";
+import apiJobsSource from "./api/jobs.ts?raw";
+import apiProbeSource from "./api/probe.ts?raw";
+import apiSettingsSource from "./api/settings.ts?raw";
+import apiSharedSource from "./api/shared.ts?raw";
+import apiSystemSource from "./api/system.ts?raw";
+import apiThreadsSource from "./api/threads.ts?raw";
+import apiUpdatesSource from "./api/updates.ts?raw";
 import runtimeSource from "./runtime.ts?raw";
 import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
 import demoCoreSource from "./domain/demoCore.ts?raw";
 import type { MessageBlock, ProbeLogsDbStatus, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
+
+const domainApiSource = [
+  apiAuthSource,
+  apiJobsSource,
+  apiProbeSource,
+  apiSettingsSource,
+  apiSharedSource,
+  apiSystemSource,
+  apiThreadsSource,
+  apiUpdatesSource
+].join("\n");
 
 async function loadRealApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
@@ -220,15 +239,15 @@ describe("archive delete API compatibility", () => {
     expect(save.options.method).toBe("POST");
     expect(save.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(save.body).toEqual({
-      thread_id: "thread-a",
+      threadId: "thread-a",
       objective: "ship local goal",
-      token_budget: 12345
+      tokenBudget: 12345
     });
     for (const index of [2, 3, 4]) {
       const call = rpcCall(fetchMock, index);
       expect(call.options.method).toBe("POST");
       expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
-      expect(call.body).toEqual({ thread_id: "thread-a" });
+      expect(call.body).toEqual({ threadId: "thread-a" });
     }
   });
 
@@ -378,13 +397,10 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("desktop_thread_blocks");
+      expect(command).toBe("getThreadBlocks");
       expect(args).toEqual({
-        request: {
-          id: "thread-a",
-          limit: 80,
-          before: "b:200"
-        }
+        id: "thread-a",
+        options: { limit: 80, before: "b:200" }
       });
       return {
         thread_id: "thread-a",
@@ -888,8 +904,8 @@ describe("archive delete API compatibility", () => {
       securitySettings: false,
       publicEndpointStatus: false,
       codexStatePaths: false,
-      linuxBackupPrune: false,
-      linuxUpdateLabels: false,
+      backupPrune: false,
+      updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
     });
@@ -900,8 +916,8 @@ describe("archive delete API compatibility", () => {
       securitySettings: false,
       publicEndpointStatus: false,
       codexStatePaths: false,
-      linuxBackupPrune: false,
-      linuxUpdateLabels: false,
+      backupPrune: false,
+      updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
     });
@@ -911,8 +927,8 @@ describe("archive delete API compatibility", () => {
       webAuth: true,
       securitySettings: true,
       publicEndpointStatus: true,
-      linuxBackupPrune: true,
-      linuxUpdateLabels: true,
+      backupPrune: true,
+      updateServiceLabels: true,
       forkAction: true,
       approvalActions: true
     });
@@ -921,11 +937,15 @@ describe("archive delete API compatibility", () => {
       webAuth: false,
       securitySettings: false,
       publicEndpointStatus: false,
-      linuxBackupPrune: false,
-      linuxUpdateLabels: false,
+      backupPrune: false,
+      updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
     });
+    expect(Object.keys(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap))).not.toEqual(expect.arrayContaining([
+      "linuxBackupPrune",
+      "linuxUpdateLabels"
+    ]));
   });
 
   test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
@@ -958,7 +978,7 @@ describe("archive delete API compatibility", () => {
       platformOverview.service_kind
     ].filter((value): value is string => typeof value === "string").join("\n");
 
-    expect(visibleValues).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune|prune_backups|linux_systemd_job/i);
+    expect(visibleValues).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune|prune_backups|linux_systemd_job|661313\.xyz/i);
     expect(visibleValues).toMatch(/macos_tauri_updater|signature_verification|restart_after_install/);
   });
 
@@ -1081,15 +1101,15 @@ describe("archive delete API compatibility", () => {
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
   });
 
-  test("desktop update helpers use macOS updater command instead of Linux panel routes", async () => {
+  test("desktop update helpers use shared typed updater commands instead of Linux panel routes", async () => {
     const { getUpdateStatus, runUpdateAction, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, _args) => {
-      if (command === "install_update_and_restart") {
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      if (command === "runUpdateAction" && args?.action === "install") {
         return { job_id: "desktop-native-job", installed: false };
       }
-      if (command === "check_update_status") {
+      if (command === "runUpdateAction" && args?.action === "check") {
         return {
           job_id: "desktop-check-job",
           status: {
@@ -1104,7 +1124,8 @@ describe("archive delete API compatibility", () => {
           }
         };
       }
-      expect(command).toBe("desktop_update_status");
+      expect(command).toBe("getUpdateStatus");
+      expect(args).toBeUndefined();
       return {
         current_version: "0.1.100",
         latest_version: "v0.1.103",
@@ -1127,7 +1148,7 @@ describe("archive delete API compatibility", () => {
     });
     await expect(runUpdateAction("install", "ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
     const macCapabilities = runtimeCapabilitiesForRuntime("desktop");
-    expect(macCapabilities.linuxBackupPrune).toBe(false);
+    expect(macCapabilities.backupPrune).toBe(false);
     await expect(runUpdateAction("prune", "ignored-csrf", macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
     try {
       await runUpdateAction("prune", "ignored-csrf", macCapabilities);
@@ -1138,6 +1159,8 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "check", csrfToken: "ignored-csrf" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "install", csrfToken: "ignored-csrf" });
   });
 
   test("update prune is gated by capability matrix instead of runtime kind", async () => {
@@ -1148,7 +1171,7 @@ describe("archive delete API compatibility", () => {
 
     const desktopWithPrune = {
       ...runtimeCapabilitiesForRuntime("desktop"),
-      linuxBackupPrune: true
+      backupPrune: true
     };
 
     await expect(runUpdateAction("prune", "ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
@@ -1161,8 +1184,8 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("desktop_archive_delete_execute");
-      expect(args).toBeUndefined();
+      expect(command).toBe("startArchiveDelete");
+      expect(args).toEqual({ confirmed: true, csrfToken: "ignored-csrf" });
       return {
         before: {},
         deleted_threads: 0,
@@ -1201,25 +1224,25 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       switch (command) {
-        case "desktop_threads":
-          expect(args).toEqual({ request: { status: "all", query: "needle", limit: 120 } });
+        case "listThreads":
+          expect(args).toEqual({ status: "all", q: "needle", limit: 120 });
           return [];
-        case "desktop_thread_detail":
-          expect(args).toEqual({ request: { id: "thread-a", limit: undefined, before: undefined, full: undefined } });
+        case "getThread":
+          expect(args).toEqual({ id: "thread-a", options: {} });
           return { summary: { id: "thread-a", title: "A", status: "Recent", message_count: 1 }, messages: [], blocks: [], raw_event_count: 0 };
-        case "desktop_archive_delete_dry_run":
-          expect(args).toBeUndefined();
+        case "dryRunArchiveDelete":
+          expect(args).toEqual({ csrfToken: "ignored-csrf" });
           return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
-        case "desktop_archive_delete_execute":
-          expect(args).toBeUndefined();
+        case "startArchiveDelete":
+          expect(args).toEqual({ confirmed: true, csrfToken: "ignored-csrf" });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
-        case "desktop_hidden_delete_dry_run":
-          expect(args).toBeUndefined();
+        case "dryRunHiddenThreadDelete":
+          expect(args).toEqual({ csrfToken: "ignored-csrf" });
           return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
-        case "desktop_hidden_delete_execute":
-          expect(args).toBeUndefined();
+        case "startHiddenThreadDelete":
+          expect(args).toEqual({ confirmed: true, csrfToken: "ignored-csrf" });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
-        case "desktop_probe_settings":
+        case "getProbeSettings":
           expect(args).toBeUndefined();
           return {
             codex: { hostLabel: "macbook", configuredCodexHome: "/Users/gosu/.codex" },
@@ -1234,38 +1257,36 @@ describe("archive delete API compatibility", () => {
             notifications: { deviceKeyConfigured: true, serverUrl: "https://api.day.app", notifyReplyNeeded: true },
             logsDb: { enabled: true, retentionDays: 3, maintenanceIntervalHours: 4 }
           };
-        case "desktop_probe_save_settings":
-          expect(args).toMatchObject({ request: { probe: { enabled: false } } });
+        case "saveProbeSettings":
+          expect(args).toMatchObject({ settings: { probe: { enabled: false } }, csrfToken: "ignored-csrf" });
           return { probe: { enabled: false }, notifications: {}, logs_db: {} };
-        case "desktop_probe_bark_test":
-          expect(args).toBeUndefined();
-          return { job_id: "probe-bark-job" };
-        case "desktop_probe_logs_db_maintain":
-          expect(args).toEqual({ request: { dryRun: true, compact: false } });
+        case "startProbeJob":
+          expect(args).toMatchObject({ csrfToken: "ignored-csrf" });
+          expect(["bark-test", "logs-db-dry-run"]).toContain(args?.action);
           return { job_id: "probe-logs-job" };
-        case "desktop_delete_upload":
-          expect(args).toEqual({ id: "upload-a" });
+        case "deleteUpload":
+          expect(args).toEqual({ id: "upload-a", csrfToken: "ignored-csrf" });
           return { ok: true, deleted: true };
-        case "desktop_jobs":
-          expect(args).toEqual({ request: { limit: 30 } });
+        case "listJobs":
+          expect(args).toEqual({ limit: 30 });
           return [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 }];
-        case "desktop_job_detail":
-          expect(args).toEqual({ request: { id: "job-a" } });
+        case "getJob":
+          expect(args).toEqual({ id: "job-a" });
           return { id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 };
-        case "desktop_home":
-          expect(args).toBeUndefined();
+        case "getCodexGoal":
+          expect(args).toEqual({ threadId: "thread-a" });
           return { goal: { available: true, enabled: false, objective: null, token_budget: null, status: "idle" } };
-        case "desktop_save_goal_command":
-          expect(args).toEqual({ request: { threadId: "thread-a", objective: "ship", tokenBudget: 5000 } });
+        case "saveCodexGoal":
+          expect(args).toEqual({ threadId: "thread-a", objective: "ship", tokenBudget: 5000, csrfToken: "ignored-csrf" });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
-        case "desktop_clear_goal_command":
-          expect(args).toEqual({ threadId: "thread-a" });
+        case "clearCodexGoal":
+          expect(args).toEqual({ threadId: "thread-a", csrfToken: "ignored-csrf" });
           return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "cleared" };
-        case "desktop_pause_goal_command":
-          expect(args).toEqual({ threadId: "thread-a" });
+        case "pauseCodexGoal":
+          expect(args).toEqual({ threadId: "thread-a", csrfToken: "ignored-csrf" });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "paused" };
-        case "desktop_resume_goal_command":
-          expect(args).toEqual({ threadId: "thread-a" });
+        case "resumeCodexGoal":
+          expect(args).toEqual({ threadId: "thread-a", csrfToken: "ignored-csrf" });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
         default:
           throw new Error(`unexpected command ${command}`);
@@ -1308,28 +1329,28 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["desktop_threads", { request: { status: "all", query: "needle", limit: 120 } }],
-      ["desktop_thread_detail", { request: { id: "thread-a", limit: undefined, before: undefined, full: undefined } }],
-      ["desktop_archive_delete_dry_run", undefined],
-      ["desktop_archive_delete_execute", undefined],
-      ["desktop_hidden_delete_dry_run", undefined],
-      ["desktop_hidden_delete_execute", undefined],
-      ["desktop_probe_settings", undefined],
-      ["desktop_probe_save_settings", expect.objectContaining({ request: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
-      ["desktop_probe_bark_test", undefined],
-      ["desktop_probe_logs_db_maintain", { request: { dryRun: true, compact: false } }],
-      ["desktop_delete_upload", { id: "upload-a" }],
-      ["desktop_jobs", { request: { limit: 30 } }],
-      ["desktop_job_detail", { request: { id: "job-a" } }],
-      ["desktop_home", undefined],
-      ["desktop_save_goal_command", { request: { threadId: "thread-a", objective: "ship", tokenBudget: 5000 } }],
-      ["desktop_clear_goal_command", { threadId: "thread-a" }],
-      ["desktop_pause_goal_command", { threadId: "thread-a" }],
-      ["desktop_resume_goal_command", { threadId: "thread-a" }]
+      ["listThreads", { status: "all", q: "needle", limit: 120 }],
+      ["getThread", { id: "thread-a", options: {} }],
+      ["dryRunArchiveDelete", { csrfToken: "ignored-csrf" }],
+      ["startArchiveDelete", { confirmed: true, csrfToken: "ignored-csrf" }],
+      ["dryRunHiddenThreadDelete", { csrfToken: "ignored-csrf" }],
+      ["startHiddenThreadDelete", { confirmed: true, csrfToken: "ignored-csrf" }],
+      ["getProbeSettings", undefined],
+      ["saveProbeSettings", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
+      ["startProbeJob", { action: "bark-test", csrfToken: "ignored-csrf" }],
+      ["startProbeJob", { action: "logs-db-dry-run", csrfToken: "ignored-csrf" }],
+      ["deleteUpload", { id: "upload-a", csrfToken: "ignored-csrf" }],
+      ["listJobs", { limit: 30 }],
+      ["getJob", { id: "job-a" }],
+      ["getCodexGoal", { threadId: "thread-a" }],
+      ["saveCodexGoal", { threadId: "thread-a", objective: "ship", tokenBudget: 5000, csrfToken: "ignored-csrf" }],
+      ["clearCodexGoal", { threadId: "thread-a", csrfToken: "ignored-csrf" }],
+      ["pauseCodexGoal", { threadId: "thread-a", csrfToken: "ignored-csrf" }],
+      ["resumeCodexGoal", { threadId: "thread-a", csrfToken: "ignored-csrf" }]
     ]);
     const file = new File(["# hello"], "note.md", { type: "text/markdown" });
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("desktop_upload_files_command");
+      expect(command).toBe("uploadFiles");
       expect(args).toMatchObject({ files: [{ name: "note.md", mime: "text/markdown" }] });
       return { files: [{ id: "upload-a", name: "note.md", mime: "text/markdown", size: 7, sha256: "x", kind: "markdown", status: "ready" }] };
     });
@@ -1349,19 +1370,24 @@ describe("archive delete API compatibility", () => {
     ];
 
     expect(apiSource).not.toContain("const ROUTES");
-    expect(apiSource).not.toContain("WebRoute");
-    expect(apiSource).not.toContain("DesktopRoute");
-    expect(apiSource).not.toContain('runtimeRpc("desktopApi"');
-    expect(apiSource).not.toContain("invokeDesktop");
-    expect(apiSource).not.toContain("DesktopApiUpload");
-    expect(apiSource).not.toContain("new EventSource");
-    expect(apiSource).not.toContain("/api/system/panel/update");
-    expect(apiSource).not.toContain("getRuntimeKind");
-    expect(apiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
-    expect(apiSource).not.toContain("systemCapabilitiesForRuntime");
-    expect(apiSource).not.toContain("SystemCapabilities =");
+    expect(apiSource).not.toContain("runtimeDispatch(");
+    expect(domainApiSource).not.toContain("const ROUTES");
+    expect(domainApiSource).not.toContain("WebRoute");
+    expect(domainApiSource).not.toContain("DesktopRoute");
+    expect(domainApiSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(domainApiSource).not.toContain("invokeDesktop");
+    expect(domainApiSource).not.toContain("DesktopApiUpload");
+    expect(domainApiSource).not.toContain("new EventSource");
+    expect(domainApiSource).not.toContain("/api/system/panel/update");
+    expect(domainApiSource).not.toContain("getRuntimeKind");
+    expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
+    expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
+    expect(domainApiSource).not.toContain("SystemCapabilities =");
+    expect(domainCapabilitiesSource).not.toContain("linuxBackupPrune");
+    expect(domainCapabilitiesSource).not.toContain("linuxUpdateLabels");
     for (const token of forbiddenDomainTokens) {
       expect(apiSource, `api.ts must not contain ${token}`).not.toContain(token);
+      expect(domainApiSource, `domain API modules must not contain ${token}`).not.toContain(token);
       expect(domainCapabilitiesSource, `domain/capabilities.ts must not contain ${token}`).not.toContain(token);
       expect(demoCoreSource, `domain/demoCore.ts must not contain ${token}`).not.toContain(token);
     }

@@ -201,9 +201,9 @@ export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): strin
     "Current",
     "Latest",
     "Update",
-    capabilities.linuxUpdateLabels ? "Precheck" : "Check",
-    capabilities.linuxUpdateLabels ? "Update" : "Install",
-    ...(capabilities.linuxBackupPrune ? ["Prune"] : []),
+    capabilities.updateServiceLabels ? "Precheck" : "Check",
+    capabilities.updateServiceLabels ? "Update" : "Install",
+    ...(capabilities.backupPrune ? ["Prune"] : []),
     "Dry-run",
     "清理归档",
     "确认清理归档",
@@ -4730,9 +4730,9 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
-          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.linuxUpdateLabels ? "Precheck" : "Check"}</button>
-          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.linuxUpdateLabels ? "Update" : "Install"}</button>
-          {capabilities.linuxBackupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
+          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.updateServiceLabels ? "Precheck" : "Check"}</button>
+          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.updateServiceLabels ? "Update" : "Install"}</button>
+          {capabilities.backupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
         </div>
       </Panel>
       <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
@@ -4807,6 +4807,7 @@ function UpdateMetrics({ status }: { status?: UpdateStatus }) {
 function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null; username: string }) {
   const qc = useQueryClient();
   const security = useQuery({ queryKey: ["security"], queryFn: getSecurity });
+  const systemStatus = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, staleTime: 5000, placeholderData: preservePreviousQueryData });
   const [draft, setDraft] = useState<Partial<SecuritySettings> & { turnstile_secret_key?: string }>({});
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
   const [passwordFeedback, setPasswordFeedback] = useState<string | null>(null);
@@ -4827,7 +4828,8 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
   });
   const merged = { ...security.data, ...draft } as SecuritySettings & { turnstile_secret_key?: string };
   const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * secondsPerDay);
-  const expectedHostname = merged.turnstile_expected_hostname || "661313.xyz";
+  const defaultExpectedHostname = hostnameFromPublicEndpoint(systemStatus.data?.public_endpoint);
+  const expectedHostname = cleanHostValue(merged.turnstile_expected_hostname) ?? defaultExpectedHostname;
   const expectedAction = normalizeTurnstileAction(merged.turnstile_expected_action);
   const passwordReady = passwordForm.current && passwordForm.next.length >= 12 && passwordForm.next === passwordForm.confirm;
   return (
@@ -4836,7 +4838,7 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
         <div className="settings-meta-grid">
           <Metric label="Secret" value={security.data?.turnstile_secret_configured ? "configured" : "not configured"} tone={security.data?.turnstile_secret_configured ? "success" : "warning"} />
           <Metric label="Mode" value={merged.turnstile_required ? "fail-closed" : "enabled"} />
-          <Metric label="Expected hostname" value={expectedHostname} />
+          <Metric label="Expected hostname" value={expectedHostname ?? "未配置"} />
           <Metric label="Expected action" value={expectedAction} />
         </div>
         <label className="toggle-row">
@@ -4848,7 +4850,7 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
           <input type="checkbox" checked={Boolean(merged.turnstile_required)} onChange={(event) => setDraft({ ...draft, turnstile_required: event.target.checked })} />
         </label>
         <label className="field-label">Site Key<input value={merged.turnstile_site_key ?? ""} onChange={(event) => setDraft({ ...draft, turnstile_site_key: event.target.value })} /></label>
-        <label className="field-label">Expected hostname<input value={expectedHostname} onChange={(event) => setDraft({ ...draft, turnstile_expected_hostname: event.target.value })} /></label>
+        <label className="field-label">Expected hostname<input value={merged.turnstile_expected_hostname ?? ""} placeholder={defaultExpectedHostname ?? "未配置"} onChange={(event) => setDraft({ ...draft, turnstile_expected_hostname: event.target.value })} /></label>
         <label className="field-label">Expected action<input value={expectedAction} onChange={(event) => setDraft({ ...draft, turnstile_expected_action: event.target.value })} /></label>
         <label className="field-label">Secret Key<input type="password" placeholder={security.data?.turnstile_secret_configured ? "已配置，留空保留" : "未配置"} onChange={(event) => setDraft({ ...draft, turnstile_secret_key: event.target.value })} /></label>
         <button className="primary-button" onClick={() => mutation.mutate()}><ShieldCheck size={17} />保存 Turnstile</button>
@@ -5385,7 +5387,7 @@ const genericFailureLabels: Record<string, string> = {
 
 export function failureCategoryLabel(category: string, capabilities?: RuntimeCapabilityInput): string {
   const resolvedCapabilities = capabilitiesForInput(capabilities);
-  if (!resolvedCapabilities.linuxUpdateLabels && genericFailureLabels[category]) {
+  if (!resolvedCapabilities.updateServiceLabels && genericFailureLabels[category]) {
     return genericFailureLabels[category];
   }
   const labels: Record<string, string> = {
@@ -5409,7 +5411,7 @@ export function jobFailureAnalysisView(
 ): { label: string; explanation: string; suggestions: string[] } {
   const resolvedCapabilities = capabilitiesForInput(capabilities);
   const label = failureCategoryLabel(analysis.category, resolvedCapabilities);
-  if (resolvedCapabilities.linuxUpdateLabels) {
+  if (resolvedCapabilities.updateServiceLabels) {
     return {
       label,
       explanation: analysis.explanation,
@@ -5440,7 +5442,7 @@ function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
 export function jobOutputView(value: string, capabilities?: RuntimeCapabilityInput): string {
   const output = value.trim() || "no output";
   const resolvedCapabilities = capabilitiesForInput(capabilities);
-  return resolvedCapabilities.linuxUpdateLabels
+  return resolvedCapabilities.updateServiceLabels
     ? output
     : sanitizeDesktopFailureCopy(output, "任务输出不可用");
 }
@@ -5953,6 +5955,16 @@ function cleanHostValue(value?: string | null): string | null {
   const legacyAlias = ["tencent", "wanka"].join("-");
   if (!cleaned || cleaned === legacyAlias) return null;
   return cleaned;
+}
+
+function hostnameFromPublicEndpoint(value?: string | null): string | null {
+  const endpoint = cleanHostValue(value);
+  if (!endpoint) return null;
+  try {
+    return new URL(endpoint).hostname || null;
+  } catch {
+    return endpoint.replace(/^\/+/, "").split("/")[0]?.split(":")[0] || null;
+  }
 }
 
 function secondsToDays(seconds: number): number {

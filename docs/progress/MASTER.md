@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-20
-> **Mode**: V0.1.110_CC_SWITCH_RUNTIME_BOUNDARY_CLOSURE
+> **Mode**: V0.1.111_CC_SWITCH_FINAL_SERVICE_LAYER_CLOSURE
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.110 cc-switch runtime boundary closure<br>
-**Active Task**: `v0.1.110` closes the remaining runtime-boundary gaps: frontend capability fallback is minimal and full capability state is derived from core `SystemStatus`, retired desktop compatibility commands are removed from the macOS invoke handler, Linux REST update/status wrappers are covered against RPC DTO drift, macOS Web security/admin/systemd/Nginx surfaces remain unavailable, and `CLAUDE.md` remains intentionally absent.
+**Active Phase**: v0.1.111 cc-switch final service-layer closure<br>
+**Active Task**: `v0.1.111` closes the final service-layer/runtime-domain gaps: upload planning is centralized in core, frontend domain APIs are split behind a thin compatibility barrel, desktop retired compat command surfaces stay unregistered, Linux RPC/REST DTO parity remains guarded, macOS Web security/admin/systemd/Nginx surfaces remain unavailable, and `CLAUDE.md` remains intentionally absent.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.110_CC_SWITCH_RUNTIME_BOUNDARY_CLOSURE
+  mode: V0.1.111_CC_SWITCH_FINAL_SERVICE_LAYER_CLOSURE
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -119,7 +119,7 @@ adaptive:
 | 2026-06-19 | v0.1.107 cc-switch runtime RPC closure | L | P/R pass | 0 | Released `0.1.107`; moved frontend Web traffic to `/api/rpc/:command`, kept runtime as a thin transport, centralized Probe settings save normalization in core, removed macOS `desktop_security_status`, preserved `CLAUDE.md` as intentionally deleted, and fixed macOS updater stale-cache downgrade availability. |
 | 2026-06-20 | v0.1.108 cc-switch typed RPC closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.108`; removes the frontend domain route table, routes shared actions through runtime RPC/Tauri typed commands, adds Linux RPC DTO alias compatibility, keeps macOS Web security commands unregistered, and adds static guards against old desktop API bridges. |
 | 2026-06-20 | v0.1.109 cc-switch service closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.109`; moves Goal DTO/status/view planning and Linux update shell job specs into core services, removes the last update prune runtime-kind branch from the frontend domain API, and preserves `CLAUDE.md` as intentionally absent. |
-| 2026-06-20 | v0.1.110 cc-switch runtime boundary closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.110`; makes frontend capability fallback minimal and core-derived, removes unused desktop `_command` wrappers from the invoke handler, adds RPC/REST DTO equivalence tests for status and updates, and keeps Linux-only WebUI surfaces capability-gated. |
+| 2026-06-20 | v0.1.111 cc-switch final service-layer closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.111`; centralizes upload planning in core, splits frontend API implementations into domain modules behind a thin barrel, keeps runtime as transport only, removes retired desktop `_command` wrappers from registration, and keeps Linux-only WebUI surfaces capability-gated. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -136,7 +136,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.110
+git ls-remote --tags origin refs/tags/v0.1.111
 ```
 
 ## Next Steps
@@ -147,7 +147,7 @@ git ls-remote --tags origin refs/tags/v0.1.110
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.110 Acceptance Matrix
+## v0.1.111 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -183,4 +183,4 @@ git ls-remote --tags origin refs/tags/v0.1.110
 | 2026-06-19 | v0.1.107-cc-switch-runtime-rpc-closure | Closes the remaining runtime split: WebUI domain APIs dispatch to Linux `/api/rpc/:command`, macOS keeps typed Tauri commands, runtime no longer owns business route tables, Probe settings save normalization is shared in core, `CLAUDE.md` remains intentionally deleted, Probe desktop partial DTOs no longer white-screen, and stale older updater checks no longer show as available updates. |
 | 2026-06-20 | v0.1.108-cc-switch-typed-rpc-closure | Closes the remaining typed RPC contract split: frontend domain APIs no longer maintain Web/Desktop route tables, Linux RPC accepts shared DTO wrappers and aliases, macOS typed commands cover shared domains without Web security entries, and static guards prevent route bridge regressions. |
 | 2026-06-20 | v0.1.109-cc-switch-service-closure | Closes the remaining service split: Goal status/view planning and Linux update shell job specs are shared core services, frontend update prune is capability-driven, and macOS keeps Web security/admin/systemd/Nginx surfaces unavailable. |
-| 2026-06-20 | v0.1.110-cc-switch-runtime-boundary-closure | Closes the remaining runtime-boundary split: frontend capability state is core-derived after bootstrap, desktop retired `_command` wrappers are removed from registration, Linux RPC/REST DTO parity is guarded, and macOS keeps Linux WebUI-only operations unavailable. |
+| 2026-06-20 | v0.1.111-cc-switch-final-service-layer-closure | Closes the final cc-switch alignment gaps: upload validation/storage planning is shared in core, frontend domain APIs are split behind `runtime` transport, desktop compat `_command` wrappers stay retired, and macOS keeps Linux WebUI-only operations unavailable. |

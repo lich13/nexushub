@@ -2,6 +2,8 @@ use crate::{
     codex::{self, CodexPaths, ThreadStatus, ThreadSummary},
     config::Config,
     db::JobRecord,
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
     services::threads::{self, ThreadListRuntimeState},
 };
 use anyhow::Result;
@@ -17,6 +19,23 @@ pub struct ProbeStatusAggregation {
     pub running_threads: Vec<ThreadSummary>,
     pub reply_needed_threads: Vec<ThreadSummary>,
     pub recoverable_threads: Vec<ThreadSummary>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProbeStatusFacadePlan {
+    pub required_capability: Capability,
+    pub status: ProbeStatusAggregation,
+}
+
+pub fn probe_status_with_capability(
+    config: &Config,
+    platform: &PlatformPaths,
+) -> Result<ProbeStatusFacadePlan> {
+    require_capability(platform, Capability::Probe)?;
+    Ok(ProbeStatusFacadePlan {
+        required_capability: Capability::Probe,
+        status: aggregate_probe_status(config),
+    })
 }
 
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
@@ -160,4 +179,36 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
         output: row.get(9)?,
         error: row.get(10)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_status_with_capability;
+    use crate::{
+        config::Config,
+        platform::{PlatformKind, PlatformPaths},
+        services::system::Capability,
+    };
+
+    #[test]
+    fn probe_status_facade_requires_probe_capability() {
+        let config = Config::for_platform_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+
+        let status = probe_status_with_capability(&config, &platform)
+            .expect("Linux should allow probe facade");
+
+        assert_eq!(status.required_capability, Capability::Probe);
+    }
+
+    #[test]
+    fn probe_status_facade_rejects_unsupported_platform() {
+        let config = Config::for_platform_kind(PlatformKind::Windows);
+        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
+
+        let err = probe_status_with_capability(&config, &platform)
+            .expect_err("Windows should not expose probe facade");
+
+        assert!(err.to_string().contains("probe is unavailable on windows"));
+    }
 }

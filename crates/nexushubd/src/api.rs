@@ -40,11 +40,11 @@ use nexushub_core::{
             ThreadsQuery,
         },
         updates::{self as update_service, UpdateAction},
+        uploads as upload_service,
     },
     update,
     uploads::{
-        self, cleanup_upload_ids, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES,
-        MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
+        self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES, MAX_UPLOAD_FILES,
     },
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -784,14 +784,16 @@ async fn patch_probe_settings(
             &format!("config file not found: {}", config_path.display()),
         ));
     }
-    let normalized = request
-        .normalize()
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let plan = settings_service::plan_probe_settings_save(
+        &PlatformPaths::for_kind(PlatformKind::Linux),
+        request,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
-    let updated = patch_probe_config_toml(&text, &normalized.config_patch)?;
+    let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
     fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
     let response_config = Config::load(&config_path)?;
-    if let Some(device_key) = normalized.bark_device_key {
+    if let Some(device_key) = plan.bark_device_key {
         state.db.set_secret_setting_bytes(
             settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
             device_key.as_bytes(),
@@ -1238,10 +1240,8 @@ async fn upload_files(
     ) {
         tracing::warn!("stale upload cleanup failed: {err}");
     }
-    let mut files = Vec::new();
-    let mut total_bytes = 0usize;
-    let mut rollback = true;
     let result: Result<uploads::UploadOutcome, ApiError> = async {
+        let mut items = Vec::new();
         while let Some(field) = multipart.next_field().await.map_err(|err| {
             api_error(
                 StatusCode::BAD_REQUEST,
@@ -1251,12 +1251,6 @@ async fn upload_files(
             let Some(file_name) = field.file_name().map(str::to_string) else {
                 continue;
             };
-            if files.len() >= MAX_UPLOAD_FILES {
-                return Err(api_error(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "一次最多上传 5 个文件",
-                ));
-            }
             let mime = field.content_type().map(str::to_string);
             let bytes = field.bytes().await.map_err(|err| {
                 api_error(
@@ -1264,45 +1258,42 @@ async fn upload_files(
                     &format!("read upload failed: {err}"),
                 )
             })?;
-            if bytes.len() > MAX_UPLOAD_FILE_BYTES {
-                return Err(api_error(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "单个文件不能超过 10 MiB",
-                ));
-            }
-            total_bytes += bytes.len();
-            if total_bytes > MAX_TOTAL_UPLOAD_BYTES {
-                return Err(api_error(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "一次上传总大小不能超过 30 MiB",
-                ));
-            }
-            let record = uploads::store_upload(&root, &file_name, mime.as_deref(), &bytes)
-                .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-            files.push(record);
+            items.push(upload_service::UploadBatchItem {
+                name: file_name,
+                mime,
+                bytes: bytes.to_vec(),
+            });
         }
-        if files.is_empty() {
-            return Err(api_error(StatusCode::BAD_REQUEST, "没有可上传的文件"));
-        }
+        let plan = upload_service::plan_store_uploads(items)
+            .map_err(|err| upload_service_error(err.to_string()))?;
+        let total_files = plan.total_files;
+        let total_bytes = plan.total_bytes;
+        let outcome = upload_service::store_upload_plan(&root, plan)
+            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
         state.db.record_audit(
             Some(&auth.admin_id),
             "uploads.create",
             Some("upload"),
             None,
             None,
-            json!({"files": files.len(), "bytes": total_bytes}),
+            json!({"files": total_files, "bytes": total_bytes}),
         )?;
-        rollback = false;
-        Ok(uploads::UploadOutcome {
-            files: files.clone(),
-        })
+        Ok(outcome)
     }
     .await;
-    if rollback {
-        let ids = files.iter().map(|file| file.id.clone()).collect::<Vec<_>>();
-        cleanup_upload_ids(&root, &ids);
-    }
     ok(result?)
+}
+
+fn upload_service_error(message: String) -> ApiError {
+    let status = if message.contains("一次最多上传")
+        || message.contains("单个文件不能超过")
+        || message.contains("一次上传总大小不能超过")
+    {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    api_error(status, &message)
 }
 
 async fn delete_upload_file(
@@ -1474,8 +1465,12 @@ async fn patch_security(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = security_service::plan_security_patch(payload)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let plan = security_service::plan_security_patch_with_capability(
+        &PlatformPaths::for_kind(PlatformKind::Linux),
+        payload,
+    )
+    .map(|plan| plan.patch)
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     for write in &plan.settings {
         state.db.set_setting(write.key, &write.value)?;
     }
@@ -2473,7 +2468,8 @@ async fn codex_goal_set(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = goal_service::plan_save_goal(payload)
+    let plan = goal_service::plan_goal_update(payload)
+        .map(|plan| plan.update)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
     ok(goal_service::goal_response(Some(&goal)))
@@ -2486,7 +2482,8 @@ async fn codex_goal_clear(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = goal_service::plan_clear_goal(payload.thread_id.as_deref().unwrap_or_default())
+    let plan = goal_service::plan_clear_goal_update(payload.thread_id.as_deref())
+        .map(|plan| plan.update)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
     ok(goal_service::goal_response(Some(&goal)))
@@ -2502,7 +2499,8 @@ async fn codex_goal_pause(
     let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let existing = state.db.get_thread_goal(&thread_id)?;
-    let plan = goal_service::plan_goal_status_for_thread(&thread_id, existing.as_ref(), "paused")
+    let plan = goal_service::plan_pause_goal_update(&thread_id, existing.as_ref())
+        .map(|plan| plan.update)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
     ok(goal_service::goal_response(Some(&goal)))
@@ -2518,7 +2516,8 @@ async fn codex_goal_resume(
     let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let existing = state.db.get_thread_goal(&thread_id)?;
-    let plan = goal_service::plan_goal_status_for_thread(&thread_id, existing.as_ref(), "active")
+    let plan = goal_service::plan_resume_goal_update(&thread_id, existing.as_ref())
+        .map(|plan| plan.update)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
     ok(goal_service::goal_response(Some(&goal)))
@@ -2556,6 +2555,11 @@ async fn start_update_action(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let platform = http_update_platform();
+    let plan = update_service::plan_update_action(&state.config(), &platform, action)?;
+    let spec = plan
+        .linux_job
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Linux update job is unavailable"))?;
     if let Some(audit_action) = audit_action {
         state.db.record_audit(
             Some(&auth.admin_id),
@@ -2566,8 +2570,6 @@ async fn start_update_action(
             json!({ "action": format!("{action:?}") }),
         )?;
     }
-    let plan = update_service::update_action_plan(&http_update_platform(), action);
-    let spec = update_service::linux_update_job_spec(&state.config(), plan)?;
     let id = if let Some(group) = spec.exclusive_group.as_deref() {
         state
             .jobs
@@ -2722,13 +2724,14 @@ fn security_response(state: &AppState) -> anyhow::Result<Value> {
     let security = state
         .db
         .security_settings(state.config().security.session_ttl_seconds)?;
-    serde_json::to_value(security_service::security_view(
+    let view = security_service::security_view_with_capability(
+        &PlatformPaths::for_kind(PlatformKind::Linux),
         security,
         &state.config().security,
         state.db.get_setting("turnstile_expected_hostname")?,
         state.db.get_setting("turnstile_expected_action")?,
-    ))
-    .map_err(Into::into)
+    )?;
+    serde_json::to_value(view).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -4470,6 +4473,57 @@ mod tests {
             rpc["job_id"] = json!("<job-id>");
             assert_eq!(rpc, rest, "{action}");
         }
+    }
+
+    #[tokio::test]
+    async fn rpc_update_status_preserves_rest_update_status_dto_shape() {
+        let (state, session_token, _) = authenticated_test_state();
+        let app = router(state);
+
+        async fn request_json(
+            app: axum::Router,
+            method: &str,
+            uri: &str,
+            body: &str,
+            session_token: &str,
+        ) -> serde_json::Value {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", format!("nexushub_session={session_token}"));
+            if !body.is_empty() {
+                builder = builder.header("content-type", "application/json");
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+
+        let rest = request_json(
+            app.clone(),
+            "GET",
+            "/api/system/update/status",
+            "",
+            &session_token,
+        )
+        .await;
+        let rpc = request_json(
+            app,
+            "POST",
+            "/api/rpc/getUpdateStatus",
+            "{}",
+            &session_token,
+        )
+        .await;
+
+        assert_eq!(rpc, rest);
+        assert_eq!(rpc["method"], "linux_systemd_job");
+        assert_eq!(rpc["state"], "idle");
     }
 
     #[tokio::test]

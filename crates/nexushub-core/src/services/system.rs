@@ -2,7 +2,75 @@ use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
 };
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Threads,
+    Jobs,
+    Probe,
+    Status,
+    Settings,
+    JobHistory,
+    AppUpdater,
+    WebAuth,
+    SecuritySettings,
+    Turnstile,
+    Systemd,
+    Nginx,
+    PublicEndpoint,
+    AdminPassword,
+    LinuxUpdateJob,
+    PruneBackups,
+}
+
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Threads => "threads",
+            Self::Jobs => "jobs",
+            Self::Probe => "probe",
+            Self::Status => "status",
+            Self::Settings => "settings",
+            Self::JobHistory => "job_history",
+            Self::AppUpdater => "app_updater",
+            Self::WebAuth => "web_auth",
+            Self::SecuritySettings => "security_settings",
+            Self::Turnstile => "turnstile",
+            Self::Systemd => "systemd",
+            Self::Nginx => "nginx",
+            Self::PublicEndpoint => "public_endpoint",
+            Self::AdminPassword => "admin_password",
+            Self::LinuxUpdateJob => "linux_update_job",
+            Self::PruneBackups => "prune_backups",
+        }
+    }
+
+    pub fn is_supported_on(self, platform: &PlatformPaths) -> bool {
+        let shared_core = matches!(platform.kind, PlatformKind::Linux | PlatformKind::Macos);
+        let linux_web_host = matches!(platform.kind, PlatformKind::Linux);
+        match self {
+            Self::Threads
+            | Self::Jobs
+            | Self::Probe
+            | Self::Status
+            | Self::Settings
+            | Self::JobHistory
+            | Self::AppUpdater => shared_core,
+            Self::WebAuth
+            | Self::SecuritySettings
+            | Self::Turnstile
+            | Self::Systemd
+            | Self::Nginx
+            | Self::PublicEndpoint
+            | Self::AdminPassword
+            | Self::LinuxUpdateJob
+            | Self::PruneBackups => linux_web_host,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemCapabilities {
@@ -24,25 +92,81 @@ pub struct SystemCapabilities {
     pub prune_backups: bool,
 }
 
+pub fn require_capability(platform: &PlatformPaths, capability: Capability) -> Result<()> {
+    if capability.is_supported_on(platform) {
+        return Ok(());
+    }
+    bail!(
+        "{} is unavailable on {}",
+        capability.as_str(),
+        platform_kind_label(platform.kind)
+    )
+}
+
 pub fn system_capabilities(_config: &Config, platform: &PlatformPaths) -> SystemCapabilities {
-    let shared_core = matches!(platform.kind, PlatformKind::Linux | PlatformKind::Macos);
-    let linux_web_host = matches!(platform.kind, PlatformKind::Linux);
     SystemCapabilities {
-        threads: shared_core,
-        jobs: shared_core,
-        probe: shared_core,
-        status: shared_core,
-        settings: shared_core,
-        job_history: shared_core,
-        app_updater: shared_core,
-        web_auth: linux_web_host,
-        security_settings: linux_web_host,
-        turnstile: linux_web_host,
-        systemd: linux_web_host,
-        nginx: linux_web_host,
-        public_endpoint: linux_web_host,
-        admin_password: linux_web_host,
-        linux_update_job: linux_web_host,
-        prune_backups: linux_web_host,
+        threads: Capability::Threads.is_supported_on(platform),
+        jobs: Capability::Jobs.is_supported_on(platform),
+        probe: Capability::Probe.is_supported_on(platform),
+        status: Capability::Status.is_supported_on(platform),
+        settings: Capability::Settings.is_supported_on(platform),
+        job_history: Capability::JobHistory.is_supported_on(platform),
+        app_updater: Capability::AppUpdater.is_supported_on(platform),
+        web_auth: Capability::WebAuth.is_supported_on(platform),
+        security_settings: Capability::SecuritySettings.is_supported_on(platform),
+        turnstile: Capability::Turnstile.is_supported_on(platform),
+        systemd: Capability::Systemd.is_supported_on(platform),
+        nginx: Capability::Nginx.is_supported_on(platform),
+        public_endpoint: Capability::PublicEndpoint.is_supported_on(platform),
+        admin_password: Capability::AdminPassword.is_supported_on(platform),
+        linux_update_job: Capability::LinuxUpdateJob.is_supported_on(platform),
+        prune_backups: Capability::PruneBackups.is_supported_on(platform),
+    }
+}
+
+fn platform_kind_label(kind: PlatformKind) -> &'static str {
+    match kind {
+        PlatformKind::Linux => "linux",
+        PlatformKind::Macos => "macos",
+        PlatformKind::Windows => "windows",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{require_capability, system_capabilities, Capability};
+    use crate::{config::Config, platform::PlatformPaths};
+
+    #[test]
+    fn linux_only_capabilities_are_allowed_only_on_linux() {
+        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
+
+        assert!(require_capability(&linux, Capability::SecuritySettings).is_ok());
+        assert!(require_capability(&linux, Capability::LinuxUpdateJob).is_ok());
+
+        let security_error = require_capability(&macos, Capability::SecuritySettings)
+            .expect_err("macOS must not allow Linux web-host security settings");
+        assert!(security_error
+            .to_string()
+            .contains("security_settings is unavailable on macos"));
+
+        let update_error = require_capability(&macos, Capability::LinuxUpdateJob)
+            .expect_err("macOS must not allow Linux update jobs");
+        assert!(update_error
+            .to_string()
+            .contains("linux_update_job is unavailable on macos"));
+    }
+
+    #[test]
+    fn capability_matrix_matches_neutral_capability_gate() {
+        let config = Config::for_platform_kind(crate::platform::PlatformKind::Windows);
+        let platform = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
+        let matrix = system_capabilities(&config, &platform);
+
+        assert!(!matrix.settings);
+        assert!(require_capability(&platform, Capability::Settings).is_err());
+        assert!(!matrix.security_settings);
+        assert!(require_capability(&platform, Capability::SecuritySettings).is_err());
     }
 }

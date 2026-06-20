@@ -17,6 +17,91 @@ pub struct GoalUpdateRequest {
     pub enabled: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GoalCommandKind {
+    Save,
+    Clear,
+    Pause,
+    Resume,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        db::ThreadGoal,
+        services::goals::{
+            plan_clear_goal_update, plan_goal_update, plan_pause_goal_update,
+            plan_resume_goal_update, GoalCommandKind, GoalUpdateRequest,
+        },
+    };
+
+    #[test]
+    fn goal_update_request_plans_save_clear_pause_and_resume() {
+        let save = plan_goal_update(GoalUpdateRequest {
+            thread_id: Some(" thread-a ".to_string()),
+            objective: Some("  Ship the feature  ".to_string()),
+            token_budget: Some(2048),
+            status: None,
+            enabled: None,
+        })
+        .unwrap();
+        assert_eq!(save.command, GoalCommandKind::Save);
+        assert_eq!(save.update.thread_id, "thread-a");
+        assert_eq!(save.update.objective.as_deref(), Some("Ship the feature"));
+        assert_eq!(save.update.token_budget, Some(2048));
+        assert_eq!(save.update.status, "active");
+
+        let clear = plan_clear_goal_update(Some(" thread-a ")).unwrap();
+        assert_eq!(clear.command, GoalCommandKind::Clear);
+        assert_eq!(clear.update.thread_id, "thread-a");
+        assert_eq!(clear.update.objective, None);
+        assert_eq!(clear.update.status, "cleared");
+
+        let existing = thread_goal("thread-a", Some("Keep context"), Some(512), "active");
+        let paused = plan_pause_goal_update(" thread-a ", Some(&existing)).unwrap();
+        assert_eq!(paused.command, GoalCommandKind::Pause);
+        assert_eq!(paused.update.objective.as_deref(), Some("Keep context"));
+        assert_eq!(paused.update.token_budget, Some(512));
+        assert_eq!(paused.update.status, "paused");
+
+        let resumed = plan_resume_goal_update(" thread-a ", Some(&existing)).unwrap();
+        assert_eq!(resumed.command, GoalCommandKind::Resume);
+        assert_eq!(resumed.update.status, "active");
+    }
+
+    #[test]
+    fn goal_pause_and_resume_can_plan_without_existing_goal() {
+        let paused = plan_pause_goal_update("thread-a", None).unwrap();
+        assert_eq!(paused.update.thread_id, "thread-a");
+        assert_eq!(paused.update.objective, None);
+        assert_eq!(paused.update.token_budget, None);
+        assert_eq!(paused.update.status, "paused");
+
+        let resumed = plan_resume_goal_update("thread-a", None).unwrap();
+        assert_eq!(resumed.update.thread_id, "thread-a");
+        assert_eq!(resumed.update.status, "active");
+    }
+
+    fn thread_goal(
+        thread_id: &str,
+        objective: Option<&str>,
+        token_budget: Option<u64>,
+        status: &str,
+    ) -> ThreadGoal {
+        ThreadGoal {
+            thread_id: thread_id.to_string(),
+            objective: objective.map(str::to_string),
+            token_budget,
+            status: status.to_string(),
+            created_at: 1,
+            updated_at: 2,
+            completed_at: None,
+            blocked_reason: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalUpdatePlan {
     pub thread_id: String,
@@ -25,6 +110,12 @@ pub struct GoalUpdatePlan {
     pub status: String,
     pub completed_at: Option<i64>,
     pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalCommandPlan {
+    pub command: GoalCommandKind,
+    pub update: GoalUpdatePlan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +183,13 @@ pub fn plan_save_goal(request: GoalUpdateRequest) -> Result<GoalUpdatePlan> {
     })
 }
 
+pub fn plan_goal_update(request: GoalUpdateRequest) -> Result<GoalCommandPlan> {
+    Ok(GoalCommandPlan {
+        command: GoalCommandKind::Save,
+        update: plan_save_goal(request)?,
+    })
+}
+
 pub fn plan_clear_goal(thread_id: &str) -> Result<GoalUpdatePlan> {
     Ok(GoalUpdatePlan {
         thread_id: required_thread_id(Some(thread_id))?,
@@ -103,12 +201,39 @@ pub fn plan_clear_goal(thread_id: &str) -> Result<GoalUpdatePlan> {
     })
 }
 
+pub fn plan_clear_goal_update(thread_id: Option<&str>) -> Result<GoalCommandPlan> {
+    Ok(GoalCommandPlan {
+        command: GoalCommandKind::Clear,
+        update: plan_clear_goal(thread_id.unwrap_or_default())?,
+    })
+}
+
 pub fn plan_pause_goal(goal: &ThreadGoal) -> GoalUpdatePlan {
     plan_goal_status(goal, "paused")
 }
 
 pub fn plan_resume_goal(goal: &ThreadGoal) -> GoalUpdatePlan {
     plan_goal_status(goal, "active")
+}
+
+pub fn plan_pause_goal_update(
+    thread_id: &str,
+    existing: Option<&ThreadGoal>,
+) -> Result<GoalCommandPlan> {
+    Ok(GoalCommandPlan {
+        command: GoalCommandKind::Pause,
+        update: plan_goal_status_for_thread(thread_id, existing, "paused")?,
+    })
+}
+
+pub fn plan_resume_goal_update(
+    thread_id: &str,
+    existing: Option<&ThreadGoal>,
+) -> Result<GoalCommandPlan> {
+    Ok(GoalCommandPlan {
+        command: GoalCommandKind::Resume,
+        update: plan_goal_status_for_thread(thread_id, existing, "active")?,
+    })
 }
 
 pub fn plan_goal_status_for_thread(
