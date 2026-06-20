@@ -743,7 +743,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
     select: applyThreadTitleOverrides
   });
   const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
-  const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
+  const resolvedSelected = resolvedSelectedThreadId(selectedId);
   const selectedThreadSummary = useMemo(
     () => visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null,
     [visibleThreads, resolvedSelected]
@@ -847,6 +847,10 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
       </section>
     </div>
   );
+}
+
+export function resolvedSelectedThreadId(selectedId: SelectedThread): string | null {
+  return selectedId === "__new" ? null : selectedId;
 }
 
 function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onNew, onRefresh, loading }: {

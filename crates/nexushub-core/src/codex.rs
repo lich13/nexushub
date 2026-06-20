@@ -8,7 +8,6 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThreadStatus {
@@ -128,6 +127,19 @@ impl CodexPaths {
         Self { home: home.into() }
     }
 
+    fn contains_path(&self, path: &Path) -> bool {
+        if is_macos_network_volume_path(&self.home) || is_macos_network_volume_path(path) {
+            return false;
+        }
+        let Ok(home) = fs::canonicalize(&self.home) else {
+            return false;
+        };
+        let Ok(candidate) = fs::canonicalize(path) else {
+            return false;
+        };
+        candidate.starts_with(home)
+    }
+
     pub fn state_db(&self) -> PathBuf {
         self.home.join("state_5.sqlite")
     }
@@ -179,12 +191,14 @@ impl Default for CodexPathDiscoveryOptions {
         let current_user_home = dirs::home_dir();
         let (fallback_codex_home, fallback_codex_home_source) =
             default_fallback_codex_home(current_user_home.as_deref());
+        let (root_codex_home, ubuntu_codex_home, home_scan_root) =
+            default_linux_codex_discovery_paths(current_user_home.as_deref());
         Self {
             env_codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
             current_user_home,
-            root_codex_home: PathBuf::from("/root/.codex"),
-            ubuntu_codex_home: PathBuf::from("/home/ubuntu/.codex"),
-            home_scan_root: PathBuf::from("/home"),
+            root_codex_home,
+            ubuntu_codex_home,
+            home_scan_root,
             fallback_codex_home,
             fallback_codex_home_source,
         }
@@ -264,7 +278,7 @@ pub fn resolve_codex_paths_with_options(
     }
 
     let (home, codex_home_source) = selected.unwrap_or_else(|| {
-        if !is_auto_path(configured_home) {
+        if !is_auto_path(configured_home) && !is_macos_network_volume_path(configured_home) {
             warnings.push(format!(
                 "no valid Codex home discovered; using configured path {}",
                 configured_home.display()
@@ -320,6 +334,31 @@ fn default_fallback_codex_home(current_user_home: Option<&Path>) -> (PathBuf, &'
     }
 }
 
+fn default_linux_codex_discovery_paths(
+    current_user_home: Option<&Path>,
+) -> (PathBuf, PathBuf, PathBuf) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let base = current_user_home
+            .map(|home| home.join(".nexushub/non-linux-codex-discovery"))
+            .unwrap_or_else(|| PathBuf::from(".nexushub/non-linux-codex-discovery"));
+        (
+            base.join("root/.codex"),
+            base.join("home/ubuntu/.codex"),
+            base.join("home"),
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = current_user_home;
+        (
+            PathBuf::from("/root/.codex"),
+            PathBuf::from("/home/ubuntu/.codex"),
+            PathBuf::from("/home"),
+        )
+    }
+}
+
 fn is_auto_path(path: &Path) -> bool {
     let value = path.to_string_lossy();
     let trimmed = value.trim();
@@ -333,6 +372,9 @@ fn configured_path_value(path: &Path) -> Option<String> {
 }
 
 fn is_valid_codex_home(path: &Path) -> bool {
+    if is_macos_network_volume_path(path) {
+        return false;
+    }
     path.is_dir()
         && [
             path.join("logs_2.sqlite"),
@@ -375,9 +417,11 @@ pub fn list_threads(
         if row.summary.rollout_path.is_none() {
             row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
         }
-        if row.summary.rollout_path.is_none() {
-            row.summary.rollout_path = find_rollout_path(paths, &row.summary.id);
-        }
+        row.summary.rollout_path = row
+            .summary
+            .rollout_path
+            .take()
+            .filter(|path| paths.contains_path(path));
         if should_repair_thread_title_from_local_metadata(
             row.db_title.as_deref(),
             row.first_user_message.as_deref(),
@@ -733,12 +777,13 @@ pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
 }
 
 pub fn thread_detail(paths: &CodexPaths, id: &str) -> Result<Option<ThreadDetail>> {
-    let Some(summary) = list_threads(paths, None, Some(id), 500)?
+    let Some(mut summary) = list_threads(paths, None, Some(id), 500)?
         .into_iter()
         .find(|thread| thread.id == id)
     else {
         return Ok(None);
     };
+    let _ = enrich_thread_from_rollout(&mut summary);
     thread_detail_from_summary(summary).map(Some)
 }
 
@@ -1055,7 +1100,7 @@ fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, SessionIndex
             continue;
         };
         let mut entry = SessionIndexEntry {
-            path: session_index_path(paths, id, &value),
+            path: session_index_path(paths, &value),
             title: session_index_title(&value),
             first_user_message: session_index_string_field(&value, "first_user_message")
                 .or_else(|| session_index_string_field(&value, "firstUserMessage")),
@@ -1077,13 +1122,37 @@ fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, SessionIndex
     Ok(map)
 }
 
-fn session_index_path(paths: &CodexPaths, id: &str, value: &Value) -> Option<PathBuf> {
+fn session_index_path(paths: &CodexPaths, value: &Value) -> Option<PathBuf> {
     value
         .get("path")
         .or_else(|| value.get("rollout_path"))
         .and_then(Value::as_str)
         .map(PathBuf::from)
-        .or_else(|| find_rollout_path(paths, id))
+        .filter(|path| paths.contains_path(path))
+}
+
+pub fn is_macos_network_volume_path(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if path.starts_with("/Volumes") {
+            return true;
+        }
+        let mut current = Some(path);
+        while let Some(candidate) = current {
+            if candidate.exists() {
+                return fs::canonicalize(candidate)
+                    .map(|canonical| canonical.starts_with("/Volumes"))
+                    .unwrap_or(true);
+            }
+            current = candidate.parent();
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn session_index_title(value: &Value) -> Option<String> {
@@ -1108,25 +1177,6 @@ fn session_index_string_field(value: &Value, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_string)
-}
-
-fn find_rollout_path(paths: &CodexPaths, thread_id: &str) -> Option<PathBuf> {
-    let sessions = paths.sessions_dir();
-    if !sessions.exists() {
-        return None;
-    }
-    WalkDir::new(sessions)
-        .max_depth(8)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|v| v.to_str())
-                .map(|name| name.contains(thread_id) && name.ends_with(".jsonl"))
-                .unwrap_or(false)
-        })
 }
 
 #[derive(Default)]
@@ -3775,10 +3825,11 @@ pub fn db_integrity(paths: &CodexPaths) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
-        parse_message_event, resolve_codex_paths_with_options, scan_rollout, set_thread_title,
-        thread_detail, thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions,
-        CodexPaths, ThreadStatus,
+        archived_thread_ids, hidden_thread_ids, is_macos_network_volume_path,
+        is_request_user_input, is_valid_codex_home, list_threads, parse_message_event,
+        resolve_codex_paths_with_options, scan_rollout, set_thread_title, thread_detail,
+        thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
+        ThreadStatus,
     };
     use rusqlite::Connection;
     use serde_json::json;
@@ -3925,6 +3976,16 @@ mod tests {
         assert_eq!(resolved.app_server_socket, None);
         assert_eq!(resolved.app_server_socket_source, None);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_discovery_options_do_not_probe_linux_autofs_homes_on_macos() {
+        let options = CodexPathDiscoveryOptions::default();
+
+        assert!(!options.root_codex_home.starts_with("/root"));
+        assert!(!options.ubuntu_codex_home.starts_with("/home"));
+        assert!(!options.home_scan_root.starts_with("/home"));
     }
 
     #[test]
@@ -4953,6 +5014,98 @@ mod tests {
             .unwrap();
         assert_eq!(row.rollout_path.as_deref(), Some(rollout.as_path()));
         assert_eq!(row.latest_message.as_deref(), Some("from db rollout"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_threads_does_not_read_rollout_outside_codex_home() {
+        let root = unique_temp_dir("external-rollout-path");
+        let external = unique_temp_dir("external-rollout-content");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        let external_rollout = external.join("external-rollout.jsonl");
+        fs::write(
+            &external_rollout,
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"external message must not be read"}]}})
+                .to_string(),
+        )
+        .unwrap();
+        write_thread_db(&root, "external-thread", &external_rollout, 1, 0);
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+
+        let row = rows
+            .iter()
+            .find(|thread| thread.id == "external-thread")
+            .unwrap();
+        assert!(row.rollout_path.is_none());
+        assert!(row.latest_message.is_none());
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(external);
+    }
+
+    #[test]
+    fn list_threads_does_not_discover_rollout_path_from_sessions_tree() {
+        let root = unique_temp_dir("list-no-session-tree-scan");
+        let sessions = root.join("sessions/2026/06/20");
+        fs::create_dir_all(&sessions).unwrap();
+        let rollout = sessions.join("rollout-special-thread.jsonl");
+        fs::write(
+            &rollout,
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            json!({"id":"special-thread"}).to_string(),
+        )
+        .unwrap();
+        write_thread_db(&root, "special-thread", Path::new(""), 1, 0);
+
+        let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+        let row = rows
+            .iter()
+            .find(|thread| thread.id == "special-thread")
+            .unwrap();
+        assert!(row.rollout_path.is_none());
+        assert_ne!(row.status, ThreadStatus::Running);
+
+        let detail = thread_detail(&CodexPaths::new(&root), "special-thread")
+            .unwrap()
+            .unwrap();
+        assert!(detail.summary.rollout_path.is_none());
+        assert!(detail.summary.active_turn_id.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn codex_paths_rejects_network_volume_paths() {
+        let paths = CodexPaths::new("/Volumes/share/.codex");
+        assert!(!paths.contains_path(Path::new("/Volumes/share/.codex/sessions/a.jsonl")));
+        assert!(!is_valid_codex_home(Path::new("/Volumes/share/.codex")));
+        assert!(is_macos_network_volume_path(Path::new(
+            "/Volumes/share/.codex"
+        )));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_codex_paths_does_not_fall_back_to_network_volume_configured_home() {
+        let root = unique_temp_dir("network-volume-configured-home");
+        let options = CodexPathDiscoveryOptions {
+            env_codex_home: None,
+            current_user_home: Some(root.clone()),
+            root_codex_home: root.join("root/.codex"),
+            ubuntu_codex_home: root.join("home/ubuntu/.codex"),
+            home_scan_root: root.join("home"),
+            fallback_codex_home: root.join("fallback/.codex"),
+            fallback_codex_home_source: "fallback_current_user",
+        };
+        let resolved =
+            resolve_codex_paths_with_options(Path::new("/Volumes/share/.codex"), &options);
+        assert!(!resolved.home.starts_with("/Volumes"));
         let _ = fs::remove_dir_all(root);
     }
 

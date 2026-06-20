@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-20
-> **Mode**: V0.1.112_CC_SWITCH_UNIFIED_ARCHITECTURE_BACKFILL
+> **Mode**: V0.1.113_MACOS_NETWORK_VOLUME_TCC_FIX
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.112 cc-switch unified architecture backfill<br>
-**Active Task**: `v0.1.112` closes the remaining unified-architecture gaps: thread steer/follow-up semantics are shared in core, desktop upload validation uses the same batch plan as HTTP upload, frontend actions move behind query/state facades, explicit cleanup capabilities gate cross-platform maintenance, macOS keeps Web security/admin/systemd/Nginx surfaces unavailable, and `CLAUDE.md` remains intentionally absent.
+**Active Phase**: v0.1.113 macOS network-volume TCC fix<br>
+**Active Task**: `v0.1.113` fixes the macOS first-launch network-volume TCC prompt by preventing implicit thread-list rollout scans from following paths outside the resolved Codex home and by deferring desktop cleanup dry-run plans until explicit user action. `CLAUDE.md` remains intentionally absent.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.112_CC_SWITCH_UNIFIED_ARCHITECTURE_BACKFILL
+  mode: V0.1.113_MACOS_NETWORK_VOLUME_TCC_FIX
   strategy: "conservative provider shell around preserved Codex behavior"
   phases:
     phase_1:
@@ -121,6 +121,7 @@ adaptive:
 | 2026-06-20 | v0.1.109 cc-switch service closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.109`; moves Goal DTO/status/view planning and Linux update shell job specs into core services, removes the last update prune runtime-kind branch from the frontend domain API, and preserves `CLAUDE.md` as intentionally absent. |
 | 2026-06-20 | v0.1.111 cc-switch final service-layer closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.111`; centralizes upload planning in core, splits frontend API implementations into domain modules behind a thin barrel, keeps runtime as transport only, removes retired desktop `_command` wrappers from registration, and keeps Linux-only WebUI surfaces capability-gated. |
 | 2026-06-20 | v0.1.112 cc-switch unified architecture backfill | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.112`; shares steer/follow-up planning and desktop upload batch validation through core, adds explicit cleanup capabilities, moves App actions behind query/state facades, keeps typed Tauri commands free of retired string action multiplexers, and preserves `CLAUDE.md` as intentionally absent. |
+| 2026-06-20 | v0.1.113 macOS network-volume TCC fix | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.113`; prevents implicit list/home reads from following rollout paths outside the resolved Codex home, defers desktop cleanup dry-run plans until explicit user action, and keeps `CLAUDE.md` intentionally absent. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -137,7 +138,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.112
+git ls-remote --tags origin refs/tags/v0.1.113
 ```
 
 ## Next Steps
@@ -148,7 +149,7 @@ git ls-remote --tags origin refs/tags/v0.1.112
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.112 Acceptance Matrix
+## v0.1.113 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -186,3 +187,4 @@ git ls-remote --tags origin refs/tags/v0.1.112
 | 2026-06-20 | v0.1.109-cc-switch-service-closure | Closes the remaining service split: Goal status/view planning and Linux update shell job specs are shared core services, frontend update prune is capability-driven, and macOS keeps Web security/admin/systemd/Nginx surfaces unavailable. |
 | 2026-06-20 | v0.1.111-cc-switch-final-service-layer-closure | Closes the final cc-switch alignment gaps: upload validation/storage planning is shared in core, frontend domain APIs are split behind `runtime` transport, desktop compat `_command` wrappers stay retired, and macOS keeps Linux WebUI-only operations unavailable. |
 | 2026-06-20 | v0.1.112-cc-switch-unified-architecture-backfill | Closes the remaining unified-architecture gaps: shared core plans thread steer/follow-up and desktop upload validation, cleanup capabilities are explicit, frontend mutations sit behind query/state facades, and Linux WebUI-only operations stay unavailable on macOS. |
+| 2026-06-20 | v0.1.113-macos-network-volume-tcc-fix | Fixes the macOS first-launch network-volume TCC prompt by keeping implicit thread-list scans inside the resolved Codex home and deferring desktop cleanup dry-run scans to explicit user actions. |

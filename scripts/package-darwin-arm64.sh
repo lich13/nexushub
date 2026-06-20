@@ -133,6 +133,19 @@ assert_helper_resource_placeholder() {
   fi
 }
 
+cleanup_stale_launchservices_dmg_registrations() {
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  [[ -x "${lsregister}" ]] || return 0
+
+  "${lsregister}" -dump 2>/dev/null |
+    awk '/path: *\/Volumes\/dmg\..*\/NexusHub\.app/ {print $2}' |
+    sort -u |
+    while IFS= read -r stale_app; do
+      [[ -n "${stale_app}" ]] || continue
+      "${lsregister}" -u "${stale_app}" >/dev/null 2>&1 || true
+    done
+}
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -242,6 +255,7 @@ else
 fi
 
 cp "${TAURI_DMG}" "${DIST}/${DMG_ASSET}"
+cleanup_stale_launchservices_dmg_registrations
 
 (
   cd "${DIST}"

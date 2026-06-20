@@ -133,9 +133,13 @@ pub struct DesktopState {
 
 impl DesktopState {
     pub fn current() -> Result<Self> {
-        let config = load_desktop_config();
+        let mut config = load_desktop_config();
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
+        if nexushub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
+            config.codex.workspace = default_local_desktop_workspace()
+                .ok_or_else(|| anyhow!("cannot resolve local desktop workspace"))?;
+        }
         std::fs::create_dir_all(&config.codex.workspace)?;
         let db = open_panel_db(&config)?;
         Ok(Self::new(config, db, PlatformPaths::current()))
@@ -171,6 +175,10 @@ impl DesktopState {
     pub fn platform(&self) -> &PlatformPaths {
         &self.platform
     }
+}
+
+fn default_local_desktop_workspace() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("nexushub-workspace"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -479,7 +487,6 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
     let mut warnings = overview_warning(&overview);
     let resolved = resolve_codex_paths(&config.codex.home);
     warnings.extend(resolved.discovery_warnings.clone());
-    let codex_paths = resolved.codex_paths();
     let runtime = ProbeRuntime::new(config.clone(), state.platform().clone());
 
     let system = system_status_with_paths(&config, state.platform())
@@ -499,8 +506,8 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
         warnings.push(format!("线程读取失败: {err}"));
         Vec::new()
     });
-    let archive_plan = plan_delete_archived(&codex_paths).ok();
-    let hidden_plan = plan_delete_hidden(&codex_paths).ok();
+    let archive_plan = None;
+    let hidden_plan = None;
     let goal = first_thread_goal(&config, threads.first());
 
     Ok(DesktopHome {
@@ -1895,6 +1902,16 @@ mod tests {
         assert!(response
             .message
             .contains("fork uses Codex app-server state"));
+    }
+
+    #[tokio::test]
+    async fn desktop_home_defers_cleanup_dry_run_plans() {
+        let (_temp, state) = test_desktop_state();
+
+        let home = build_desktop_home_with_state(&state).await.unwrap();
+
+        assert!(home.archive_plan.is_none());
+        assert!(home.hidden_plan.is_none());
     }
 
     #[test]

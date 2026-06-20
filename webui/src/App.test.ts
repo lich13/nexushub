@@ -73,6 +73,7 @@ type AppExports = typeof import("./App") & {
   ) => boolean;
   nextVisibleThreadIdAfterRemoval?: (threads: ThreadSummary[], removedThreadId: string) => string | null;
   shouldHydrateThreadDetail?: (threadId: string | null | undefined, detail?: { summary: ThreadSummary } | null) => boolean;
+  resolvedSelectedThreadId?: (selectedId: string | "__new" | null) => string | null;
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
   applyOptimisticThreadTitle?: (qc: QueryClient, threadId: string, title: string) => unknown;
   rollbackOptimisticThreadTitle?: (qc: QueryClient, snapshot: unknown) => void;
@@ -912,6 +913,15 @@ describe("conversation helpers", () => {
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: recent })).toBe(true);
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: archived })).toBe(false);
     expect(app.shouldHydrateThreadDetail?.("thread-a", { summary: { ...recent, id: "thread-b" } })).toBe(false);
+  });
+
+  test("first paint does not auto-select the first thread and trigger detail loading", async () => {
+    const app = await loadApp();
+
+    expect(app.resolvedSelectedThreadId?.(null)).toBeNull();
+    expect(app.resolvedSelectedThreadId?.("__new")).toBeNull();
+    expect(app.resolvedSelectedThreadId?.("thread-a")).toBe("thread-a");
+    expect(appSource).not.toContain("visibleThreads[0]?.id");
   });
 
   test("thread list keeps title, search, and filters outside the independent scroll container", () => {
