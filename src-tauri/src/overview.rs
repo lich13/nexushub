@@ -30,6 +30,7 @@ use nexushub_core::{
     services::{
         goals as goal_service, jobs as job_service, settings as settings_service,
         threads::{self as thread_service, ThreadsQuery},
+        uploads as upload_service,
     },
     system::{system_status_with_paths, SystemStatus},
     update::{analyze_job_failure, JobFailureAnalysis},
@@ -690,18 +691,22 @@ pub fn desktop_send_message_with_state(
 
 pub fn desktop_continue_thread_with_state(
     state: &DesktopState,
-    mut request: DesktopSendMessageRequest,
+    request: DesktopSendMessageRequest,
 ) -> Result<CodexActionResult> {
-    let Some(thread_id) = request
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        anyhow::bail!("thread_id is required");
-    };
-    request.thread_id = Some(thread_id.to_string());
-    start_codex_job_from_request(state, request, job_service::CodexActionKind::Resume)
+    let attachments = prepare_request_attachments(state, &request.attachments)?;
+    let plan = job_service::plan_steer_thread_as_followup(job_service::ThreadCommandRequest {
+        command: job_service::ThreadCommandKind::FollowUp,
+        thread_id: request.thread_id.clone(),
+        message: request.into_thread_message(attachments),
+    })?;
+    let followup = plan.followup.ok_or_else(|| anyhow!("missing follow-up plan"))?;
+    state
+        .db
+        .enqueue_followup(&followup.thread_id, &followup.message, followup.options)?;
+    Ok(job_service::codex_action_submitted(
+        Some(followup.thread_id),
+        None,
+    ))
 }
 
 pub fn desktop_stop_thread_with_state(
@@ -1061,16 +1066,17 @@ pub fn desktop_store_uploads_with_state(
     files: Vec<DesktopUploadFile>,
 ) -> Result<uploads::UploadOutcome> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let mut stored = Vec::new();
-    for file in files {
-        stored.push(uploads::store_upload(
-            &root,
-            &file.name,
-            Some(&file.mime),
-            &file.bytes,
-        )?);
-    }
-    Ok(uploads::UploadOutcome { files: stored })
+    let plan = upload_service::plan_desktop_batch_uploads(
+        files
+            .into_iter()
+            .map(|file| upload_service::UploadBatchItem {
+                name: file.name,
+                mime: Some(file.mime),
+                bytes: file.bytes,
+            })
+            .collect(),
+    )?;
+    upload_service::store_upload_plan(&root, plan)
 }
 
 pub fn desktop_jobs_with_state(
@@ -1768,6 +1774,28 @@ mod tests {
             desktop_delete_upload_with_state(&state, DesktopDeleteUploadRequest { id }).unwrap();
         assert!(deleted.ok);
         assert!(deleted.deleted);
+    }
+
+    #[test]
+    fn desktop_typed_uploads_use_shared_batch_validation() {
+        let (_temp, state) = test_desktop_state();
+
+        let empty_error = desktop_store_uploads_with_state(&state, vec![])
+            .unwrap_err()
+            .to_string();
+        assert!(empty_error.contains("没有可上传的文件"));
+
+        let too_many = (0..6)
+            .map(|index| DesktopUploadFile {
+                name: format!("note-{index}.md"),
+                mime: "text/markdown".to_string(),
+                bytes: b"# hello".to_vec(),
+            })
+            .collect();
+        let too_many_error = desktop_store_uploads_with_state(&state, too_many)
+            .unwrap_err()
+            .to_string();
+        assert!(too_many_error.contains("一次最多上传 5 个文件"));
     }
 
     #[test]

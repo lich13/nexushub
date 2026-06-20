@@ -106,8 +106,8 @@ pub fn listModels() -> Result<Vec<nexushub_core::local::CodexModelInfo>, String>
 }
 
 #[tauri::command]
-pub fn listPermissionProfiles(
-) -> Result<Vec<nexushub_core::local::CodexPermissionProfile>, String> {
+pub fn listPermissionProfiles() -> Result<Vec<nexushub_core::local::CodexPermissionProfile>, String>
+{
     Ok(nexushub_core::local::default_permission_profiles())
 }
 

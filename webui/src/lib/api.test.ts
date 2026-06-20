@@ -879,7 +879,10 @@ describe("archive delete API compatibility", () => {
       public_endpoint: true,
       admin_password: true,
       linux_update_job: true,
-      prune_backups: true
+      prune_backups: true,
+      thread_cleanup: true,
+      probe_log_maintenance: true,
+      thread_archive_actions: true
     };
     const macCore: SystemStatus["capabilities"] = {
       ...linuxCore,
@@ -891,7 +894,10 @@ describe("archive delete API compatibility", () => {
       public_endpoint: false,
       admin_password: false,
       linux_update_job: false,
-      prune_backups: false
+      prune_backups: false,
+      thread_cleanup: true,
+      probe_log_maintenance: true,
+      thread_archive_actions: true
     };
     const webBootstrap = runtimeCapabilitiesForRuntime("web");
     const desktopBootstrap = runtimeCapabilitiesForRuntime("desktop");
@@ -905,6 +911,9 @@ describe("archive delete API compatibility", () => {
       publicEndpointStatus: false,
       codexStatePaths: false,
       backupPrune: false,
+      threadCleanup: false,
+      probeLogMaintenance: false,
+      threadArchiveActions: false,
       updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
@@ -917,6 +926,9 @@ describe("archive delete API compatibility", () => {
       publicEndpointStatus: false,
       codexStatePaths: false,
       backupPrune: false,
+      threadCleanup: false,
+      probeLogMaintenance: false,
+      threadArchiveActions: false,
       updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
@@ -928,6 +940,9 @@ describe("archive delete API compatibility", () => {
       securitySettings: true,
       publicEndpointStatus: true,
       backupPrune: true,
+      threadCleanup: true,
+      probeLogMaintenance: true,
+      threadArchiveActions: true,
       updateServiceLabels: true,
       forkAction: true,
       approvalActions: true
@@ -938,6 +953,9 @@ describe("archive delete API compatibility", () => {
       securitySettings: false,
       publicEndpointStatus: false,
       backupPrune: false,
+      threadCleanup: true,
+      probeLogMaintenance: true,
+      threadArchiveActions: true,
       updateServiceLabels: false,
       forkAction: false,
       approvalActions: false
@@ -1106,10 +1124,10 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      if (command === "runUpdateAction" && args?.action === "install") {
+      if (command === "installUpdateAndRestart") {
         return { job_id: "desktop-native-job", installed: false };
       }
-      if (command === "runUpdateAction" && args?.action === "check") {
+      if (command === "checkUpdate") {
         return {
           job_id: "desktop-check-job",
           status: {
@@ -1159,8 +1177,8 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "check", csrfToken: "ignored-csrf" });
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "install", csrfToken: "ignored-csrf" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("checkUpdate", undefined);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("installUpdateAndRestart", undefined);
   });
 
   test("update prune is gated by capability matrix instead of runtime kind", async () => {
@@ -1175,7 +1193,7 @@ describe("archive delete API compatibility", () => {
     };
 
     await expect(runUpdateAction("prune", "ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("runUpdateAction", { action: "prune", csrfToken: "ignored-csrf" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("backupPrune", undefined);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1260,9 +1278,9 @@ describe("archive delete API compatibility", () => {
         case "saveProbeSettings":
           expect(args).toMatchObject({ settings: { probe: { enabled: false } }, csrfToken: "ignored-csrf" });
           return { probe: { enabled: false }, notifications: {}, logs_db: {} };
-        case "startProbeJob":
-          expect(args).toMatchObject({ csrfToken: "ignored-csrf" });
-          expect(["bark-test", "logs-db-dry-run"]).toContain(args?.action);
+        case "startProbeBarkTest":
+        case "startProbeLogsDbDryRun":
+          expect(args).toBeUndefined();
           return { job_id: "probe-logs-job" };
         case "deleteUpload":
           expect(args).toEqual({ id: "upload-a", csrfToken: "ignored-csrf" });
@@ -1337,8 +1355,8 @@ describe("archive delete API compatibility", () => {
       ["startHiddenThreadDelete", { confirmed: true, csrfToken: "ignored-csrf" }],
       ["getProbeSettings", undefined],
       ["saveProbeSettings", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
-      ["startProbeJob", { action: "bark-test", csrfToken: "ignored-csrf" }],
-      ["startProbeJob", { action: "logs-db-dry-run", csrfToken: "ignored-csrf" }],
+      ["startProbeBarkTest", undefined],
+      ["startProbeLogsDbDryRun", undefined],
       ["deleteUpload", { id: "upload-a", csrfToken: "ignored-csrf" }],
       ["listJobs", { limit: 30 }],
       ["getJob", { id: "job-a" }],

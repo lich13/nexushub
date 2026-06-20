@@ -221,8 +221,14 @@ pub fn renameThread(
     threadId: String,
     name: String,
 ) -> Result<DesktopActionResponse, String> {
-    desktop_rename_thread_with_state(&state, DesktopRenameThreadRequest { thread_id: threadId, name })
-        .map_err(|err| err.to_string())
+    desktop_rename_thread_with_state(
+        &state,
+        DesktopRenameThreadRequest {
+            thread_id: threadId,
+            name,
+        },
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -238,7 +244,10 @@ pub fn answerElicitation(
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
     desktop_answer_elicitation_with_state(
         &state,
-        DesktopElicitationAnswerRequest { thread_id: threadId, answers },
+        DesktopElicitationAnswerRequest {
+            thread_id: threadId,
+            answers,
+        },
     )
     .map_err(|err| err.to_string())
 }

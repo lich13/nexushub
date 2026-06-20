@@ -36,13 +36,9 @@ import type {
   UploadOutcome
 } from "../../types";
 import {
-  RuntimeUnavailableError,
-  createRuntimeThreadEventSource,
-  desktopSessionUser,
   runtimeDispatch,
   runtimeRpc,
   runtimeValue,
-  uploadRuntimeFiles
 } from "./transport";
 import { jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
 import { demoProbeSettings, demoProbeStatus } from "./demo";
@@ -235,9 +231,24 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
 
 export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  const result = await runtimeDispatch<{ job_id?: string | null; jobId?: string | null }>({
-    command: "startProbeJob",
-    args: { action, csrfToken }
-  });
+  const result = await startProbeJobForRuntime(action, csrfToken);
   return jobIdFromRuntimeResult(result, `probe-${action}`);
+}
+
+function desktopProbeJobCommand(action: ProbeJobAction): string {
+  if (action === "bark-test") return "startProbeBarkTest";
+  if (action === "hooks-install") return "startProbeHooksInstall";
+  if (action === "logs-db-dry-run") return "startProbeLogsDbDryRun";
+  return "startProbeLogsDbExecute";
+}
+
+async function startProbeJobForRuntime(
+  action: ProbeJobAction,
+  csrfToken?: string | null,
+): Promise<{ job_id?: string | null; jobId?: string | null }> {
+  return runtimeDispatch({
+    command: desktopProbeJobCommand(action),
+    webCommand: "startProbeJob",
+    webArgs: { action, csrfToken }
+  });
 }

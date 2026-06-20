@@ -145,23 +145,19 @@ pub async fn install_update_and_restart(
 }
 
 #[tauri::command]
-pub async fn runUpdateAction(
+pub async fn checkUpdate(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
-    action: String,
-) -> std::result::Result<serde_json::Value, String> {
-    match action.as_str() {
-        "check" => {
-            let response = check_update_status(app, state).await?;
-            serde_json::to_value(response).map_err(|err| err.to_string())
-        }
-        "install" => {
-            let response = install_update_and_restart(app, state).await?;
-            serde_json::to_value(response).map_err(|err| err.to_string())
-        }
-        "prune" => Err("当前运行时不支持备份清理动作。".to_string()),
-        _ => Err(format!("unknown update action: {action}")),
-    }
+) -> std::result::Result<DesktopUpdateCheckResponse, String> {
+    check_update_status(app, state).await
+}
+
+#[tauri::command]
+pub async fn installUpdateAndRestart(
+    app: AppHandle,
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<DesktopUpdateInstallResponse, String> {
+    install_update_and_restart(app, state).await
 }
 
 fn update_job_id(action: &str) -> String {

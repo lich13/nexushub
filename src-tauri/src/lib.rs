@@ -195,9 +195,8 @@ pub fn run() {
             commands::probe::getProbeStatus,
             commands::updates::desktop_update_status,
             commands::updates::getUpdateStatus,
-            commands::updates::runUpdateAction,
-            commands::updates::check_update_status,
-            commands::updates::install_update_and_restart,
+            commands::updates::checkUpdate,
+            commands::updates::installUpdateAndRestart,
             commands::settings::desktop_archive_plan,
             commands::settings::desktop_hidden_plan,
             commands::settings::desktop_save_goal,
@@ -208,7 +207,10 @@ pub fn run() {
             commands::settings::saveProbeSettings,
             commands::settings::getProbeLogsDbStatus,
             commands::settings::getProbeEvents,
-            commands::settings::startProbeJob,
+            commands::settings::startProbeBarkTest,
+            commands::settings::startProbeHooksInstall,
+            commands::settings::startProbeLogsDbDryRun,
+            commands::settings::startProbeLogsDbExecute,
             commands::settings::dryRunArchiveDelete,
             commands::settings::startArchiveDelete,
             commands::settings::dryRunHiddenThreadDelete,
@@ -417,6 +419,24 @@ log_dir = "{}"
     #[test]
     fn tauri_invoke_handler_excludes_retired_desktop_command_compat_wrappers() {
         let commands = registered_invoke_command_paths();
+        for command in &commands {
+            let Some(name) = command.rsplit("::").next() else {
+                continue;
+            };
+            assert!(
+                !(name.starts_with("desktop_") && name.ends_with("_command")),
+                "desktop_*_command compatibility command must not be registered: {command}"
+            );
+        }
+        for retired in [
+            command_path("settings", "startProbeJob"),
+            command_path("updates", "runUpdateAction"),
+        ] {
+            assert!(
+                !commands.contains(&retired),
+                "string action compatibility command must not be registered: {retired}"
+            );
+        }
         for (module, stem) in [
             ("threads", "desktop_threads"),
             ("threads", "desktop_thread_detail"),
@@ -445,6 +465,15 @@ log_dir = "{}"
             .split("\n#[cfg(test)]")
             .nth(1)
             .expect("lib source must include test section");
+        for retired in [
+            command_path("settings", "startProbeJob"),
+            command_path("updates", "runUpdateAction"),
+        ] {
+            assert!(
+                !test_source.contains(&retired),
+                "tests must not embed retired string action command token: {retired}"
+            );
+        }
         for (module, stem) in [
             ("threads", "desktop_threads"),
             ("threads", "desktop_thread_detail"),

@@ -1815,20 +1815,36 @@ async fn steer_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let (message, options) = payload
-        .into_followup_message_and_options()
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let plan = job_service::plan_steer_thread_as_followup(job_service::ThreadCommandRequest {
+        command: job_service::ThreadCommandKind::FollowUp,
+        thread_id: Some(id.clone()),
+        message: payload,
+    })
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let followup_plan = plan
+        .followup
+        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "missing follow-up plan"))?;
 
-    let followup = state.db.enqueue_followup(&id, &message, options)?;
+    let followup = state
+        .db
+        .enqueue_followup(
+            &followup_plan.thread_id,
+            &followup_plan.message,
+            followup_plan.options,
+        )
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued_after_steer_fallback",
         Some("thread"),
-        Some(&id),
+        Some(&followup_plan.thread_id),
         None,
         json!({"followup_id": followup.id}),
     )?;
-    ok(job_service::codex_action_submitted(Some(id), None))
+    ok(job_service::codex_action_submitted(
+        Some(followup_plan.thread_id),
+        None,
+    ))
 }
 
 async fn list_followups(

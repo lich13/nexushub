@@ -40,7 +40,10 @@ export const demoWebSystemStatus: SystemStatus = {
     public_endpoint: true,
     admin_password: true,
     linux_update_job: true,
-    prune_backups: true
+    prune_backups: true,
+    thread_cleanup: true,
+    probe_log_maintenance: true,
+    thread_archive_actions: true
   },
   codex_home: "/root/.codex",
   configured_codex_home: "/root/.codex",

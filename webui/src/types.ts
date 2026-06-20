@@ -184,6 +184,9 @@ export type SystemCapabilities = {
   admin_password: boolean;
   linux_update_job: boolean;
   prune_backups: boolean;
+  thread_cleanup?: boolean;
+  probe_log_maintenance?: boolean;
+  thread_archive_actions?: boolean;
 };
 
 export type SystemStatus = {

@@ -9,6 +9,9 @@ export type RuntimeCapabilityMatrix = {
   publicEndpointStatus: boolean;
   codexStatePaths: boolean;
   backupPrune: boolean;
+  threadCleanup: boolean;
+  probeLogMaintenance: boolean;
+  threadArchiveActions: boolean;
   updateServiceLabels: boolean;
   forkAction: boolean;
   approvalActions: boolean;
@@ -22,6 +25,9 @@ const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   publicEndpointStatus: false,
   codexStatePaths: false,
   backupPrune: false,
+  threadCleanup: false,
+  probeLogMaintenance: false,
+  threadArchiveActions: false,
   updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
@@ -35,6 +41,9 @@ const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   publicEndpointStatus: false,
   codexStatePaths: false,
   backupPrune: false,
+  threadCleanup: false,
+  probeLogMaintenance: false,
+  threadArchiveActions: false,
   updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
@@ -52,6 +61,9 @@ function runtimeCapabilitiesFromCore(
     publicEndpointStatus: core.public_endpoint,
     codexStatePaths: core.systemd,
     backupPrune: core.prune_backups,
+    threadCleanup: core.thread_cleanup === true,
+    probeLogMaintenance: core.probe_log_maintenance === true,
+    threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: core.linux_update_job,
     forkAction: core.web_auth,
     approvalActions: core.web_auth

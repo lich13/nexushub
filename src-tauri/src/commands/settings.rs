@@ -130,6 +130,48 @@ pub fn desktop_probe_logs_db_maintain(
 }
 
 #[tauri::command]
+pub fn startProbeBarkTest(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    desktop_probe_bark_test_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn startProbeHooksInstall(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    desktop_probe_hooks_install_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn startProbeLogsDbDryRun(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    desktop_probe_logs_db_maintain_with_state(
+        &state,
+        DesktopLogsDbMaintainRequest {
+            dry_run: Some(true),
+            compact: Some(false),
+        },
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn startProbeLogsDbExecute(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    desktop_probe_logs_db_maintain_with_state(
+        &state,
+        DesktopLogsDbMaintainRequest {
+            dry_run: Some(false),
+            compact: Some(false),
+        },
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn getProbeLogsDbStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::probe::ProbeLogsDbStatus, String> {
@@ -146,36 +188,6 @@ pub fn getProbeEvents(
 ) -> Result<DesktopProbeEventsResponse, String> {
     desktop_probe_events_with_state(&state, DesktopProbeEventsRequest { limit })
         .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn startProbeJob(
-    state: tauri::State<'_, DesktopState>,
-    action: String,
-) -> Result<DesktopActionResponse, String> {
-    match action.as_str() {
-        "bark-test" => desktop_probe_bark_test_with_state(&state).map_err(|err| err.to_string()),
-        "hooks-install" => {
-            desktop_probe_hooks_install_with_state(&state).map_err(|err| err.to_string())
-        }
-        "logs-db-dry-run" => desktop_probe_logs_db_maintain_with_state(
-            &state,
-            DesktopLogsDbMaintainRequest {
-                dry_run: Some(true),
-                compact: Some(false),
-            },
-        )
-        .map_err(|err| err.to_string()),
-        "logs-db-execute" => desktop_probe_logs_db_maintain_with_state(
-            &state,
-            DesktopLogsDbMaintainRequest {
-                dry_run: Some(false),
-                compact: Some(false),
-            },
-        )
-        .map_err(|err| err.to_string()),
-        _ => Err(format!("unknown probe action: {action}")),
-    }
 }
 
 #[tauri::command]

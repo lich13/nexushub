@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test } from "vitest";
 import appSource from "./App.tsx?raw";
+import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
 
@@ -187,6 +188,9 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   publicEndpointStatus: true,
   codexStatePaths: true,
   backupPrune: true,
+  threadCleanup: true,
+  probeLogMaintenance: true,
+  threadArchiveActions: true,
   updateServiceLabels: true,
   forkAction: true,
   approvalActions: true
@@ -200,6 +204,9 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   publicEndpointStatus: false,
   codexStatePaths: false,
   backupPrune: false,
+  threadCleanup: true,
+  probeLogMaintenance: true,
+  threadArchiveActions: true,
   updateServiceLabels: false,
   forkAction: false,
   approvalActions: false
@@ -231,7 +238,7 @@ describe("conversation helpers", () => {
     );
 
     expect(shellSource).toContain('capabilities.securitySettings && view === "security"');
-    expect(securityWorkspaceSource).toContain("getSystemStatus");
+    expect(securityWorkspaceSource).toContain("useSystemStatusQuery");
     expect(securityWorkspaceSource).toContain('value={expectedHostname ?? "未配置"}');
     expect(securityWorkspaceSource).toContain('placeholder={defaultExpectedHostname ?? "未配置"}');
     expect(securityWorkspaceSource).not.toContain('|| "661313.xyz"');
@@ -334,6 +341,84 @@ describe("conversation helpers", () => {
     }
   });
 
+  test("components consume query/state layer instead of direct domain API functions", () => {
+    expect(appSource, "App.tsx must not import the domain API barrel").not.toContain("from \"./lib/api\"");
+    expect(appSource, "App.tsx must not create raw mutations; use query/state action hooks").not.toContain("useMutation(");
+
+    const appImportBlock = appSource.slice(0, appSource.indexOf("import { clearSession"));
+    const queryProxiedApiFunctions = [
+      "acceptPlan",
+      "answerApproval",
+      "answerElicitation",
+      "archiveThread",
+      "cancelFollowUp",
+      "changePassword",
+      "clearCodexGoal",
+      "createThread",
+      "deleteUpload",
+      "dryRunArchiveDelete",
+      "dryRunHiddenThreadDelete",
+      "forkThread",
+      "getClaudeCodeOverview",
+      "getCodexConfig",
+      "getCodexGoal",
+      "getPlatformOverview",
+      "getProbeEvents",
+      "getProbeLogsDbStatus",
+      "getProbeSettings",
+      "getProbeStatus",
+      "getPublicSettings",
+      "getSecurity",
+      "getSystemStatus",
+      "getThread",
+      "getThreadBlocks",
+      "getUpdateStatus",
+      "listFollowUps",
+      "listJobs",
+      "listModels",
+      "listPermissionProfiles",
+      "listPlugins",
+      "listProviders",
+      "listThreads",
+      "login",
+      "logout",
+      "pauseCodexGoal",
+      "renameThread",
+      "restoreThread",
+      "resumeCodexGoal",
+      "revisePlan",
+      "runUpdateAction",
+      "saveCodexGoal",
+      "saveProbeSettings",
+      "saveSecurity",
+      "sendMessage",
+      "startArchiveDelete",
+      "startHiddenThreadDelete",
+      "startProbeJob",
+      "steerThread",
+      "stopThread",
+      "uploadFiles"
+    ];
+
+    for (const name of queryProxiedApiFunctions) {
+      expect(appImportBlock, `App.tsx should consume ${name} via query/state hooks`).not.toMatch(new RegExp(`\\b${name}\\b`));
+    }
+
+    const threadQueryPublicExports = threadQuerySource.slice(threadQuerySource.lastIndexOf("export {"));
+    for (const name of queryProxiedApiFunctions) {
+      expect(threadQueryPublicExports, `query/threads.ts must not re-export raw ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
+    }
+
+    const opsSource = extractFunctionSource("OpsWorkspace");
+    const probeSource = extractProbeWorkspaceSource();
+    for (const source of [opsSource, probeSource]) {
+      for (const name of queryProxiedApiFunctions) {
+        expect(source, `workspace should not directly call ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
+      }
+      expect(source).not.toContain("useQueryClient");
+    }
+  });
+
   test("segments internal paths and Codex ids as copyable references", async () => {
     const app = await loadApp();
     const segments = app.segmentInternalReferences?.(
@@ -400,7 +485,7 @@ describe("conversation helpers", () => {
   test("slash command menu renders listbox with command, Chinese explanation, usage, and thread marker", async () => {
     const app = await loadApp();
 
-    const html = app.renderSlashCommandMenuHtml?.("/archive", 8, false);
+    const html = app.renderSlashCommandMenuHtml?.("/archive", 8, false, 0, linuxWebCapabilities);
 
     expect(html).toContain('role="listbox"');
     expect(html).toContain("/archive");
@@ -548,8 +633,13 @@ describe("conversation helpers", () => {
 
     expect(app.slashCommandAction?.("/plan")).toEqual({ kind: "toggle_plan_mode", command: "/plan" });
     expect(app.slashCommandAction?.("/new")).toEqual({ kind: "open_new_thread", command: "/new" });
-    expect(app.slashCommandAction?.("/archive")).toEqual({ kind: "archive_thread", command: "/archive" });
-    expect(app.slashCommandAction?.("/archive", false)).toEqual({
+    expect(app.slashCommandAction?.("/archive")).toEqual({
+      kind: "unknown",
+      command: "/archive",
+      message: expect.stringContaining("未知")
+    });
+    expect(app.slashCommandAction?.("/archive", true, linuxWebCapabilities)).toEqual({ kind: "archive_thread", command: "/archive" });
+    expect(app.slashCommandAction?.("/archive", false, linuxWebCapabilities)).toEqual({
       kind: "requires_thread",
       command: "/archive",
       message: expect.stringContaining("需要已有线程")
@@ -1157,11 +1247,16 @@ describe("conversation helpers", () => {
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
       "系统状态",
       "NexusHub 更新",
+      "Job History"
+    ]);
+    expect(app.opsWorkspacePanelTitles?.(linuxWebCapabilities)).toEqual([
+      "系统状态",
+      "NexusHub 更新",
       "归档线程清理",
       "隐藏线程清理",
       "Job History"
     ]);
-    expect(app.opsWorkspacePanelTitles?.()).toEqual(expect.arrayContaining([
+    expect(app.opsWorkspacePanelTitles?.(linuxWebCapabilities)).toEqual(expect.arrayContaining([
       "归档线程清理",
       "隐藏线程清理"
     ]));
@@ -1170,7 +1265,7 @@ describe("conversation helpers", () => {
       retiredClaudePanel,
       "归档清理"
     ]));
-    const visibleCopy = app.opsWorkspaceVisibleCopy?.().join("\n") ?? "";
+    const visibleCopy = app.opsWorkspaceVisibleCopy?.(linuxWebCapabilities).join("\n") ?? "";
     expect(visibleCopy).toContain("归档线程清理");
     expect(visibleCopy).toContain("隐藏线程清理");
     expect(visibleCopy).not.toContain(retiredCodexPanel);

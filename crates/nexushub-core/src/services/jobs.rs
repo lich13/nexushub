@@ -157,7 +157,7 @@ pub struct ThreadFollowUpPlan {
 pub struct ThreadCommandPlan {
     pub command: ThreadCommandKind,
     pub thread_id: Option<String>,
-    pub action: JobActionRequest,
+    pub action: Option<JobActionRequest>,
     pub followup: Option<ThreadFollowUpPlan>,
 }
 
@@ -263,7 +263,7 @@ pub fn normalize_thread_command_request(
             Ok(ThreadCommandPlan {
                 command: ThreadCommandKind::Create,
                 thread_id: None,
-                action,
+                action: Some(action),
                 followup: None,
             })
         }
@@ -278,31 +278,31 @@ pub fn normalize_thread_command_request(
             Ok(ThreadCommandPlan {
                 command: ThreadCommandKind::Resume,
                 thread_id: Some(thread_id),
-                action,
+                action: Some(action),
                 followup: None,
             })
         }
-        ThreadCommandKind::FollowUp => {
-            let thread_id = required_command_thread_id(
-                request.thread_id.as_deref(),
-                request.message.thread_id.as_deref(),
-            )?;
-            let mut message = request.message;
-            message.thread_id = Some(thread_id.clone());
-            let action = message.clone().into_job_action(CodexActionKind::Resume);
-            let (followup_message, options) = message.into_followup_message_and_options()?;
-            Ok(ThreadCommandPlan {
-                command: ThreadCommandKind::FollowUp,
-                thread_id: Some(thread_id.clone()),
-                action,
-                followup: Some(ThreadFollowUpPlan {
-                    thread_id,
-                    message: followup_message,
-                    options,
-                }),
-            })
-        }
+        ThreadCommandKind::FollowUp => plan_steer_thread_as_followup(request),
     }
+}
+
+pub fn plan_steer_thread_as_followup(request: ThreadCommandRequest) -> Result<ThreadCommandPlan> {
+    let thread_id = required_command_thread_id(
+        request.thread_id.as_deref(),
+        request.message.thread_id.as_deref(),
+    )?;
+    let message = request.message;
+    let (followup_message, options) = message.into_followup_message_and_options()?;
+    Ok(ThreadCommandPlan {
+        command: ThreadCommandKind::FollowUp,
+        thread_id: Some(thread_id.clone()),
+        action: None,
+        followup: Some(ThreadFollowUpPlan {
+            thread_id,
+            message: followup_message,
+            options,
+        }),
+    })
 }
 
 pub fn build_codex_job_spec(
@@ -723,9 +723,9 @@ mod tests {
         archive_thread_response, build_codex_job_spec, cancel_followup_response,
         codex_action_submitted, effective_message, elicitation_answer_resume_message,
         followup_request, followup_view, normalize_thread_command_request,
-        plan_accept_resume_message, plan_revise_resume_message, rename_thread_response,
-        thread_message_options_json, CodexActionKind, JobActionRequest, ThreadCommandKind,
-        ThreadCommandRequest, ThreadMessageRequest,
+        plan_accept_resume_message, plan_revise_resume_message, plan_steer_thread_as_followup,
+        rename_thread_response, thread_message_options_json, CodexActionKind, JobActionRequest,
+        ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest,
     };
     use crate::{
         db::ThreadFollowUp,
@@ -940,10 +940,11 @@ mod tests {
             },
         })
         .unwrap();
-        assert_eq!(create.action.kind, CodexActionKind::Exec);
-        assert_eq!(create.action.thread_id, None);
-        assert_eq!(create.action.message, "start");
-        assert_eq!(create.action.cwd, Some(PathBuf::from("/tmp/work")));
+        let create_action = create.action.expect("create action");
+        assert_eq!(create_action.kind, CodexActionKind::Exec);
+        assert_eq!(create_action.thread_id, None);
+        assert_eq!(create_action.message, "start");
+        assert_eq!(create_action.cwd, Some(PathBuf::from("/tmp/work")));
         assert!(create.followup.is_none());
 
         let resume = normalize_thread_command_request(ThreadCommandRequest {
@@ -956,10 +957,11 @@ mod tests {
             },
         })
         .unwrap();
-        assert_eq!(resume.action.kind, CodexActionKind::Resume);
-        assert_eq!(resume.action.thread_id.as_deref(), Some("thread-a"));
-        assert_eq!(resume.action.message, "continue");
-        assert_eq!(resume.action.model.as_deref(), Some("gpt-5.5"));
+        let resume_action = resume.action.expect("resume action");
+        assert_eq!(resume_action.kind, CodexActionKind::Resume);
+        assert_eq!(resume_action.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(resume_action.message, "continue");
+        assert_eq!(resume_action.model.as_deref(), Some("gpt-5.5"));
 
         let steer = normalize_thread_command_request(ThreadCommandRequest {
             command: ThreadCommandKind::FollowUp,
@@ -971,10 +973,34 @@ mod tests {
             },
         })
         .unwrap();
+        assert!(steer.action.is_none());
         let followup = steer.followup.expect("followup plan");
         assert_eq!(followup.thread_id, "thread-a");
         assert_eq!(followup.message, "queue this");
         assert_eq!(followup.options["attachments"][0], "upload-a");
+    }
+
+    #[test]
+    fn steer_thread_helper_plans_followup_without_resume_action() {
+        let plan = plan_steer_thread_as_followup(ThreadCommandRequest {
+            command: ThreadCommandKind::Resume,
+            thread_id: Some(" thread-a ".to_string()),
+            message: ThreadMessageRequest {
+                thread_id: Some("ignored-when-top-level-present".to_string()),
+                message: "  follow up when ready  ".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                ..ThreadMessageRequest::default()
+            },
+        })
+        .unwrap();
+
+        assert_eq!(plan.command, ThreadCommandKind::FollowUp);
+        assert_eq!(plan.thread_id.as_deref(), Some("thread-a"));
+        assert!(plan.action.is_none());
+        let followup = plan.followup.expect("followup plan");
+        assert_eq!(followup.thread_id, "thread-a");
+        assert_eq!(followup.message, "follow up when ready");
+        assert_eq!(followup.options["model"], "gpt-5.5");
     }
 
     #[test]

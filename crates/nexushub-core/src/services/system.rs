@@ -15,6 +15,9 @@ pub enum Capability {
     Settings,
     JobHistory,
     AppUpdater,
+    ThreadCleanup,
+    ProbeLogMaintenance,
+    ThreadArchiveActions,
     WebAuth,
     SecuritySettings,
     Turnstile,
@@ -36,6 +39,9 @@ impl Capability {
             Self::Settings => "settings",
             Self::JobHistory => "job_history",
             Self::AppUpdater => "app_updater",
+            Self::ThreadCleanup => "thread_cleanup",
+            Self::ProbeLogMaintenance => "probe_log_maintenance",
+            Self::ThreadArchiveActions => "thread_archive_actions",
             Self::WebAuth => "web_auth",
             Self::SecuritySettings => "security_settings",
             Self::Turnstile => "turnstile",
@@ -58,7 +64,10 @@ impl Capability {
             | Self::Status
             | Self::Settings
             | Self::JobHistory
-            | Self::AppUpdater => shared_core,
+            | Self::AppUpdater
+            | Self::ThreadCleanup
+            | Self::ProbeLogMaintenance
+            | Self::ThreadArchiveActions => shared_core,
             Self::WebAuth
             | Self::SecuritySettings
             | Self::Turnstile
@@ -81,6 +90,9 @@ pub struct SystemCapabilities {
     pub settings: bool,
     pub job_history: bool,
     pub app_updater: bool,
+    pub thread_cleanup: bool,
+    pub probe_log_maintenance: bool,
+    pub thread_archive_actions: bool,
     pub web_auth: bool,
     pub security_settings: bool,
     pub turnstile: bool,
@@ -112,6 +124,9 @@ pub fn system_capabilities(_config: &Config, platform: &PlatformPaths) -> System
         settings: Capability::Settings.is_supported_on(platform),
         job_history: Capability::JobHistory.is_supported_on(platform),
         app_updater: Capability::AppUpdater.is_supported_on(platform),
+        thread_cleanup: Capability::ThreadCleanup.is_supported_on(platform),
+        probe_log_maintenance: Capability::ProbeLogMaintenance.is_supported_on(platform),
+        thread_archive_actions: Capability::ThreadArchiveActions.is_supported_on(platform),
         web_auth: Capability::WebAuth.is_supported_on(platform),
         security_settings: Capability::SecuritySettings.is_supported_on(platform),
         turnstile: Capability::Turnstile.is_supported_on(platform),
@@ -144,6 +159,13 @@ mod tests {
 
         assert!(require_capability(&linux, Capability::SecuritySettings).is_ok());
         assert!(require_capability(&linux, Capability::LinuxUpdateJob).is_ok());
+        assert!(require_capability(&linux, Capability::WebAuth).is_ok());
+        assert!(require_capability(&linux, Capability::Turnstile).is_ok());
+        assert!(require_capability(&linux, Capability::Systemd).is_ok());
+        assert!(require_capability(&linux, Capability::Nginx).is_ok());
+        assert!(require_capability(&linux, Capability::PublicEndpoint).is_ok());
+        assert!(require_capability(&linux, Capability::AdminPassword).is_ok());
+        assert!(require_capability(&linux, Capability::PruneBackups).is_ok());
 
         let security_error = require_capability(&macos, Capability::SecuritySettings)
             .expect_err("macOS must not allow Linux web-host security settings");
@@ -159,6 +181,28 @@ mod tests {
     }
 
     #[test]
+    fn local_maintenance_capabilities_are_shared_by_linux_and_macos_only() {
+        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
+        let windows = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
+
+        for capability in [
+            Capability::ThreadCleanup,
+            Capability::ProbeLogMaintenance,
+            Capability::ThreadArchiveActions,
+        ] {
+            assert!(require_capability(&linux, capability).is_ok());
+            assert!(require_capability(&macos, capability).is_ok());
+            assert!(require_capability(&windows, capability).is_err());
+        }
+
+        assert!(require_capability(&macos, Capability::LinuxUpdateJob).is_err());
+        assert!(require_capability(&windows, Capability::ThreadCleanup).is_err());
+        assert!(require_capability(&windows, Capability::ProbeLogMaintenance).is_err());
+        assert!(require_capability(&windows, Capability::ThreadArchiveActions).is_err());
+    }
+
+    #[test]
     fn capability_matrix_matches_neutral_capability_gate() {
         let config = Config::for_platform_kind(crate::platform::PlatformKind::Windows);
         let platform = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
@@ -166,6 +210,9 @@ mod tests {
 
         assert!(!matrix.settings);
         assert!(require_capability(&platform, Capability::Settings).is_err());
+        assert!(!matrix.thread_cleanup);
+        assert!(!matrix.probe_log_maintenance);
+        assert!(!matrix.thread_archive_actions);
         assert!(!matrix.security_settings);
         assert!(require_capability(&platform, Capability::SecuritySettings).is_err());
     }

@@ -37,12 +37,8 @@ import type {
 } from "../../types";
 import {
   RuntimeUnavailableError,
-  createRuntimeThreadEventSource,
-  desktopSessionUser,
   runtimeDispatch,
-  runtimeRpc,
-  runtimeValue,
-  uploadRuntimeFiles
+  runtimeValue
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
@@ -96,12 +92,26 @@ export async function runUpdateAction(
   if (action === "prune" && !capabilities.backupPrune) {
     throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
   }
-  const result = await runtimeDispatch<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>({
-    command: "runUpdateAction",
-    args: { action, csrfToken },
-  });
+  const result = await runUpdateActionForRuntime(action, csrfToken);
   return {
     ...jobIdFromRuntimeResult(result, `update-${action}`),
     ...(result.status ? { status: result.status } : {})
   };
+}
+
+function desktopUpdateCommand(action: UnifiedUpdateAction): string {
+  if (action === "check") return "checkUpdate";
+  if (action === "install") return "installUpdateAndRestart";
+  return "backupPrune";
+}
+
+async function runUpdateActionForRuntime(
+  action: UnifiedUpdateAction,
+  csrfToken?: string | null,
+): Promise<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }> {
+  return runtimeDispatch({
+    command: desktopUpdateCommand(action),
+    webCommand: "runUpdateAction",
+    webArgs: { action, csrfToken }
+  });
 }

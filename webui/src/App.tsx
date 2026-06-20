@@ -1,4 +1,4 @@
-import { QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   Bot,
@@ -35,66 +35,6 @@ import {
 } from "lucide-react";
 import { ChangeEvent, Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  acceptPlan,
-  answerApproval,
-  answerElicitation,
-  archiveThread,
-  cancelFollowUp,
-  changePassword,
-  clearCodexGoal,
-  createThread,
-  deleteUpload,
-  desktopRuntimeSessionUser,
-  dryRunArchiveDelete,
-  dryRunHiddenThreadDelete,
-  forkThread,
-  getCodexGoal,
-  getCodexConfig,
-  getPublicSettings,
-  getProbeLogsDbStatus,
-  getProbeSettings,
-  getProbeStatus,
-  getSecurity,
-  getSystemStatus,
-  getUpdateStatus,
-  getThread,
-  getThreadBlocks,
-  listFollowUps,
-  listPlugins,
-  listModels,
-  listJobs,
-  listPermissionProfiles,
-  listThreads,
-  login,
-  logout,
-  renameThread,
-  revisePlan,
-  restoreThread,
-  pauseCodexGoal,
-  resumeCodexGoal,
-  saveProbeSettings,
-  saveSecurity,
-  saveCodexGoal,
-  sendMessage,
-  startArchiveDelete,
-  startHiddenThreadDelete,
-  startProbeJob,
-  runUpdateAction,
-  stopThread,
-  steerThread,
-  subscribeThreadEvents,
-  uploadFiles,
-  getClaudeCodeOverview,
-  getPlatformOverview,
-  getProbeEvents,
-  listProviders,
-  runtimeCapabilities,
-  runtimeCapabilitiesFromSystemStatus,
-  runtimeCapabilitiesForRuntime,
-  type RuntimeCapabilityMatrix,
-  type ThreadSendPayload
-} from "./lib/api";
-import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
   probeEventCard,
@@ -105,6 +45,35 @@ import {
   type ProbeSectionId,
   type ProbeSettingsDraft
 } from "./lib/probeUi";
+import { desktopRuntimeSessionUser, logoutRuntime, useLoginMutation, usePublicSettingsQuery } from "./lib/query/auth";
+import { useClaudeQueries } from "./lib/query/claude";
+import { useCodexConfigQuery, useCodexModelQuery, useCodexPermissionProfilesQuery } from "./lib/query/codex";
+import { useOpsActions, useOpsQueries } from "./lib/query/ops";
+import { useProbeActions, useProbeQueries } from "./lib/query/probe";
+import { useSecurityActions, useSecurityQuery } from "./lib/query/security";
+import {
+  bootstrapRuntimeCapabilities,
+  runtimeCapabilitiesForRuntime,
+  useBootstrapRuntimeCapabilities,
+  useRuntimeCapabilities,
+  useSystemStatusQuery,
+  type RuntimeCapabilityMatrix
+} from "./lib/query/system";
+import {
+  subscribeThreadEvents,
+  threadQueryKeys,
+  type ThreadSendPayload,
+  useCreateThreadMutation,
+  useFollowUpsQuery,
+  usePluginsQuery,
+  useThreadActionMutations,
+  useThreadBlockPageMutation,
+  useThreadDetailQuery,
+  useThreadGoalActions,
+  useThreadGoalQuery,
+  useThreadsQuery,
+  useUploadActions
+} from "./lib/query/threads";
 import { clearSession, loadSession, saveSession } from "./lib/session";
 import {
   applyRealtimeBlocksToThreadSlot,
@@ -152,6 +121,7 @@ import type {
   SecuritySettings,
   SessionUser,
   SystemStatus,
+  ThreadBlockPage,
   UpdateStatus,
   ThreadDetail,
   ThreadStatus,
@@ -159,12 +129,12 @@ import type {
   UploadRecord
 } from "./types";
 
-export { runtimeCapabilitiesForRuntime } from "./lib/api";
+export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
 type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
-const DEFAULT_RUNTIME_CAPABILITIES = runtimeCapabilities();
+const DEFAULT_RUNTIME_CAPABILITIES = bootstrapRuntimeCapabilities();
 
 function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
   return input ?? DEFAULT_RUNTIME_CAPABILITIES;
@@ -178,12 +148,12 @@ const OPS_PANEL_TITLES = {
   jobs: "Job History"
 } as const;
 
-export function opsWorkspacePanelTitles(_desktop?: RuntimeCapabilityInput): string[] {
+export function opsWorkspacePanelTitles(desktop?: RuntimeCapabilityInput): string[] {
+  const capabilities = capabilitiesForInput(desktop);
   const titles = [
     OPS_PANEL_TITLES.system,
     OPS_PANEL_TITLES.updates,
-    OPS_PANEL_TITLES.archivedCleanup,
-    OPS_PANEL_TITLES.hiddenCleanup,
+    ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
     OPS_PANEL_TITLES.jobs
   ];
   return titles;
@@ -192,7 +162,7 @@ export function opsWorkspacePanelTitles(_desktop?: RuntimeCapabilityInput): stri
 export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): string[] {
   const capabilities = capabilitiesForInput(desktop);
   const copy = [
-    ...opsWorkspacePanelTitles(),
+    ...opsWorkspacePanelTitles(desktop),
     "Hostname",
     ...(capabilities.publicEndpointStatus ? ["Public endpoint"] : []),
     ...(capabilities.codexStatePaths ? ["state DB", "Codex Home", "State DB"] : []),
@@ -204,21 +174,23 @@ export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): strin
     capabilities.updateServiceLabels ? "Precheck" : "Check",
     capabilities.updateServiceLabels ? "Update" : "Install",
     ...(capabilities.backupPrune ? ["Prune"] : []),
-    "Dry-run",
-    "清理归档",
-    "确认清理归档",
-    "扫描隐藏线程",
-    "清理隐藏线程",
-    "确认清理隐藏",
-    "active",
-    "archived",
-    "integrity",
-    "session index",
-    "rollout 文件",
-    "visible",
-    "hidden",
-    "sources",
-    "rollout 删除结果",
+    ...(capabilities.threadCleanup ? [
+      "Dry-run",
+      "清理归档",
+      "确认清理归档",
+      "扫描隐藏线程",
+      "清理隐藏线程",
+      "确认清理隐藏",
+      "active",
+      "archived",
+      "integrity",
+      "session index",
+      "rollout 文件",
+      "visible",
+      "hidden",
+      "sources",
+      "rollout 删除结果"
+    ] : []),
     failureCategoryLabel("systemd_failure", capabilities),
     failureCategoryLabel("nginx_failure", capabilities),
     failureCategoryLabel("permission_denied_sudo", capabilities)
@@ -428,6 +400,7 @@ export function slashCommandsForRuntime(desktop?: RuntimeCapabilityInput): Slash
   const capabilities = capabilitiesForInput(desktop);
   return slashCommands.filter((item) => {
     if (!capabilities.forkAction && desktopUnsupportedSlashCommands.has(item.command)) return false;
+    if (!capabilities.threadArchiveActions && item.command === "/archive") return false;
     if (!capabilities.logout && item.command === "/logout") return false;
     return true;
   });
@@ -453,20 +426,10 @@ declare global {
 }
 
 export default function App() {
-  const bootstrapCapabilities = DEFAULT_RUNTIME_CAPABILITIES;
+  const bootstrapCapabilities = useBootstrapRuntimeCapabilities();
   const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(bootstrapCapabilities));
-  const systemStatus = useQuery({
-    queryKey: ["system-status"],
-    queryFn: getSystemStatus,
-    enabled: Boolean(session),
-    refetchInterval: 8000,
-    staleTime: 5000,
-    placeholderData: preservePreviousQueryData
-  });
-  const capabilities = useMemo(
-    () => runtimeCapabilitiesFromSystemStatus(systemStatus.data, bootstrapCapabilities),
-    [bootstrapCapabilities, systemStatus.data]
-  );
+  const systemStatus = useSystemStatusQuery({ enabled: Boolean(session), refetchInterval: 8000 });
+  const capabilities = useRuntimeCapabilities(systemStatus.data, bootstrapCapabilities);
   const [view, setView] = useState<View>("codex");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
@@ -494,7 +457,7 @@ export default function App() {
       ) : (
         <SideNav view={view} setView={setView} capabilities={capabilities} onCollapse={toggleNavCollapsed} onLogout={async () => {
           if (capabilities.logout) {
-            await logout(session.csrf_token);
+            await logoutRuntime(session.csrf_token);
             clearSession();
             setSession(null);
           }
@@ -563,7 +526,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
   const [turnstileStatus, setTurnstileStatus] = useState<"idle" | "loading" | "ready" | "verified" | "error">("idle");
   const widgetRef = useRef<TurnstileWidgetId | null>(null);
   const turnstileRef = useRef<HTMLDivElement | null>(null);
-  const publicSettings = useQuery({ queryKey: ["public-settings"], queryFn: getPublicSettings });
+  const publicSettings = usePublicSettingsQuery();
   const turnstileEnabled = Boolean(publicSettings.data?.turnstile_enabled && publicSettings.data.turnstile_site_key);
   const turnstileRequired = Boolean(publicSettings.data?.turnstile_required);
   const turnstileAction = publicSettings.data?.turnstile_action || "login";
@@ -626,14 +589,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
     }
   };
 
-  const mutation = useMutation({
-    mutationFn: () => login(username, password, turnstileToken),
-    onSuccess: onLogin,
-    onError: (err: Error) => {
-      setError(err.message);
-      resetTurnstile();
-    }
-  });
+  const mutation = useLoginMutation(onLogin);
 
   return (
     <div className="login-shell">
@@ -644,7 +600,15 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
           setError("请先完成 Turnstile 验证");
           return;
         }
-        mutation.mutate();
+        mutation.mutate(
+          { username, password, turnstileToken },
+          {
+            onError: (err) => {
+              setError(err.message);
+              resetTurnstile();
+            }
+          }
+        );
       }}>
         <div className="brand-mark"><Cloud size={24} /></div>
         <h1>NexusHub</h1>
@@ -773,12 +737,10 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const messageStore = useThreadMessageStoreController();
-  const threads = useQuery({
-    queryKey: ["threads", status, q],
-    queryFn: async () => applyThreadTitleOverrides(await listThreads(status, q)),
-    refetchInterval: 5000,
-    staleTime: 3000,
-    placeholderData: preservePreviousQueryData
+  const threads = useThreadsQuery({
+    status,
+    q,
+    select: applyThreadTitleOverrides
   });
   const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
   const resolvedSelected = selectedId === "__new" ? null : selectedId ?? visibleThreads[0]?.id ?? null;
@@ -786,15 +748,11 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
     () => visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null,
     [visibleThreads, resolvedSelected]
   );
-  const detail = useQuery({
-    queryKey: ["thread", resolvedSelected],
-    queryFn: async () => applyThreadTitleOverrideToDetail(await getThread(resolvedSelected!)),
-    enabled: Boolean(resolvedSelected),
-    refetchInterval: (query) => {
-      const current = query.state.data as ThreadDetail | undefined;
-      return threadDetailRefetchInterval(current, selectedThreadSummary);
-    },
-    placeholderData: preservePreviousQueryData
+  const detail = useThreadDetailQuery({
+    threadId: resolvedSelected,
+    selectedThreadSummary,
+    select: applyThreadTitleOverrideToDetail,
+    refetchInterval: threadDetailRefetchInterval
   });
   const rawSelectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
   const selectedDetail = shouldHydrateThreadDetail(resolvedSelected, rawSelectedDetail) ? rawSelectedDetail : null;
@@ -955,9 +913,9 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
 }
 
 function useCodexRunOptions() {
-  const models = useQuery({ queryKey: ["codex-models"], queryFn: listModels, staleTime: 60000, placeholderData: preservePreviousQueryData });
-  const profiles = useQuery({ queryKey: ["codex-permission-profiles"], queryFn: listPermissionProfiles, staleTime: 60000, placeholderData: preservePreviousQueryData });
-  const config = useQuery({ queryKey: ["codex-config"], queryFn: getCodexConfig, staleTime: 60000, placeholderData: preservePreviousQueryData });
+  const models = useCodexModelQuery();
+  const profiles = useCodexPermissionProfilesQuery();
+  const config = useCodexConfigQuery();
   return {
     models: models.data?.available ? models.data.data ?? [] : [],
     profiles: profiles.data?.available ? profiles.data.data ?? [] : [],
@@ -1790,8 +1748,14 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function renderSlashCommandMenuHtml(draft: string, cursor: number, hasThread = true, selected = 0): string {
-  const suggestions = slashCommandSuggestions(draft, cursor, hasThread);
+export function renderSlashCommandMenuHtml(
+  draft: string,
+  cursor: number,
+  hasThread = true,
+  selected = 0,
+  desktop?: RuntimeCapabilityInput,
+): string {
+  const suggestions = slashCommandSuggestions(draft, cursor, hasThread, desktop);
   if (suggestions.length === 0) return "";
   const options = suggestions.map((item, index) => {
     const className = index === selected ? "slash-option selected" : "slash-option";
@@ -1987,6 +1951,7 @@ function useComposerAttachments(csrfToken?: string | null, setFeedback?: (messag
   const [uploads, setUploads] = useState<ComposerUpload[]>([]);
   const [uploadInProgress, setUploadInProgress] = useState(false);
   const [removingUploadId, setRemovingUploadId] = useState<string | null>(null);
+  const uploadActions = useUploadActions({ csrfToken });
   const readyUploads = useMemo(() => readyComposerUploads(uploads), [uploads]);
 
   const openPicker = () => {
@@ -2014,7 +1979,7 @@ function useComposerAttachments(csrfToken?: string | null, setFeedback?: (messag
     setFeedback?.("正在上传附件...");
 
     try {
-      const outcome = await uploadFiles(files, csrfToken);
+      const outcome = await uploadActions.upload(files);
       setUploads((current) => [
         ...current.filter((item) => !pendingIds.has(item.id)),
         ...outcome.files.map((file) => ({ ...file, local_status: "ready" as const }))
@@ -2042,7 +2007,7 @@ function useComposerAttachments(csrfToken?: string | null, setFeedback?: (messag
     if (upload.status !== "ready") return;
     setRemovingUploadId(upload.id);
     try {
-      await deleteUpload(upload.id, csrfToken);
+      await uploadActions.delete(upload.id);
     } catch (error) {
       setFeedback?.(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2536,7 +2501,7 @@ type ThreadMessageStoreController = {
   applySummary: (threadId: string, summary: ThreadSummary) => void;
   patchSummary: (threadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => void;
   applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
-  applyBlockPage: (threadId: string, page: Awaited<ReturnType<typeof getThreadBlocks>>, expectedCursor?: string | null) => void;
+  applyBlockPage: (threadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => void;
   setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
   setFeedback: (threadId: string, feedback: string | null) => void;
   setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
@@ -2586,7 +2551,7 @@ function useThreadMessageStoreController(): ThreadMessageStoreController {
     applyRealtimeBlocksToThreadSlot(storeRef.current, nextThreadId, blocks);
     notify(nextThreadId);
   }, [notify]);
-  const applyBlockPage = useCallback((nextThreadId: string, page: Awaited<ReturnType<typeof getThreadBlocks>>, expectedCursor?: string | null) => {
+  const applyBlockPage = useCallback((nextThreadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => {
     applyThreadBlockPageToSlot(storeRef.current, nextThreadId, page, expectedCursor);
     notify(nextThreadId);
   }, [notify]);
@@ -2670,7 +2635,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const [explicitBottomFollowRevision, setExplicitBottomFollowRevision] = useState(0);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
-  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000, placeholderData: preservePreviousQueryData });
+  const pluginsQuery = usePluginsQuery();
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig(undefined, detail.summary));
   const [renameValue, setRenameValue] = useState(detail.summary.title);
   const [renameDirty, setRenameDirty] = useState(false);
@@ -2787,24 +2752,17 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const running = isThreadRunning(summary, blocks, lastResult);
   const canStop = running || Boolean(summary.active_turn_id || summary.active_job_id || lastResult?.turn_id || lastResult?.job_id);
   const actionMode = composerActionMode(running, draft, canStop, attachments.readyUploads.length);
-  const followUps = useQuery({
-    queryKey: ["thread-followups", summary.id],
-    queryFn: () => listFollowUps(summary.id),
-    refetchInterval: running ? 3000 : 8000,
-    placeholderData: preservePreviousQueryData
-  });
+  const followUps = useFollowUpsQuery(summary.id, running);
   const followUpItems = followUps.data?.items ?? [];
   const payloadRunConfig = useMemo(
     () => runConfigWithSupportedServiceTier(runConfig, runOptions.models),
     [runConfig, runOptions.models]
   );
-  const loadEarlierMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, cursor }: { threadId: string; cursor: string }) => {
-      if (!cursor) throw new Error("没有更早的消息");
+  const loadEarlierMutation = useThreadBlockPageMutation({
+    onBeforeLoad: (requestThreadId) => {
       const beforeHeight = messageStreamRef.current?.scrollHeight ?? 0;
       messageStore.setLoadingEarlier(requestThreadId, true);
-      const page = await getThreadBlocks(requestThreadId, { limit: 120, before: cursor });
-      return { threadId: requestThreadId, cursor, page, beforeHeight };
+      return beforeHeight;
     },
     onSuccess: ({ threadId: loadedThreadId, cursor, page, beforeHeight }) => {
       messageStore.applyBlockPage(loadedThreadId, page, cursor);
@@ -2815,20 +2773,18 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         stream.scrollTop += Math.max(0, stream.scrollHeight - beforeHeight);
       });
     },
-    onError: (err: Error, variables) => {
+    onError: (err, variables) => {
       const failedThreadId = variables?.threadId ?? summary.id;
       messageStore.setLoadingEarlier(failedThreadId, false, err.message);
       messageStore.setFeedback(failedThreadId, err.message);
     }
   });
 
-  const sendMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, message, config, uploads }: { threadId: string; message: string; config: RunConfig; uploads: Pick<UploadRecord, "id">[] }) => {
-      const payload = buildPayload(message, config, uploads);
-      const result = await sendMessage(requestThreadId, payload, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: resultThreadId, result }) => {
+  const threadActions = useThreadActionMutations({
+    csrfToken,
+    capabilities,
+    buildPayload,
+    onSendSuccess: ({ threadId: resultThreadId, result }) => {
       messageStore.setLastResult(resultThreadId, result);
       if (result.job_id || result.turn_id) {
         messageStore.patchSummary(resultThreadId, (current) => ({
@@ -2848,29 +2804,12 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const stopMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, turnId, jobId }: { threadId: string; turnId?: string | null; jobId?: string | null }) => {
-      await stopThread(requestThreadId, { turn_id: turnId, job_id: jobId }, csrfToken);
-      return { threadId: requestThreadId };
-    },
-    onSuccess: ({ threadId: stoppedThreadId }) => {
+    onStopSuccess: ({ threadId: stoppedThreadId }) => {
       messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["thread", stoppedThreadId] });
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const steerMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, message, config, uploads }: { threadId: string; message: string; config: RunConfig; uploads: Pick<UploadRecord, "id">[] }) => {
-      const payload = buildPayload(message, config, uploads);
-      const result = await steerThread(requestThreadId, payload, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: resultThreadId, result }) => {
+    onSteerSuccess: ({ threadId: resultThreadId, result }) => {
       messageStore.setLastResult(resultThreadId, result);
       if (messageStore.isActive(resultThreadId)) {
         setDraft("");
@@ -2882,32 +2821,11 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       qc.invalidateQueries({ queryKey: ["threads"] });
       qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const cancelFollowUpMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, followUpId }: { threadId: string; followUpId: string }) => {
-      await cancelFollowUp(requestThreadId, followUpId, csrfToken);
-      return { threadId: requestThreadId };
-    },
-    onSuccess: ({ threadId: cancelledThreadId }) => {
+    onCancelFollowUpSuccess: ({ threadId: cancelledThreadId }) => {
       messageStore.setFeedback(cancelledThreadId, "跟进已取消");
       qc.invalidateQueries({ queryKey: ["thread-followups", cancelledThreadId] });
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const archiveMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, status }: { threadId: string; status: ThreadStatus }) => {
-      const wasArchived = status === "Archived";
-      if (wasArchived) {
-        await restoreThread(requestThreadId, csrfToken);
-      } else {
-        await archiveThread(requestThreadId, csrfToken);
-      }
-      return { threadId: requestThreadId, wasArchived };
-    },
-    onMutate: async (variables) => {
+    onArchiveMutate: async (variables) => {
       await Promise.all([
         qc.cancelQueries({ queryKey: ["threads"] }),
         qc.cancelQueries({ queryKey: ["thread", variables.threadId] })
@@ -2921,35 +2839,28 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       }
       return { snapshot, wasArchived };
     },
-    onSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
+    onArchiveSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
       messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
     },
-    onError: (err: Error, variables, context) => {
-      if (context?.wasArchived) {
-        rollbackOptimisticThreadRestore(qc, context.snapshot);
+    onArchiveError: (err, variables, context) => {
+      const archiveContext = context as { snapshot?: ThreadCacheSnapshot; wasArchived?: boolean } | undefined;
+      if (archiveContext?.wasArchived) {
+        rollbackOptimisticThreadRestore(qc, archiveContext.snapshot);
       } else {
-        rollbackOptimisticThreadArchive(qc, context?.snapshot);
+        rollbackOptimisticThreadArchive(qc, archiveContext?.snapshot);
         if (variables?.threadId) {
           onSelect(variables.threadId);
         }
       }
       messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
     },
-    onSettled: (_data, _error, variables) => {
+    onArchiveSettled: (variables) => {
       qc.invalidateQueries({ queryKey: ["threads"] });
       if (variables?.threadId) {
         qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
       }
-    }
-  });
-
-  const renameMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, title: requestedTitle }: { threadId: string; title: string }) => {
-      const title = requestedTitle.trim();
-      await renameThread(requestThreadId, requestedTitle, csrfToken);
-      return { threadId: requestThreadId, title };
     },
-    onMutate: async (variables) => {
+    onRenameMutate: async (variables) => {
       const title = variables.title.trim();
       await Promise.all([
         qc.cancelQueries({ queryKey: ["threads"] }),
@@ -2964,18 +2875,19 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       }
       return { snapshot };
     },
-    onSuccess: ({ threadId: renamedThreadId, title }) => {
+    onRenameSuccess: ({ threadId: renamedThreadId, title }) => {
       messageStore.setFeedback(renamedThreadId, "线程名称已更新");
       if (title) {
         setLocalThreadTitleOverride(renamedThreadId, title);
         applyOptimisticThreadTitle(qc, renamedThreadId, title);
       }
     },
-    onError: (err: Error, variables, context) => {
+    onRenameError: (err, variables, context) => {
+      const renameContext = context as { snapshot?: ThreadCacheSnapshot } | undefined;
       if (variables?.threadId) {
         clearLocalThreadTitleOverride(variables.threadId);
       }
-      rollbackOptimisticThreadTitle(qc, context?.snapshot);
+      rollbackOptimisticThreadTitle(qc, renameContext?.snapshot);
       const restoredTitle = cachedThreadSummary(qc, variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
       if (variables?.threadId === summary.id && restoredTitle) {
         setRenameValue(restoredTitle);
@@ -2984,86 +2896,38 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       }
       messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
     },
-    onSettled: (_data, _error, variables) => {
+    onRenameSettled: (variables) => {
       qc.invalidateQueries({ queryKey: ["threads"] });
       if (variables?.threadId) {
         qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
       }
-    }
-  });
-
-  const forkMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId }: { threadId: string }) => {
-      const result = await forkThread(requestThreadId, csrfToken);
-      return { threadId: requestThreadId, result };
     },
-    onSuccess: ({ threadId: forkedThreadId, result }) => {
+    onForkSuccess: ({ threadId: forkedThreadId, result }) => {
       messageStore.setLastResult(forkedThreadId, result);
       messageStore.setFeedback(forkedThreadId, actionMessage(result));
       if (result.thread_id) onSelect(result.thread_id);
       qc.invalidateQueries({ queryKey: ["threads"] });
     },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+    onBridgeActionSuccess: ({ threadId: actionThreadId, result }) => {
+      messageStore.setLastResult(actionThreadId, result);
+      messageStore.setFeedback(actionThreadId, actionMessage(result));
+      qc.invalidateQueries({ queryKey: ["threads"] });
+      qc.invalidateQueries({ queryKey: ["thread", actionThreadId] });
+    },
+    onActionError: (err, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });
 
-  const answerMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, answers }: { threadId: string; answers: Record<string, string[]> }) => {
-      const result = await answerElicitation(requestThreadId, answers, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: answeredThreadId, result }) => {
-      messageStore.setLastResult(answeredThreadId, result);
-      messageStore.setFeedback(answeredThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-    },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const planAcceptMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, block }: { threadId: string; block: MessageBlock }) => {
-      const result = await acceptPlan(requestThreadId, { turn_id: block.turn_id, item_id: block.item_id }, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: planThreadId, result }) => {
-      messageStore.setLastResult(planThreadId, result);
-      messageStore.setFeedback(planThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", planThreadId] });
-    },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const planReviseMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, block, instructions }: { threadId: string; block: MessageBlock; instructions: string }) => {
-      const result = await revisePlan(requestThreadId, { turn_id: block.turn_id, item_id: block.item_id, instructions }, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: planThreadId, result }) => {
-      messageStore.setLastResult(planThreadId, result);
-      messageStore.setFeedback(planThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", planThreadId] });
-    },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
-
-  const approvalMutation = useMutation({
-    mutationFn: async ({ threadId: requestThreadId, block, decision }: { threadId: string; block: MessageBlock; decision: string }) => {
-      const result = await answerApproval(requestThreadId, {
-        turn_id: block.turn_id,
-        item_id: block.item_id ?? block.call_id,
-        decision
-      }, csrfToken);
-      return { threadId: requestThreadId, result };
-    },
-    onSuccess: ({ threadId: approvalThreadId, result }) => {
-      messageStore.setLastResult(approvalThreadId, result);
-      messageStore.setFeedback(approvalThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", approvalThreadId] });
-    },
-    onError: (err: Error, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
-  });
+  const sendMutation = threadActions.send;
+  const stopMutation = threadActions.stop;
+  const steerMutation = threadActions.steer;
+  const cancelFollowUpMutation = threadActions.cancelFollowUp;
+  const archiveMutation = threadActions.archive;
+  const renameMutation = threadActions.rename;
+  const forkMutation = threadActions.fork;
+  const answerMutation = threadActions.answer;
+  const planAcceptMutation = threadActions.planAccept;
+  const planReviseMutation = threadActions.planRevise;
+  const approvalMutation = threadActions.approval;
   const executeSlashCommand = useCallback((command: string) => {
     const action = slashCommandAction(command, Boolean(threadId), capabilities);
     switch (action.kind) {
@@ -3100,6 +2964,10 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         break;
       case "archive_thread":
         setDraft("");
+        if (!capabilities.threadArchiveActions) {
+          messageStore.setFeedback(threadId, "当前运行时不支持归档操作");
+          break;
+        }
         archiveMutation.mutate({ threadId: summary.id, status: summary.status });
         break;
       case "fork_thread":
@@ -3226,6 +3094,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       forkPending={forkPending}
       onFork={() => forkMutation.mutate({ threadId: summary.id })}
       showFork={canShowForkAction(capabilities)}
+      showArchive={capabilities.threadArchiveActions}
       onFeedback={setActiveFeedback}
     />
   );
@@ -3421,6 +3290,7 @@ function ThreadInspectorPanels({
   forkPending,
   onFork,
   showFork,
+  showArchive,
   onFeedback
 }: {
   summary: ThreadSummary;
@@ -3435,6 +3305,7 @@ function ThreadInspectorPanels({
   forkPending: boolean;
   onFork: () => void;
   showFork: boolean;
+  showArchive: boolean;
   onFeedback: (message: string | null) => void;
 }) {
   const copyText = useCallback((text: string | null, message: string) => {
@@ -3455,7 +3326,7 @@ function ThreadInspectorPanels({
         }} /></label>
         <div className="button-row">
           <button className="secondary-button" onClick={onRename} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
-          <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={onArchive} disabled={archivePending}>
+          <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={onArchive} disabled={archivePending || !showArchive}>
             {summary.status === "Archived" ? <Undo2 size={17} /> : <Archive size={17} />}
             {summary.status === "Archived" ? "恢复" : "归档"}
           </button>
@@ -3494,14 +3365,7 @@ function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
   onFeedback: (message: string | null) => void;
 }) {
   const qc = useQueryClient();
-  const goal = useQuery({
-    queryKey: ["thread-goal", threadId],
-    queryFn: () => getCodexGoal(threadId),
-    enabled: Boolean(threadId),
-    staleTime: 5000,
-    refetchInterval: 15000,
-    placeholderData: preservePreviousQueryData
-  });
+  const goal = useThreadGoalQuery(threadId);
   const [objective, setObjective] = useState("");
   const [tokenBudget, setTokenBudget] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -3538,26 +3402,17 @@ function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
     onFeedback(err.message);
   }, [onFeedback]);
 
-  const saveGoalMutation = useMutation({
-    mutationFn: () => saveCodexGoal(threadId, goalSaveInput(objective, tokenBudget), csrfToken),
-    onSuccess: (next) => afterGoalSuccess(next, "Goal 已保存"),
+  const goalActions = useThreadGoalActions({
+    threadId,
+    csrfToken,
+    saveInput: () => goalSaveInput(objective, tokenBudget),
+    onSuccess: afterGoalSuccess,
     onError: onGoalError
   });
-  const clearGoalMutation = useMutation({
-    mutationFn: () => clearCodexGoal(threadId, csrfToken),
-    onSuccess: (next) => afterGoalSuccess(next, "Goal 已清除"),
-    onError: onGoalError
-  });
-  const pauseGoalMutation = useMutation({
-    mutationFn: () => pauseCodexGoal(threadId, csrfToken),
-    onSuccess: (next) => afterGoalSuccess(next, "Goal 已暂停"),
-    onError: onGoalError
-  });
-  const resumeGoalMutation = useMutation({
-    mutationFn: () => resumeCodexGoal(threadId, csrfToken),
-    onSuccess: (next) => afterGoalSuccess(next, "Goal 已恢复"),
-    onError: onGoalError
-  });
+  const saveGoalMutation = goalActions.save;
+  const clearGoalMutation = goalActions.clear;
+  const pauseGoalMutation = goalActions.pause;
+  const resumeGoalMutation = goalActions.resume;
 
   const busy = saveGoalMutation.isPending || clearGoalMutation.isPending || pauseGoalMutation.isPending || resumeGoalMutation.isPending;
   const controls = goalControlState(currentGoal, { busy, objective, tokenBudget });
@@ -3809,7 +3664,7 @@ function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
-  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, staleTime: 30000, placeholderData: preservePreviousQueryData });
+  const pluginsQuery = usePluginsQuery();
   const [runConfig, setRunConfig] = useState<RunConfig>(() => makeRunConfig());
   const [result, setResult] = useState<BridgeActionResult | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -3824,8 +3679,9 @@ function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
     () => runConfigWithSupportedServiceTier(runConfig, runOptions.models),
     [runConfig, runOptions.models]
   );
-  const mutation = useMutation({
-    mutationFn: ({ message }: { message: string }) => createThread(buildPayload(message, payloadRunConfig, attachments.readyUploads), csrfToken),
+  const mutation = useCreateThreadMutation({
+    csrfToken,
+    payload: (message) => buildPayload(message, payloadRunConfig, attachments.readyUploads),
     onSuccess: (next) => {
       setResult(next);
       setDraft("");
@@ -4322,9 +4178,7 @@ function UnsupportedApprovalCard({ block }: { block: MessageBlock }) {
 }
 
 function ClaudeWorkspace() {
-  const providers = useQuery({ queryKey: ["providers"], queryFn: listProviders, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
-  const overview = useQuery({ queryKey: ["claude-code-overview"], queryFn: getClaudeCodeOverview, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
-  const platform = useQuery({ queryKey: ["platform-overview"], queryFn: getPlatformOverview, refetchInterval: 30000, placeholderData: preservePreviousQueryData });
+  const { providers, overview, platform } = useClaudeQueries();
   const provider = providerById(providers.data, "claude_code") ?? providerById(providers.data, "claude-code");
   const data = overview.data?.data;
   const available = overview.data?.available ?? false;
@@ -4412,12 +4266,7 @@ function ClaudeWorkspace() {
 }
 
 function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
-  const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["probe-status"], queryFn: getProbeStatus, refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
-  const settings = useQuery({ queryKey: ["probe-settings"], queryFn: getProbeSettings, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
-  const logsDbStatus = useQuery({ queryKey: ["probe-logs-db-status"], queryFn: getProbeLogsDbStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
-  const events = useQuery({ queryKey: ["probe-events"], queryFn: () => getProbeEvents(10), refetchInterval: 15000, staleTime: 10000, placeholderData: preservePreviousQueryData });
-  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
+  const { status, settings, logsDbStatus, events, jobs } = useProbeQueries();
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [actionStatus, setActionStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -4447,30 +4296,24 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
   const snapshotText = probeSnapshotStatusText(data, status.isFetching);
   const snapshotTone = data?.is_refreshing || status.isFetching ? "warning" : "success";
   const probeJobs = (jobs.data ?? []).filter(isProbeJob).slice(0, 6);
-  const probeJobMutation = useMutation({
-    mutationFn: (action: ProbeJobAction) => startProbeJob(action, csrfToken),
-    onSuccess: (_result, action) => {
-      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
-      if (action === "logs-db-dry-run") setLogsDbExecuteArmed(true);
-      if (action === "logs-db-execute") setLogsDbExecuteArmed(false);
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-      qc.invalidateQueries({ queryKey: ["probe-status"] });
-      qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
-      qc.invalidateQueries({ queryKey: ["probe-events"] });
-    },
-    onError: (err: Error, action) => {
-      setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
-    }
-  });
-  const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
-  const saveMutation = useMutation({
-    mutationFn: async (submittedDeviceKey?: string) => {
+  const probeActions = useProbeActions({
+    csrfToken,
+    capabilities,
+    savePayload: (submittedDeviceKey) => {
       if (!draft) throw new Error("探针设置尚未载入");
       const errors = probeSettingsValidation(draft);
       if (errors.length) throw new Error(errors[0]);
-      return saveProbeSettings(buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey), csrfToken);
+      return buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey);
     },
-    onSuccess: (saved, submittedDeviceKey) => {
+    onJobSuccess: (action) => {
+      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
+      if (action === "logs-db-dry-run") setLogsDbExecuteArmed(true);
+      if (action === "logs-db-execute") setLogsDbExecuteArmed(false);
+    },
+    onJobError: (err, action) => {
+      setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
+    },
+    onSaveSuccess: (saved, submittedDeviceKey) => {
       const nextSettings = probeSettingsAfterBarkSave(saved, submittedDeviceKey ?? draft?.notifications.device_key);
       if (!isProbeSettings(nextSettings)) {
         setSaveStatus({ tone: "error", message: "保存响应结构异常，已保留当前输入" });
@@ -4478,15 +4321,14 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
       }
       setSaveStatus({ tone: "success", message: "设置已保存" });
       setDraft(buildProbeSettingsDraft(nextSettings));
-      qc.invalidateQueries({ queryKey: ["probe-settings"] });
-      qc.invalidateQueries({ queryKey: ["probe-status"] });
-      qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
-      qc.invalidateQueries({ queryKey: ["probe-events"] });
     },
-    onError: (err: Error) => {
+    onSaveError: (err) => {
       setSaveStatus({ tone: "error", message: err.message });
     }
   });
+  const probeJobMutation = probeActions.job;
+  const saveMutation = probeActions.save;
+  const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
 
   useEffect(() => {
     if (!currentSettings || draft) return;
@@ -4556,12 +4398,12 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
           <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
             <ProbeLogsDbCard
               logsDb={logsDb}
-              busy={probeJobMutation.isPending}
+              busy={probeJobMutation.isPending || !capabilities.probeLogMaintenance}
               executeArmed={logsDbExecuteArmed}
-              onDryRun={() => probeJobMutation.mutate("logs-db-dry-run")}
-              onArmExecute={() => setLogsDbExecuteArmed(true)}
+              onDryRun={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-dry-run")}
+              onArmExecute={() => capabilities.probeLogMaintenance && setLogsDbExecuteArmed(true)}
               onCancelExecute={() => setLogsDbExecuteArmed(false)}
-              onExecute={() => probeJobMutation.mutate("logs-db-execute")}
+              onExecute={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-execute")}
             />
           </Panel>
         );
@@ -4613,12 +4455,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
           <h1>探针</h1>
         </div>
         <div className="button-row">
-          <button className="secondary-button" onClick={() => {
-            qc.invalidateQueries({ queryKey: ["probe-status"] });
-            qc.invalidateQueries({ queryKey: ["probe-settings"] });
-            qc.invalidateQueries({ queryKey: ["probe-logs-db-status"] });
-            qc.invalidateQueries({ queryKey: ["probe-events"] });
-          }}><RefreshCw size={17} />刷新</button>
+          <button className="secondary-button" onClick={probeActions.refresh}><RefreshCw size={17} />刷新</button>
           <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
         </div>
       </div>
@@ -4656,46 +4493,39 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
 }
 
 function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
-  const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, refetchInterval: 8000, staleTime: 5000, placeholderData: preservePreviousQueryData });
-  const update = useQuery({ queryKey: ["update-status"], queryFn: getUpdateStatus, refetchInterval: 30000, staleTime: 15000, placeholderData: preservePreviousQueryData });
-  const jobs = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 5000, placeholderData: preservePreviousQueryData });
+  const { status, update, jobs } = useOpsQueries();
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
-  const jobMutation = useMutation({ mutationFn: ({ action }: { action: "check" | "install" | "prune" }) => runUpdateAction(action, csrfToken, capabilities), onSuccess: (result) => {
-    if (result.status) {
-      qc.setQueryData(["update-status"], result.status);
+  const opsActions = useOpsActions({
+    csrfToken,
+    capabilities,
+    onArchiveDryRun: (nextPlan) => {
+      setPlan(nextPlan);
+      setDeleteArmed(false);
+    },
+    onArchiveExecute: (result) => {
+      setDeleteArmed(false);
+      setPlan((current) => archivePlanAfterExecute(current, result));
+    },
+    onHiddenDryRun: (nextPlan) => {
+      setHiddenPlan(nextPlan);
+      setHiddenDeleteResult(null);
+      setHiddenDeleteArmed(false);
+    },
+    onHiddenExecute: (result) => {
+      setHiddenDeleteArmed(false);
+      setHiddenDeleteResult(result);
+      setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
     }
-    qc.invalidateQueries({ queryKey: ["jobs"] });
-    qc.invalidateQueries({ queryKey: ["update-status"] });
-  } });
-  const dryRun = useMutation({ mutationFn: () => dryRunArchiveDelete(csrfToken), onSuccess: (nextPlan) => {
-    setPlan(nextPlan);
-    setDeleteArmed(false);
-  } });
-  const executeDelete = useMutation({ mutationFn: () => startArchiveDelete(csrfToken), onSuccess: (result) => {
-    setDeleteArmed(false);
-    setPlan((current) => archivePlanAfterExecute(current, result));
-    qc.invalidateQueries({ queryKey: ["jobs"] });
-    qc.invalidateQueries({ queryKey: ["system-status"] });
-    qc.invalidateQueries({ queryKey: ["threads"] });
-  } });
-  const hiddenDryRun = useMutation({ mutationFn: () => dryRunHiddenThreadDelete(csrfToken), onSuccess: (nextPlan) => {
-    setHiddenPlan(nextPlan);
-    setHiddenDeleteResult(null);
-    setHiddenDeleteArmed(false);
-  } });
-  const executeHiddenDelete = useMutation({ mutationFn: () => startHiddenThreadDelete(csrfToken), onSuccess: (result) => {
-    setHiddenDeleteArmed(false);
-    setHiddenDeleteResult(result);
-    setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
-    qc.invalidateQueries({ queryKey: ["jobs"] });
-    qc.invalidateQueries({ queryKey: ["system-status"] });
-    qc.invalidateQueries({ queryKey: ["threads"] });
-  } });
+  });
+  const jobMutation = opsActions.updateJob;
+  const dryRun = opsActions.archiveDryRun;
+  const executeDelete = opsActions.archiveExecute;
+  const hiddenDryRun = opsActions.hiddenDryRun;
+  const executeHiddenDelete = opsActions.hiddenExecute;
   const publicEndpoint = cleanHostValue(status.data?.public_endpoint);
   const hostname = cleanHostValue(status.data?.hostname) ?? "读取中";
   const hiddenStats = hiddenThreadDeleteStats(hiddenPlan, status.data);
@@ -4735,7 +4565,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
           {capabilities.backupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
         </div>
       </Panel>
-      <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
+      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
           <span className={`status-chip ${archivedCleanupStage.tone ? `tone-${archivedCleanupStage.tone}` : "tone-muted"}`}>{archivedCleanupStage.label}</span>
@@ -4758,8 +4588,8 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
             </>
           )}
         </div>
-      </Panel>
-      <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
+      </Panel>}
+      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 non-archived subagent/internal</span>
           <span className={`status-chip ${hiddenCleanupStage.tone ? `tone-${hiddenCleanupStage.tone}` : "tone-muted"}`}>{hiddenCleanupStage.label}</span>
@@ -4782,7 +4612,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
             </>
           )}
         </div>
-      </Panel>
+      </Panel>}
       <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
         <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
       </Panel>
@@ -4805,27 +4635,24 @@ function UpdateMetrics({ status }: { status?: UpdateStatus }) {
 }
 
 function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null; username: string }) {
-  const qc = useQueryClient();
-  const security = useQuery({ queryKey: ["security"], queryFn: getSecurity });
-  const systemStatus = useQuery({ queryKey: ["system-status"], queryFn: getSystemStatus, staleTime: 5000, placeholderData: preservePreviousQueryData });
+  const security = useSecurityQuery();
+  const systemStatus = useSystemStatusQuery();
   const [draft, setDraft] = useState<Partial<SecuritySettings> & { turnstile_secret_key?: string }>({});
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
   const [passwordFeedback, setPasswordFeedback] = useState<string | null>(null);
-  const mutation = useMutation({
-    mutationFn: () => saveSecurity(draft, csrfToken),
-    onSuccess: () => {
-      setDraft({});
-      qc.invalidateQueries({ queryKey: ["security"] });
-    }
-  });
-  const passwordMutation = useMutation({
-    mutationFn: () => changePassword(passwordForm.current, passwordForm.next, csrfToken),
-    onSuccess: () => {
+  const securityActions = useSecurityActions({
+    csrfToken,
+    draft,
+    passwordForm,
+    onSaveSuccess: () => setDraft({}),
+    onPasswordSuccess: () => {
       setPasswordFeedback("密码已更新");
       setPasswordForm({ current: "", next: "", confirm: "" });
     },
-    onError: (err: Error) => setPasswordFeedback(err.message)
+    onPasswordError: (err) => setPasswordFeedback(err.message)
   });
+  const mutation = securityActions.save;
+  const passwordMutation = securityActions.password;
   const merged = { ...security.data, ...draft } as SecuritySettings & { turnstile_secret_key?: string };
   const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * secondsPerDay);
   const defaultExpectedHostname = hostnameFromPublicEndpoint(systemStatus.data?.public_endpoint);
