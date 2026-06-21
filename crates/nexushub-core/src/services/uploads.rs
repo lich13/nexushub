@@ -3,9 +3,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::uploads::{
-    self as upload_core, UploadKind, UploadOutcome, UploadRecord, MAX_TOTAL_UPLOAD_BYTES,
-    MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
+use crate::{
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
+    uploads::{
+        self as upload_core, UploadKind, UploadOutcome, UploadRecord, MAX_TOTAL_UPLOAD_BYTES,
+        MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +36,13 @@ pub struct UploadStorePlan {
     pub items: Vec<UploadStoreItem>,
     pub total_files: usize,
     pub total_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadFacadePlan {
+    pub required_capability: Capability,
+    pub plan: UploadStorePlan,
 }
 
 pub fn validate_upload_batch(items: &[UploadBatchItem]) -> Result<usize> {
@@ -79,6 +90,17 @@ pub fn plan_store_uploads(items: Vec<UploadBatchItem>) -> Result<UploadStorePlan
         items: planned,
         total_files,
         total_bytes,
+    })
+}
+
+pub fn plan_store_uploads_with_capability(
+    platform: &PlatformPaths,
+    items: Vec<UploadBatchItem>,
+) -> Result<UploadFacadePlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(UploadFacadePlan {
+        required_capability: Capability::Jobs,
+        plan: plan_store_uploads(items)?,
     })
 }
 

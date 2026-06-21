@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-20
-> **Mode**: V0.1.113_MACOS_NETWORK_VOLUME_TCC_FIX
+> **Last Updated**: 2026-06-21
+> **Mode**: V0.1.114_CC_SWITCH_UNIFIED_COMMAND_CLOSURE
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.113 macOS network-volume TCC fix<br>
-**Active Task**: `v0.1.113` fixes the macOS first-launch network-volume TCC prompt by preventing implicit thread-list rollout scans from following paths outside the resolved Codex home and by deferring desktop cleanup dry-run plans until explicit user action. `CLAUDE.md` remains intentionally absent.
+**Active Phase**: v0.1.114 cc-switch unified command closure<br>
+**Active Task**: `v0.1.114` closes the remaining cc-switch alignment gaps by routing Linux RPC and macOS Tauri through shared typed Probe/Update commands, moving action planning into core facades, and keeping Linux WebUI-only operations unavailable on macOS. `CLAUDE.md` remains intentionally absent.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,8 +52,8 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.113_MACOS_NETWORK_VOLUME_TCC_FIX
-  strategy: "conservative provider shell around preserved Codex behavior"
+  mode: V0.1.114_CC_SWITCH_UNIFIED_COMMAND_CLOSURE
+  strategy: "cc-switch style shared services with thin Linux WebUI and macOS Tauri adapters"
   phases:
     phase_1:
       drift_score: 0
@@ -85,7 +85,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-19"
+  last_updated: "2026-06-21"
 ```
 
 ## Task Telemetry Log
@@ -121,7 +121,7 @@ adaptive:
 | 2026-06-20 | v0.1.109 cc-switch service closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.109`; moves Goal DTO/status/view planning and Linux update shell job specs into core services, removes the last update prune runtime-kind branch from the frontend domain API, and preserves `CLAUDE.md` as intentionally absent. |
 | 2026-06-20 | v0.1.111 cc-switch final service-layer closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.111`; centralizes upload planning in core, splits frontend API implementations into domain modules behind a thin barrel, keeps runtime as transport only, removes retired desktop `_command` wrappers from registration, and keeps Linux-only WebUI surfaces capability-gated. |
 | 2026-06-20 | v0.1.112 cc-switch unified architecture backfill | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.112`; shares steer/follow-up planning and desktop upload batch validation through core, adds explicit cleanup capabilities, moves App actions behind query/state facades, keeps typed Tauri commands free of retired string action multiplexers, and preserves `CLAUDE.md` as intentionally absent. |
-| 2026-06-20 | v0.1.113 macOS network-volume TCC fix | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.113`; prevents implicit list/home reads from following rollout paths outside the resolved Codex home, defers desktop cleanup dry-run plans until explicit user action, and keeps `CLAUDE.md` intentionally absent. |
+| 2026-06-21 | v0.1.114 cc-switch unified command closure | L | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.114`; adds core action facades for Probe/Update/thread/job/Goal/upload flows, exposes shared typed Probe/Update commands on Linux RPC and macOS Tauri, removes frontend Web/Desktop command maps, keeps Linux WebUI-only operations capability-gated, and keeps `CLAUDE.md` intentionally absent. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -138,7 +138,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.113
+git ls-remote --tags origin refs/tags/v0.1.114
 ```
 
 ## Next Steps
@@ -149,12 +149,12 @@ git ls-remote --tags origin refs/tags/v0.1.113
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.113 Acceptance Matrix
+## v0.1.114 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
 | Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, loopback `healthz`, public HTTPS smoke, `nexushubd doctor`, retired paths `404`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
-| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, no Web login/API admin setup, Codex/Probe/Goal/cleanup smoke, helper sync check, log tail, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, Tauri updater `Check` shows the latest signed version in the shared update card and Job History |
+| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, no Web login/API admin setup, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, log tail, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, Tauri updater `Check` shows the latest signed version in the shared update card and Job History |
 
 ## Session Log
 
@@ -187,4 +187,4 @@ git ls-remote --tags origin refs/tags/v0.1.113
 | 2026-06-20 | v0.1.109-cc-switch-service-closure | Closes the remaining service split: Goal status/view planning and Linux update shell job specs are shared core services, frontend update prune is capability-driven, and macOS keeps Web security/admin/systemd/Nginx surfaces unavailable. |
 | 2026-06-20 | v0.1.111-cc-switch-final-service-layer-closure | Closes the final cc-switch alignment gaps: upload validation/storage planning is shared in core, frontend domain APIs are split behind `runtime` transport, desktop compat `_command` wrappers stay retired, and macOS keeps Linux WebUI-only operations unavailable. |
 | 2026-06-20 | v0.1.112-cc-switch-unified-architecture-backfill | Closes the remaining unified-architecture gaps: shared core plans thread steer/follow-up and desktop upload validation, cleanup capabilities are explicit, frontend mutations sit behind query/state facades, and Linux WebUI-only operations stay unavailable on macOS. |
-| 2026-06-20 | v0.1.113-macos-network-volume-tcc-fix | Fixes the macOS first-launch network-volume TCC prompt by keeping implicit thread-list scans inside the resolved Codex home and deferring desktop cleanup dry-run scans to explicit user actions. |
+| 2026-06-21 | v0.1.114-cc-switch-unified-command-closure | Closes the remaining cc-switch alignment gaps with shared core action facades, unified Probe/Update command names across Linux RPC and macOS Tauri, thin runtime transport, capability-gated Linux WebUI-only operations, and `CLAUDE.md` intentionally absent. |

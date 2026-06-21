@@ -5,9 +5,9 @@ import {
   getSystemStatus,
   getUpdateStatus,
   listJobs,
-  runUpdateAction,
   startArchiveDelete,
   startHiddenThreadDelete,
+  updates,
   type RuntimeCapabilityMatrix,
   type UnifiedUpdateAction
 } from "../api";
@@ -68,7 +68,11 @@ export function useOpsActions(input: {
   return {
     qc,
     updateJob: useMutation({
-      mutationFn: ({ action }: { action: UnifiedUpdateAction }) => runUpdateAction(action, csrfToken, capabilities),
+      mutationFn: ({ action }: { action: UnifiedUpdateAction }) => {
+        if (action === "check") return updates.check(csrfToken);
+        if (action === "install") return updates.install(csrfToken);
+        return updates.prune(csrfToken, capabilities);
+      },
       onSuccess: (result) => {
         if (result.status) {
           qc.setQueryData(opsQueryKeys.updateStatus, result.status);

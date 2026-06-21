@@ -21,10 +21,6 @@ export type RuntimeThreadEventSource = {
 export type RuntimeDispatchOptions<T = unknown> = {
   command: string;
   args?: RpcArgs;
-  desktopCommand?: string;
-  desktopArgs?: RpcArgs;
-  webCommand?: string;
-  webArgs?: RpcArgs;
   desktopFallback?: () => T | Promise<T>;
   desktopUnavailable?: string;
   webUnavailable?: string;
@@ -144,6 +140,11 @@ function rpcBodyArgs(args?: RpcArgs): RpcArgs {
   return body;
 }
 
+function desktopRpcArgs(args?: RpcArgs): RpcArgs {
+  const body = rpcBodyArgs(args) ?? {};
+  return Object.keys(body).length ? body : undefined;
+}
+
 async function checkedResponse(response: Response): Promise<unknown> {
   const payload = await parseResponse(response);
   if (!response.ok) {
@@ -226,12 +227,12 @@ export async function runtimeDispatch<T = unknown>(
     if (options.desktopFallback) {
       return options.desktopFallback();
     }
-    return invokeDesktop<T>(options.desktopCommand ?? options.command, options.desktopArgs ?? options.args);
+    return invokeDesktop<T>(options.command, desktopRpcArgs(options.args));
   }
   if (options.webUnavailable) {
     throw new RuntimeUnavailableError(options.webUnavailable, options.webUnavailable);
   }
-  return webJsonRpc<T>(options.webCommand ?? options.command, options.webArgs ?? options.args);
+  return webJsonRpc<T>(options.command, options.args);
 }
 
 export async function runtimeRpc<T = unknown>(

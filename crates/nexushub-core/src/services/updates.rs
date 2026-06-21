@@ -82,12 +82,18 @@ pub struct LinuxUpdateJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeUpdateSpec {
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateActionPlan {
     pub required_capability: Capability,
     pub action: UpdateAction,
     pub method: UpdateExecutionMethod,
     pub platform: PlatformKind,
     pub linux_job: Option<LinuxUpdateJobSpec>,
+    pub native: Option<NativeUpdateSpec>,
 }
 
 pub fn update_status(
@@ -140,15 +146,30 @@ pub fn plan_update_action(
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<UpdateActionPlan> {
-    require_capability(platform, Capability::LinuxUpdateJob)?;
     let job_plan = update_action_plan(platform, action);
-    let linux_job = Some(linux_update_job_spec(config, job_plan)?);
+    let required_capability = update_action_capability(platform.kind, action);
+    require_capability(platform, required_capability)?;
+    let (linux_job, native) = match job_plan.method {
+        UpdateExecutionMethod::LinuxSystemdJob => {
+            (Some(linux_update_job_spec(config, job_plan)?), None)
+        }
+        UpdateExecutionMethod::MacosTauriUpdater => (
+            None,
+            Some(NativeUpdateSpec {
+                command: native_update_command(action)?.to_string(),
+            }),
+        ),
+        UpdateExecutionMethod::Unsupported => {
+            anyhow::bail!("updates are unavailable on this platform")
+        }
+    };
     Ok(UpdateActionPlan {
-        required_capability: Capability::LinuxUpdateJob,
+        required_capability,
         action,
         method: job_plan.method,
         platform: job_plan.platform,
         linux_job,
+        native,
     })
 }
 
@@ -185,6 +206,31 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
 fn non_empty_string(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn update_action_capability(platform: PlatformKind, action: UpdateAction) -> Capability {
+    match (platform, action) {
+        (PlatformKind::Linux, UpdateAction::Prune) => Capability::PruneBackups,
+        (PlatformKind::Linux, UpdateAction::Check | UpdateAction::Install) => {
+            Capability::LinuxUpdateJob
+        }
+        (PlatformKind::Macos, UpdateAction::Check | UpdateAction::Install) => {
+            Capability::AppUpdater
+        }
+        (PlatformKind::Macos, UpdateAction::Prune) => Capability::PruneBackups,
+        (PlatformKind::Windows, UpdateAction::Check | UpdateAction::Install) => {
+            Capability::AppUpdater
+        }
+        (PlatformKind::Windows, UpdateAction::Prune) => Capability::PruneBackups,
+    }
+}
+
+fn native_update_command(action: UpdateAction) -> Result<&'static str> {
+    match action {
+        UpdateAction::Check => Ok("check"),
+        UpdateAction::Install => Ok("install"),
+        UpdateAction::Prune => anyhow::bail!("native updater does not support backup prune"),
+    }
 }
 
 pub fn update_available_for_versions(current_version: &str, latest_version: &str) -> Option<bool> {
@@ -301,15 +347,22 @@ mod tests {
     }
 
     #[test]
-    fn non_linux_update_action_plan_does_not_create_linux_job() {
+    fn macos_update_action_plan_uses_native_updater_and_rejects_prune() {
         let config = Config::for_platform_kind(PlatformKind::Macos);
         let platform = PlatformPaths::for_kind(PlatformKind::Macos);
 
-        let err = plan_update_action(&config, &platform, UpdateAction::Install)
-            .expect_err("macOS should not plan Linux update jobs");
+        let plan = plan_update_action(&config, &platform, UpdateAction::Install)
+            .expect("macOS should plan native updater installs");
 
+        assert_eq!(plan.required_capability, Capability::AppUpdater);
+        assert_eq!(plan.method, UpdateExecutionMethod::MacosTauriUpdater);
+        assert!(plan.linux_job.is_none());
+        assert_eq!(plan.native.as_ref().unwrap().command, "install");
+
+        let err = plan_update_action(&config, &platform, UpdateAction::Prune)
+            .expect_err("macOS should not plan Linux backup pruning");
         assert!(err
             .to_string()
-            .contains("linux_update_job is unavailable on macos"));
+            .contains("prune_backups is unavailable on macos"));
     }
 }

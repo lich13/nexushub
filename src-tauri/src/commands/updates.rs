@@ -32,13 +32,6 @@ pub fn desktop_update_status_with_state(
 }
 
 #[tauri::command]
-pub fn desktop_update_status(
-    state: tauri::State<'_, DesktopState>,
-) -> std::result::Result<UpdateStatus, String> {
-    desktop_update_status_with_state(&state, None, None).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub fn getUpdateStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<UpdateStatus, String> {
@@ -152,12 +145,33 @@ pub async fn checkUpdate(
     check_update_status(app, state).await
 }
 
+#[tauri::command(rename = "updates.check")]
+pub async fn updatesCheck(
+    app: AppHandle,
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<DesktopUpdateCheckResponse, String> {
+    check_update_status(app, state).await
+}
+
 #[tauri::command]
 pub async fn installUpdateAndRestart(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {
     install_update_and_restart(app, state).await
+}
+
+#[tauri::command(rename = "updates.install")]
+pub async fn updatesInstall(
+    app: AppHandle,
+    state: tauri::State<'_, DesktopState>,
+) -> std::result::Result<DesktopUpdateInstallResponse, String> {
+    install_update_and_restart(app, state).await
+}
+
+#[tauri::command(rename = "updates.prune")]
+pub fn updatesPrune() -> std::result::Result<serde_json::Value, String> {
+    Err("当前运行时不支持备份清理动作".to_string())
 }
 
 fn update_job_id(action: &str) -> String {

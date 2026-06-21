@@ -2,7 +2,6 @@ export {
   RuntimeUnavailableError,
   createRuntimeThreadEventSource,
   desktopSessionUser,
-  runtimeDispatch,
   runtimeRpc,
   runtimeValue,
   uploadRuntimeFiles

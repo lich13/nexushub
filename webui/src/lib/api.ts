@@ -26,9 +26,12 @@ export {
   saveProbeSettings,
   getProbeLogsDbStatus,
   getProbeEvents,
-  startProbeJob
+  startProbeBarkTest,
+  startProbeHooksInstall,
+  startProbeLogsDbDryRun,
+  startProbeLogsDbExecute
 } from "./api/probe";
-export { getUpdateStatus, runUpdateAction } from "./api/updates";
+export { getUpdateStatus, updates } from "./api/updates";
 export type { UnifiedUpdateAction, UpdateActionResult } from "./api/updates";
 export {
   listThreads,

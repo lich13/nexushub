@@ -1,47 +1,18 @@
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
-  AgentProviderInfo,
   BridgeActionResult,
-  ClaudeOverview,
-  CodexConfig,
   CodexGoal,
   CodexGoalSaveInput,
-  CodexModel,
   FollowUpQueueItem,
   FollowUpQueueState,
-  HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  JobRecord,
   MessageBlock,
-  OptionalResult,
-  PermissionProfile,
-  PlatformOverview,
-  PluginInfo,
-  ProbeEventsResponse,
-  ProbeJobAction,
-  ProbeLogsDbStatus,
-  ProbeSettings,
-  ProbeStatus,
-  PublicSettings,
-  SecuritySettings,
-  SentinelStatus,
-  SessionUser,
-  SystemStatus,
-  SystemVersion,
   ThreadBlockPage,
   ThreadDetail,
   ThreadSummary,
-  UpdateStatus,
   UploadOutcome
 } from "../../types";
 import {
-  RuntimeUnavailableError,
   createRuntimeThreadEventSource,
-  desktopSessionUser,
-  runtimeDispatch,
   runtimeRpc,
-  runtimeValue,
   uploadRuntimeFiles
 } from "./transport";
 import { USE_DEMO } from "./shared";
@@ -49,10 +20,7 @@ import { demoCodexGoal, demoThreads } from "./demo";
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);
-  return runtimeDispatch<ThreadSummary[]>({
-    command: "listThreads",
-    args: { status, q, limit: 120 }
-  });
+  return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
 }
 
 export type ThreadDetailOptions = {
@@ -105,10 +73,7 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
       ]
     };
   }
-  return runtimeDispatch<ThreadDetail>({
-    command: "getThread",
-    args: { id, options }
-  });
+  return runtimeRpc<ThreadDetail>("getThread", { id, options });
 }
 
 export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOptions, "limit" | "before"> = {}): Promise<ThreadBlockPage> {
@@ -122,10 +87,7 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
       before_cursor: detail.before_cursor ?? null
     };
   }
-  return runtimeDispatch<ThreadBlockPage>({
-    command: "getThreadBlocks",
-    args: { id, options }
-  });
+  return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
 }
 
 export type ThreadSendPayload = {
@@ -161,42 +123,27 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
 
 export async function deleteUpload(id: string, csrfToken?: string | null): Promise<{ ok: boolean; deleted: boolean }> {
   if (USE_DEMO) return { ok: true, deleted: true };
-  return runtimeDispatch<{ ok: boolean; deleted: boolean }>({
-    command: "deleteUpload",
-    args: { id, csrfToken }
-  });
+  return runtimeRpc<{ ok: boolean; deleted: boolean }>("deleteUpload", { id, csrfToken });
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeDispatch<BridgeActionResult>({
-    command: "createThread",
-    args: { payload, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("createThread", { payload, csrfToken });
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeDispatch<BridgeActionResult>({
-    command: "sendMessage",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("sendMessage", { threadId, payload, csrfToken });
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeDispatch<BridgeActionResult>({
-    command: "steerThread",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("steerThread", { threadId, payload, csrfToken });
 }
 
 export async function listFollowUps(threadId: string): Promise<FollowUpQueueState> {
   if (USE_DEMO) return { items: [] };
-  const result = await runtimeDispatch<FollowUpQueueState | FollowUpQueueItem[]>({
-    command: "listFollowUps",
-    args: { threadId }
-  });
+  const result = await runtimeRpc<FollowUpQueueState | FollowUpQueueItem[]>("listFollowUps", { threadId });
   return Array.isArray(result) ? { items: result } : result;
 }
 
@@ -211,62 +158,37 @@ export async function enqueueFollowUp(threadId: string, payload: ThreadSendPaylo
       created_at: Math.floor(Date.now() / 1000)
     };
   }
-  return runtimeDispatch<FollowUpQueueItem>({
-    command: "enqueueFollowUp",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc<FollowUpQueueItem>("enqueueFollowUp", { threadId, payload, csrfToken });
 }
 
 export async function cancelFollowUp(threadId: string, followUpId: string, csrfToken?: string | null): Promise<{ ok: boolean }> {
   if (USE_DEMO) return { ok: true };
-  return runtimeDispatch<{ ok: boolean }>({
-    command: "cancelFollowUp",
-    args: { threadId, followUpId, csrfToken }
-  });
+  return runtimeRpc<{ ok: boolean }>("cancelFollowUp", { threadId, followUpId, csrfToken });
 }
 
 export async function stopThread(threadId: string, payload: { turn_id?: string | null; job_id?: string | null }, csrfToken?: string | null) {
   if (USE_DEMO) return { ok: true };
-  return runtimeDispatch({
-    command: "stopThread",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc("stopThread", { threadId, payload, csrfToken });
 }
 
 export async function archiveThread(threadId: string, csrfToken?: string | null) {
-  return runtimeDispatch({
-    command: "archiveThread",
-    args: { threadId, csrfToken }
-  });
+  return runtimeRpc("archiveThread", { threadId, csrfToken });
 }
 
 export async function restoreThread(threadId: string, csrfToken?: string | null) {
-  return runtimeDispatch({
-    command: "restoreThread",
-    args: { threadId, csrfToken }
-  });
+  return runtimeRpc("restoreThread", { threadId, csrfToken });
 }
 
 export async function renameThread(threadId: string, name: string, csrfToken?: string | null) {
-  return runtimeDispatch({
-    command: "renameThread",
-    args: { threadId, name, csrfToken }
-  });
+  return runtimeRpc("renameThread", { threadId, name, csrfToken });
 }
 
 export async function forkThread(threadId: string, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeDispatch<BridgeActionResult>({
-    command: "forkThread",
-    args: { threadId, csrfToken },
-    desktopUnavailable: "Desktop fork command is not implemented"
-  });
+  return runtimeRpc<BridgeActionResult>("forkThread", { threadId, csrfToken });
 }
 
 export async function answerElicitation(threadId: string, answers: Record<string, string[]>, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeDispatch<BridgeActionResult>({
-    command: "answerElicitation",
-    args: { threadId, answers, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("answerElicitation", { threadId, answers, csrfToken });
 }
 
 export async function acceptPlan(
@@ -274,10 +196,7 @@ export async function acceptPlan(
   payload: { turn_id?: string | null; item_id?: string | null },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeDispatch<BridgeActionResult>({
-    command: "acceptPlan",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("acceptPlan", { threadId, payload, csrfToken });
 }
 
 export async function revisePlan(
@@ -285,10 +204,7 @@ export async function revisePlan(
   payload: { turn_id?: string | null; item_id?: string | null; instructions: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeDispatch<BridgeActionResult>({
-    command: "revisePlan",
-    args: { threadId, payload, csrfToken }
-  });
+  return runtimeRpc<BridgeActionResult>("revisePlan", { threadId, payload, csrfToken });
 }
 
 export async function answerApproval(
@@ -296,19 +212,12 @@ export async function answerApproval(
   payload: { turn_id?: string | null; item_id?: string | null; request_id?: string | null; decision: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeDispatch<BridgeActionResult>({
-    command: "answerApproval",
-    args: { threadId, payload, csrfToken },
-    desktopUnavailable: "Desktop approval command is not implemented"
-  });
+  return runtimeRpc<BridgeActionResult>("answerApproval", { threadId, payload, csrfToken });
 }
 
 export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
-  const result = await runtimeDispatch<CodexGoal | { goal?: CodexGoal | null }>({
-    command: "getCodexGoal",
-    args: { threadId }
-  });
+  const result = await runtimeRpc<CodexGoal | { goal?: CodexGoal | null }>("getCodexGoal", { threadId });
   return result && typeof result === "object" && "goal" in result
     ? result.goal ?? demoCodexGoal(threadId)
     : result as CodexGoal;
@@ -324,14 +233,11 @@ export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, 
       status: "active"
     };
   }
-  return runtimeDispatch<CodexGoal>({
-    command: "saveCodexGoal",
-    args: {
-      threadId,
-      objective: goal.objective,
-      tokenBudget: goal.token_budget ?? null,
-      csrfToken
-    }
+  return runtimeRpc<CodexGoal>("saveCodexGoal", {
+    threadId,
+    objective: goal.objective,
+    tokenBudget: goal.token_budget ?? null,
+    csrfToken
   });
 }
 
@@ -345,10 +251,7 @@ export async function clearCodexGoal(threadId: string, csrfToken?: string | null
       status: "cleared"
     };
   }
-  return runtimeDispatch<CodexGoal>({
-    command: "clearCodexGoal",
-    args: { threadId, csrfToken }
-  });
+  return runtimeRpc<CodexGoal>("clearCodexGoal", { threadId, csrfToken });
 }
 
 export async function pauseCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -359,10 +262,7 @@ export async function pauseCodexGoal(threadId: string, csrfToken?: string | null
       status: "paused"
     };
   }
-  return runtimeDispatch<CodexGoal>({
-    command: "pauseCodexGoal",
-    args: { threadId, csrfToken }
-  });
+  return runtimeRpc<CodexGoal>("pauseCodexGoal", { threadId, csrfToken });
 }
 
 export async function resumeCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -373,10 +273,7 @@ export async function resumeCodexGoal(threadId: string, csrfToken?: string | nul
       status: "active"
     };
   }
-  return runtimeDispatch<CodexGoal>({
-    command: "resumeCodexGoal",
-    args: { threadId, csrfToken }
-  });
+  return runtimeRpc<CodexGoal>("resumeCodexGoal", { threadId, csrfToken });
 }
 
 export function subscribeThreadEvents(

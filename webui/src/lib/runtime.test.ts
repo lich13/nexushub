@@ -81,6 +81,16 @@ describe("NexusHub runtime transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  test("desktop dispatch strips CSRF-only transport args before native invoke", async () => {
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
+    const { runtimeRpc } = await loadRuntime(true);
+
+    await expect(runtimeRpc("checkUpdate", { csrfToken: "csrf-token" })).resolves.toEqual({
+      command: "checkUpdate",
+      args: undefined
+    });
+  });
+
   test("desktop upload helper delegates to native upload command", async () => {
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
     const { invokeDesktopUpload } = await loadRuntime(true);
@@ -147,6 +157,8 @@ describe("NexusHub runtime transport", () => {
   });
 
   test("production runtime stays a thin transport layer", async () => {
+    const runtimeDispatchOptionsBody = runtimeSource.match(/export type RuntimeDispatchOptions[\s\S]*?};/)?.[0] ?? "";
+
     expect(runtimeSource).not.toContain("const ROUTES");
     expect(runtimeSource).not.toContain("WebRoute");
     expect(runtimeSource).not.toContain("DesktopRoute");
@@ -154,6 +166,10 @@ describe("NexusHub runtime transport", () => {
     expect(runtimeSource).not.toContain("desktop_api_command");
     expect(runtimeSource).not.toContain("desktopApiRoute");
     expect(runtimeSource).not.toContain("invokeDesktopApi");
+    expect(runtimeDispatchOptionsBody).not.toContain("desktopCommand");
+    expect(runtimeDispatchOptionsBody).not.toContain("desktopArgs");
+    expect(runtimeDispatchOptionsBody).not.toContain("webCommand");
+    expect(runtimeDispatchOptionsBody).not.toContain("webArgs");
     expect(runtimeSource).not.toContain("systemd");
     expect(runtimeSource).not.toContain("Nginx");
   });

@@ -1,25 +1,18 @@
 #![allow(non_snake_case)]
 
 use crate::overview::{
-    self, build_desktop_home, build_desktop_home_with_state, build_desktop_overview,
-    desktop_platform_status_with_state, DesktopHome, DesktopOverview, DesktopState,
+    build_desktop_home_with_state, build_desktop_overview, DesktopHome, DesktopOverview,
+    DesktopState,
 };
 use serde::Serialize;
 
 #[tauri::command]
-pub fn desktop_overview() -> Result<DesktopOverview, String> {
+pub fn getDesktopOverview() -> Result<DesktopOverview, String> {
     build_desktop_overview().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-pub async fn desktop_home() -> Result<DesktopHome, String> {
-    build_desktop_home().await.map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub async fn desktop_home_native(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopHome, String> {
+pub async fn getDesktopHome(state: tauri::State<'_, DesktopState>) -> Result<DesktopHome, String> {
     build_desktop_home_with_state(&state)
         .await
         .map_err(|err| err.to_string())
@@ -58,7 +51,7 @@ pub fn getSystemVersion() -> Result<DesktopSystemVersion, String> {
 }
 
 #[tauri::command]
-pub async fn desktop_platform_status(
+pub async fn getDesktopPlatformStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<
     (
@@ -67,15 +60,15 @@ pub async fn desktop_platform_status(
     ),
     String,
 > {
-    desktop_platform_status_with_state(&state)
+    platform_status_with_state(&state)
         .await
         .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-pub fn desktop_claude_code_overview() -> Result<nexushub_core::claude_code::ClaudeOverview, String>
+pub fn getDesktopClaudeCodeOverview() -> Result<nexushub_core::claude_code::ClaudeOverview, String>
 {
-    overview::desktop_claude_code_overview().map_err(|err| err.to_string())
+    claude_code_overview().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -85,7 +78,7 @@ pub fn listProviders() -> Result<Vec<nexushub_core::local::LocalPluginInfo>, Str
 
 #[tauri::command]
 pub fn getClaudeCodeOverview() -> Result<nexushub_core::claude_code::ClaudeOverview, String> {
-    desktop_claude_code_overview()
+    claude_code_overview().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -117,4 +110,24 @@ pub fn getCodexConfig(
 ) -> Result<nexushub_core::local::LocalCodexConfig, String> {
     let config = state.config();
     Ok(nexushub_core::local::local_codex_config(&config, None))
+}
+
+async fn platform_status_with_state(
+    state: &DesktopState,
+) -> anyhow::Result<(
+    nexushub_core::platform::PlatformPaths,
+    Option<nexushub_core::system::SystemStatus>,
+)> {
+    let config = state.config();
+    let system = nexushub_core::system::system_status_with_paths(&config, state.platform())
+        .await
+        .ok();
+    Ok((state.platform().clone(), system))
+}
+
+fn claude_code_overview() -> anyhow::Result<nexushub_core::claude_code::ClaudeOverview> {
+    let paths = std::env::var_os("NEXUSHUB_CLAUDE_HOME")
+        .map(nexushub_core::claude_code::ClaudePaths::new)
+        .unwrap_or_else(nexushub_core::claude_code::ClaudePaths::default_for_user);
+    nexushub_core::claude_code::claude_overview(&paths)
 }

@@ -3,13 +3,15 @@ use crate::{
     config::Config,
     db::JobRecord,
     platform::PlatformPaths,
+    probe as probe_core,
     services::system::{require_capability, Capability},
     services::threads::{self, ThreadListRuntimeState},
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags};
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::{path::Path, str::FromStr};
 
 pub const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 
@@ -27,6 +29,50 @@ pub struct ProbeStatusFacadePlan {
     pub status: ProbeStatusAggregation,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProbeAction {
+    #[serde(rename = "barkTest", alias = "bark-test")]
+    BarkTest,
+    #[serde(rename = "installHooks", alias = "hooks-install")]
+    InstallHooks,
+    #[serde(rename = "logsDbDryRun", alias = "logs-db-dry-run")]
+    LogsDbDryRun,
+    #[serde(rename = "logsDbExecute", alias = "logs-db-execute")]
+    LogsDbExecute,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeExecutionKind {
+    FixedShellJob,
+    LogsDbMaintenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeFixedJobSpec {
+    pub kind: String,
+    pub title: String,
+    pub args: Vec<String>,
+    pub command: String,
+    pub exclusive_group: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeLogsDbMaintenanceSpec {
+    pub dry_run: bool,
+    pub compact: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProbeActionPlan {
+    pub required_capability: Capability,
+    pub action: ProbeAction,
+    pub execution: ProbeExecutionKind,
+    pub job: Option<ProbeFixedJobSpec>,
+    pub maintenance: Option<ProbeLogsDbMaintenanceSpec>,
+    pub diagnostic_plan: Option<probe_core::ProbeActionPlan>,
+}
+
 pub fn probe_status_with_capability(
     config: &Config,
     platform: &PlatformPaths,
@@ -35,6 +81,59 @@ pub fn probe_status_with_capability(
     Ok(ProbeStatusFacadePlan {
         required_capability: Capability::Probe,
         status: aggregate_probe_status(config),
+    })
+}
+
+pub fn plan_probe_action(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: ProbeAction,
+) -> Result<ProbeActionPlan> {
+    plan_probe_action_with_device_key(config, platform, action, false)
+}
+
+pub fn plan_probe_action_with_device_key(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: ProbeAction,
+    device_key_configured: bool,
+) -> Result<ProbeActionPlan> {
+    let required_capability = probe_action_capability(action);
+    require_capability(platform, required_capability)?;
+    let runtime = probe_core::ProbeRuntime::new(config.clone(), platform.clone());
+    let diagnostic_plan = match action {
+        ProbeAction::BarkTest => Some(runtime.bark_test_plan(device_key_configured)),
+        ProbeAction::InstallHooks => {
+            Some(runtime.plan_action(probe_core::ProbeActionPlanKind::InstallHooks)?)
+        }
+        ProbeAction::LogsDbDryRun | ProbeAction::LogsDbExecute => {
+            Some(runtime.plan_action(probe_core::ProbeActionPlanKind::LogsDbMaintain)?)
+        }
+    };
+    let job = Some(probe_fixed_job_spec(platform, action)?);
+    let maintenance = match action {
+        ProbeAction::LogsDbDryRun => Some(ProbeLogsDbMaintenanceSpec {
+            dry_run: true,
+            compact: false,
+        }),
+        ProbeAction::LogsDbExecute => Some(ProbeLogsDbMaintenanceSpec {
+            dry_run: false,
+            compact: false,
+        }),
+        ProbeAction::BarkTest | ProbeAction::InstallHooks => None,
+    };
+    let execution = if maintenance.is_some() {
+        ProbeExecutionKind::LogsDbMaintenance
+    } else {
+        ProbeExecutionKind::FixedShellJob
+    };
+    Ok(ProbeActionPlan {
+        required_capability,
+        action,
+        execution,
+        job,
+        maintenance,
+        diagnostic_plan,
     })
 }
 
@@ -89,6 +188,112 @@ pub fn probe_threads_for_status_with_paths(
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
     Ok(threads::thread_summaries_for_status(threads, status, limit))
+}
+
+impl ProbeAction {
+    pub fn as_rpc_action(self) -> &'static str {
+        match self {
+            Self::BarkTest => "bark-test",
+            Self::InstallHooks => "hooks-install",
+            Self::LogsDbDryRun => "logs-db-dry-run",
+            Self::LogsDbExecute => "logs-db-execute",
+        }
+    }
+
+    pub fn as_desktop_command(self) -> &'static str {
+        match self {
+            Self::BarkTest => "startProbeBarkTest",
+            Self::InstallHooks => "startProbeHooksInstall",
+            Self::LogsDbDryRun => "startProbeLogsDbDryRun",
+            Self::LogsDbExecute => "startProbeLogsDbExecute",
+        }
+    }
+}
+
+impl FromStr for ProbeAction {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim() {
+            "barkTest" | "bark-test" => Ok(Self::BarkTest),
+            "installHooks" | "hooks-install" => Ok(Self::InstallHooks),
+            "logsDbDryRun" | "logs-db-dry-run" => Ok(Self::LogsDbDryRun),
+            "logsDbExecute" | "logs-db-execute" => Ok(Self::LogsDbExecute),
+            action => Err(anyhow!("unknown probe action: {action}")),
+        }
+    }
+}
+
+fn probe_action_capability(action: ProbeAction) -> Capability {
+    match action {
+        ProbeAction::BarkTest | ProbeAction::InstallHooks => Capability::Probe,
+        ProbeAction::LogsDbDryRun | ProbeAction::LogsDbExecute => Capability::ProbeLogMaintenance,
+    }
+}
+
+fn probe_fixed_job_spec(
+    platform: &PlatformPaths,
+    action: ProbeAction,
+) -> Result<ProbeFixedJobSpec> {
+    let (kind, title, args, exclusive_group) = match action {
+        ProbeAction::BarkTest => (
+            "probe_bark_test",
+            "探针 Bark 测试",
+            vec!["probe", "bark-test"],
+            "probe_bark",
+        ),
+        ProbeAction::InstallHooks => (
+            "probe_hooks_install",
+            "探针 Hook 安装",
+            vec!["probe", "hooks-install"],
+            "probe_hooks",
+        ),
+        ProbeAction::LogsDbDryRun => (
+            "probe_logs_db_maintain_dry_run",
+            "Codex logs DB 维护 dry-run",
+            vec!["probe", "logs-db-maintain", "--dry-run"],
+            "probe_logs_db",
+        ),
+        ProbeAction::LogsDbExecute => (
+            "probe_logs_db_maintain",
+            "Codex logs DB 维护",
+            vec!["probe", "logs-db-maintain"],
+            "probe_logs_db",
+        ),
+    };
+    let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+    Ok(ProbeFixedJobSpec {
+        kind: kind.to_string(),
+        title: title.to_string(),
+        command: fixed_probe_shell_command(platform, &args),
+        args,
+        exclusive_group: Some(exclusive_group.to_string()),
+    })
+}
+
+fn fixed_probe_shell_command(platform: &PlatformPaths, args: &[String]) -> String {
+    let mut parts = vec![
+        platform.daemon_binary().display().to_string(),
+        "--config".to_string(),
+        platform.config_file.display().to_string(),
+    ];
+    parts.extend(args.iter().cloned());
+    parts
+        .iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '/' | '.' | ':' | '='))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }
 
 fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> {

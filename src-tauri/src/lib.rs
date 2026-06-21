@@ -1,5 +1,5 @@
 mod commands;
-// 业务命令入口按领域放在 commands/*；overview 仅保留桌面状态和兼容 helper。
+// 业务命令入口按领域放在 commands/*；overview 仅保留桌面状态、首页汇总和启动初始化。
 #[allow(dead_code)]
 mod overview;
 
@@ -152,9 +152,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            commands::system::desktop_overview,
-            commands::system::desktop_home,
-            commands::system::desktop_home_native,
+            commands::system::getDesktopOverview,
+            commands::system::getDesktopHome,
             commands::system::getSystemStatus,
             commands::system::getSystemVersion,
             commands::system::listProviders,
@@ -182,31 +181,21 @@ pub fn run() {
             commands::threads::acceptPlan,
             commands::threads::revisePlan,
             commands::threads::answerApproval,
-            commands::threads::desktop_threads,
-            commands::threads::desktop_thread_detail,
-            commands::threads::desktop_thread_blocks,
-            commands::threads::desktop_send_message,
-            commands::threads::desktop_continue_thread,
-            commands::threads::desktop_stop_thread,
-            commands::threads::desktop_plan_accept,
-            commands::threads::desktop_plan_revise,
-            commands::threads::desktop_answer_elicitation,
-            commands::probe::desktop_probe_status,
             commands::probe::getProbeStatus,
-            commands::updates::desktop_update_status,
             commands::updates::getUpdateStatus,
+            commands::updates::updatesCheck,
+            commands::updates::updatesInstall,
+            commands::updates::updatesPrune,
             commands::updates::checkUpdate,
             commands::updates::installUpdateAndRestart,
-            commands::settings::desktop_archive_plan,
-            commands::settings::desktop_hidden_plan,
-            commands::settings::desktop_save_goal,
-            commands::settings::desktop_clear_goal,
-            commands::settings::desktop_pause_goal,
-            commands::settings::desktop_resume_goal,
             commands::settings::getProbeSettings,
             commands::settings::saveProbeSettings,
             commands::settings::getProbeLogsDbStatus,
             commands::settings::getProbeEvents,
+            commands::settings::probeBarkTest,
+            commands::settings::probeInstallHooks,
+            commands::settings::probeLogsDbDryRun,
+            commands::settings::probeLogsDbExecute,
             commands::settings::startProbeBarkTest,
             commands::settings::startProbeHooksInstall,
             commands::settings::startProbeLogsDbDryRun,
@@ -222,30 +211,10 @@ pub fn run() {
             commands::settings::clearCodexGoal,
             commands::settings::pauseCodexGoal,
             commands::settings::resumeCodexGoal,
-            commands::threads::desktop_archive_thread,
-            commands::threads::desktop_restore_thread,
-            commands::threads::desktop_rename_thread,
-            commands::threads::desktop_fork_thread,
-            commands::settings::desktop_probe_settings,
-            commands::settings::desktop_probe_save_settings,
-            commands::settings::desktop_probe_bark_test,
-            commands::settings::desktop_probe_hooks_install,
-            commands::settings::desktop_probe_logs_db_maintain,
-            commands::settings::desktop_probe_events,
-            commands::settings::desktop_archive_delete_dry_run,
-            commands::settings::desktop_archive_delete_execute,
-            commands::settings::desktop_hidden_delete_dry_run,
-            commands::settings::desktop_hidden_delete_execute,
-            commands::settings::desktop_delete_upload,
             commands::jobs::listJobs,
             commands::jobs::getJob,
-            commands::jobs::desktop_jobs,
-            commands::jobs::desktop_job_detail,
-            commands::threads::desktop_list_followups,
-            commands::threads::desktop_enqueue_followup,
-            commands::threads::desktop_cancel_followup,
-            commands::system::desktop_platform_status,
-            commands::system::desktop_claude_code_overview
+            commands::system::getDesktopPlatformStatus,
+            commands::system::getDesktopClaudeCodeOverview
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -455,6 +424,87 @@ log_dir = "{}"
             assert!(
                 !commands.contains(&retired),
                 "unused desktop compatibility command must not be registered: {retired}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_invoke_handler_keeps_desktop_compat_out_of_frontend_workflows() {
+        let commands = registered_invoke_command_paths();
+        for typed in [
+            command_path("system", "getDesktopOverview"),
+            command_path("system", "getDesktopHome"),
+            command_path("system", "getDesktopPlatformStatus"),
+            command_path("system", "getDesktopClaudeCodeOverview"),
+            command_path("settings", "probeBarkTest"),
+            command_path("settings", "probeInstallHooks"),
+            command_path("settings", "probeLogsDbDryRun"),
+            command_path("settings", "probeLogsDbExecute"),
+            command_path("updates", "updatesCheck"),
+            command_path("updates", "updatesInstall"),
+            command_path("updates", "updatesPrune"),
+        ] {
+            assert!(
+                commands.contains(&typed),
+                "typed desktop command must be registered: {typed}"
+            );
+        }
+
+        for command in &commands {
+            let Some(name) = command.rsplit("::").next() else {
+                continue;
+            };
+            assert!(
+                !name.starts_with("desktop_"),
+                "frontend workflow must use typed command registration instead of desktop_* compat: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn overview_does_not_export_desktop_business_helper_functions() {
+        let overview_source = include_str!("overview.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("overview source must include production section");
+
+        for forbidden in [
+            "desktop_threads",
+            "desktop_thread_detail",
+            "desktop_thread_blocks",
+            "desktop_send_message",
+            "desktop_continue_thread",
+            "desktop_stop_thread",
+            "desktop_plan_accept",
+            "desktop_plan_revise",
+            "desktop_answer_elicitation",
+            "desktop_archive_thread",
+            "desktop_restore_thread",
+            "desktop_rename_thread",
+            "desktop_fork_thread",
+            "desktop_probe_status",
+            "desktop_probe_settings",
+            "desktop_probe_save_settings",
+            "desktop_probe_bark_test",
+            "desktop_probe_hooks_install",
+            "desktop_probe_logs_db_maintain",
+            "desktop_probe_events",
+            "desktop_archive_plan",
+            "desktop_hidden_plan",
+            "desktop_archive_delete",
+            "desktop_hidden_delete",
+            "desktop_delete_upload",
+            "desktop_store_uploads",
+            "desktop_jobs",
+            "desktop_job_detail",
+            "desktop_list_followups",
+            "desktop_enqueue_followup",
+            "desktop_cancel_followup",
+            "desktop_codex_job_spec",
+        ] {
+            assert!(
+                !overview_source.contains(forbidden),
+                "overview.rs must not retain desktop business helper: {forbidden}"
             );
         }
     }

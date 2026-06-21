@@ -32,7 +32,7 @@ use nexushub_core::{
     providers::ProviderRegistry,
     services::{
         goals as goal_service, jobs as job_service,
-        probe::probe_threads_for_status_with_paths,
+        probe::{self as probe_service, probe_threads_for_status_with_paths},
         security as security_service, settings as settings_service,
         threads::{
             apply_running_job_to_summary, build_threads_overview, filter_thread_summaries,
@@ -258,30 +258,30 @@ async fn rpc_dispatch(
             )
             .await
         }
+        "probe.barkTest" | "startProbeBarkTest" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
+        }
+        "probe.installHooks" | "startProbeHooksInstall" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
+        }
+        "probe.logsDbDryRun" | "startProbeLogsDbDryRun" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
+        }
+        "probe.logsDbExecute" | "startProbeLogsDbExecute" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
+        }
         "startProbeJob" => match rpc_string(&args, "action").as_deref() {
-            Some("bark-test") => probe_bark_test(State(state), headers).await,
-            Some("hooks-install") => probe_hooks_install(State(state), headers).await,
+            Some("bark-test") => {
+                start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
+            }
+            Some("hooks-install") => {
+                start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
+            }
             Some("logs-db-dry-run") => {
-                probe_logs_db_maintain(
-                    State(state),
-                    headers,
-                    Some(Json(ProbeLogsDbMaintainRequest {
-                        dry_run: Some(true),
-                        compact: Some(false),
-                    })),
-                )
-                .await
+                start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
             }
             Some("logs-db-execute") => {
-                probe_logs_db_maintain(
-                    State(state),
-                    headers,
-                    Some(Json(ProbeLogsDbMaintainRequest {
-                        dry_run: Some(false),
-                        compact: Some(false),
-                    })),
-                )
-                .await
+                start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
             }
             Some(action) => Err(api_error(
                 StatusCode::BAD_REQUEST,
@@ -308,6 +308,27 @@ async fn rpc_dispatch(
             .await
         }
         "getUpdateStatus" => system_update_status(State(state), headers).await,
+        "updates.check" | "checkUpdate" => {
+            start_update_action(state, headers, UpdateAction::Check, None).await
+        }
+        "updates.install" | "installUpdateAndRestart" => {
+            start_update_action(
+                state,
+                headers,
+                UpdateAction::Install,
+                Some("nexushub.update.install_started"),
+            )
+            .await
+        }
+        "updates.prune" | "backupPrune" => {
+            start_update_action(
+                state,
+                headers,
+                UpdateAction::Prune,
+                Some("nexushub.update.prune_started"),
+            )
+            .await
+        }
         "runUpdateAction" => match rpc_string(&args, "action").as_deref() {
             Some("check") => system_update_precheck(State(state), headers).await,
             Some("install") => system_update_install(State(state), headers).await,
@@ -938,27 +959,11 @@ async fn get_probe_logs_db_status(
 }
 
 async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_bark_test",
-        "探针 Bark 测试",
-        vec!["probe".to_string(), "bark-test".to_string()],
-        "probe_bark",
-    )
-    .await
+    start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
 }
 
 async fn probe_hooks_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_fixed_job(
-        state,
-        headers,
-        "probe_hooks_install",
-        "探针 Hook 安装",
-        vec!["probe".to_string(), "hooks-install".to_string()],
-        "probe_hooks",
-    )
-    .await
+    start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -980,54 +985,66 @@ async fn probe_logs_db_maintain(
         });
     let dry_run = request.dry_run.unwrap_or(true);
     let compact = request.compact.unwrap_or(false);
-    let mut args = vec!["probe".to_string(), "logs-db-maintain".to_string()];
-    if dry_run {
-        args.push("--dry-run".to_string());
-    }
-    if compact {
-        args.push("--compact".to_string());
-    }
-    start_probe_fixed_job(
-        state,
-        headers,
-        if dry_run {
-            "probe_logs_db_maintain_dry_run"
-        } else {
-            "probe_logs_db_maintain"
-        },
-        if dry_run {
-            "Codex logs DB 维护 dry-run"
-        } else {
-            "Codex logs DB 维护"
-        },
-        args,
-        "probe_logs_db",
-    )
-    .await
+    let action = if dry_run {
+        probe_service::ProbeAction::LogsDbDryRun
+    } else {
+        probe_service::ProbeAction::LogsDbExecute
+    };
+    start_probe_action_with_compact(state, headers, action, compact).await
 }
 
-async fn start_probe_fixed_job(
+async fn start_probe_action(
     state: AppState,
     headers: HeaderMap,
-    kind: &str,
-    title: &str,
-    args: Vec<String>,
-    group: &str,
+    action: probe_service::ProbeAction,
+) -> ApiResponse {
+    start_probe_action_with_compact(state, headers, action, false).await
+}
+
+async fn start_probe_action_with_compact(
+    state: AppState,
+    headers: HeaderMap,
+    action: probe_service::ProbeAction,
+    compact: bool,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let device_key_configured = state
+        .db
+        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
+        .is_some_and(|value| !value.is_empty());
+    let platform = http_update_platform();
+    let plan = probe_service::plan_probe_action_with_device_key(
+        &state.config(),
+        &platform,
+        action,
+        device_key_configured,
+    )?;
+    let spec = plan
+        .job
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Probe job is unavailable"))?;
+    let mut args = spec.args.clone();
+    if compact
+        && matches!(
+            action,
+            probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
+        )
+    {
+        args.push("--compact".to_string());
+    }
     state.db.record_audit(
         Some(&auth.admin_id),
-        &format!("{kind}.started"),
+        &format!("{}.started", spec.kind),
         Some("probe"),
-        Some(title),
+        Some(&spec.title),
         None,
-        json!({"args": args}),
+        json!({"args": args, "action": action.as_rpc_action()}),
     )?;
     let command = fixed_probe_shell_command(&state, &args);
+    let group = spec.exclusive_group.as_deref().unwrap_or(&spec.kind);
     let id = state
         .jobs
-        .start_exclusive_shell_job(kind, title, command, group)
+        .start_exclusive_shell_job(&spec.kind, &spec.title, command, group)
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
@@ -4382,6 +4399,124 @@ mod tests {
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, "nexushub_update_check");
+    }
+
+    #[tokio::test]
+    async fn rpc_probe_typed_commands_start_matching_jobs() {
+        for (command, kind) in [
+            ("probe.barkTest", "probe_bark_test"),
+            ("probe.installHooks", "probe_hooks_install"),
+            ("probe.logsDbDryRun", "probe_logs_db_maintain_dry_run"),
+            ("probe.logsDbExecute", "probe_logs_db_maintain"),
+        ] {
+            let (state, session_token, csrf_token) = authenticated_test_state();
+            let app = router(state.clone());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/rpc/{command}"))
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "{command}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let job_id = payload["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind, "{command}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_update_typed_commands_preserve_rest_update_job_dto_shape() {
+        for (command, rest_uri) in [
+            ("updates.check", "/api/system/update/precheck"),
+            ("updates.install", "/api/system/update/install"),
+            ("updates.prune", "/api/system/update/prune"),
+        ] {
+            let (rest_state, rest_session_token, rest_csrf_token) = authenticated_test_state();
+            let rest_app = router(rest_state);
+            let rest_response = rest_app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(rest_uri)
+                        .header("cookie", format!("nexushub_session={rest_session_token}"))
+                        .header("x-csrf-token", rest_csrf_token.as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rest_response.status(), StatusCode::OK, "{rest_uri}");
+            let rest_body = to_bytes(rest_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let mut rest: serde_json::Value = serde_json::from_slice(&rest_body).unwrap();
+
+            let (rpc_state, rpc_session_token, rpc_csrf_token) = authenticated_test_state();
+            let rpc_app = router(rpc_state);
+            let rpc_response = rpc_app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/rpc/{command}"))
+                        .header("cookie", format!("nexushub_session={rpc_session_token}"))
+                        .header("x-csrf-token", rpc_csrf_token.as_str())
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rpc_response.status(), StatusCode::OK, "{command}");
+            let rpc_body = to_bytes(rpc_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let mut rpc: serde_json::Value = serde_json::from_slice(&rpc_body).unwrap();
+
+            assert!(rest["job_id"].as_str().is_some(), "{rest_uri}");
+            assert!(rpc["job_id"].as_str().is_some(), "{command}");
+            rest["job_id"] = json!("<job-id>");
+            rpc["job_id"] = json!("<job-id>");
+            assert_eq!(rpc, rest, "{command}");
+        }
+    }
+
+    #[test]
+    fn rpc_dispatch_keeps_string_action_commands_as_compat_only() {
+        let source = include_str!("api.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("api source must include production section");
+        for typed in [
+            "\"probe.barkTest\"",
+            "\"probe.installHooks\"",
+            "\"probe.logsDbDryRun\"",
+            "\"probe.logsDbExecute\"",
+            "\"updates.check\"",
+            "\"updates.install\"",
+            "\"updates.prune\"",
+        ] {
+            assert!(
+                source.contains(typed),
+                "RPC dispatcher must expose typed command {typed}"
+            );
+        }
+        for compat in ["\"startProbeJob\"", "\"runUpdateAction\""] {
+            assert_eq!(
+                source.matches(compat).count(),
+                1,
+                "{compat} must stay as a single compatibility wrapper, not a second business path"
+            );
+        }
     }
 
     #[tokio::test]

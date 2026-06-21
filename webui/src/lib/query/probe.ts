@@ -6,7 +6,10 @@ import {
   getProbeStatus,
   listJobs,
   saveProbeSettings,
-  startProbeJob
+  startProbeBarkTest,
+  startProbeHooksInstall,
+  startProbeLogsDbDryRun,
+  startProbeLogsDbExecute
 } from "../api";
 import type { ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
@@ -74,6 +77,13 @@ export function useProbeActions(input: {
     qc.invalidateQueries({ queryKey: probeQueryKeys.events });
   };
 
+  const runProbeCommand = (action: ProbeJobAction) => {
+    if (action === "bark-test") return startProbeBarkTest(input.csrfToken);
+    if (action === "hooks-install") return startProbeHooksInstall(input.csrfToken);
+    if (action === "logs-db-dry-run") return startProbeLogsDbDryRun(input.csrfToken);
+    return startProbeLogsDbExecute(input.csrfToken);
+  };
+
   return {
     qc,
     refresh: () => {
@@ -85,7 +95,7 @@ export function useProbeActions(input: {
         if ((action === "logs-db-dry-run" || action === "logs-db-execute") && !input.capabilities.probeLogMaintenance) {
           throw new Error("当前运行时不支持探针日志库维护");
         }
-        return startProbeJob(action, input.csrfToken);
+        return runProbeCommand(action);
       },
       onSuccess: (_result, action) => {
         input.onJobSuccess(action);

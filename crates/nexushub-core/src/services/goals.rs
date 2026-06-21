@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{ThreadGoal, ThreadGoalUpdate};
+use crate::{
+    db::{ThreadGoal, ThreadGoalUpdate},
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
+};
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct GoalUpdateRequest {
@@ -118,6 +122,12 @@ pub struct GoalCommandPlan {
     pub update: GoalUpdatePlan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalCommandFacadePlan {
+    pub required_capability: Capability,
+    pub command: GoalCommandPlan,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoalView {
     pub available: bool,
@@ -187,6 +197,17 @@ pub fn plan_goal_update(request: GoalUpdateRequest) -> Result<GoalCommandPlan> {
     Ok(GoalCommandPlan {
         command: GoalCommandKind::Save,
         update: plan_save_goal(request)?,
+    })
+}
+
+pub fn plan_goal_command_with_capability(
+    platform: &PlatformPaths,
+    request: GoalUpdateRequest,
+) -> Result<GoalCommandFacadePlan> {
+    require_capability(platform, Capability::Threads)?;
+    Ok(GoalCommandFacadePlan {
+        required_capability: Capability::Threads,
+        command: plan_goal_update(request)?,
     })
 }
 

@@ -1,45 +1,13 @@
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
-  AgentProviderInfo,
-  BridgeActionResult,
-  ClaudeOverview,
-  CodexConfig,
-  CodexGoal,
-  CodexGoalSaveInput,
-  CodexModel,
-  FollowUpQueueItem,
-  FollowUpQueueState,
-  HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  JobRecord,
-  MessageBlock,
   OptionalResult,
-  PermissionProfile,
-  PlatformOverview,
-  PluginInfo,
   ProbeEventsResponse,
   ProbeJobAction,
   ProbeLogsDbStatus,
   ProbeSettings,
   ProbeStatus,
-  PublicSettings,
-  SecuritySettings,
-  SentinelStatus,
-  SessionUser,
-  SystemStatus,
-  SystemVersion,
-  ThreadBlockPage,
-  ThreadDetail,
-  ThreadSummary,
-  UpdateStatus,
-  UploadOutcome
+  SentinelStatus
 } from "../../types";
-import {
-  runtimeDispatch,
-  runtimeRpc,
-  runtimeValue,
-} from "./transport";
+import { runtimeRpc } from "./transport";
 import { jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
 import { demoProbeSettings, demoProbeStatus } from "./demo";
 
@@ -64,9 +32,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
       data: demoProbeSettings()
     };
   }
-  const payload = await runtimeDispatch<ProbeSettings | OptionalResult<ProbeSettings>>({
-    command: "getProbeSettings"
-  });
+  const payload = await runtimeRpc<ProbeSettings | OptionalResult<ProbeSettings>>("getProbeSettings");
   const result = normalizeOptionalResult<ProbeSettings>(payload);
   return result.available
     ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeSettings }
@@ -90,12 +56,9 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
-  const payload = await runtimeDispatch<ProbeSettings>({
-    command: "saveProbeSettings",
-    args: {
-      settings: normalizedSettings,
-      csrfToken
-    }
+  const payload = await runtimeRpc<ProbeSettings>("saveProbeSettings", {
+    settings: normalizedSettings,
+    csrfToken
   });
   return normalizeProbeRuntimePayload(payload) as ProbeSettings;
 }
@@ -229,26 +192,28 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
   return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("getProbeEvents", { limit }));
 }
 
-export async function startProbeJob(action: ProbeJobAction, csrfToken?: string | null): Promise<{ job_id: string }> {
-  if (USE_DEMO) return { job_id: `probe-${action}-demo` };
-  const result = await startProbeJobForRuntime(action, csrfToken);
-  return jobIdFromRuntimeResult(result, `probe-${action}`);
+export async function startProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.barkTest", "probe-bark-test", csrfToken);
 }
 
-function desktopProbeJobCommand(action: ProbeJobAction): string {
-  if (action === "bark-test") return "startProbeBarkTest";
-  if (action === "hooks-install") return "startProbeHooksInstall";
-  if (action === "logs-db-dry-run") return "startProbeLogsDbDryRun";
-  return "startProbeLogsDbExecute";
+export async function startProbeHooksInstall(csrfToken?: string | null): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.installHooks", "probe-hooks-install", csrfToken);
 }
 
-async function startProbeJobForRuntime(
-  action: ProbeJobAction,
+export async function startProbeLogsDbDryRun(csrfToken?: string | null): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.logsDbDryRun", "probe-logs-db-dry-run", csrfToken);
+}
+
+export async function startProbeLogsDbExecute(csrfToken?: string | null): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.logsDbExecute", "probe-logs-db-execute", csrfToken);
+}
+
+async function startProbeCommand(
+  command: "probe.barkTest" | "probe.installHooks" | "probe.logsDbDryRun" | "probe.logsDbExecute",
+  fallback: string,
   csrfToken?: string | null,
-): Promise<{ job_id?: string | null; jobId?: string | null }> {
-  return runtimeDispatch({
-    command: desktopProbeJobCommand(action),
-    webCommand: "startProbeJob",
-    webArgs: { action, csrfToken }
-  });
+): Promise<{ job_id: string }> {
+  if (USE_DEMO) return { job_id: `${fallback}-demo` };
+  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>(command, { csrfToken });
+  return jobIdFromRuntimeResult(result, fallback);
 }

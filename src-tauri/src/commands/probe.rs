@@ -11,15 +11,6 @@ use nexushub_core::{
 };
 
 #[tauri::command]
-pub async fn desktop_probe_status(
-    state: tauri::State<'_, DesktopState>,
-) -> std::result::Result<ProbeStatus, String> {
-    desktop_probe_status_with_state(&state)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
 pub async fn getProbeStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<ProbeStatus, String> {

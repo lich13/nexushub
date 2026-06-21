@@ -1,66 +1,23 @@
 import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
-  AgentProviderInfo,
-  BridgeActionResult,
-  ClaudeOverview,
-  CodexConfig,
-  CodexGoal,
-  CodexGoalSaveInput,
-  CodexModel,
-  FollowUpQueueItem,
-  FollowUpQueueState,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
-  MessageBlock,
-  OptionalResult,
-  PermissionProfile,
-  PlatformOverview,
-  PluginInfo,
-  ProbeEventsResponse,
-  ProbeJobAction,
-  ProbeLogsDbStatus,
-  ProbeSettings,
-  ProbeStatus,
-  PublicSettings,
-  SecuritySettings,
-  SentinelStatus,
-  SessionUser,
-  SystemStatus,
-  SystemVersion,
-  ThreadBlockPage,
-  ThreadDetail,
-  ThreadSummary,
-  UpdateStatus,
-  UploadOutcome
+  OptionalResult
 } from "../../types";
-import {
-  RuntimeUnavailableError,
-  createRuntimeThreadEventSource,
-  desktopSessionUser,
-  runtimeDispatch,
-  runtimeRpc,
-  runtimeValue,
-  uploadRuntimeFiles
-} from "./transport";
+import { runtimeRpc } from "./transport";
 import { normalizeOptionalResult, USE_DEMO } from "./shared";
 
 export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeletePlan> {
   if (USE_DEMO) {
     return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };
   }
-  return runtimeDispatch<ArchiveDeletePlan>({
-    command: "dryRunArchiveDelete",
-    args: { csrfToken }
-  });
+  return runtimeRpc<ArchiveDeletePlan>("dryRunArchiveDelete", { csrfToken });
 }
 
 export async function startArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeleteResult> {
-  return runtimeDispatch<ArchiveDeleteResult>({
-    command: "startArchiveDelete",
-    args: { confirmed: true, csrfToken }
-  });
+  return runtimeRpc<ArchiveDeleteResult>("startArchiveDelete", { confirmed: true, csrfToken });
 }
 
 export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
@@ -77,10 +34,7 @@ export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promi
       integrity: "ok"
     };
   }
-  return runtimeDispatch<HiddenThreadDeletePlan>({
-    command: "dryRunHiddenThreadDelete",
-    args: { csrfToken }
-  });
+  return runtimeRpc<HiddenThreadDeletePlan>("dryRunHiddenThreadDelete", { csrfToken });
 }
 
 export async function startHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeleteResult> {
@@ -109,10 +63,7 @@ export async function startHiddenThreadDelete(csrfToken?: string | null): Promis
       deleted_rollout_files: 4
     };
   }
-  return runtimeDispatch<HiddenThreadDeleteResult>({
-    command: "startHiddenThreadDelete",
-    args: { confirmed: true, csrfToken }
-  });
+  return runtimeRpc<HiddenThreadDeleteResult>("startHiddenThreadDelete", { confirmed: true, csrfToken });
 }
 
 export async function listJobs(): Promise<JobRecord[]> {
@@ -124,10 +75,7 @@ export async function listJobs(): Promise<JobRecord[]> {
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }
-  const payload = await runtimeDispatch<JobRecord[] | OptionalResult<JobRecord[]>>({
-    command: "listJobs",
-    args: { limit: 30 }
-  });
+  const payload = await runtimeRpc<JobRecord[] | OptionalResult<JobRecord[]>>("listJobs", { limit: 30 });
   const result = normalizeOptionalResult<JobRecord[]>(payload);
   return result.available && Array.isArray(result.data) ? result.data : [];
 }
@@ -144,8 +92,5 @@ export async function getJob(id: string): Promise<JobRecord> {
       error: "demo job not found"
     };
   }
-  return runtimeDispatch<JobRecord>({
-    command: "getJob",
-    args: { id }
-  });
+  return runtimeRpc<JobRecord>("getJob", { id });
 }

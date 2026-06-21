@@ -1,48 +1,11 @@
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
-  AgentProviderInfo,
-  BridgeActionResult,
-  ClaudeOverview,
-  CodexConfig,
-  CodexGoal,
-  CodexGoalSaveInput,
-  CodexModel,
-  FollowUpQueueItem,
-  FollowUpQueueState,
-  HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  JobRecord,
-  MessageBlock,
-  OptionalResult,
-  PermissionProfile,
-  PlatformOverview,
-  PluginInfo,
-  ProbeEventsResponse,
-  ProbeJobAction,
-  ProbeLogsDbStatus,
-  ProbeSettings,
-  ProbeStatus,
   PublicSettings,
-  SecuritySettings,
-  SentinelStatus,
-  SessionUser,
-  SystemStatus,
-  SystemVersion,
-  ThreadBlockPage,
-  ThreadDetail,
-  ThreadSummary,
-  UpdateStatus,
-  UploadOutcome
+  SessionUser
 } from "../../types";
 import {
-  RuntimeUnavailableError,
-  createRuntimeThreadEventSource,
   desktopSessionUser,
-  runtimeDispatch,
   runtimeRpc,
-  runtimeValue,
-  uploadRuntimeFiles
+  runtimeValue
 } from "./transport";
 import { USE_DEMO } from "./shared";
 
@@ -54,10 +17,7 @@ export async function getPublicSettings(): Promise<PublicSettings> {
   if (USE_DEMO) {
     return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
   }
-  return runtimeDispatch<PublicSettings>({
-    command: "getPublicSettings",
-    desktopFallback: () => ({ site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true })
-  });
+  return runtimeRpc<PublicSettings>("getPublicSettings");
 }
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
@@ -67,20 +27,12 @@ export async function login(username: string, password: string, turnstileToken?:
       desktop: () => desktopSessionUser()
     });
   }
-  return runtimeDispatch<SessionUser>({
-    command: "login",
-    args: { username, password, turnstile_token: turnstileToken ?? null },
-    desktopFallback: () => desktopSessionUser()
-  });
+  return runtimeRpc<SessionUser>("login", { username, password, turnstile_token: turnstileToken ?? null });
 }
 
 export async function logout(csrfToken?: string | null): Promise<void> {
   if (USE_DEMO) return;
-  await runtimeDispatch<void>({
-    command: "logout",
-    args: { csrfToken },
-    desktopFallback: () => undefined
-  });
+  await runtimeRpc<void>("logout", { csrfToken });
 }
 
 export async function me(): Promise<SessionUser> {
@@ -90,8 +42,5 @@ export async function me(): Promise<SessionUser> {
       desktop: () => desktopSessionUser()
     });
   }
-  return runtimeDispatch<SessionUser>({
-    command: "me",
-    desktopFallback: () => desktopSessionUser()
-  });
+  return runtimeRpc<SessionUser>("me");
 }

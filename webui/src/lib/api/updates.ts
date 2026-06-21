@@ -1,43 +1,9 @@
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
-  AgentProviderInfo,
-  BridgeActionResult,
-  ClaudeOverview,
-  CodexConfig,
-  CodexGoal,
-  CodexGoalSaveInput,
-  CodexModel,
-  FollowUpQueueItem,
-  FollowUpQueueState,
-  HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  JobRecord,
-  MessageBlock,
-  OptionalResult,
-  PermissionProfile,
-  PlatformOverview,
-  PluginInfo,
-  ProbeEventsResponse,
-  ProbeJobAction,
-  ProbeLogsDbStatus,
-  ProbeSettings,
-  ProbeStatus,
-  PublicSettings,
-  SecuritySettings,
-  SentinelStatus,
-  SessionUser,
-  SystemStatus,
-  SystemVersion,
-  ThreadBlockPage,
-  ThreadDetail,
-  ThreadSummary,
-  UpdateStatus,
-  UploadOutcome
+  UpdateStatus
 } from "../../types";
 import {
   RuntimeUnavailableError,
-  runtimeDispatch,
+  runtimeRpc,
   runtimeValue
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
@@ -71,9 +37,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
       }
     });
   }
-  return runtimeDispatch<UpdateStatus>({
-    command: "getUpdateStatus"
-  });
+  return runtimeRpc<UpdateStatus>("getUpdateStatus");
 }
 
 export type UnifiedUpdateAction = "check" | "install" | "prune";
@@ -83,35 +47,35 @@ export type UpdateActionResult = {
   status?: UpdateStatus;
 };
 
-export async function runUpdateAction(
-  action: UnifiedUpdateAction,
+async function runTypedUpdateCommand(
+  command: "updates.check" | "updates.install" | "updates.prune",
+  fallback: string,
   csrfToken?: string | null,
-  capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
 ): Promise<UpdateActionResult> {
-  if (USE_DEMO) return { job_id: `update-${action}-demo` };
-  if (action === "prune" && !capabilities.backupPrune) {
-    throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
-  }
-  const result = await runUpdateActionForRuntime(action, csrfToken);
+  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>(command, { csrfToken });
   return {
-    ...jobIdFromRuntimeResult(result, `update-${action}`),
+    ...jobIdFromRuntimeResult(result, fallback),
     ...(result.status ? { status: result.status } : {})
   };
 }
 
-function desktopUpdateCommand(action: UnifiedUpdateAction): string {
-  if (action === "check") return "checkUpdate";
-  if (action === "install") return "installUpdateAndRestart";
-  return "backupPrune";
-}
-
-async function runUpdateActionForRuntime(
-  action: UnifiedUpdateAction,
-  csrfToken?: string | null,
-): Promise<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }> {
-  return runtimeDispatch({
-    command: desktopUpdateCommand(action),
-    webCommand: "runUpdateAction",
-    webArgs: { action, csrfToken }
-  });
-}
+export const updates = {
+  async check(csrfToken?: string | null): Promise<UpdateActionResult> {
+    if (USE_DEMO) return { job_id: "update-check-demo" };
+    return runTypedUpdateCommand("updates.check", "update-check", csrfToken);
+  },
+  async install(csrfToken?: string | null): Promise<UpdateActionResult> {
+    if (USE_DEMO) return { job_id: "update-install-demo" };
+    return runTypedUpdateCommand("updates.install", "update-install", csrfToken);
+  },
+  async prune(
+    csrfToken?: string | null,
+    capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
+  ): Promise<UpdateActionResult> {
+    if (USE_DEMO) return { job_id: "update-prune-demo" };
+    if (!capabilities.backupPrune) {
+      throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
+    }
+    return runTypedUpdateCommand("updates.prune", "update-prune", csrfToken);
+  }
+};

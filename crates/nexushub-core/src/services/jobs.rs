@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use crate::{
     db::ThreadFollowUp,
     jobs::CodexActionResult,
+    platform::PlatformPaths,
+    services::system::{require_capability, Capability},
     uploads::{prompt_with_attachment_context, PreparedAttachment},
 };
 
@@ -161,6 +163,13 @@ pub struct ThreadCommandPlan {
     pub followup: Option<ThreadFollowUpPlan>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCommandFacadePlan {
+    pub required_capability: Capability,
+    pub command: ThreadCommandPlan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexJobSpec {
@@ -284,6 +293,17 @@ pub fn normalize_thread_command_request(
         }
         ThreadCommandKind::FollowUp => plan_steer_thread_as_followup(request),
     }
+}
+
+pub fn plan_thread_command_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadCommandRequest,
+) -> Result<ThreadCommandFacadePlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(ThreadCommandFacadePlan {
+        required_capability: Capability::Jobs,
+        command: normalize_thread_command_request(request)?,
+    })
 }
 
 pub fn plan_steer_thread_as_followup(request: ThreadCommandRequest) -> Result<ThreadCommandPlan> {
