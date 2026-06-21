@@ -55,7 +55,7 @@ fn thread_id_request(thread_id: String) -> DesktopThreadIdRequest {
     DesktopThreadIdRequest { thread_id }
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.list")]
 pub fn listThreads(
     state: tauri::State<'_, DesktopState>,
     status: Option<String>,
@@ -73,7 +73,7 @@ pub fn listThreads(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.detail")]
 pub fn getThread(
     state: tauri::State<'_, DesktopState>,
     id: String,
@@ -92,7 +92,7 @@ pub fn getThread(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.blocks")]
 pub fn getThreadBlocks(
     state: tauri::State<'_, DesktopState>,
     id: String,
@@ -110,7 +110,7 @@ pub fn getThreadBlocks(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.create")]
 pub fn createThread(
     state: tauri::State<'_, DesktopState>,
     mut payload: DesktopSendMessageRequest,
@@ -119,7 +119,7 @@ pub fn createThread(
     send_message_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.send")]
 pub fn sendMessage(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -131,7 +131,7 @@ pub fn sendMessage(
     send_message_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.steer")]
 pub fn steerThread(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -143,7 +143,7 @@ pub fn steerThread(
     steer_thread_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.followups.list")]
 pub fn listFollowUps(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -158,7 +158,7 @@ pub fn listFollowUps(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.followups.enqueue")]
 pub fn enqueueFollowUp(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -170,7 +170,7 @@ pub fn enqueueFollowUp(
     enqueue_followup_with_state(&state, payload).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.followups.cancel")]
 pub fn cancelFollowUp(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -186,7 +186,7 @@ pub fn cancelFollowUp(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.stop")]
 pub fn stopThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -204,7 +204,7 @@ pub fn stopThread(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.archive")]
 pub fn archiveThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -212,7 +212,7 @@ pub fn archiveThread(
     archive_thread_with_state(&state, thread_id_request(threadId)).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.restore")]
 pub fn restoreThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -220,7 +220,7 @@ pub fn restoreThread(
     restore_thread_with_state(&state, thread_id_request(threadId)).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.rename")]
 pub fn renameThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -236,12 +236,12 @@ pub fn renameThread(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.fork")]
 pub fn forkThread(threadId: String) -> DesktopActionResponse {
     fork_thread_unavailable(thread_id_request(threadId))
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.elicitation.answer")]
 pub fn answerElicitation(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -257,7 +257,7 @@ pub fn answerElicitation(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.plan.accept")]
 pub fn acceptPlan(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -274,7 +274,7 @@ pub fn acceptPlan(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.plan.revise")]
 pub fn revisePlan(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
@@ -292,7 +292,7 @@ pub fn revisePlan(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.approval.answer")]
 pub fn answerApproval(threadId: String) -> DesktopActionResponse {
     let mut response = unavailable_action(
         "answerApproval",

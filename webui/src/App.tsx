@@ -173,7 +173,7 @@ export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): strin
     "Update",
     capabilities.updateServiceLabels ? "Precheck" : "Check",
     capabilities.updateServiceLabels ? "Update" : "Install",
-    ...(capabilities.backupPrune ? ["Prune"] : []),
+    ...(capabilities.updatePrune ? ["Prune"] : []),
     ...(capabilities.threadCleanup ? [
       "Dry-run",
       "清理归档",
@@ -4570,7 +4570,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
         <div className="button-row ops-action-row">
           <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.updateServiceLabels ? "Precheck" : "Check"}</button>
           <button className="primary-button" disabled={jobMutation.isPending || !canStartUpdateInstall(update.data)} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.updateServiceLabels ? "Update" : "Install"}</button>
-          {capabilities.backupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
+          {capabilities.updatePrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
         </div>
       </Panel>
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>

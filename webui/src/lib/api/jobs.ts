@@ -13,11 +13,11 @@ export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<Ar
   if (USE_DEMO) {
     return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };
   }
-  return runtimeRpc<ArchiveDeletePlan>("dryRunArchiveDelete", { csrfToken });
+  return runtimeRpc<ArchiveDeletePlan>("cleanup.archiveDryRun", { csrfToken });
 }
 
 export async function startArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeleteResult> {
-  return runtimeRpc<ArchiveDeleteResult>("startArchiveDelete", { confirmed: true, csrfToken });
+  return runtimeRpc<ArchiveDeleteResult>("cleanup.archiveExecute", { confirmed: true, csrfToken });
 }
 
 export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
@@ -34,7 +34,7 @@ export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promi
       integrity: "ok"
     };
   }
-  return runtimeRpc<HiddenThreadDeletePlan>("dryRunHiddenThreadDelete", { csrfToken });
+  return runtimeRpc<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", { csrfToken });
 }
 
 export async function startHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeleteResult> {
@@ -63,7 +63,7 @@ export async function startHiddenThreadDelete(csrfToken?: string | null): Promis
       deleted_rollout_files: 4
     };
   }
-  return runtimeRpc<HiddenThreadDeleteResult>("startHiddenThreadDelete", { confirmed: true, csrfToken });
+  return runtimeRpc<HiddenThreadDeleteResult>("cleanup.hiddenExecute", { confirmed: true, csrfToken });
 }
 
 export async function listJobs(): Promise<JobRecord[]> {
@@ -75,7 +75,7 @@ export async function listJobs(): Promise<JobRecord[]> {
       { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
     ];
   }
-  const payload = await runtimeRpc<JobRecord[] | OptionalResult<JobRecord[]>>("listJobs", { limit: 30 });
+  const payload = await runtimeRpc<JobRecord[] | OptionalResult<JobRecord[]>>("jobs.list", { limit: 30 });
   const result = normalizeOptionalResult<JobRecord[]>(payload);
   return result.available && Array.isArray(result.data) ? result.data : [];
 }
@@ -92,5 +92,5 @@ export async function getJob(id: string): Promise<JobRecord> {
       error: "demo job not found"
     };
   }
-  return runtimeRpc<JobRecord>("getJob", { id });
+  return runtimeRpc<JobRecord>("jobs.detail", { id });
 }

@@ -6,7 +6,7 @@ use crate::overview::{
 use anyhow::Result;
 use nexushub_core::{db::JobRecord, update::analyze_job_failure};
 
-#[tauri::command]
+#[tauri::command(rename = "jobs.list")]
 pub fn listJobs(
     state: tauri::State<'_, DesktopState>,
     limit: Option<u32>,
@@ -14,7 +14,7 @@ pub fn listJobs(
     jobs_with_state(&state, DesktopJobsRequest { limit }).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "jobs.detail")]
 pub fn getJob(
     state: tauri::State<'_, DesktopState>,
     id: String,

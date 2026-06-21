@@ -17,7 +17,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{any, delete, get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use nexushub_core::{
@@ -31,7 +31,7 @@ use nexushub_core::{
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        goals as goal_service, jobs as job_service,
+        commands as rpc_commands, goals as goal_service, jobs as job_service,
         probe::{self as probe_service, probe_threads_for_status_with_paths},
         security as security_service, settings as settings_service,
         threads::{
@@ -80,102 +80,12 @@ impl From<anyhow::Error> for ApiError {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/public/settings", get(public_settings))
-        .route("/api/auth/login", post(login))
-        .route("/api/auth/logout", post(logout))
-        .route("/api/auth/me", get(me))
-        .route("/api/security", get(get_security).patch(patch_security))
-        .route("/api/security/password", post(change_password))
-        .route("/api/providers", get(list_providers))
-        .route(
-            "/api/providers/claude-code/overview",
-            get(claude_code_overview),
-        )
-        .route("/api/platform", get(platform_overview))
-        .route("/api/plugins", get(list_plugins))
-        .route("/api/probe/status", get(get_probe_status))
-        .route(
-            "/api/probe/settings",
-            get(get_probe_settings).patch(patch_probe_settings),
-        )
-        .route("/api/probe/diagnostics", get(get_probe_diagnostics))
-        .route("/api/probe/running", get(get_probe_running))
-        .route("/api/probe/reply-needed", get(get_probe_reply_needed))
-        .route("/api/probe/recoverable", get(get_probe_recoverable))
-        .route("/api/probe/lifecycle", get(get_probe_lifecycle))
-        .route("/api/probe/hook-status", get(get_probe_hook_status))
-        .route("/api/probe/hooks/install", post(probe_hooks_install))
-        .route("/api/probe/events", get(get_probe_events))
-        .route("/api/probe/logs-db/status", get(get_probe_logs_db_status))
-        .route("/api/probe/logs-db/maintain", post(probe_logs_db_maintain))
-        .route("/api/probe/bark/test", post(probe_bark_test))
-        .route("/api/threads", get(list_threads).post(create_thread))
-        .route("/api/threads/:id", get(thread_detail))
-        .route("/api/threads/:id/blocks", get(thread_blocks))
-        .route("/api/threads/:id/messages", post(send_message))
-        .route("/api/threads/:id/steer", post(steer_thread))
-        .route(
-            "/api/threads/:id/follow-ups",
-            get(list_followups).post(enqueue_followup),
-        )
-        .route(
-            "/api/threads/:id/follow-ups/:followup_id/cancel",
-            post(cancel_followup),
-        )
-        .route("/api/threads/:id/stop", post(stop_thread))
-        .route("/api/threads/:id/archive", post(archive_thread))
-        .route("/api/threads/:id/restore", post(restore_thread))
-        .route("/api/threads/:id/rename", post(rename_thread))
-        .route("/api/threads/:id/fork", post(fork_thread))
-        .route("/api/threads/:id/plan/accept", post(plan_accept))
-        .route("/api/threads/:id/plan/revise", post(plan_revise))
-        .route("/api/threads/:id/elicitation", post(answer_elicitation))
-        .route("/api/threads/:id/approval", post(answer_approval))
-        .route("/api/threads/:id/events", get(thread_events))
-        .route(
-            "/api/uploads",
-            post(upload_files).layer(DefaultBodyLimit::max(MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024)),
-        )
-        .route("/api/uploads/:id", delete(delete_upload_file))
-        .route("/api/system/status", get(system_status))
-        .route("/api/system/version", get(system_version))
-        .route("/api/system/update/status", get(system_update_status))
-        .route("/api/system/update/precheck", post(system_update_precheck))
-        .route("/api/system/update/install", post(system_update_install))
-        .route("/api/system/update/prune", post(system_update_prune))
-        .route("/api/codex/models", get(codex_models))
-        .route(
-            "/api/codex/permission-profiles",
-            get(codex_permission_profiles),
-        )
-        .route(
-            "/api/codex/permissionProfiles",
-            get(codex_permission_profiles),
-        )
-        .route("/api/codex/config", get(codex_config))
-        .route("/api/codex/goal", get(codex_goal_get).post(codex_goal_set))
-        .route("/api/codex/goal/clear", post(codex_goal_clear))
-        .route("/api/codex/goal/pause", post(codex_goal_pause))
-        .route("/api/codex/goal/resume", post(codex_goal_resume))
-        .route("/api/archives/delete/dry-run", post(archive_delete_dry_run))
-        .route("/api/archives/delete/execute", post(archive_delete_execute))
-        .route(
-            "/api/hidden-threads/delete/dry-run",
-            post(hidden_threads_delete_dry_run),
-        )
-        .route(
-            "/api/hidden-threads/delete/execute",
-            post(hidden_threads_delete_execute),
-        )
         .route("/api/rpc/threadEvents/:id", get(thread_events))
         .route(
             "/api/rpc/uploadFiles",
             post(upload_files).layer(DefaultBodyLimit::max(MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024)),
         )
         .route("/api/rpc/:command", post(rpc_dispatch))
-        .route("/api/jobs", get(list_jobs))
-        .route("/api/jobs/:id", get(job_detail))
-        .route("/api/jobs/:id/events", get(job_events))
         .route("/api/*path", any(api_not_found))
         .with_state(state)
 }
@@ -196,8 +106,8 @@ async fn rpc_dispatch(
     Json(args): Json<Value>,
 ) -> ApiResponse {
     match command.as_str() {
-        "getPublicSettings" => public_settings(State(state)).await,
-        "login" => {
+        rpc_commands::AUTH_PUBLIC_SETTINGS => public_settings(State(state)).await,
+        rpc_commands::AUTH_LOGIN => {
             login(
                 State(state),
                 connect,
@@ -206,10 +116,10 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "logout" => logout(State(state), headers).await,
-        "me" => me(State(state), headers).await,
-        "getSecurity" => get_security(State(state), headers).await,
-        "saveSecurity" => {
+        rpc_commands::AUTH_LOGOUT => logout(State(state), headers).await,
+        rpc_commands::AUTH_ME => me(State(state), headers).await,
+        rpc_commands::SECURITY_GET => get_security(State(state), headers).await,
+        rpc_commands::SECURITY_SAVE => {
             patch_security(
                 State(state),
                 headers,
@@ -217,12 +127,16 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "changePassword" => change_password(State(state), headers, Json(rpc_payload(&args)?)).await,
-        "listProviders" => list_providers(State(state), headers).await,
-        "getClaudeCodeOverview" => claude_code_overview(State(state), headers).await,
-        "getPlatformOverview" => platform_overview(State(state), headers).await,
-        "listPlugins" => list_plugins(State(state), headers).await,
-        "getProbeStatus" => {
+        rpc_commands::SECURITY_CHANGE_PASSWORD => {
+            change_password(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        rpc_commands::SYSTEM_PROVIDERS => list_providers(State(state), headers).await,
+        rpc_commands::SYSTEM_CLAUDE_CODE_OVERVIEW => {
+            claude_code_overview(State(state), headers).await
+        }
+        rpc_commands::SYSTEM_PLATFORM => platform_overview(State(state), headers).await,
+        rpc_commands::SYSTEM_PLUGINS => list_plugins(State(state), headers).await,
+        rpc_commands::PROBE_STATUS => {
             get_probe_status(
                 State(state),
                 Query(ProbeStatusQuery {
@@ -232,8 +146,8 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getProbeSettings" => get_probe_settings(State(state), headers).await,
-        "saveProbeSettings" => {
+        rpc_commands::PROBE_SETTINGS_GET => get_probe_settings(State(state), headers).await,
+        rpc_commands::PROBE_SETTINGS_SAVE => {
             patch_probe_settings(
                 State(state),
                 headers,
@@ -244,8 +158,8 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getProbeLogsDbStatus" => get_probe_logs_db_status(State(state), headers).await,
-        "getProbeEvents" => {
+        rpc_commands::PROBE_LOGS_DB_STATUS => get_probe_logs_db_status(State(state), headers).await,
+        rpc_commands::PROBE_EVENTS => {
             get_probe_events(
                 State(state),
                 Query(ProbeEventsQuery {
@@ -258,20 +172,22 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "probe.barkTest" => {
+        rpc_commands::PROBE_BARK_TEST => {
             start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
         }
-        "probe.installHooks" => {
+        rpc_commands::PROBE_INSTALL_HOOKS => {
             start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
         }
-        "probe.logsDbDryRun" => {
+        rpc_commands::PROBE_LOGS_DB_DRY_RUN => {
             start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
         }
-        "probe.logsDbExecute" => {
+        rpc_commands::PROBE_LOGS_DB_EXECUTE => {
             start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
         }
-        "dryRunArchiveDelete" => archive_delete_dry_run(State(state), headers).await,
-        "startArchiveDelete" => {
+        rpc_commands::CLEANUP_ARCHIVE_DRY_RUN => {
+            archive_delete_dry_run(State(state), headers).await
+        }
+        rpc_commands::CLEANUP_ARCHIVE_EXECUTE => {
             archive_delete_execute(
                 State(state),
                 headers,
@@ -279,8 +195,10 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "dryRunHiddenThreadDelete" => hidden_threads_delete_dry_run(State(state), headers).await,
-        "startHiddenThreadDelete" => {
+        rpc_commands::CLEANUP_HIDDEN_DRY_RUN => {
+            hidden_threads_delete_dry_run(State(state), headers).await
+        }
+        rpc_commands::CLEANUP_HIDDEN_EXECUTE => {
             hidden_threads_delete_execute(
                 State(state),
                 headers,
@@ -288,9 +206,11 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getUpdateStatus" => system_update_status(State(state), headers).await,
-        "updates.check" => start_update_action(state, headers, UpdateAction::Check, None).await,
-        "updates.install" => {
+        rpc_commands::UPDATES_STATUS => system_update_status(State(state), headers).await,
+        rpc_commands::UPDATES_CHECK => {
+            start_update_action(state, headers, UpdateAction::Check, None).await
+        }
+        rpc_commands::UPDATES_INSTALL => {
             start_update_action(
                 state,
                 headers,
@@ -299,7 +219,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "updates.prune" | "backupPrune" => {
+        rpc_commands::UPDATES_PRUNE => {
             start_update_action(
                 state,
                 headers,
@@ -308,8 +228,10 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "listThreads" => list_threads(State(state), headers, Query(rpc_payload(&args)?)).await,
-        "getThread" => {
+        rpc_commands::THREADS_LIST => {
+            list_threads(State(state), headers, Query(rpc_payload(&args)?)).await
+        }
+        rpc_commands::THREADS_DETAIL => {
             thread_detail(
                 State(state),
                 headers,
@@ -318,7 +240,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getThreadBlocks" => {
+        rpc_commands::THREADS_BLOCKS => {
             thread_blocks(
                 State(state),
                 headers,
@@ -327,7 +249,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "createThread" => {
+        rpc_commands::THREADS_CREATE => {
             create_thread(
                 State(state),
                 headers,
@@ -335,7 +257,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "sendMessage" => {
+        rpc_commands::THREADS_SEND => {
             send_message(
                 State(state),
                 headers,
@@ -344,7 +266,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "steerThread" => {
+        rpc_commands::THREADS_STEER => {
             steer_thread(
                 State(state),
                 headers,
@@ -353,7 +275,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "listFollowUps" => {
+        rpc_commands::THREADS_FOLLOWUPS_LIST => {
             list_followups(
                 State(state),
                 headers,
@@ -361,7 +283,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "enqueueFollowUp" => {
+        rpc_commands::THREADS_FOLLOWUPS_ENQUEUE => {
             enqueue_followup(
                 State(state),
                 headers,
@@ -370,7 +292,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "cancelFollowUp" => {
+        rpc_commands::THREADS_FOLLOWUPS_CANCEL => {
             cancel_followup(
                 State(state),
                 headers,
@@ -381,7 +303,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "stopThread" => {
+        rpc_commands::THREADS_STOP => {
             stop_thread(
                 State(state),
                 headers,
@@ -390,7 +312,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "archiveThread" => {
+        rpc_commands::THREADS_ARCHIVE => {
             archive_thread(
                 State(state),
                 headers,
@@ -398,7 +320,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "restoreThread" => {
+        rpc_commands::THREADS_RESTORE => {
             restore_thread(
                 State(state),
                 headers,
@@ -406,7 +328,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "renameThread" => {
+        rpc_commands::THREADS_RENAME => {
             rename_thread(
                 State(state),
                 headers,
@@ -415,7 +337,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "forkThread" => {
+        rpc_commands::THREADS_FORK => {
             fork_thread(
                 State(state),
                 headers,
@@ -423,7 +345,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "acceptPlan" => {
+        rpc_commands::THREADS_PLAN_ACCEPT => {
             plan_accept(
                 State(state),
                 headers,
@@ -432,7 +354,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "revisePlan" => {
+        rpc_commands::THREADS_PLAN_REVISE => {
             plan_revise(
                 State(state),
                 headers,
@@ -441,7 +363,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "answerElicitation" => {
+        rpc_commands::THREADS_ELICITATION_ANSWER => {
             answer_elicitation(
                 State(state),
                 headers,
@@ -450,7 +372,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "answerApproval" => {
+        rpc_commands::THREADS_APPROVAL_ANSWER => {
             answer_approval(
                 State(state),
                 headers,
@@ -459,7 +381,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "deleteUpload" => {
+        rpc_commands::UPLOADS_DELETE => {
             delete_upload_file(
                 State(state),
                 headers,
@@ -467,17 +389,17 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getSystemStatus" => system_status(State(state), headers).await,
-        "getSystemVersion" => system_version(State(state), headers).await,
-        "listModels" => codex_models(State(state), headers).await,
-        "listPermissionProfiles" => {
+        rpc_commands::SYSTEM_STATUS => system_status(State(state), headers).await,
+        rpc_commands::SYSTEM_VERSION => system_version(State(state), headers).await,
+        rpc_commands::SYSTEM_MODELS => codex_models(State(state), headers).await,
+        rpc_commands::SYSTEM_PERMISSION_PROFILES => {
             codex_permission_profiles(State(state), headers, Query(rpc_payload_or_empty(&args)?))
                 .await
         }
-        "getCodexConfig" => {
+        rpc_commands::SYSTEM_CODEX_CONFIG => {
             codex_config(State(state), headers, Query(rpc_payload_or_empty(&args)?)).await
         }
-        "getCodexGoal" => {
+        rpc_commands::THREADS_GOAL_GET => {
             codex_goal_get(
                 State(state),
                 headers,
@@ -487,7 +409,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "saveCodexGoal" => {
+        rpc_commands::THREADS_GOAL_SAVE => {
             codex_goal_set(
                 State(state),
                 headers,
@@ -495,7 +417,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "clearCodexGoal" => {
+        rpc_commands::THREADS_GOAL_CLEAR => {
             codex_goal_clear(
                 State(state),
                 headers,
@@ -503,7 +425,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "pauseCodexGoal" => {
+        rpc_commands::THREADS_GOAL_PAUSE => {
             codex_goal_pause(
                 State(state),
                 headers,
@@ -511,7 +433,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "resumeCodexGoal" => {
+        rpc_commands::THREADS_GOAL_RESUME => {
             codex_goal_resume(
                 State(state),
                 headers,
@@ -519,7 +441,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "listJobs" => {
+        rpc_commands::JOBS_LIST => {
             list_jobs(
                 State(state),
                 headers,
@@ -527,7 +449,7 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "getJob" => {
+        rpc_commands::JOBS_DETAIL => {
             job_detail(
                 State(state),
                 headers,
@@ -535,85 +457,10 @@ async fn rpc_dispatch(
             )
             .await
         }
-        _ => rpc_dispatch_compat(state, command.as_str(), headers, args).await,
-    }
-}
-
-async fn rpc_dispatch_compat(
-    state: AppState,
-    command: &str,
-    headers: HeaderMap,
-    args: Value,
-) -> ApiResponse {
-    match command {
-        "startProbeBarkTest" => {
-            start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
-        }
-        "startProbeHooksInstall" => {
-            start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
-        }
-        "startProbeLogsDbDryRun" => {
-            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
-        }
-        "startProbeLogsDbExecute" => {
-            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
-        }
-        "startProbeJob" => {
-            let action = rpc_probe_action(&args)?;
-            start_probe_action(state, headers, action).await
-        }
-        "checkUpdate" => start_update_action(state, headers, UpdateAction::Check, None).await,
-        "installUpdateAndRestart" => {
-            start_update_action(
-                state,
-                headers,
-                UpdateAction::Install,
-                Some("nexushub.update.install_started"),
-            )
-            .await
-        }
-        "runUpdateAction" => {
-            let action = rpc_update_action(&args)?;
-            start_update_action(state, headers, action, update_action_event(action)).await
-        }
         _ => Err(api_error(
             StatusCode::NOT_FOUND,
             &format!("unknown rpc command: {command}"),
         )),
-    }
-}
-
-fn rpc_probe_action(args: &Value) -> Result<probe_service::ProbeAction, ApiError> {
-    let action = rpc_string(args, "action")
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "action is required"))?;
-    action
-        .parse()
-        .map_err(|err: anyhow::Error| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
-}
-
-fn rpc_update_action(args: &Value) -> Result<UpdateAction, ApiError> {
-    let action = rpc_string(args, "action")
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "action is required"))?;
-    for candidate in [
-        UpdateAction::Check,
-        UpdateAction::Install,
-        UpdateAction::Prune,
-    ] {
-        if action == candidate.as_rpc_action() {
-            return Ok(candidate);
-        }
-    }
-    Err(api_error(
-        StatusCode::BAD_REQUEST,
-        &format!("unknown update action: {action}"),
-    ))
-}
-
-fn update_action_event(action: UpdateAction) -> Option<&'static str> {
-    match action {
-        UpdateAction::Check => None,
-        UpdateAction::Install => Some("nexushub.update.install_started"),
-        UpdateAction::Prune => Some("nexushub.update.prune_started"),
     }
 }
 
@@ -830,11 +677,6 @@ async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -
     ok(probe_settings_value(&state)?)
 }
 
-async fn get_probe_diagnostics(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!(probe_runtime(&state).diagnostics()))
-}
-
 async fn patch_probe_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -874,68 +716,6 @@ async fn patch_probe_settings(
         json!({"config_path": config_path}),
     )?;
     ok(probe_settings_value_for_config(&state, &response_config)?)
-}
-
-async fn get_probe_lifecycle(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(
-        serde_json::to_value(probe_runtime(&state).lifecycle_status())
-            .map_err(anyhow::Error::from)?,
-    )
-}
-
-async fn get_probe_hook_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!(probe_runtime(&state).hook_status()))
-}
-
-#[derive(Debug, Deserialize)]
-struct ProbeThreadsQuery {
-    limit: Option<usize>,
-}
-
-async fn get_probe_running(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeThreadsQuery>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    get_probe_threads_for_status(state, query, headers, "running").await
-}
-
-async fn get_probe_reply_needed(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeThreadsQuery>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    get_probe_threads_for_status(state, query, headers, "reply-needed").await
-}
-
-async fn get_probe_recoverable(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeThreadsQuery>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    get_probe_threads_for_status(state, query, headers, "recoverable").await
-}
-
-async fn get_probe_threads_for_status(
-    state: AppState,
-    query: ProbeThreadsQuery,
-    headers: HeaderMap,
-    status: &'static str,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = query
-        .limit
-        .unwrap_or(state.config().probe.recent_limit)
-        .clamp(1, 200);
-    let threads = load_probe_threads(&state, status, limit).await?;
-    ok(json!({
-        "status": status,
-        "limit": limit,
-        "count": threads.len(),
-        "threads": threads,
-    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1000,41 +780,6 @@ async fn get_probe_logs_db_status(
         }
     }
     ok(value)
-}
-
-async fn probe_bark_test(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
-}
-
-async fn probe_hooks_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
-}
-
-#[derive(Debug, Deserialize)]
-struct ProbeLogsDbMaintainRequest {
-    dry_run: Option<bool>,
-    compact: Option<bool>,
-}
-
-async fn probe_logs_db_maintain(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Option<Json<ProbeLogsDbMaintainRequest>>,
-) -> ApiResponse {
-    let request = body
-        .map(|Json(body)| body)
-        .unwrap_or(ProbeLogsDbMaintainRequest {
-            dry_run: Some(true),
-            compact: Some(false),
-        });
-    let dry_run = request.dry_run.unwrap_or(true);
-    let compact = request.compact.unwrap_or(false);
-    let action = if dry_run {
-        probe_service::ProbeAction::LogsDbDryRun
-    } else {
-        probe_service::ProbeAction::LogsDbExecute
-    };
-    start_probe_action_with_compact(state, headers, action, compact).await
 }
 
 async fn start_probe_action(
@@ -2600,30 +2345,6 @@ async fn codex_goal_resume(
     ok(goal_service::goal_response(Some(&goal)))
 }
 
-async fn system_update_precheck(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(state, headers, UpdateAction::Check, None).await
-}
-
-async fn system_update_install(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(
-        state,
-        headers,
-        UpdateAction::Install,
-        Some("nexushub.update.install_started"),
-    )
-    .await
-}
-
-async fn system_update_prune(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    start_update_action(
-        state,
-        headers,
-        UpdateAction::Prune,
-        Some("nexushub.update.prune_started"),
-    )
-    .await
-}
-
 async fn start_update_action(
     state: AppState,
     headers: HeaderMap,
@@ -2765,36 +2486,6 @@ async fn job_detail(
         Some(job) => ok(job_response(job)),
         None => Err(api_error(StatusCode::NOT_FOUND, "job not found")),
     }
-}
-
-async fn job_events(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let mut rx = state.jobs.subscribe();
-    let stream = async_stream::stream! {
-        loop {
-            match rx.recv().await {
-                Ok(event) if event.job_id == id => {
-                    yield Ok::<Event, std::convert::Infallible>(Event::default().event("job").data(serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string())));
-                }
-                Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    yield Ok::<Event, std::convert::Infallible>(Event::default().event("job").data(json!({"job_id": id, "status": "lagged"}).to_string()));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
-    Ok(Sse::new(stream)
-        .keep_alive(
-            KeepAlive::new()
-                .interval(Duration::from_secs(25))
-                .text("ping"),
-        )
-        .into_response())
 }
 
 fn security_response(state: &AppState) -> anyhow::Result<Value> {
@@ -3920,7 +3611,7 @@ mod tests {
             let guard = CONFIG_ENV_LOCK
                 .get_or_init(|| Mutex::new(()))
                 .lock()
-                .expect("config env lock");
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous = env::var_os("NEXUSHUB_CONFIG");
             env::set_var("NEXUSHUB_CONFIG", path);
             Self {
@@ -4104,63 +3795,88 @@ mod tests {
         }
     }
 
+    async fn request_rpc_json(
+        app: axum::Router,
+        command: &str,
+        body: &str,
+        session_token: &str,
+        csrf_token: Option<&str>,
+    ) -> serde_json::Value {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("/api/rpc/{command}"))
+            .header("cookie", format!("nexushub_session={session_token}"))
+            .header("content-type", "application/json");
+        if let Some(csrf_token) = csrf_token {
+            builder = builder.header("x-csrf-token", csrf_token);
+        }
+        let response = app
+            .oneshot(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "RPC {command}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn request_rpc_status(
+        app: axum::Router,
+        command: &str,
+        body: &str,
+        session_token: Option<&str>,
+        csrf_token: Option<&str>,
+    ) -> StatusCode {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(format!("/api/rpc/{command}"))
+            .header("content-type", "application/json");
+        if let Some(session_token) = session_token {
+            builder = builder.header("cookie", format!("nexushub_session={session_token}"));
+        }
+        if let Some(csrf_token) = csrf_token {
+            builder = builder.header("x-csrf-token", csrf_token);
+        }
+        app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
     #[tokio::test]
     async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
         let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
         seed_local_codex_thread(&home, "thread-a", "local title");
         let app = router(state);
 
-        let list_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/threads?limit=10")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(list_response.status(), StatusCode::OK);
-        let list_body = to_bytes(list_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        let list = request_rpc_json(
+            app.clone(),
+            "threads.list",
+            r#"{"limit":10}"#,
+            &session_token,
+            None,
+        )
+        .await;
         assert_eq!(list[0]["id"], "thread-a");
         assert_eq!(list[0]["title"], "local title");
 
-        let detail_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/threads/thread-a")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(detail_response.status(), StatusCode::OK);
-        let detail_body = to_bytes(detail_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let detail: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
+        let detail = request_rpc_json(
+            app.clone(),
+            "threads.detail",
+            r#"{"id":"thread-a"}"#,
+            &session_token,
+            None,
+        )
+        .await;
         assert_eq!(detail["summary"]["title"], "local title");
 
-        let rename_response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/threads/thread-a/rename")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token)
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"local renamed"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(rename_response.status(), StatusCode::OK);
+        let _ = request_rpc_json(
+            app,
+            "threads.rename",
+            r#"{"threadId":"thread-a","name":"local renamed"}"#,
+            &session_token,
+            Some(&csrf_token),
+        )
+        .await;
 
         let rows = nexushub_core::codex::list_threads(
             &nexushub_core::codex::CodexPaths::new(&home),
@@ -4192,53 +3908,24 @@ mod tests {
         seed_local_codex_thread(&home, "thread-a", "local title");
         let app = router(state);
 
-        async fn request_goal(
-            app: axum::Router,
-            method: &str,
-            uri: &str,
-            body: &str,
-            session_token: &str,
-            csrf_token: &str,
-        ) -> serde_json::Value {
-            let mut builder = Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("cookie", format!("nexushub_session={session_token}"));
-            if method == "POST" {
-                builder = builder
-                    .header("x-csrf-token", csrf_token)
-                    .header("content-type", "application/json");
-            }
-            let response = app
-                .clone()
-                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            serde_json::from_slice(&body).unwrap()
-        }
-
-        let initial = request_goal(
+        let initial = request_rpc_json(
             app.clone(),
-            "GET",
-            "/api/codex/goal?thread_id=thread-a",
-            "",
+            "threads.goal.get",
+            r#"{"threadId":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            None,
         )
         .await;
         assert_eq!(initial["available"], true);
         assert_eq!(initial["enabled"], false);
         assert_eq!(initial["status"], "idle");
 
-        let set = request_goal(
+        let set = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/codex/goal",
+            "threads.goal.save",
             r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345,"status":"paused","enabled":false}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(set["available"], true);
@@ -4247,13 +3934,12 @@ mod tests {
         assert_eq!(set["token_budget"], 12345);
         assert_eq!(set["status"], "paused");
 
-        let get = request_goal(
+        let get = request_rpc_json(
             app.clone(),
-            "GET",
-            "/api/codex/goal?thread_id=thread-a",
-            "",
+            "threads.goal.get",
+            r#"{"threadId":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            None,
         )
         .await;
         assert_eq!(get["available"], true);
@@ -4262,13 +3948,12 @@ mod tests {
         assert_eq!(get["token_budget"], 12345);
         assert_eq!(get["status"], "paused");
 
-        let saved_active = request_goal(
+        let saved_active = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/codex/goal",
+            "threads.goal.save",
             r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(saved_active["available"], true);
@@ -4277,13 +3962,12 @@ mod tests {
         assert_eq!(saved_active["token_budget"], 12345);
         assert_eq!(saved_active["status"], "active");
 
-        let paused = request_goal(
+        let paused = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/codex/goal/pause",
+            "threads.goal.pause",
             r#"{"thread_id":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(paused["available"], true);
@@ -4292,13 +3976,12 @@ mod tests {
         assert_eq!(paused["token_budget"], 12345);
         assert_eq!(paused["status"], "paused");
 
-        let resumed = request_goal(
+        let resumed = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/codex/goal/resume",
+            "threads.goal.resume",
             r#"{"thread_id":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(resumed["available"], true);
@@ -4307,13 +3990,12 @@ mod tests {
         assert_eq!(resumed["token_budget"], 12345);
         assert_eq!(resumed["status"], "active");
 
-        let cleared = request_goal(
+        let cleared = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/codex/goal/clear",
+            "threads.goal.clear",
             r#"{"thread_id":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(cleared["available"], true);
@@ -4322,13 +4004,12 @@ mod tests {
         assert_eq!(cleared["token_budget"], serde_json::Value::Null);
         assert_eq!(cleared["status"], "cleared");
 
-        let resumed_after_clear = request_goal(
+        let resumed_after_clear = request_rpc_json(
             app,
-            "POST",
-            "/api/codex/goal/resume",
+            "threads.goal.resume",
             r#"{"thread_id":"thread-a"}"#,
             &session_token,
-            &csrf_token,
+            Some(&csrf_token),
         )
         .await;
         assert_eq!(resumed_after_clear["available"], true);
@@ -4338,63 +4019,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rpc_goal_wrapper_preserves_rest_goal_dto_shape() {
+    async fn rpc_goal_wrapper_preserves_goal_dto_shape() {
         let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
         seed_local_codex_thread(&home, "thread-a", "local title");
         let app = router(state);
 
-        async fn request_json(
-            app: axum::Router,
-            method: &str,
-            uri: &str,
-            body: &str,
-            session_token: &str,
-            csrf_token: Option<&str>,
-        ) -> serde_json::Value {
-            let mut builder = Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("cookie", format!("nexushub_session={session_token}"));
-            if !body.is_empty() {
-                builder = builder.header("content-type", "application/json");
-            }
-            if let Some(csrf_token) = csrf_token {
-                builder = builder.header("x-csrf-token", csrf_token);
-            }
-            let response = app
-                .clone()
-                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            serde_json::from_slice(&body).unwrap()
-        }
-
-        let rest_initial = request_json(
+        let rpc_initial = request_rpc_json(
             app.clone(),
-            "GET",
-            "/api/codex/goal?thread_id=thread-a",
-            "",
-            &session_token,
-            None,
-        )
-        .await;
-        let rpc_initial = request_json(
-            app.clone(),
-            "POST",
-            "/api/rpc/getCodexGoal",
+            "threads.goal.get",
             r#"{"threadId":"thread-a"}"#,
             &session_token,
             None,
         )
         .await;
-        assert_eq!(rpc_initial, rest_initial);
+        assert_eq!(rpc_initial["available"], true);
+        assert_eq!(rpc_initial["enabled"], false);
+        assert_eq!(rpc_initial["status"], "idle");
 
-        let rpc_saved = request_json(
+        let rpc_saved = request_rpc_json(
             app.clone(),
-            "POST",
-            "/api/rpc/saveCodexGoal",
+            "threads.goal.save",
             r#"{"request":{"threadId":"thread-a","objective":"ship rpc","tokenBudget":2048}}"#,
             &session_token,
             Some(&csrf_token),
@@ -4405,23 +4049,22 @@ mod tests {
         assert_eq!(rpc_saved["objective"], "ship rpc");
         assert_eq!(rpc_saved["token_budget"], 2048);
 
-        let rest_after_rpc = request_json(
+        let rpc_after_save = request_rpc_json(
             app,
-            "GET",
-            "/api/codex/goal?thread_id=thread-a",
-            "",
+            "threads.goal.get",
+            r#"{"threadId":"thread-a"}"#,
             &session_token,
             None,
         )
         .await;
-        assert_eq!(rest_after_rpc, rpc_saved);
+        assert_eq!(rpc_after_save, rpc_saved);
         let _ = fs::remove_dir_all(home);
     }
 
     #[tokio::test]
-    async fn rpc_update_action_accepts_nested_payload_action() {
+    async fn retired_update_string_action_rpc_returns_404() {
         let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state.clone());
+        let app = router(state);
 
         let response = app
             .oneshot(
@@ -4437,12 +4080,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let job_id = payload["job_id"].as_str().unwrap();
-        let job = state.db.job(job_id).unwrap().unwrap();
-        assert_eq!(job.kind, "nexushub_update_check");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -4479,79 +4117,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rpc_update_typed_commands_preserve_rest_update_job_dto_shape() {
-        for (command, rest_uri) in [
-            ("updates.check", "/api/system/update/precheck"),
-            ("updates.install", "/api/system/update/install"),
-            ("updates.prune", "/api/system/update/prune"),
+    async fn rpc_update_typed_commands_start_update_jobs() {
+        for (command, kind) in [
+            ("updates.check", "nexushub_update_check"),
+            ("updates.install", "nexushub_update_install"),
+            ("updates.prune", "nexushub_update_prune"),
         ] {
-            let (rest_state, rest_session_token, rest_csrf_token) = authenticated_test_state();
-            let rest_app = router(rest_state);
-            let rest_response = rest_app
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(rest_uri)
-                        .header("cookie", format!("nexushub_session={rest_session_token}"))
-                        .header("x-csrf-token", rest_csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(rest_response.status(), StatusCode::OK, "{rest_uri}");
-            let rest_body = to_bytes(rest_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let mut rest: serde_json::Value = serde_json::from_slice(&rest_body).unwrap();
-
             let (rpc_state, rpc_session_token, rpc_csrf_token) = authenticated_test_state();
-            let rpc_app = router(rpc_state);
-            let rpc_response = rpc_app
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(format!("/api/rpc/{command}"))
-                        .header("cookie", format!("nexushub_session={rpc_session_token}"))
-                        .header("x-csrf-token", rpc_csrf_token.as_str())
-                        .header("content-type", "application/json")
-                        .body(Body::from("{}"))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(rpc_response.status(), StatusCode::OK, "{command}");
-            let rpc_body = to_bytes(rpc_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let mut rpc: serde_json::Value = serde_json::from_slice(&rpc_body).unwrap();
-
-            assert!(rest["job_id"].as_str().is_some(), "{rest_uri}");
-            assert!(rpc["job_id"].as_str().is_some(), "{command}");
-            rest["job_id"] = json!("<job-id>");
-            rpc["job_id"] = json!("<job-id>");
-            assert_eq!(rpc, rest, "{command}");
+            let rpc = request_rpc_json(
+                router(rpc_state.clone()),
+                command,
+                "{}",
+                &rpc_session_token,
+                Some(&rpc_csrf_token),
+            )
+            .await;
+            let job_id = rpc["job_id"].as_str().unwrap();
+            let job = rpc_state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind, "{command}");
         }
     }
 
     #[test]
-    fn rpc_dispatch_keeps_string_action_commands_as_compat_only() {
+    fn rpc_dispatch_hard_deletes_string_action_compat_commands() {
         let source = include_str!("api.rs")
             .split("\n#[cfg(test)]")
             .next()
             .expect("api source must include production section");
-        let typed_dispatch = source
-            .split("async fn rpc_dispatch_compat")
-            .next()
-            .expect("api source must include typed rpc dispatcher");
         for typed in [
-            "\"probe.barkTest\"",
-            "\"probe.installHooks\"",
-            "\"probe.logsDbDryRun\"",
-            "\"probe.logsDbExecute\"",
-            "\"updates.check\"",
-            "\"updates.install\"",
-            "\"updates.prune\"",
+            "rpc_commands::PROBE_BARK_TEST",
+            "rpc_commands::PROBE_INSTALL_HOOKS",
+            "rpc_commands::PROBE_LOGS_DB_DRY_RUN",
+            "rpc_commands::PROBE_LOGS_DB_EXECUTE",
+            "rpc_commands::UPDATES_CHECK",
+            "rpc_commands::UPDATES_INSTALL",
+            "rpc_commands::UPDATES_PRUNE",
         ] {
             assert!(
                 source.contains(typed),
@@ -4569,173 +4169,77 @@ mod tests {
             "\"installUpdateAndRestart\"",
         ] {
             assert!(
-                !typed_dispatch.contains(compat),
-                "{compat} must live only in the explicit RPC compatibility dispatcher"
-            );
-        }
-        for compat in ["\"startProbeJob\"", "\"runUpdateAction\""] {
-            assert_eq!(
-                source.matches(compat).count(),
-                1,
-                "{compat} must stay as a single compatibility wrapper, not a second business path"
+                !source.contains(compat),
+                "{compat} must not remain in the production RPC dispatcher"
             );
         }
     }
 
     #[tokio::test]
-    async fn rpc_system_status_preserves_rest_capabilities_dto_shape() {
+    async fn rpc_system_status_exposes_capabilities_dto_shape() {
         let (state, session_token, _) = authenticated_test_state();
         let app = router(state);
 
-        async fn request_json(
-            app: axum::Router,
-            method: &str,
-            uri: &str,
-            body: &str,
-            session_token: &str,
-        ) -> serde_json::Value {
-            let mut builder = Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("cookie", format!("nexushub_session={session_token}"));
-            if !body.is_empty() {
-                builder = builder.header("content-type", "application/json");
-            }
-            let response = app
-                .clone()
-                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            serde_json::from_slice(&body).unwrap()
-        }
+        let rpc = request_rpc_json(app, "system.status", "{}", &session_token, None).await;
 
-        let rest = request_json(app.clone(), "GET", "/api/system/status", "", &session_token).await;
-        let rpc = request_json(
-            app,
-            "POST",
-            "/api/rpc/getSystemStatus",
-            "{}",
-            &session_token,
-        )
-        .await;
-
-        assert_eq!(rpc["capabilities"], rest["capabilities"]);
         assert_eq!(rpc["capabilities"]["threads"], true);
         assert_eq!(rpc["capabilities"]["web_auth"], true);
         assert_eq!(rpc["capabilities"]["turnstile"], true);
         assert_eq!(rpc["capabilities"]["systemd"], true);
         assert_eq!(rpc["capabilities"]["nginx"], true);
         assert_eq!(rpc["capabilities"]["linux_update_job"], true);
-        assert_eq!(rpc, rest);
     }
 
     #[tokio::test]
-    async fn rpc_update_action_preserves_rest_update_job_dto_shape() {
-        for (action, rest_uri) in [
-            ("check", "/api/system/update/precheck"),
-            ("install", "/api/system/update/install"),
-            ("prune", "/api/system/update/prune"),
+    async fn legacy_update_rest_routes_return_404_and_rpc_actions_start_jobs() {
+        for uri in [
+            "/api/system/update/precheck",
+            "/api/system/update/install",
+            "/api/system/update/prune",
         ] {
-            let (rest_state, rest_session_token, rest_csrf_token) = authenticated_test_state();
-            let rest_app = router(rest_state);
-            let rest_response = rest_app
+            let (state, session_token, csrf_token) = authenticated_test_state();
+            let response = router(state)
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(rest_uri)
-                        .header("cookie", format!("nexushub_session={rest_session_token}"))
-                        .header("x-csrf-token", rest_csrf_token.as_str())
+                        .uri(uri)
+                        .header("cookie", format!("nexushub_session={session_token}"))
+                        .header("x-csrf-token", csrf_token.as_str())
                         .body(Body::empty())
                         .unwrap(),
                 )
                 .await
                 .unwrap();
-            assert_eq!(rest_response.status(), StatusCode::OK, "{rest_uri}");
-            let rest_body = to_bytes(rest_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let mut rest: serde_json::Value = serde_json::from_slice(&rest_body).unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        }
 
-            let (rpc_state, rpc_session_token, rpc_csrf_token) = authenticated_test_state();
-            let rpc_app = router(rpc_state);
-            let rpc_response = rpc_app
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/rpc/runUpdateAction")
-                        .header("cookie", format!("nexushub_session={rpc_session_token}"))
-                        .header("x-csrf-token", rpc_csrf_token.as_str())
-                        .header("content-type", "application/json")
-                        .body(Body::from(format!(
-                            r#"{{"payload":{{"action":"{action}"}}}}"#
-                        )))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(rpc_response.status(), StatusCode::OK, "{action}");
-            let rpc_body = to_bytes(rpc_response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let mut rpc: serde_json::Value = serde_json::from_slice(&rpc_body).unwrap();
-
-            assert!(rest["job_id"].as_str().is_some(), "{rest_uri}");
-            assert!(rpc["job_id"].as_str().is_some(), "{action}");
-            rest["job_id"] = json!("<job-id>");
-            rpc["job_id"] = json!("<job-id>");
-            assert_eq!(rpc, rest, "{action}");
+        for (command, kind) in [
+            ("updates.check", "nexushub_update_check"),
+            ("updates.install", "nexushub_update_install"),
+            ("updates.prune", "nexushub_update_prune"),
+        ] {
+            let (state, session_token, csrf_token) = authenticated_test_state();
+            let rpc = request_rpc_json(
+                router(state.clone()),
+                command,
+                "{}",
+                &session_token,
+                Some(&csrf_token),
+            )
+            .await;
+            let job_id = rpc["job_id"].as_str().unwrap();
+            let job = state.db.job(job_id).unwrap().unwrap();
+            assert_eq!(job.kind, kind, "{command}");
         }
     }
 
     #[tokio::test]
-    async fn rpc_update_status_preserves_rest_update_status_dto_shape() {
+    async fn rpc_update_status_uses_shared_update_status_shape() {
         let (state, session_token, _) = authenticated_test_state();
         let app = router(state);
 
-        async fn request_json(
-            app: axum::Router,
-            method: &str,
-            uri: &str,
-            body: &str,
-            session_token: &str,
-        ) -> serde_json::Value {
-            let mut builder = Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("cookie", format!("nexushub_session={session_token}"));
-            if !body.is_empty() {
-                builder = builder.header("content-type", "application/json");
-            }
-            let response = app
-                .clone()
-                .oneshot(builder.body(Body::from(body.to_string())).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            serde_json::from_slice(&body).unwrap()
-        }
+        let rpc = request_rpc_json(app, "updates.status", "{}", &session_token, None).await;
 
-        let rest = request_json(
-            app.clone(),
-            "GET",
-            "/api/system/update/status",
-            "",
-            &session_token,
-        )
-        .await;
-        let rpc = request_json(
-            app,
-            "POST",
-            "/api/rpc/getUpdateStatus",
-            "{}",
-            &session_token,
-        )
-        .await;
-
-        assert_eq!(rpc, rest);
         assert_eq!(rpc["method"], "linux_systemd_job");
         assert_eq!(rpc["state"], "idle");
     }
@@ -4749,7 +4253,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/rpc/enqueueFollowUp")
+                    .uri("/api/rpc/threads.followups.enqueue")
                     .header("cookie", format!("nexushub_session={session_token}"))
                     .header("x-csrf-token", csrf_token.as_str())
                     .header("content-type", "application/json")
@@ -4903,99 +4407,69 @@ mod tests {
         seed_local_codex_thread(&home, "thread-a", "local title");
         let app = router(state.clone());
 
-        for uri in [
-            "/api/codex/models",
-            "/api/codex/permission-profiles",
-            "/api/codex/config",
-            "/api/system/status",
+        for (command, body) in [
+            ("system.models", "{}"),
+            ("system.permissionProfiles", "{}"),
+            ("system.codexConfig", "{}"),
+            ("system.status", "{}"),
         ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let value = request_rpc_json(app.clone(), command, body, &session_token, None).await;
             let text = serde_json::to_string(&value).unwrap();
-            assert!(!text.contains("app-server"), "{uri}");
+            assert!(!text.contains("app-server"), "{command}");
         }
 
-        let config_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/codex/config?cwd=%2Ftmp%2Fworkspace")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(config_response.status(), StatusCode::OK);
-        let config_body = to_bytes(config_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let config_value: serde_json::Value = serde_json::from_slice(&config_body).unwrap();
+        let config_value = request_rpc_json(
+            app.clone(),
+            "system.codexConfig",
+            r#"{"cwd":"/tmp/workspace"}"#,
+            &session_token,
+            None,
+        )
+        .await;
         assert_eq!(config_value["cwd"], "/tmp/workspace");
         assert_eq!(config_value["raw"]["source"], "local");
 
-        for (uri, body) in [
+        for (command, body) in [
             (
-                "/api/threads/thread-a/plan/accept",
-                r#"{"turn_id":"turn-a","item_id":"plan-a"}"#,
+                "threads.plan.accept",
+                r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"plan-a"}}"#,
             ),
             (
-                "/api/threads/thread-a/plan/revise",
-                r#"{"turn_id":"turn-a","item_id":"plan-a","instructions":"补充检查"}"#,
+                "threads.plan.revise",
+                r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"plan-a","instructions":"补充检查"}}"#,
             ),
             (
-                "/api/threads/thread-a/elicitation",
-                r#"{"answers":{"q1":["继续"]}}"#,
+                "threads.elicitation.answer",
+                r#"{"threadId":"thread-a","answers":{"q1":["继续"]}}"#,
             ),
         ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .header("content-type", "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["bridge"], false, "{uri}");
-            assert_eq!(value["fallback"], true, "{uri}");
-            assert_eq!(value["message"], "已提交给 Codex", "{uri}");
+            let value = request_rpc_json(
+                app.clone(),
+                command,
+                body,
+                &session_token,
+                Some(&csrf_token),
+            )
+            .await;
+            assert_eq!(value["bridge"], false, "{command}");
+            assert_eq!(value["fallback"], true, "{command}");
+            assert_eq!(value["message"], "已提交给 Codex", "{command}");
             let message = value["message"].as_str().unwrap_or_default();
-            assert!(!message.contains("fallback"), "{uri}");
-            assert!(!message.contains("bridge"), "{uri}");
-            assert!(!message.contains("codex exec"), "{uri}");
-            assert!(!message.contains("job"), "{uri}");
+            assert!(!message.contains("fallback"), "{command}");
+            assert!(!message.contains("bridge"), "{command}");
+            assert!(!message.contains("codex exec"), "{command}");
+            assert!(!message.contains("job"), "{command}");
             assert!(
                 value["job_id"].as_str().is_some_and(|id| !id.is_empty()),
-                "{uri}"
+                "{command}"
             );
         }
 
-        for (uri, body) in [
-            ("/api/threads/thread-a/fork", ""),
+        for (command, body) in [
+            ("threads.fork", r#"{"threadId":"thread-a"}"#),
             (
-                "/api/threads/thread-a/approval",
-                r#"{"turn_id":"turn-a","item_id":"approval-a","decision":"approve"}"#,
+                "threads.approval.answer",
+                r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"approval-a","decision":"approve"}}"#,
             ),
         ] {
             let response = app
@@ -5003,7 +4477,7 @@ mod tests {
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(uri)
+                        .uri(format!("/api/rpc/{command}"))
                         .header("cookie", format!("nexushub_session={session_token}"))
                         .header("x-csrf-token", csrf_token.as_str())
                         .header("content-type", "application/json")
@@ -5012,11 +4486,11 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{uri}");
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{command}");
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let error = value["error"].as_str().unwrap();
-            assert!(!error.contains("app-server"), "{uri}");
+            assert!(!error.contains("app-server"), "{command}");
         }
         let _ = fs::remove_dir_all(home);
     }
@@ -5186,7 +4660,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/codex/goal/resume")
+                    .uri("/api/rpc/threads.goal.resume")
                     .header("cookie", format!("nexushub_session={session_token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"thread_id":"thread-a"}"#))
@@ -5201,7 +4675,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/codex/goal/resume")
+                    .uri("/api/rpc/threads.goal.resume")
                     .header("cookie", format!("nexushub_session={session_token}"))
                     .header("x-csrf-token", csrf_token.as_str())
                     .header("content-type", "application/json")
@@ -5240,7 +4714,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/codex/goal/pause")
+                    .uri("/api/rpc/threads.goal.pause")
                     .header("cookie", format!("nexushub_session={session_token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"thread_id":"thread-a"}"#))
@@ -5255,7 +4729,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/codex/goal/pause")
+                    .uri("/api/rpc/threads.goal.pause")
                     .header("cookie", format!("nexushub_session={session_token}"))
                     .header("x-csrf-token", csrf_token.as_str())
                     .header("content-type", "application/json")
@@ -5277,19 +4751,19 @@ mod tests {
 
     #[tokio::test]
     async fn panel_update_routes_require_auth_and_csrf_and_start_fixed_panel_jobs() {
-        for (uri, kind, title) in [
+        for (command, kind, title) in [
             (
-                "/api/system/update/precheck",
+                "updates.check",
                 "nexushub_update_check",
                 "NexusHub update precheck",
             ),
             (
-                "/api/system/update/install",
+                "updates.install",
                 "nexushub_update_install",
                 "NexusHub update install",
             ),
             (
-                "/api/system/update/prune",
+                "updates.prune",
                 "nexushub_update_prune",
                 "NexusHub update backup prune",
             ),
@@ -5297,55 +4771,26 @@ mod tests {
             let (state, session_token, csrf_token) = authenticated_test_state();
             let app = router(state.clone());
 
-            let unauthorized = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED, "{uri}");
+            let unauthorized = request_rpc_status(app.clone(), command, "{}", None, None).await;
+            assert_eq!(unauthorized, StatusCode::UNAUTHORIZED, "{command}");
 
-            let missing_csrf = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN, "{uri}");
+            let missing_csrf =
+                request_rpc_status(app.clone(), command, "{}", Some(&session_token), None).await;
+            assert_eq!(missing_csrf, StatusCode::FORBIDDEN, "{command}");
 
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let payload = request_rpc_json(
+                app.clone(),
+                command,
+                "{}",
+                &session_token,
+                Some(&csrf_token),
+            )
+            .await;
             let job_id = payload["job_id"].as_str().unwrap();
             let job = state.db.job(job_id).unwrap().unwrap();
 
-            assert_eq!(job.kind, kind, "{uri}");
-            assert_eq!(job.title, title, "{uri}");
+            assert_eq!(job.kind, kind, "{command}");
+            assert_eq!(job.title, title, "{command}");
         }
     }
 
@@ -5413,34 +4858,11 @@ mod tests {
         let (state, session_token, _) = authenticated_test_state();
         let app = router(state.clone());
 
-        let unauthorized = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/system/update/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unauthorized =
+            request_rpc_status(app.clone(), "updates.status", "{}", None, None).await;
+        assert_eq!(unauthorized, StatusCode::UNAUTHORIZED);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/system/update/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload = request_rpc_json(app, "updates.status", "{}", &session_token, None).await;
         assert_eq!(payload["method"], "linux_systemd_job");
         assert_eq!(payload["state"], "idle");
         assert_eq!(payload["channel"], "stable");
@@ -5456,21 +4878,7 @@ mod tests {
         let (state, session_token, _) = authenticated_test_state();
         let app = router(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/system/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload = request_rpc_json(app, "system.status", "{}", &session_token, None).await;
         assert_eq!(payload["platform"], "linux");
         assert_eq!(payload["capabilities"]["threads"], true);
         assert_eq!(payload["capabilities"]["jobs"], true);
@@ -5510,21 +4918,8 @@ mod tests {
         state.replace_config(config);
         let app = router(state.clone());
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let status =
+            request_rpc_json(app.clone(), "probe.status", "{}", &session_token, None).await;
         assert_eq!(status["label"], "Probe");
         assert_ne!(status["label"], "Sentinel");
         assert!(status["flavor"].as_str().is_some());
@@ -5570,41 +4965,15 @@ mod tests {
         state.replace_config(config);
         let app = router(state.clone());
 
-        let first = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
-        let body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
-        let first_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let first_status =
+            request_rpc_json(app.clone(), "probe.status", "{}", &session_token, None).await;
         assert_eq!(first_status["label"], "Probe");
         assert_eq!(first_status["snapshot_status"], "initial");
         assert_eq!(first_status["is_refreshing"], true);
         assert_eq!(first_status["snapshot_age_seconds"], 0);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let second = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(second.status(), StatusCode::OK);
-        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
-        let second_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let second_status = request_rpc_json(app, "probe.status", "{}", &session_token, None).await;
         assert_eq!(second_status["snapshot_status"], "cached");
         assert!(second_status["snapshot_age_seconds"].as_i64().is_some());
         assert!(second_status["running_threads"].as_array().is_some());
@@ -5720,33 +5089,12 @@ mod tests {
             .unwrap();
         let app = router(state);
 
-        let unauthorized = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/events")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unauthorized =
+            request_rpc_status(app.clone(), "probe.events", r#"{"limit":1}"#, None, None).await;
+        assert_eq!(unauthorized, StatusCode::UNAUTHORIZED);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/events?limit=1")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload =
+            request_rpc_json(app, "probe.events", r#"{"limit":1}"#, &session_token, None).await;
         assert_eq!(payload["limit"], 1);
         assert_eq!(payload["events"].as_array().unwrap().len(), 1);
         let event = &payload["events"][0];
@@ -5796,23 +5144,16 @@ mod tests {
         let _config_env = ConfigEnvGuard::set(&config_path);
         let app = router(state.clone());
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token)
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = request_rpc_status(
+            app,
+            "probe.settings.save",
+            r#"{"settings":{"notifications":{"server_url":"http://example.com","device_key":"secret-device"}}}"#,
+            Some(&session_token),
+            Some(&csrf_token),
+        )
+        .await;
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(state
             .db
             .get_secret_setting_bytes("probe_bark_device_key")
@@ -5835,19 +5176,6 @@ mod tests {
             "/api/probe/reply-needed",
             "/api/probe/recoverable",
         ] {
-            let unauthorized = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED, "{uri}");
-
             let response = app
                 .clone()
                 .oneshot(
@@ -5860,81 +5188,42 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            if uri == "/api/probe/diagnostics" {
-                assert_eq!(
-                    payload["effective_constants"]["legacy_sentinel_cli_runtime"],
-                    false
-                );
-                assert_eq!(payload["effective_constants"]["auto_reply"], false);
-                assert_eq!(
-                    payload["effective_constants"]["hidden_desktop_control"],
-                    false
-                );
-            } else {
-                assert!(payload["threads"].as_array().is_some());
-                assert!(payload["count"].as_u64().is_some());
-            }
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         }
 
-        for (uri, body, kind, title, forbidden_arg) in [
+        for (command, kind, title, forbidden_arg) in [
             (
-                "/api/probe/hooks/install",
-                None,
+                "probe.installHooks",
                 "probe_hooks_install",
                 "探针 Hook 安装",
                 "codex-sentinel",
             ),
             (
-                "/api/probe/bark/test",
-                None,
+                "probe.barkTest",
                 "probe_bark_test",
                 "探针 Bark 测试",
                 "device_key",
             ),
             (
-                "/api/probe/logs-db/maintain",
-                None,
+                "probe.logsDbDryRun",
                 "probe_logs_db_maintain_dry_run",
                 "Codex logs DB 维护 dry-run",
                 "rm -rf",
             ),
-        ]
-            as [(&str, Option<&str>, &str, &str, &str); 3]
+        ] as [(&str, &str, &str, &str); 3]
         {
-            let missing_csrf = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN, "{uri}");
+            let missing_csrf =
+                request_rpc_status(app.clone(), command, "{}", Some(&session_token), None).await;
+            assert_eq!(missing_csrf, StatusCode::FORBIDDEN, "{command}");
 
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .header("content-type", "application/json")
-                        .body(body.map_or_else(Body::empty, Body::from))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let payload = request_rpc_json(
+                app.clone(),
+                command,
+                "{}",
+                &session_token,
+                Some(&csrf_token),
+            )
+            .await;
             let job_id = payload["job_id"].as_str().unwrap();
             let job = state.db.job(job_id).unwrap().unwrap();
             assert_eq!(job.kind, kind);
@@ -5944,28 +5233,14 @@ mod tests {
 
         let (execute_state, execute_session_token, execute_csrf_token) = authenticated_test_state();
         let execute_app = router(execute_state.clone());
-        let execute_response = execute_app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/probe/logs-db/maintain")
-                    .header(
-                        "cookie",
-                        format!("nexushub_session={execute_session_token}"),
-                    )
-                    .header("x-csrf-token", execute_csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"dry_run":false,"compact":false}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(execute_response.status(), StatusCode::OK);
-        let execute_body = to_bytes(execute_response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let execute_payload: serde_json::Value = serde_json::from_slice(&execute_body).unwrap();
+        let execute_payload = request_rpc_json(
+            execute_app,
+            "probe.logsDbExecute",
+            "{}",
+            &execute_session_token,
+            Some(&execute_csrf_token),
+        )
+        .await;
         let execute_job_id = execute_payload["job_id"].as_str().unwrap();
         let execute_job = execute_state.db.job(execute_job_id).unwrap().unwrap();
         assert_eq!(execute_job.kind, "probe_logs_db_maintain");
@@ -6046,21 +5321,14 @@ mod tests {
         config.probe.logs_db.retention_days = 2;
         state.replace_config(config);
 
-        let app = router(state.clone());
-        let logs_db = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/logs-db/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(logs_db.status(), StatusCode::OK);
-        let body = to_bytes(logs_db.into_body(), usize::MAX).await.unwrap();
-        let logs_db: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let logs_db = request_rpc_json(
+            router(state.clone()),
+            "probe.logsDb.status",
+            "{}",
+            &session_token,
+            None,
+        )
+        .await;
 
         assert_eq!(logs_db["target"], "codex_logs_2");
         assert_eq!(logs_db["path"], logs_path.to_string_lossy().as_ref());
@@ -6130,41 +5398,27 @@ mod tests {
             .unwrap();
         let app = router(state.clone());
 
-        for uri in [
-            "/api/probe/settings",
-            "/api/probe/hook-status",
-            "/api/probe/logs-db/status",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
-        }
+        let settings = request_rpc_json(
+            app.clone(),
+            "probe.settings.get",
+            "{}",
+            &session_token,
+            None,
+        )
+        .await;
+        assert_eq!(settings["probe"]["logs_db"]["retention_days"], 2);
+        let probe_status =
+            request_rpc_json(app.clone(), "probe.status", "{}", &session_token, None).await;
+        assert!(probe_status["hook_status"].as_str().is_some());
 
-        let logs_db = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/logs-db/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(logs_db.status(), StatusCode::OK);
-        let body = to_bytes(logs_db.into_body(), usize::MAX).await.unwrap();
-        let logs_db: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let logs_db = request_rpc_json(
+            app.clone(),
+            "probe.logsDb.status",
+            "{}",
+            &session_token,
+            None,
+        )
+        .await;
         assert!(logs_db.get("event_count").is_none());
         assert!(logs_db.get("dedupe_count").is_none());
         assert_eq!(logs_db["target"], "codex_logs_2");
@@ -6186,24 +5440,15 @@ mod tests {
             .is_some_and(|value| !value.is_empty()));
         assert_eq!(logs_db["last_result"], "dry-run: would_delete_rows=1");
 
-        let patch = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"probe":{"poll_seconds":20,"notifications":{"enabled":true,"device_key":"secret-bark-key"}}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(patch.status(), StatusCode::OK);
-        let body = to_bytes(patch.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload = request_rpc_json(
+            app,
+            "probe.settings.save",
+            r#"{"probe":{"poll_seconds":20,"notifications":{"enabled":true,"device_key":"secret-bark-key"}}}"#,
+            &session_token,
+            Some(&csrf_token),
+        )
+        .await;
+        let body = serde_json::to_vec(&payload).unwrap();
         assert_eq!(
             payload["codex"]["home"],
             logs_path.parent().unwrap().to_string_lossy().as_ref()
@@ -6236,20 +5481,16 @@ mod tests {
         let _config_env = ConfigEnvGuard::set(&config_path);
         let app = router(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"probe":{"poll_seconds":25}}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = request_rpc_status(
+            app,
+            "probe.settings.save",
+            r#"{"probe":{"poll_seconds":25}}"#,
+            Some(&session_token),
+            None,
+        )
+        .await;
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -6261,24 +5502,16 @@ mod tests {
         let _config_env = ConfigEnvGuard::set(&missing_path);
         let app = router(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"probe":{"poll_seconds":25}}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = request_rpc_status(
+            app,
+            "probe.settings.save",
+            r#"{"probe":{"poll_seconds":25}}"#,
+            Some(&session_token),
+            Some(&csrf_token),
+        )
+        .await;
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(payload["error"].as_str().unwrap().contains("config"));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -6288,92 +5521,49 @@ mod tests {
         let _config_env = ConfigEnvGuard::set(&config_path);
         let app = router(state.clone());
 
-        let patch = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"codex":{"host_label":"fresh-host"},"probe":{"poll_seconds":33,"logs_db":{"retention_days":2}}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(patch.status(), StatusCode::OK);
+        let _ = request_rpc_json(
+            app.clone(),
+            "probe.settings.save",
+            r#"{"codex":{"host_label":"fresh-host"},"probe":{"poll_seconds":33,"logs_db":{"retention_days":2}}}"#,
+            &session_token,
+            Some(&csrf_token),
+        )
+        .await;
 
-        let settings = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/settings")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(settings.status(), StatusCode::OK);
-        let body = to_bytes(settings.into_body(), usize::MAX).await.unwrap();
-        let settings: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let settings = request_rpc_json(
+            app.clone(),
+            "probe.settings.get",
+            "{}",
+            &session_token,
+            None,
+        )
+        .await;
         assert_eq!(settings["probe"]["poll_seconds"], 33);
         assert_eq!(settings["codex"]["host_label"], "fresh-host");
 
-        let status = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(status.status(), StatusCode::OK);
-        let body = to_bytes(status.into_body(), usize::MAX).await.unwrap();
-        let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let status =
+            request_rpc_json(app.clone(), "probe.status", "{}", &session_token, None).await;
         assert_eq!(status["poll_seconds"], 33);
         assert_eq!(status["host_label"], "fresh-host");
 
-        let logs_status = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/probe/logs-db/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(logs_status.status(), StatusCode::OK);
-        let body = to_bytes(logs_status.into_body(), usize::MAX).await.unwrap();
-        let logs_status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let logs_status = request_rpc_json(
+            app.clone(),
+            "probe.logsDb.status",
+            "{}",
+            &session_token,
+            None,
+        )
+        .await;
         assert_eq!(logs_status["retention_days"], 2);
 
-        let job = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/probe/bark/test")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(job.status(), StatusCode::OK);
-        let body = to_bytes(job.into_body(), usize::MAX).await.unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let payload = request_rpc_json(
+            app,
+            "probe.barkTest",
+            "{}",
+            &session_token,
+            Some(&csrf_token),
+        )
+        .await;
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, "probe_bark_test");
@@ -6389,20 +5579,7 @@ mod tests {
         let (state, session_token, _csrf_token) = authenticated_test_state();
         let app = router(state);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/plugins")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let plugins: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let plugins = request_rpc_json(app, "system.plugins", "{}", &session_token, None).await;
         let rows = plugins.as_array().unwrap();
 
         assert!(rows.iter().any(|plugin| {

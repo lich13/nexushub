@@ -26,14 +26,14 @@ use serde_json::Value;
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 
-#[tauri::command]
+#[tauri::command(rename = "probe.settings.get")]
 pub fn getProbeSettings(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopProbeSettings, String> {
     probe_settings_with_state(&state).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "probe.settings.save")]
 pub fn saveProbeSettings(
     state: tauri::State<'_, DesktopState>,
     settings: ProbeSettingsSaveRequest,
@@ -87,14 +87,14 @@ pub fn probeLogsDbExecute(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "probe.logsDb.status")]
 pub fn getProbeLogsDbStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::probe::ProbeLogsDbStatus, String> {
     Ok(ProbeRuntime::new(state.config(), state.platform().clone()).logs_db_status())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "probe.events")]
 pub fn getProbeEvents(
     state: tauri::State<'_, DesktopState>,
     limit: Option<u32>,
@@ -103,35 +103,35 @@ pub fn getProbeEvents(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "cleanup.archiveDryRun")]
 pub fn dryRunArchiveDelete(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
     archive_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "cleanup.archiveExecute")]
 pub fn startArchiveDelete(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::archive::ArchiveDeleteResult, String> {
     archive_delete_execute_with_state(&state).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "cleanup.hiddenDryRun")]
 pub fn dryRunHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
     hidden_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "cleanup.hiddenExecute")]
 pub fn startHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
     hidden_delete_execute_with_state(&state).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "uploads.delete")]
 pub fn deleteUpload(
     state: tauri::State<'_, DesktopState>,
     id: String,
@@ -140,7 +140,7 @@ pub fn deleteUpload(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "uploadFiles")]
 pub fn uploadFiles(
     state: tauri::State<'_, DesktopState>,
     files: Vec<DesktopUploadFile>,
@@ -148,7 +148,7 @@ pub fn uploadFiles(
     store_uploads_with_state(&state, files).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.goal.get")]
 pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -168,7 +168,7 @@ pub fn getCodexGoal(
     Ok(goal_with_thread_id(view, Some(thread_id)))
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.goal.save")]
 pub fn saveCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -191,7 +191,7 @@ pub fn saveCodexGoal(
     .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.goal.clear")]
 pub fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -203,7 +203,7 @@ pub fn clearCodexGoal(
     clear_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.goal.pause")]
 pub fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
@@ -215,7 +215,7 @@ pub fn pauseCodexGoal(
     pause_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename = "threads.goal.resume")]
 pub fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,

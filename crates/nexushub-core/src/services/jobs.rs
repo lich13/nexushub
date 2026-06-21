@@ -8,6 +8,7 @@ use crate::{
     db::ThreadFollowUp,
     jobs::CodexActionResult,
     platform::PlatformPaths,
+    services::commands,
     services::system::{require_capability, Capability},
     uploads::{prompt_with_attachment_context, PreparedAttachment},
 };
@@ -429,12 +430,12 @@ pub fn action_unavailable(command: &str, message: &str) -> ActionResponse {
 pub fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
     let (command, message) = if archived {
         (
-            "desktop_archive_thread",
+            commands::THREADS_ARCHIVE,
             "thread archived in local Codex state",
         )
     } else {
         (
-            "desktop_restore_thread",
+            commands::THREADS_RESTORE,
             "thread restored in local Codex state",
         )
     };
@@ -447,7 +448,7 @@ pub fn rename_thread_response(thread_id: String, name: &str) -> Result<ActionRes
         return Err(anyhow!("name cannot be empty"));
     }
     Ok(action_ok(
-        "desktop_rename_thread",
+        commands::THREADS_RENAME,
         "thread renamed in local Codex state",
         Some(thread_id),
         None,
@@ -739,6 +740,7 @@ fn cli_config_string(value: &str) -> String {
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
+    use crate::services::commands;
     use crate::services::jobs::{
         archive_thread_response, build_codex_job_spec, cancel_followup_response,
         codex_action_submitted, effective_message, elicitation_answer_resume_message,
@@ -1120,16 +1122,16 @@ mod tests {
 
         let archived = archive_thread_response("thread-a".to_string(), true);
         assert!(archived.ok);
-        assert_eq!(archived.command, "desktop_archive_thread");
+        assert_eq!(archived.command, commands::THREADS_ARCHIVE);
         assert_eq!(archived.thread_id.as_deref(), Some("thread-a"));
 
         let renamed = rename_thread_response("thread-a".to_string(), "  新名字  ").unwrap();
-        assert_eq!(renamed.command, "desktop_rename_thread");
+        assert_eq!(renamed.command, commands::THREADS_RENAME);
         assert_eq!(renamed.data.unwrap()["name"], "新名字");
         assert!(rename_thread_response("thread-a".to_string(), "   ").is_err());
 
         let cancelled = cancel_followup_response(
-            "desktop_cancel_followup",
+            commands::THREADS_FOLLOWUPS_CANCEL,
             "thread-a".to_string(),
             "f1".to_string(),
             false,

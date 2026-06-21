@@ -3,6 +3,20 @@ import { RuntimeUnavailableError } from "./transport";
 
 export const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
 
+type RuntimeGlobal = typeof globalThis & {
+  __TAURI_INTERNALS__?: unknown;
+  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
+};
+
+function useDesktopDemoFallback(): boolean {
+  const target = globalThis as RuntimeGlobal;
+  return target.__NEXUSHUB_DESKTOP_RUNTIME__ === true || Boolean(target.__TAURI_INTERNALS__);
+}
+
+export function selectRuntimeFallback<T>(options: { web: T; desktop: T }): T {
+  return useDesktopDemoFallback() ? options.desktop : options.web;
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);

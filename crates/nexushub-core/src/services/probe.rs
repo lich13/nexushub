@@ -4,6 +4,7 @@ use crate::{
     db::JobRecord,
     platform::PlatformPaths,
     probe as probe_core,
+    services::commands,
     services::system::{require_capability, Capability},
     services::threads::{self, ThreadListRuntimeState},
 };
@@ -193,20 +194,15 @@ pub fn probe_threads_for_status_with_paths(
 impl ProbeAction {
     pub fn as_rpc_action(self) -> &'static str {
         match self {
-            Self::BarkTest => "bark-test",
-            Self::InstallHooks => "hooks-install",
-            Self::LogsDbDryRun => "logs-db-dry-run",
-            Self::LogsDbExecute => "logs-db-execute",
+            Self::BarkTest => commands::PROBE_BARK_TEST,
+            Self::InstallHooks => commands::PROBE_INSTALL_HOOKS,
+            Self::LogsDbDryRun => commands::PROBE_LOGS_DB_DRY_RUN,
+            Self::LogsDbExecute => commands::PROBE_LOGS_DB_EXECUTE,
         }
     }
 
     pub fn as_desktop_command(self) -> &'static str {
-        match self {
-            Self::BarkTest => "probe.barkTest",
-            Self::InstallHooks => "probe.installHooks",
-            Self::LogsDbDryRun => "probe.logsDbDryRun",
-            Self::LogsDbExecute => "probe.logsDbExecute",
-        }
+        self.as_rpc_action()
     }
 }
 

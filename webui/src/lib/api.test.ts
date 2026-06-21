@@ -77,7 +77,7 @@ describe("archive delete API compatibility", () => {
     await startArchiveDelete("csrf-token");
 
     const call = rpcCall(fetchMock);
-    expect(call.path).toBe("/api/rpc/startArchiveDelete");
+    expect(call.path).toBe("/api/rpc/cleanup.archiveExecute");
     expect(call.options.method).toBe("POST");
     expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(call.body).toEqual({ confirmed: true });
@@ -86,7 +86,7 @@ describe("archive delete API compatibility", () => {
   test("uses hidden thread cleanup endpoints with dry-run and boolean confirmation", async () => {
     const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
-      String(path).endsWith("/dryRunHiddenThreadDelete")
+      String(path).endsWith("/cleanup.hiddenDryRun")
         ? {
           total_threads: 9,
           visible_threads: 7,
@@ -133,8 +133,8 @@ describe("archive delete API compatibility", () => {
     expect(plan.hidden_threads).toBe(2);
     expect(result.deleted_threads).toBe(2);
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/rpc/dryRunHiddenThreadDelete",
-      "/api/rpc/startHiddenThreadDelete"
+      "/api/rpc/cleanup.hiddenDryRun",
+      "/api/rpc/cleanup.hiddenExecute"
     ]);
     const execute = rpcCall(fetchMock, 1);
     expect(execute.options.method).toBe("POST");
@@ -145,7 +145,7 @@ describe("archive delete API compatibility", () => {
   test("upload API posts FormData without JSON content-type and deletes uploads with csrf", async () => {
     const { uploadFiles, deleteUpload } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
-      String(path).endsWith("/deleteUpload")
+      String(path).endsWith("/uploads.delete")
         ? { ok: true, deleted: true }
         : {
           files: [{
@@ -176,7 +176,7 @@ describe("archive delete API compatibility", () => {
     expect(upload.options.headers.get("content-type")).toBeNull();
     expect(upload.options.headers.get("x-csrf-token")).toBe("csrf-token");
     const deletedCall = rpcCall(fetchMock, 1);
-    expect(deletedCall.path).toBe("/api/rpc/deleteUpload");
+    expect(deletedCall.path).toBe("/api/rpc/uploads.delete");
     expect(deletedCall.options.method).toBe("POST");
     expect(deletedCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(deletedCall.body).toEqual({ id: "upload-1" });
@@ -193,7 +193,7 @@ describe("archive delete API compatibility", () => {
     await stopThread("thread-a", { turn_id: "turn-live", job_id: "job-live" }, "csrf-token");
 
     const call = rpcCall(fetchMock);
-    expect(call.path).toBe("/api/rpc/stopThread");
+    expect(call.path).toBe("/api/rpc/threads.stop");
     expect(call.options.method).toBe("POST");
     expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(call.body).toEqual({
@@ -229,11 +229,11 @@ describe("archive delete API compatibility", () => {
     expect(paused.status).toBe("paused");
     expect(resumed.status).toBe("active");
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/rpc/getCodexGoal",
-      "/api/rpc/saveCodexGoal",
-      "/api/rpc/clearCodexGoal",
-      "/api/rpc/pauseCodexGoal",
-      "/api/rpc/resumeCodexGoal"
+      "/api/rpc/threads.goal.get",
+      "/api/rpc/threads.goal.save",
+      "/api/rpc/threads.goal.clear",
+      "/api/rpc/threads.goal.pause",
+      "/api/rpc/threads.goal.resume"
     ]);
     const save = rpcCall(fetchMock, 1);
     expect(save.options.method).toBe("POST");
@@ -289,7 +289,7 @@ describe("archive delete API compatibility", () => {
 
     const detail = await getThread("thread-a", { limit: 120, before: "b:240", full: true });
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getThread");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.detail");
     expect(rpcCall(fetchMock).body).toEqual({
       id: "thread-a",
       options: { limit: 120, before: "b:240", full: true }
@@ -311,7 +311,7 @@ describe("archive delete API compatibility", () => {
 
     const result = await getProbeEvents(10);
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getProbeEvents");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/probe.events");
     expect(rpcCall(fetchMock).body).toEqual({ limit: 10 });
     expect(result.available).toBe(true);
     expect(result.data?.events[0].kind).toBe("hook-stop");
@@ -382,7 +382,7 @@ describe("archive delete API compatibility", () => {
 
     const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/getThreadBlocks");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.blocks");
     expect(rpcCall(fetchMock).body).toEqual({
       id: "thread-a",
       options: { limit: 80, before: "b:200" }
@@ -397,7 +397,7 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("getThreadBlocks");
+      expect(command).toBe("threads.blocks");
       expect(args).toEqual({
         id: "thread-a",
         options: { limit: 80, before: "b:200" }
@@ -445,7 +445,7 @@ describe("archive delete API compatibility", () => {
     const actionCall = rpcCall(fetchMock, 1);
     expect(status.method).toBe("linux_systemd_job");
     expect(result).toEqual({ job_id: "panel-job" });
-    expect(statusCall.path).toBe("/api/rpc/getUpdateStatus");
+    expect(statusCall.path).toBe("/api/rpc/updates.status");
     expect(actionCall.path).toBe("/api/rpc/updates.install");
     expect(actionCall.options.method).toBe("POST");
     expect(actionCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
@@ -476,14 +476,14 @@ describe("archive delete API compatibility", () => {
       listProviders
     } = await loadRealApi();
     const responses: Record<string, unknown> = {
-      "/api/rpc/listProviders": [{ id: "codex", label: "Codex", status: "ready", capabilities: ["threads"] }],
-      "/api/rpc/getClaudeCodeOverview": {
+      "/api/rpc/system.providers": [{ id: "codex", label: "Codex", status: "ready", capabilities: ["threads"] }],
+      "/api/rpc/system.claudeCodeOverview": {
         home: "/Users/gosu/.claude",
         settings_exists: true,
         settings_preview: { apiKey: "[redacted]" },
         projects: [{ id: "-Users-gosu-demo", display_name: "/Users/gosu/demo", session_count: 1, sessions: [] }]
       },
-      "/api/rpc/getPlatformOverview": {
+      "/api/rpc/system.platform": {
         kind: "linux",
         data_dir: "/opt/nexushub",
         config_file: "/opt/nexushub/config.toml",
@@ -492,7 +492,7 @@ describe("archive delete API compatibility", () => {
         service_name: "nexushub",
         service_kind: "systemd"
       },
-      "/api/rpc/getProbeStatus": {
+      "/api/rpc/probe.status": {
         label: "Probe",
         enabled: true,
         platform: "linux",
@@ -512,7 +512,7 @@ describe("archive delete API compatibility", () => {
         recoverable_threads: [],
         config_path: "/opt/nexushub/config.toml"
       },
-      "/api/rpc/getProbeSettings": {
+      "/api/rpc/probe.settings.get": {
         codex: {
           home: "/root/.codex",
           workspace: "/home/ubuntu/codex-workspace",
@@ -535,11 +535,11 @@ describe("archive delete API compatibility", () => {
     await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "builtin", service_name: "nexushub" } });
     await expect(getProbeSettings()).resolves.toMatchObject({ available: true, data: { probe: { poll_seconds: 15 } } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/rpc/listProviders",
-      "/api/rpc/getClaudeCodeOverview",
-      "/api/rpc/getPlatformOverview",
-      "/api/rpc/getProbeStatus",
-      "/api/rpc/getProbeSettings"
+      "/api/rpc/system.providers",
+      "/api/rpc/system.claudeCodeOverview",
+      "/api/rpc/system.platform",
+      "/api/rpc/probe.status",
+      "/api/rpc/probe.settings.get"
     ]);
   });
 
@@ -593,12 +593,13 @@ describe("archive delete API compatibility", () => {
     globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
     const { getPlatformOverview, getProbeStatus, getProbeSettings, getSecurity, getSystemStatus, getUpdateStatus, listJobs } = await import("./api");
 
+    const systemStatus = await getSystemStatus();
     const fixtures = [
       await getPlatformOverview(),
       (await getProbeStatus()).data,
       (await getProbeSettings()).data,
       await getSecurity(),
-      await getSystemStatus(),
+      { ...systemStatus, capabilities: undefined },
       await getUpdateStatus(),
       await listJobs()
     ];
@@ -607,6 +608,17 @@ describe("archive delete API compatibility", () => {
     expect(demoCoreSource).toContain("function buildDemoPlatformOverview");
     expect(demoCoreSource).toContain("function buildDemoSystemStatus");
     expect(demoCoreSource).toContain("function buildDemoSecurity");
+    expect(systemStatus.capabilities).toMatchObject({
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false
+    });
     expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i);
   });
 
@@ -648,13 +660,13 @@ describe("archive delete API compatibility", () => {
 
     const fetchMock = vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
       const textPath = String(path);
-      if (textPath.endsWith("/saveProbeSettings")) {
+      if (textPath.endsWith("/probe.settings.save")) {
         return new Response(JSON.stringify({ saved: true }), {
           status: 200,
           headers: { "content-type": "application/json" }
         });
       }
-      if (textPath.endsWith("/getProbeLogsDbStatus")) {
+      if (textPath.endsWith("/probe.logsDb.status")) {
         return new Response(JSON.stringify({
           status: "maintenance_ready",
           path: "/root/.codex/logs_2.sqlite",
@@ -699,12 +711,12 @@ describe("archive delete API compatibility", () => {
       (options as RequestInit & { body?: string }).body ? JSON.parse(String((options as RequestInit & { body?: string }).body)) : null
     ]);
     expect(calls).toEqual([
-      ["/api/rpc/getProbeLogsDbStatus", "POST", null, {}],
+      ["/api/rpc/probe.logsDb.status", "POST", null, {}],
       ["/api/rpc/probe.barkTest", "POST", "csrf-token", {}],
       ["/api/rpc/probe.installHooks", "POST", "csrf-token", {}],
       ["/api/rpc/probe.logsDbDryRun", "POST", "csrf-token", {}],
       ["/api/rpc/probe.logsDbExecute", "POST", "csrf-token", {}],
-      ["/api/rpc/saveProbeSettings", "POST", "csrf-token", {
+      ["/api/rpc/probe.settings.save", "POST", "csrf-token", {
         settings: {
         codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
         notifications: { device_key: "secret" },
@@ -759,8 +771,8 @@ describe("archive delete API compatibility", () => {
       retained_rows: 34
     };
     const responses: Record<string, unknown> = {
-      "/api/rpc/getProbeStatus": probeStatus,
-      "/api/rpc/getProbeLogsDbStatus": logsDbStatus
+      "/api/rpc/probe.status": probeStatus,
+      "/api/rpc/probe.logsDb.status": logsDbStatus
     };
     vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
       status: 200,
@@ -813,8 +825,8 @@ describe("archive delete API compatibility", () => {
       config_path: "/Users/gosu/Library/Application Support/NexusHub/config.toml"
     };
     const responses: Record<string, unknown> = {
-      "/api/rpc/getProbeStatus": probeStatus,
-      "/api/rpc/getProbeEvents": {
+      "/api/rpc/probe.status": probeStatus,
+      "/api/rpc/probe.events": {
         available: true,
         data: {
           limit: 10,
@@ -868,7 +880,7 @@ describe("archive delete API compatibility", () => {
     await expect(listJobs()).resolves.toEqual([
       expect.objectContaining({ id: "job-a", kind: "probe" })
     ]);
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/listJobs");
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/jobs.list");
   });
 
   test("status path display helpers prefer resolved backend paths and source labels", async () => {
@@ -940,7 +952,7 @@ describe("archive delete API compatibility", () => {
       securitySettings: false,
       publicEndpointStatus: false,
       codexStatePaths: false,
-      backupPrune: false,
+      updatePrune: false,
       threadCleanup: false,
       probeLogMaintenance: false,
       threadArchiveActions: false,
@@ -955,7 +967,7 @@ describe("archive delete API compatibility", () => {
       securitySettings: false,
       publicEndpointStatus: false,
       codexStatePaths: false,
-      backupPrune: false,
+      updatePrune: false,
       threadCleanup: false,
       probeLogMaintenance: false,
       threadArchiveActions: false,
@@ -969,7 +981,7 @@ describe("archive delete API compatibility", () => {
       webAuth: true,
       securitySettings: true,
       publicEndpointStatus: true,
-      backupPrune: true,
+      updatePrune: true,
       threadCleanup: true,
       probeLogMaintenance: true,
       threadArchiveActions: true,
@@ -982,7 +994,7 @@ describe("archive delete API compatibility", () => {
       webAuth: false,
       securitySettings: false,
       publicEndpointStatus: false,
-      backupPrune: false,
+      updatePrune: false,
       threadCleanup: true,
       probeLogMaintenance: true,
       threadArchiveActions: true,
@@ -1049,7 +1061,7 @@ describe("archive delete API compatibility", () => {
 
     const call = rpcCall(fetchMock);
     const body = call.body as Record<string, any>;
-    expect(call.path).toBe("/api/rpc/saveProbeSettings");
+    expect(call.path).toBe("/api/rpc/probe.settings.save");
     expect(call.options.method).toBe("POST");
     expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(Object.keys(body).sort()).toEqual(["settings"]);
@@ -1099,7 +1111,7 @@ describe("archive delete API compatibility", () => {
     await login("admin", "password", "turnstile-token");
 
     const call = rpcCall(fetchMock);
-    expect(call.path).toBe("/api/rpc/login");
+    expect(call.path).toBe("/api/rpc/auth.login");
     expect(call.body).toEqual({
       username: "admin",
       password: "password",
@@ -1124,7 +1136,7 @@ describe("archive delete API compatibility", () => {
     await login("admin", "password");
 
     const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/nexushub/api/rpc/login");
+    expect(path).toBe("/nexushub/api/rpc/auth.login");
   });
 
   test("desktop auth query state never calls Web auth endpoints", async () => {
@@ -1167,7 +1179,7 @@ describe("archive delete API compatibility", () => {
           }
         };
       }
-      expect(command).toBe("getUpdateStatus");
+      expect(command).toBe("updates.status");
       expect(args).toBeUndefined();
       return {
         current_version: "0.1.100",
@@ -1191,7 +1203,7 @@ describe("archive delete API compatibility", () => {
     });
     await expect(updates.install("ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
     const macCapabilities = runtimeCapabilitiesForRuntime("desktop");
-    expect(macCapabilities.backupPrune).toBe(false);
+    expect(macCapabilities.updatePrune).toBe(false);
     await expect(updates.prune("ignored-csrf", macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
     try {
       await updates.prune("ignored-csrf", macCapabilities);
@@ -1214,7 +1226,7 @@ describe("archive delete API compatibility", () => {
 
     const desktopWithPrune = {
       ...runtimeCapabilitiesForRuntime("desktop"),
-      backupPrune: true
+      updatePrune: true
     };
 
     await expect(updates.prune("ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
@@ -1227,7 +1239,7 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      expect(command).toBe("startArchiveDelete");
+      expect(command).toBe("cleanup.archiveExecute");
       expect(args).toEqual({ confirmed: true });
       return {
         before: {},
@@ -1268,25 +1280,25 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       switch (command) {
-        case "listThreads":
+        case "threads.list":
           expect(args).toEqual({ status: "all", q: "needle", limit: 120 });
           return [];
-        case "getThread":
+        case "threads.detail":
           expect(args).toEqual({ id: "thread-a", options: {} });
           return { summary: { id: "thread-a", title: "A", status: "Recent", message_count: 1 }, messages: [], blocks: [], raw_event_count: 0 };
-        case "dryRunArchiveDelete":
+        case "cleanup.archiveDryRun":
           expect(args).toBeUndefined();
           return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
-        case "startArchiveDelete":
+        case "cleanup.archiveExecute":
           expect(args).toEqual({ confirmed: true });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
-        case "dryRunHiddenThreadDelete":
+        case "cleanup.hiddenDryRun":
           expect(args).toBeUndefined();
           return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
-        case "startHiddenThreadDelete":
+        case "cleanup.hiddenExecute":
           expect(args).toEqual({ confirmed: true });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
-        case "getProbeSettings":
+        case "probe.settings.get":
           expect(args).toBeUndefined();
           return {
             codex: { hostLabel: "macbook", configuredCodexHome: "/Users/gosu/.codex" },
@@ -1301,7 +1313,7 @@ describe("archive delete API compatibility", () => {
             notifications: { deviceKeyConfigured: true, serverUrl: "https://api.day.app", notifyReplyNeeded: true },
             logsDb: { enabled: true, retentionDays: 3, maintenanceIntervalHours: 4 }
           };
-        case "saveProbeSettings":
+        case "probe.settings.save":
           expect(args).toMatchObject({ settings: { probe: { enabled: false } } });
           expect(args).not.toHaveProperty("csrfToken");
           return { probe: { enabled: false }, notifications: {}, logs_db: {} };
@@ -1309,28 +1321,28 @@ describe("archive delete API compatibility", () => {
         case "probe.logsDbDryRun":
           expect(args).toBeUndefined();
           return { job_id: "probe-logs-job" };
-        case "deleteUpload":
+        case "uploads.delete":
           expect(args).toEqual({ id: "upload-a" });
           return { ok: true, deleted: true };
-        case "listJobs":
+        case "jobs.list":
           expect(args).toEqual({ limit: 30 });
           return [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 }];
-        case "getJob":
+        case "jobs.detail":
           expect(args).toEqual({ id: "job-a" });
           return { id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1 };
-        case "getCodexGoal":
+        case "threads.goal.get":
           expect(args).toEqual({ threadId: "thread-a" });
           return { goal: { available: true, enabled: false, objective: null, token_budget: null, status: "idle" } };
-        case "saveCodexGoal":
+        case "threads.goal.save":
           expect(args).toEqual({ threadId: "thread-a", objective: "ship", tokenBudget: 5000 });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
-        case "clearCodexGoal":
+        case "threads.goal.clear":
           expect(args).toEqual({ threadId: "thread-a" });
           return { available: true, enabled: false, thread_id: "thread-a", objective: null, token_budget: null, status: "cleared" };
-        case "pauseCodexGoal":
+        case "threads.goal.pause":
           expect(args).toEqual({ threadId: "thread-a" });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "paused" };
-        case "resumeCodexGoal":
+        case "threads.goal.resume":
           expect(args).toEqual({ threadId: "thread-a" });
           return { available: true, enabled: true, thread_id: "thread-a", objective: "ship", token_budget: 5000, status: "active" };
         default:
@@ -1374,24 +1386,24 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect((globalThis.__NEXUSHUB_TEST_INVOKE__ as ReturnType<typeof vi.fn>).mock.calls).toEqual([
-      ["listThreads", { status: "all", q: "needle", limit: 120 }],
-      ["getThread", { id: "thread-a", options: {} }],
-      ["dryRunArchiveDelete", undefined],
-      ["startArchiveDelete", { confirmed: true }],
-      ["dryRunHiddenThreadDelete", undefined],
-      ["startHiddenThreadDelete", { confirmed: true }],
-      ["getProbeSettings", undefined],
-      ["saveProbeSettings", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
+      ["threads.list", { status: "all", q: "needle", limit: 120 }],
+      ["threads.detail", { id: "thread-a", options: {} }],
+      ["cleanup.archiveDryRun", undefined],
+      ["cleanup.archiveExecute", { confirmed: true }],
+      ["cleanup.hiddenDryRun", undefined],
+      ["cleanup.hiddenExecute", { confirmed: true }],
+      ["probe.settings.get", undefined],
+      ["probe.settings.save", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
       ["probe.barkTest", undefined],
       ["probe.logsDbDryRun", undefined],
-      ["deleteUpload", { id: "upload-a" }],
-      ["listJobs", { limit: 30 }],
-      ["getJob", { id: "job-a" }],
-      ["getCodexGoal", { threadId: "thread-a" }],
-      ["saveCodexGoal", { threadId: "thread-a", objective: "ship", tokenBudget: 5000 }],
-      ["clearCodexGoal", { threadId: "thread-a" }],
-      ["pauseCodexGoal", { threadId: "thread-a" }],
-      ["resumeCodexGoal", { threadId: "thread-a" }]
+      ["uploads.delete", { id: "upload-a" }],
+      ["jobs.list", { limit: 30 }],
+      ["jobs.detail", { id: "job-a" }],
+      ["threads.goal.get", { threadId: "thread-a" }],
+      ["threads.goal.save", { threadId: "thread-a", objective: "ship", tokenBudget: 5000 }],
+      ["threads.goal.clear", { threadId: "thread-a" }],
+      ["threads.goal.pause", { threadId: "thread-a" }],
+      ["threads.goal.resume", { threadId: "thread-a" }]
     ]);
     const file = new File(["# hello"], "note.md", { type: "text/markdown" });
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
@@ -1474,9 +1486,9 @@ describe("archive delete API compatibility", () => {
     await answerApproval("thread-1", { turn_id: "turn-1", item_id: "approval-1", decision: "approved" }, "csrf-token");
 
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/rpc/acceptPlan",
-      "/api/rpc/revisePlan",
-      "/api/rpc/answerApproval"
+      "/api/rpc/threads.plan.accept",
+      "/api/rpc/threads.plan.revise",
+      "/api/rpc/threads.approval.answer"
     ]);
     expect(rpcCall(fetchMock, 0).body).toEqual({
       threadId: "thread-1",
@@ -1508,11 +1520,11 @@ describe("archive delete API compatibility", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
-      if (command === "forkThread") {
+      if (command === "threads.fork") {
         expect(args).toEqual({ threadId: "thread-a" });
         return { bridge: false, thread_id: "thread-a", fallback: false, message: "fork unavailable" };
       }
-      if (command === "answerApproval") {
+      if (command === "threads.approval.answer") {
         expect(args).toEqual({ threadId: "thread-a", payload: { decision: "approved" } });
         return { bridge: false, thread_id: "thread-a", fallback: false, message: "approval unavailable" };
       }
@@ -1522,8 +1534,8 @@ describe("archive delete API compatibility", () => {
     await expect(forkThread("thread-a", "ignored-csrf")).resolves.toMatchObject({ message: "fork unavailable" });
     await expect(answerApproval("thread-a", { decision: "approved" }, "ignored-csrf")).resolves.toMatchObject({ message: "approval unavailable" });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("forkThread", { threadId: "thread-a" });
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("answerApproval", { threadId: "thread-a", payload: { decision: "approved" } });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("threads.fork", { threadId: "thread-a" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("threads.approval.answer", { threadId: "thread-a", payload: { decision: "approved" } });
   });
 
   test("follow-up API posts thread payload with csrf and supports listing and cancel", async () => {
@@ -1553,15 +1565,15 @@ describe("archive delete API compatibility", () => {
     await cancelFollowUp("thread-a", "fu-1", "csrf-token");
 
     const post = rpcCall(fetchMock, 0);
-    expect(post.path).toBe("/api/rpc/enqueueFollowUp");
+    expect(post.path).toBe("/api/rpc/threads.followups.enqueue");
     expect(post.options.method).toBe("POST");
     expect(post.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(post.body).toEqual({
       threadId: "thread-a",
       payload: { message: "继续检查", model: "gpt-5.5" }
     });
-    expect(rpcCall(fetchMock, 1).path).toBe("/api/rpc/listFollowUps");
-    expect(rpcCall(fetchMock, 2).path).toBe("/api/rpc/cancelFollowUp");
+    expect(rpcCall(fetchMock, 1).path).toBe("/api/rpc/threads.followups.list");
+    expect(rpcCall(fetchMock, 2).path).toBe("/api/rpc/threads.followups.cancel");
     expect(rpcCall(fetchMock, 2).body).toEqual({ threadId: "thread-a", followUpId: "fu-1" });
   });
 
@@ -1589,7 +1601,7 @@ describe("archive delete API compatibility", () => {
 
     const call = rpcCall(fetchMock);
     expect(result).toMatchObject({ turn_id: "turn-live", fallback: false });
-    expect(call.path).toBe("/api/rpc/steerThread");
+    expect(call.path).toBe("/api/rpc/threads.steer");
     expect(call.options.method).toBe("POST");
     expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
     expect(call.body).toEqual({ threadId: "thread-a", payload });

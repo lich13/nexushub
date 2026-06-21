@@ -21,23 +21,18 @@ describe("NexusHub runtime transport", () => {
     vi.resetModules();
   });
 
-  test("detects web runtime by default and desktop runtime when forced for tests", async () => {
-    expect((await loadRuntime()).getRuntimeKind()).toBe("web");
-    expect((await loadRuntime(true)).getRuntimeKind()).toBe("desktop");
-  });
-
   test("web rpc posts one command envelope to the Linux RPC endpoint", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "content-type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetchMock);
-    const { webJsonRpc } = await loadRuntime();
+    const { runtimeRpc } = await loadRuntime();
 
-    await webJsonRpc("getPublicSettings", { csrfToken: "csrf-token", q: "needle" });
+    await runtimeRpc("auth.publicSettings", { csrfToken: "csrf-token", q: "needle" });
 
     const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { headers: Headers; body: string }];
-    expect(path).toBe("/api/rpc/getPublicSettings");
+    expect(path).toBe("/api/rpc/auth.publicSettings");
     expect(options.method).toBe("POST");
     expect(options.credentials).toBe("include");
     expect(options.headers.get("content-type")).toBe("application/json");
@@ -69,10 +64,10 @@ describe("NexusHub runtime transport", () => {
     }));
     const { runtimeRpc } = await loadRuntime(true);
 
-    const result = await runtimeRpc("listThreads", { status: "all", q: "plan", limit: 20 });
+    const result = await runtimeRpc("threads.list", { status: "all", q: "plan", limit: 20 });
 
     expect(result).toEqual({
-      command: "listThreads",
+      command: "threads.list",
       args: { status: "all", q: "plan", limit: 20 }
     });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -90,9 +85,9 @@ describe("NexusHub runtime transport", () => {
 
   test("desktop upload helper delegates to native upload command", async () => {
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { invokeDesktopUpload } = await loadRuntime(true);
+    const { uploadRuntimeFiles } = await loadRuntime(true);
 
-    const result = await invokeDesktopUpload([{ name: "note.md", mime: "text/markdown", bytes: [35] }]);
+    const result = await uploadRuntimeFiles([new File(["#"], "note.md", { type: "text/markdown" })]);
 
     expect(result).toEqual({
       command: "uploadFiles",
@@ -160,6 +155,11 @@ describe("NexusHub runtime transport", () => {
     expect(runtimeSource).not.toContain("WebRoute");
     expect(runtimeSource).not.toContain("DesktopRoute");
     expect(runtimeSource).not.toContain("fromHome");
+    expect(runtimeSource).not.toMatch(/export async function webJsonRpc\b/);
+    expect(runtimeSource).not.toMatch(/export async function webFormRpc\b/);
+    expect(runtimeSource).not.toMatch(/export async function invokeDesktop\b/);
+    expect(runtimeSource).not.toMatch(/export async function invokeDesktopUpload\b/);
+    expect(runtimeSource).not.toMatch(/export function getRuntimeKind\b/);
     expect(runtimeSource).not.toContain("desktop_api_command");
     expect(runtimeSource).not.toContain("desktopApiRoute");
     expect(runtimeSource).not.toContain("invokeDesktopApi");

@@ -1,6 +1,7 @@
 use crate::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
+    services::commands,
     services::system::{require_capability, Capability},
     system::{compare_semver, extract_semver},
     update::{self, analyze_job_failure, JobFailureCategory},
@@ -39,18 +40,14 @@ pub enum UpdateAction {
 impl UpdateAction {
     pub fn as_rpc_action(self) -> &'static str {
         match self {
-            Self::Check => "check",
-            Self::Install => "install",
-            Self::Prune => "prune",
+            Self::Check => commands::UPDATES_CHECK,
+            Self::Install => commands::UPDATES_INSTALL,
+            Self::Prune => commands::UPDATES_PRUNE,
         }
     }
 
     pub fn as_desktop_command(self) -> &'static str {
-        match self {
-            Self::Check => "updates.check",
-            Self::Install => "updates.install",
-            Self::Prune => "updates.prune",
-        }
+        self.as_rpc_action()
     }
 }
 
@@ -245,8 +242,8 @@ fn update_action_capability(platform: PlatformKind, action: UpdateAction) -> Cap
 
 fn native_update_command(action: UpdateAction) -> Result<&'static str> {
     match action {
-        UpdateAction::Check => Ok("check"),
-        UpdateAction::Install => Ok("install"),
+        UpdateAction::Check => Ok(commands::UPDATES_CHECK),
+        UpdateAction::Install => Ok(commands::UPDATES_INSTALL),
         UpdateAction::Prune => anyhow::bail!("native updater does not support backup prune"),
     }
 }
@@ -343,7 +340,7 @@ mod tests {
     use crate::{
         config::Config,
         platform::{PlatformKind, PlatformPaths},
-        services::system::Capability,
+        services::{commands, system::Capability},
     };
 
     #[test]
@@ -375,7 +372,10 @@ mod tests {
         assert_eq!(plan.required_capability, Capability::AppUpdater);
         assert_eq!(plan.method, UpdateExecutionMethod::MacosTauriUpdater);
         assert!(plan.linux_job.is_none());
-        assert_eq!(plan.native.as_ref().unwrap().command, "install");
+        assert_eq!(
+            plan.native.as_ref().unwrap().command,
+            commands::UPDATES_INSTALL
+        );
 
         let err = plan_update_action(&config, &platform, UpdateAction::Prune)
             .expect_err("macOS should not plan Linux backup pruning");

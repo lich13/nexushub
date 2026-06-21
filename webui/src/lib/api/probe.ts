@@ -22,7 +22,7 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
       data: demoProbeStatus()
     };
   }
-  return normalizeOptionalResult<ProbeStatus>(await runtimeRpc<ProbeStatus | OptionalResult<ProbeStatus>>("getProbeStatus"));
+  return normalizeOptionalResult<ProbeStatus>(await runtimeRpc<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
 }
 
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
@@ -32,7 +32,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
       data: demoProbeSettings()
     };
   }
-  const payload = await runtimeRpc<ProbeSettings | OptionalResult<ProbeSettings>>("getProbeSettings");
+  const payload = await runtimeRpc<ProbeSettings | OptionalResult<ProbeSettings>>("probe.settings.get");
   const result = normalizeOptionalResult<ProbeSettings>(payload);
   return result.available
     ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeSettings }
@@ -56,7 +56,7 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
-  const payload = await runtimeRpc<ProbeSettings>("saveProbeSettings", {
+  const payload = await runtimeRpc<ProbeSettings>("probe.settings.save", {
     settings: normalizedSettings,
     csrfToken
   });
@@ -92,7 +92,7 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
       recent_result: "dry-run: would_delete_rows=6"
     }
   };
-  const payload = await runtimeRpc<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("getProbeLogsDbStatus");
+  const payload = await runtimeRpc<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("probe.logsDb.status");
   const result = normalizeOptionalResult<ProbeLogsDbStatus>(payload);
   return result.available
     ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeLogsDbStatus }
@@ -189,7 +189,7 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
       }
     };
   }
-  return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("getProbeEvents", { limit }));
+  return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("probe.events", { limit }));
 }
 
 export async function runProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {

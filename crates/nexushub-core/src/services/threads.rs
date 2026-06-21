@@ -7,6 +7,7 @@ use crate::{
     codex::{ThreadDetail, ThreadStatus, ThreadSummary},
     db::JobRecord,
     platform::PlatformPaths,
+    services::commands,
     services::system::{require_capability, Capability},
 };
 
@@ -58,6 +59,17 @@ pub enum ThreadCleanupAction {
     HiddenDeleteDryRun,
     #[serde(rename = "hiddenDeleteExecute", alias = "hidden-delete-execute")]
     HiddenDeleteExecute,
+}
+
+impl ThreadCleanupAction {
+    pub fn as_rpc_action(self) -> &'static str {
+        match self {
+            Self::ArchiveDeleteDryRun => commands::CLEANUP_ARCHIVE_DRY_RUN,
+            Self::ArchiveDeleteExecute => commands::CLEANUP_ARCHIVE_EXECUTE,
+            Self::HiddenDeleteDryRun => commands::CLEANUP_HIDDEN_DRY_RUN,
+            Self::HiddenDeleteExecute => commands::CLEANUP_HIDDEN_EXECUTE,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

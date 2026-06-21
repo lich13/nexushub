@@ -152,8 +152,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            commands::system::getDesktopOverview,
-            commands::system::getDesktopHome,
             commands::system::getSystemStatus,
             commands::system::getSystemVersion,
             commands::system::listProviders,
@@ -205,9 +203,7 @@ pub fn run() {
             commands::settings::pauseCodexGoal,
             commands::settings::resumeCodexGoal,
             commands::jobs::listJobs,
-            commands::jobs::getJob,
-            commands::system::getDesktopPlatformStatus,
-            commands::system::getDesktopClaudeCodeOverview
+            commands::jobs::getJob
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -394,6 +390,10 @@ log_dir = "{}"
             command_path("settings", "startProbeJob"),
             command_path("updates", "runUpdateAction"),
             command_path("updates", "updatesPrune"),
+            command_path("system", "getDesktopOverview"),
+            command_path("system", "getDesktopHome"),
+            command_path("system", "getDesktopPlatformStatus"),
+            command_path("system", "getDesktopClaudeCodeOverview"),
         ] {
             assert!(
                 !commands.contains(&retired),
@@ -426,14 +426,58 @@ log_dir = "{}"
     fn tauri_invoke_handler_keeps_desktop_compat_out_of_frontend_workflows() {
         let commands = registered_invoke_command_paths();
         for typed in [
-            command_path("system", "getDesktopOverview"),
-            command_path("system", "getDesktopHome"),
-            command_path("system", "getDesktopPlatformStatus"),
-            command_path("system", "getDesktopClaudeCodeOverview"),
+            command_path("system", "getSystemStatus"),
+            command_path("system", "getSystemVersion"),
+            command_path("system", "listProviders"),
+            command_path("system", "getClaudeCodeOverview"),
+            command_path("system", "getPlatformOverview"),
+            command_path("system", "listPlugins"),
+            command_path("system", "listModels"),
+            command_path("system", "listPermissionProfiles"),
+            command_path("system", "getCodexConfig"),
+            command_path("threads", "listThreads"),
+            command_path("threads", "getThread"),
+            command_path("threads", "getThreadBlocks"),
+            command_path("threads", "createThread"),
+            command_path("threads", "sendMessage"),
+            command_path("threads", "steerThread"),
+            command_path("threads", "listFollowUps"),
+            command_path("threads", "enqueueFollowUp"),
+            command_path("threads", "cancelFollowUp"),
+            command_path("threads", "stopThread"),
+            command_path("threads", "archiveThread"),
+            command_path("threads", "restoreThread"),
+            command_path("threads", "renameThread"),
+            command_path("threads", "forkThread"),
+            command_path("threads", "answerElicitation"),
+            command_path("threads", "acceptPlan"),
+            command_path("threads", "revisePlan"),
+            command_path("threads", "answerApproval"),
+            command_path("probe", "getProbeStatus"),
+            command_path("updates", "getUpdateStatus"),
+            command_path("updates", "updatesCheck"),
+            command_path("updates", "updatesInstall"),
+            command_path("settings", "getProbeSettings"),
+            command_path("settings", "saveProbeSettings"),
+            command_path("settings", "getProbeLogsDbStatus"),
+            command_path("settings", "getProbeEvents"),
             command_path("settings", "probeBarkTest"),
             command_path("settings", "probeInstallHooks"),
             command_path("settings", "probeLogsDbDryRun"),
             command_path("settings", "probeLogsDbExecute"),
+            command_path("settings", "dryRunArchiveDelete"),
+            command_path("settings", "startArchiveDelete"),
+            command_path("settings", "dryRunHiddenThreadDelete"),
+            command_path("settings", "startHiddenThreadDelete"),
+            command_path("settings", "deleteUpload"),
+            command_path("settings", "uploadFiles"),
+            command_path("settings", "getCodexGoal"),
+            command_path("settings", "saveCodexGoal"),
+            command_path("settings", "clearCodexGoal"),
+            command_path("settings", "pauseCodexGoal"),
+            command_path("settings", "resumeCodexGoal"),
+            command_path("jobs", "listJobs"),
+            command_path("jobs", "getJob"),
             command_path("updates", "updatesCheck"),
             command_path("updates", "updatesInstall"),
         ] {
@@ -464,6 +508,10 @@ log_dir = "{}"
             command_path("settings", "startProbeHooksInstall"),
             command_path("settings", "startProbeLogsDbDryRun"),
             command_path("settings", "startProbeLogsDbExecute"),
+            command_path("system", "getDesktopOverview"),
+            command_path("system", "getDesktopHome"),
+            command_path("system", "getDesktopPlatformStatus"),
+            command_path("system", "getDesktopClaudeCodeOverview"),
         ] {
             assert!(
                 !commands.contains(&legacy),
@@ -498,6 +546,22 @@ log_dir = "{}"
             (
                 include_str!("commands/settings.rs"),
                 "pub fn startProbeLogsDbExecute",
+            ),
+            (
+                include_str!("commands/system.rs"),
+                "pub fn getDesktopOverview",
+            ),
+            (
+                include_str!("commands/system.rs"),
+                "pub async fn getDesktopHome",
+            ),
+            (
+                include_str!("commands/system.rs"),
+                "pub async fn getDesktopPlatformStatus",
+            ),
+            (
+                include_str!("commands/system.rs"),
+                "pub fn getDesktopClaudeCodeOverview",
             ),
         ] {
             assert!(

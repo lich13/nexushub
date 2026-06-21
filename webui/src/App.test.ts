@@ -189,7 +189,7 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: true,
   publicEndpointStatus: true,
   codexStatePaths: true,
-  backupPrune: true,
+  updatePrune: true,
   threadCleanup: true,
   probeLogMaintenance: true,
   threadArchiveActions: true,
@@ -205,7 +205,7 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  backupPrune: false,
+  updatePrune: false,
   threadCleanup: true,
   probeLogMaintenance: true,
   threadArchiveActions: true,
@@ -1381,7 +1381,7 @@ describe("conversation helpers", () => {
     expect(app.canStartUpdateInstall?.(null)).toBe(false);
     expect(app.canStartUpdateInstall?.({ ...baseStatus, update_available: null })).toBe(false);
     expect(app.canStartUpdateInstall?.(baseStatus)).toBe(false);
-    expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.117", update_available: true })).toBe(true);
+    expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.118", update_available: true })).toBe(true);
   });
 
 });

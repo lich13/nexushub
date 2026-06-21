@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod goals;
 pub mod jobs;
 pub mod probe;

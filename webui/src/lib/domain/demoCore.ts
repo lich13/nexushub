@@ -74,6 +74,7 @@ export function buildDemoSystemStatus(platform: DemoPlatform): SystemStatus {
       host_label: "local-macos",
       hostname: "macos",
       public_endpoint: null,
+      capabilities: buildDemoCapabilities("desktop"),
       codex_home: "~/.codex",
       configured_codex_home: "~/.codex",
       resolved_codex_home: "~/.codex",

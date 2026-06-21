@@ -2,10 +2,11 @@ use nexushub_core::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        goals::{plan_goal_command_with_capability, GoalUpdateRequest},
+        commands,
+        goals::{plan_goal_command_with_capability, GoalCommandKind, GoalUpdateRequest},
         jobs::{
-            plan_thread_command_with_capability, ThreadCommandKind, ThreadCommandRequest,
-            ThreadMessageRequest,
+            archive_thread_response, cancel_followup_response, plan_thread_command_with_capability,
+            rename_thread_response, ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest,
         },
         probe::{plan_probe_action, ProbeAction, ProbeExecutionKind},
         system::Capability,
@@ -20,36 +21,57 @@ use nexushub_core::{
 
 #[test]
 fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
-    assert_eq!(ProbeAction::BarkTest.as_rpc_action(), "bark-test");
-    assert_eq!(ProbeAction::BarkTest.as_desktop_command(), "probe.barkTest");
-    assert_eq!(ProbeAction::InstallHooks.as_rpc_action(), "hooks-install");
+    assert_eq!(
+        ProbeAction::BarkTest.as_rpc_action(),
+        commands::PROBE_BARK_TEST
+    );
+    assert_eq!(
+        ProbeAction::BarkTest.as_desktop_command(),
+        commands::PROBE_BARK_TEST
+    );
+    assert_eq!(
+        ProbeAction::InstallHooks.as_rpc_action(),
+        commands::PROBE_INSTALL_HOOKS
+    );
     assert_eq!(
         ProbeAction::InstallHooks.as_desktop_command(),
-        "probe.installHooks"
+        commands::PROBE_INSTALL_HOOKS
     );
-    assert_eq!(ProbeAction::LogsDbDryRun.as_rpc_action(), "logs-db-dry-run");
+    assert_eq!(
+        ProbeAction::LogsDbDryRun.as_rpc_action(),
+        commands::PROBE_LOGS_DB_DRY_RUN
+    );
     assert_eq!(
         ProbeAction::LogsDbDryRun.as_desktop_command(),
-        "probe.logsDbDryRun"
+        commands::PROBE_LOGS_DB_DRY_RUN
     );
     assert_eq!(
         ProbeAction::LogsDbExecute.as_rpc_action(),
-        "logs-db-execute"
+        commands::PROBE_LOGS_DB_EXECUTE
     );
     assert_eq!(
         ProbeAction::LogsDbExecute.as_desktop_command(),
-        "probe.logsDbExecute"
+        commands::PROBE_LOGS_DB_EXECUTE
     );
 
-    assert_eq!(UpdateAction::Check.as_rpc_action(), "check");
-    assert_eq!(UpdateAction::Check.as_desktop_command(), "updates.check");
-    assert_eq!(UpdateAction::Install.as_rpc_action(), "install");
+    assert_eq!(UpdateAction::Check.as_rpc_action(), commands::UPDATES_CHECK);
+    assert_eq!(
+        UpdateAction::Check.as_desktop_command(),
+        commands::UPDATES_CHECK
+    );
+    assert_eq!(
+        UpdateAction::Install.as_rpc_action(),
+        commands::UPDATES_INSTALL
+    );
     assert_eq!(
         UpdateAction::Install.as_desktop_command(),
-        "updates.install"
+        commands::UPDATES_INSTALL
     );
-    assert_eq!(UpdateAction::Prune.as_rpc_action(), "prune");
-    assert_eq!(UpdateAction::Prune.as_desktop_command(), "updates.prune");
+    assert_eq!(UpdateAction::Prune.as_rpc_action(), commands::UPDATES_PRUNE);
+    assert_eq!(
+        UpdateAction::Prune.as_desktop_command(),
+        commands::UPDATES_PRUNE
+    );
 }
 
 #[test]
@@ -155,10 +177,16 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
     assert_eq!(mac_check.required_capability, Capability::AppUpdater);
     assert_eq!(mac_check.method, UpdateExecutionMethod::MacosTauriUpdater);
     assert!(mac_check.linux_job.is_none());
-    assert_eq!(mac_check.native.as_ref().unwrap().command, "check");
+    assert_eq!(
+        mac_check.native.as_ref().unwrap().command,
+        commands::UPDATES_CHECK
+    );
 
     let mac_install = plan_update_action(&mac_config, &mac, UpdateAction::Install).unwrap();
-    assert_eq!(mac_install.native.as_ref().unwrap().command, "install");
+    assert_eq!(
+        mac_install.native.as_ref().unwrap().command,
+        commands::UPDATES_INSTALL
+    );
 
     let err = plan_update_action(&mac_config, &mac, UpdateAction::Prune)
         .expect_err("backup prune is a Linux-only update action");
@@ -294,6 +322,166 @@ fn thread_detail_cleanup_followup_upload_facades_are_capability_gated() {
         },
     )
     .is_err());
+}
+
+#[test]
+fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
+    assert_eq!(
+        ThreadCleanupAction::ArchiveDeleteDryRun.as_rpc_action(),
+        commands::CLEANUP_ARCHIVE_DRY_RUN
+    );
+    assert_eq!(
+        ThreadCleanupAction::ArchiveDeleteExecute.as_rpc_action(),
+        commands::CLEANUP_ARCHIVE_EXECUTE
+    );
+    assert_eq!(
+        ThreadCleanupAction::HiddenDeleteDryRun.as_rpc_action(),
+        commands::CLEANUP_HIDDEN_DRY_RUN
+    );
+    assert_eq!(
+        ThreadCleanupAction::HiddenDeleteExecute.as_rpc_action(),
+        commands::CLEANUP_HIDDEN_EXECUTE
+    );
+
+    let archived = archive_thread_response("thread-a".to_string(), true);
+    assert_eq!(archived.command, commands::THREADS_ARCHIVE);
+
+    let restored = archive_thread_response("thread-a".to_string(), false);
+    assert_eq!(restored.command, commands::THREADS_RESTORE);
+
+    let renamed = rename_thread_response("thread-a".to_string(), "new name").unwrap();
+    assert_eq!(renamed.command, commands::THREADS_RENAME);
+
+    let cancelled = cancel_followup_response(
+        commands::THREADS_FOLLOWUPS_CANCEL,
+        "thread-a".to_string(),
+        "followup-a".to_string(),
+        true,
+    );
+    assert_eq!(cancelled.command, commands::THREADS_FOLLOWUPS_CANCEL);
+}
+
+#[test]
+fn goal_action_helpers_use_unified_thread_goal_commands() {
+    assert_eq!(
+        GoalCommandKind::Save.as_rpc_action(),
+        commands::THREADS_GOAL_SAVE
+    );
+    assert_eq!(
+        GoalCommandKind::Clear.as_rpc_action(),
+        commands::THREADS_GOAL_CLEAR
+    );
+    assert_eq!(
+        GoalCommandKind::Pause.as_rpc_action(),
+        commands::THREADS_GOAL_PAUSE
+    );
+    assert_eq!(
+        GoalCommandKind::Resume.as_rpc_action(),
+        commands::THREADS_GOAL_RESUME
+    );
+
+    for command in [
+        commands::THREADS_GOAL_GET,
+        commands::THREADS_GOAL_SAVE,
+        commands::THREADS_GOAL_CLEAR,
+        commands::THREADS_GOAL_PAUSE,
+        commands::THREADS_GOAL_RESUME,
+    ] {
+        assert!(commands::is_allowed_rpc_command(command));
+        assert!(!commands::is_retired_command(command));
+    }
+}
+
+#[test]
+fn retired_commands_are_not_emitted_by_core_action_plans() {
+    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
+    let mut values = vec![
+        serde_json::to_value(
+            plan_probe_action(&linux_config, &linux, ProbeAction::BarkTest).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_probe_action(&linux_config, &linux, ProbeAction::InstallHooks).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_probe_action(&linux_config, &linux, ProbeAction::LogsDbDryRun).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_probe_action(&linux_config, &linux, ProbeAction::LogsDbExecute).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_update_action(&linux_config, &linux, UpdateAction::Check).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_update_action(&linux_config, &linux, UpdateAction::Install).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_update_action(&linux_config, &linux, UpdateAction::Prune).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteDryRun).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteExecute).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_thread_cleanup_action(&linux, ThreadCleanupAction::HiddenDeleteDryRun).unwrap(),
+        )
+        .unwrap(),
+        serde_json::to_value(
+            plan_thread_cleanup_action(&linux, ThreadCleanupAction::HiddenDeleteExecute).unwrap(),
+        )
+        .unwrap(),
+    ];
+
+    values.extend([
+        serde_json::to_value(archive_thread_response("thread-a".to_string(), true)).unwrap(),
+        serde_json::to_value(archive_thread_response("thread-a".to_string(), false)).unwrap(),
+        serde_json::to_value(rename_thread_response("thread-a".to_string(), "new name").unwrap())
+            .unwrap(),
+        serde_json::to_value(cancel_followup_response(
+            commands::THREADS_FOLLOWUPS_CANCEL,
+            "thread-a".to_string(),
+            "followup-a".to_string(),
+            true,
+        ))
+        .unwrap(),
+    ]);
+
+    for value in values {
+        assert_no_retired_command(&value);
+    }
+}
+
+fn assert_no_retired_command(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => {
+            assert!(
+                !commands::is_retired_command(value),
+                "action plan emitted retired command: {value}"
+            );
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                assert_no_retired_command(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                assert_no_retired_command(item);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

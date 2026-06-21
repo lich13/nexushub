@@ -3,16 +3,15 @@ import type {
 } from "../../types";
 import {
   RuntimeUnavailableError,
-  runtimeRpc,
-  runtimeValue
+  runtimeRpc
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
-import { jobIdFromRuntimeResult, USE_DEMO } from "./shared";
+import { jobIdFromRuntimeResult, selectRuntimeFallback, USE_DEMO } from "./shared";
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
-    return runtimeValue({
+    return selectRuntimeFallback({
       desktop: {
         current_version: "0.1.100",
         latest_version: "v0.1.103",
@@ -37,7 +36,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
       }
     });
   }
-  return runtimeRpc<UpdateStatus>("getUpdateStatus");
+  return runtimeRpc<UpdateStatus>("updates.status");
 }
 
 export type UnifiedUpdateAction = "check" | "install" | "prune";
@@ -73,7 +72,7 @@ export const updates = {
     capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
   ): Promise<UpdateActionResult> {
     if (USE_DEMO) return { job_id: "update-prune-demo" };
-    if (!capabilities.backupPrune) {
+    if (!capabilities.updatePrune) {
       throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
     }
     return runTypedUpdateCommand("updates.prune", "update-prune", csrfToken);

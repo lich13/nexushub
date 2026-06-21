@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     db::{ThreadGoal, ThreadGoalUpdate},
     platform::PlatformPaths,
+    services::commands,
     services::system::{require_capability, Capability},
 };
 
@@ -28,6 +29,17 @@ pub enum GoalCommandKind {
     Clear,
     Pause,
     Resume,
+}
+
+impl GoalCommandKind {
+    pub fn as_rpc_action(self) -> &'static str {
+        match self {
+            Self::Save => commands::THREADS_GOAL_SAVE,
+            Self::Clear => commands::THREADS_GOAL_CLEAR,
+            Self::Pause => commands::THREADS_GOAL_PAUSE,
+            Self::Resume => commands::THREADS_GOAL_RESUME,
+        }
+    }
 }
 
 #[cfg(test)]

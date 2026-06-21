@@ -31,7 +31,7 @@ pub fn desktop_update_status_with_state(
     Ok(status)
 }
 
-#[tauri::command]
+#[tauri::command(rename = "updates.status")]
 pub fn getUpdateStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<UpdateStatus, String> {
@@ -64,8 +64,7 @@ pub struct DesktopUpdateInstallResponse {
     pub installed: bool,
 }
 
-#[tauri::command]
-pub async fn check_update_status(
+async fn check_update_status(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
@@ -101,8 +100,7 @@ pub async fn check_update_status(
     }
 }
 
-#[tauri::command]
-pub async fn install_update_and_restart(
+async fn install_update_and_restart(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {

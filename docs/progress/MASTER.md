@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-21
-> **Mode**: V0.1.117_CC_SWITCH_ARCHITECTURE_FINAL_AUDIT
+> **Mode**: V0.1.118_CC_SWITCH_HARD_DELETE_FINAL_AUDIT
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.117 cc-switch architecture final audit<br>
-**Active Task**: `v0.1.117` closes the final audited cc-switch alignment gaps: core owns typed Probe/Update command contracts, Linux RPC isolates old string-action compatibility, macOS Tauri registers only typed Probe/Update commands, and frontend production code no longer exports host-branch dispatch helpers. `CLAUDE.md` remains intentionally absent.
+**Active Phase**: v0.1.118 cc-switch hard-delete final audit<br>
+**Active Task**: `v0.1.118` hard-deletes legacy Linux REST and retired compatibility command entry points, keeps Linux Web traffic on `/api/rpc/:command` plus upload/events transport endpoints, aligns WebUI/Tauri on dot command names, and keeps `CLAUDE.md` intentionally absent.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,8 +52,8 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.117_CC_SWITCH_ARCHITECTURE_FINAL_AUDIT
-  strategy: "cc-switch style shared services with thin Linux WebUI and macOS Tauri adapters; typed Probe/Update command contracts are shared and old string-action compatibility is isolated"
+  mode: V0.1.118_CC_SWITCH_HARD_DELETE_FINAL_AUDIT
+  strategy: "cc-switch style shared services with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
       drift_score: 0
@@ -121,7 +121,7 @@ adaptive:
 | 2026-06-20 | v0.1.109 cc-switch service closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.109`; moves Goal DTO/status/view planning and Linux update shell job specs into core services, removes the last update prune runtime-kind branch from the frontend domain API, and preserves `CLAUDE.md` as intentionally absent. |
 | 2026-06-20 | v0.1.111 cc-switch final service-layer closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.111`; centralizes upload planning in core, splits frontend API implementations into domain modules behind a thin barrel, keeps runtime as transport only, removes retired desktop `_command` wrappers from registration, and keeps Linux-only WebUI surfaces capability-gated. |
 | 2026-06-20 | v0.1.112 cc-switch unified architecture backfill | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.112`; shares steer/follow-up planning and desktop upload batch validation through core, adds explicit cleanup capabilities, moves App actions behind query/state facades, keeps typed Tauri commands free of retired string action multiplexers, and preserves `CLAUDE.md` as intentionally absent. |
-| 2026-06-21 | v0.1.117 cc-switch architecture final audit | M | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.117`; shares typed Probe/Update command names through core, isolates Linux string-action RPC compatibility, removes old Tauri Probe/Update aliases from registration, hides runtime dispatch helpers from production frontend exports, and keeps `CLAUDE.md` intentionally absent. |
+| 2026-06-21 | v0.1.118 cc-switch hard-delete final audit | M | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.118`; adds the shared dot-command registry, hard-deletes legacy Linux REST routes and retired RPC aliases, keeps macOS on typed Tauri commands without Linux WebUI-only surfaces, and keeps `CLAUDE.md` intentionally absent. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -138,7 +138,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.117
+git ls-remote --tags origin refs/tags/v0.1.118
 ```
 
 ## Next Steps
@@ -149,7 +149,7 @@ git ls-remote --tags origin refs/tags/v0.1.117
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.117 Acceptance Matrix
+## v0.1.118 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -187,4 +187,4 @@ git ls-remote --tags origin refs/tags/v0.1.117
 | 2026-06-20 | v0.1.109-cc-switch-service-closure | Closes the remaining service split: Goal status/view planning and Linux update shell job specs are shared core services, frontend update prune is capability-driven, and macOS keeps Web security/admin/systemd/Nginx surfaces unavailable. |
 | 2026-06-20 | v0.1.111-cc-switch-final-service-layer-closure | Closes the final cc-switch alignment gaps: upload validation/storage planning is shared in core, frontend domain APIs are split behind `runtime` transport, desktop compat `_command` wrappers stay retired, and macOS keeps Linux WebUI-only operations unavailable. |
 | 2026-06-20 | v0.1.112-cc-switch-unified-architecture-backfill | Closes the remaining unified-architecture gaps: shared core plans thread steer/follow-up and desktop upload validation, cleanup capabilities are explicit, frontend mutations sit behind query/state facades, and Linux WebUI-only operations stay unavailable on macOS. |
-| 2026-06-21 | v0.1.117-cc-switch-architecture-final-audit | Closes the final audited cc-switch alignment gaps: core exposes typed Probe/Update command contracts, Linux keeps old string actions only in an explicit compatibility dispatcher, macOS Tauri removes old Probe/Update aliases from registration, frontend production code only uses `runtimeRpc`, and `CLAUDE.md` remains intentionally absent. |
+| 2026-06-21 | v0.1.118-cc-switch-hard-delete-final-audit | Closes the final audited cc-switch alignment gaps by hard-deleting old Linux REST routes and retired RPC/Tauri command aliases, using the shared dot-command registry across Linux RPC, Tauri, and WebUI, and keeping `CLAUDE.md` intentionally absent. |

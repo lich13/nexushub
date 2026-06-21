@@ -18,19 +18,6 @@ export type RuntimeThreadEventSource = {
   close(): void;
 };
 
-export type RuntimeDispatchOptions<T = unknown> = {
-  command: string;
-  args?: RpcArgs;
-  desktopFallback?: () => T | Promise<T>;
-  desktopUnavailable?: string;
-  webUnavailable?: string;
-};
-
-export type RuntimeValueOptions<T> = {
-  web: T | (() => T);
-  desktop: T | (() => T);
-};
-
 export class RuntimeUnavailableError extends Error {
   constructor(message: string, readonly feature: string) {
     super(message);
@@ -51,7 +38,7 @@ type RuntimeGlobal = typeof globalThis & {
   ) => Promise<unknown> | unknown;
 };
 
-export function getRuntimeKind(): RuntimeKind {
+function getRuntimeKind(): RuntimeKind {
   const target = globalThis as RuntimeGlobal;
   if (target.__NEXUSHUB_DESKTOP_RUNTIME__) {
     return "desktop";
@@ -60,31 +47,6 @@ export function getRuntimeKind(): RuntimeKind {
     return "desktop";
   }
   return "web";
-}
-
-function isDesktopRuntime(): boolean {
-  return getRuntimeKind() === "desktop";
-}
-
-function isWebRuntime(): boolean {
-  return getRuntimeKind() === "web";
-}
-
-function resolveRuntimeValue<T>(value: T | (() => T)): T {
-  return typeof value === "function" ? (value as () => T)() : value;
-}
-
-export function runtimeValue<T>(options: RuntimeValueOptions<T>): T {
-  return resolveRuntimeValue(isDesktopRuntime() ? options.desktop : options.web);
-}
-
-export function desktopSessionUser() {
-  return {
-    id: "desktop",
-    username: "desktop",
-    csrf_token: null,
-    session_id: "desktop"
-  };
 }
 
 function apiBase(): string {
@@ -113,7 +75,7 @@ function unavailableThreadEventSource(): RuntimeThreadEventSource {
 }
 
 export function createRuntimeThreadEventSource(threadId: string): RuntimeThreadEventSource {
-  if (isDesktopRuntime()) {
+  if (getRuntimeKind() === "desktop") {
     return unavailableThreadEventSource();
   }
   return new EventSource(
@@ -157,7 +119,7 @@ async function checkedResponse(response: Response): Promise<unknown> {
   return payload;
 }
 
-export async function webJsonRpc<T = unknown>(
+async function webJsonRpc<T = unknown>(
   command: string,
   args?: RpcArgs,
 ): Promise<T> {
@@ -179,7 +141,7 @@ export async function webJsonRpc<T = unknown>(
   return checkedResponse(response) as Promise<T>;
 }
 
-export async function webFormRpc<T = unknown>(
+async function webFormRpc<T = unknown>(
   command: string,
   form: FormData,
   csrfToken?: string | null,
@@ -200,7 +162,7 @@ export async function webFormRpc<T = unknown>(
   return checkedResponse(response) as Promise<T>;
 }
 
-export async function invokeDesktop<T = unknown>(
+async function invokeDesktop<T = unknown>(
   command: string,
   args?: RpcArgs,
 ): Promise<T> {
@@ -217,36 +179,21 @@ export async function invokeDesktop<T = unknown>(
   );
 }
 
-async function runtimeDispatch<T = unknown>(
-  options: RuntimeDispatchOptions<T>,
-): Promise<T> {
-  if (isDesktopRuntime()) {
-    if (options.desktopUnavailable) {
-      throw new RuntimeUnavailableError(options.desktopUnavailable, options.desktopUnavailable);
-    }
-    if (options.desktopFallback) {
-      return options.desktopFallback();
-    }
-    return invokeDesktop<T>(options.command, desktopRpcArgs(options.args));
-  }
-  if (options.webUnavailable) {
-    throw new RuntimeUnavailableError(options.webUnavailable, options.webUnavailable);
-  }
-  return webJsonRpc<T>(options.command, options.args);
-}
-
 export async function runtimeRpc<T = unknown>(
   command: string,
   args?: RpcArgs,
 ): Promise<T> {
-  return runtimeDispatch<T>({ command, args });
+  if (getRuntimeKind() === "desktop") {
+    return invokeDesktop<T>(command, desktopRpcArgs(args));
+  }
+  return webJsonRpc<T>(command, args);
 }
 
 export async function uploadRuntimeFiles<T = unknown>(
   files: File[],
   csrfToken?: string | null,
 ): Promise<T> {
-  if (isDesktopRuntime()) {
+  if (getRuntimeKind() === "desktop") {
     const uploads: RuntimeUploadFile[] = await Promise.all(files.map(async (file) => ({
       name: file.name,
       mime: file.type || "application/octet-stream",
@@ -260,10 +207,4 @@ export async function uploadRuntimeFiles<T = unknown>(
     form.append("files", file, file.name);
   }
   return webFormRpc<T>("uploadFiles", form, csrfToken);
-}
-
-export async function invokeDesktopUpload<T = unknown>(
-  uploads: RuntimeUploadFile[],
-): Promise<T> {
-  return invokeDesktop<T>("uploadFiles", { files: uploads });
 }

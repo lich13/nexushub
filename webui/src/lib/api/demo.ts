@@ -7,7 +7,7 @@ import type {
   SystemStatus,
   ThreadSummary
 } from "../../types";
-import { runtimeValue } from "./transport";
+import { selectRuntimeFallback } from "./shared";
 import {
   demoDesktopPlatformOverview,
   demoDesktopSecurity,
@@ -18,21 +18,21 @@ import {
 } from "../domain/demoCore";
 
 export function demoPlatformOverview(): PlatformOverview {
-  return runtimeValue({
+  return selectRuntimeFallback({
     web: demoWebPlatformOverview,
     desktop: demoDesktopPlatformOverview
   });
 }
 
 export function demoSystemStatus(): SystemStatus {
-  return runtimeValue({
+  return selectRuntimeFallback({
     web: demoWebSystemStatus,
     desktop: demoDesktopSystemStatus
   });
 }
 
 export function demoSecurity(): SecuritySettings {
-  return runtimeValue({
+  return selectRuntimeFallback({
     web: demoWebSecurity,
     desktop: demoDesktopSecurity
   });
@@ -82,7 +82,7 @@ export function demoProbeStatus(): ProbeStatus {
 export function demoProbeSettings(): ProbeSettings {
   const platform = demoPlatformOverview();
   const system = demoSystemStatus();
-  const runtimeProbeSettings = runtimeValue({
+  const runtimeProbeSettings = selectRuntimeFallback({
     web: {
       logsPath: "/root/.codex/logs_2.sqlite",
       workspace: "/home/ubuntu/codex-workspace"

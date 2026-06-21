@@ -10,7 +10,7 @@ use nexushub_core::{
     probe::{ProbeRuntime, ProbeStatus},
 };
 
-#[tauri::command]
+#[tauri::command(rename = "probe.status")]
 pub async fn getProbeStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<ProbeStatus, String> {

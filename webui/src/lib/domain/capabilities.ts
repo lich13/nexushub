@@ -1,5 +1,5 @@
 import type { SystemCapabilities, SystemStatus } from "../../types";
-import { runtimeValue } from "../api/transport";
+import { selectRuntimeFallback } from "../api/shared";
 
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "web" | "desktop";
@@ -8,7 +8,7 @@ export type RuntimeCapabilityMatrix = {
   securitySettings: boolean;
   publicEndpointStatus: boolean;
   codexStatePaths: boolean;
-  backupPrune: boolean;
+  updatePrune: boolean;
   threadCleanup: boolean;
   probeLogMaintenance: boolean;
   threadArchiveActions: boolean;
@@ -24,7 +24,7 @@ const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  backupPrune: false,
+  updatePrune: false,
   threadCleanup: false,
   probeLogMaintenance: false,
   threadArchiveActions: false,
@@ -40,7 +40,7 @@ const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   securitySettings: false,
   publicEndpointStatus: false,
   codexStatePaths: false,
-  backupPrune: false,
+  updatePrune: false,
   threadCleanup: false,
   probeLogMaintenance: false,
   threadArchiveActions: false,
@@ -60,7 +60,7 @@ function runtimeCapabilitiesFromCore(
     securitySettings: core.security_settings || core.turnstile || core.admin_password,
     publicEndpointStatus: core.public_endpoint,
     codexStatePaths: core.systemd,
-    backupPrune: core.prune_backups,
+    updatePrune: core.prune_backups,
     threadCleanup: core.thread_cleanup === true,
     probeLogMaintenance: core.probe_log_maintenance === true,
     threadArchiveActions: core.thread_archive_actions === true,
@@ -71,7 +71,7 @@ function runtimeCapabilitiesFromCore(
 }
 
 export function runtimeCapabilities(): RuntimeCapabilityMatrix {
-  return runtimeValue({
+  return selectRuntimeFallback({
     web: webBootstrapCapabilities,
     desktop: desktopBootstrapCapabilities
   });

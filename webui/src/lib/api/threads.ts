@@ -20,7 +20,7 @@ import { demoCodexGoal, demoThreads } from "./demo";
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);
-  return runtimeRpc<ThreadSummary[]>("listThreads", { status, q, limit: 120 });
+  return runtimeRpc<ThreadSummary[]>("threads.list", { status, q, limit: 120 });
 }
 
 export type ThreadDetailOptions = {
@@ -73,7 +73,7 @@ export async function getThread(id: string, options: ThreadDetailOptions = {}): 
       ]
     };
   }
-  return runtimeRpc<ThreadDetail>("getThread", { id, options });
+  return runtimeRpc<ThreadDetail>("threads.detail", { id, options });
 }
 
 export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOptions, "limit" | "before"> = {}): Promise<ThreadBlockPage> {
@@ -87,7 +87,7 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
       before_cursor: detail.before_cursor ?? null
     };
   }
-  return runtimeRpc<ThreadBlockPage>("getThreadBlocks", { id, options });
+  return runtimeRpc<ThreadBlockPage>("threads.blocks", { id, options });
 }
 
 export type ThreadSendPayload = {
@@ -123,27 +123,27 @@ export async function uploadFiles(files: File[], csrfToken?: string | null): Pro
 
 export async function deleteUpload(id: string, csrfToken?: string | null): Promise<{ ok: boolean; deleted: boolean }> {
   if (USE_DEMO) return { ok: true, deleted: true };
-  return runtimeRpc<{ ok: boolean; deleted: boolean }>("deleteUpload", { id, csrfToken });
+  return runtimeRpc<{ ok: boolean; deleted: boolean }>("uploads.delete", { id, csrfToken });
 }
 
 export async function createThread(payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: "019e-new-demo", turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("createThread", { payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.create", { payload, csrfToken });
 }
 
 export async function sendMessage(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("sendMessage", { threadId, payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.send", { threadId, payload, csrfToken });
 }
 
 export async function steerThread(threadId: string, payload: ThreadSendPayload, csrfToken?: string | null): Promise<BridgeActionResult> {
   if (USE_DEMO) return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-  return runtimeRpc<BridgeActionResult>("steerThread", { threadId, payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.steer", { threadId, payload, csrfToken });
 }
 
 export async function listFollowUps(threadId: string): Promise<FollowUpQueueState> {
   if (USE_DEMO) return { items: [] };
-  const result = await runtimeRpc<FollowUpQueueState | FollowUpQueueItem[]>("listFollowUps", { threadId });
+  const result = await runtimeRpc<FollowUpQueueState | FollowUpQueueItem[]>("threads.followups.list", { threadId });
   return Array.isArray(result) ? { items: result } : result;
 }
 
@@ -158,37 +158,37 @@ export async function enqueueFollowUp(threadId: string, payload: ThreadSendPaylo
       created_at: Math.floor(Date.now() / 1000)
     };
   }
-  return runtimeRpc<FollowUpQueueItem>("enqueueFollowUp", { threadId, payload, csrfToken });
+  return runtimeRpc<FollowUpQueueItem>("threads.followups.enqueue", { threadId, payload, csrfToken });
 }
 
 export async function cancelFollowUp(threadId: string, followUpId: string, csrfToken?: string | null): Promise<{ ok: boolean }> {
   if (USE_DEMO) return { ok: true };
-  return runtimeRpc<{ ok: boolean }>("cancelFollowUp", { threadId, followUpId, csrfToken });
+  return runtimeRpc<{ ok: boolean }>("threads.followups.cancel", { threadId, followUpId, csrfToken });
 }
 
 export async function stopThread(threadId: string, payload: { turn_id?: string | null; job_id?: string | null }, csrfToken?: string | null) {
   if (USE_DEMO) return { ok: true };
-  return runtimeRpc("stopThread", { threadId, payload, csrfToken });
+  return runtimeRpc("threads.stop", { threadId, payload, csrfToken });
 }
 
 export async function archiveThread(threadId: string, csrfToken?: string | null) {
-  return runtimeRpc("archiveThread", { threadId, csrfToken });
+  return runtimeRpc("threads.archive", { threadId, csrfToken });
 }
 
 export async function restoreThread(threadId: string, csrfToken?: string | null) {
-  return runtimeRpc("restoreThread", { threadId, csrfToken });
+  return runtimeRpc("threads.restore", { threadId, csrfToken });
 }
 
 export async function renameThread(threadId: string, name: string, csrfToken?: string | null) {
-  return runtimeRpc("renameThread", { threadId, name, csrfToken });
+  return runtimeRpc("threads.rename", { threadId, name, csrfToken });
 }
 
 export async function forkThread(threadId: string, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("forkThread", { threadId, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.fork", { threadId, csrfToken });
 }
 
 export async function answerElicitation(threadId: string, answers: Record<string, string[]>, csrfToken?: string | null): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("answerElicitation", { threadId, answers, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.elicitation.answer", { threadId, answers, csrfToken });
 }
 
 export async function acceptPlan(
@@ -196,7 +196,7 @@ export async function acceptPlan(
   payload: { turn_id?: string | null; item_id?: string | null },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("acceptPlan", { threadId, payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.plan.accept", { threadId, payload, csrfToken });
 }
 
 export async function revisePlan(
@@ -204,7 +204,7 @@ export async function revisePlan(
   payload: { turn_id?: string | null; item_id?: string | null; instructions: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("revisePlan", { threadId, payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.plan.revise", { threadId, payload, csrfToken });
 }
 
 export async function answerApproval(
@@ -212,12 +212,12 @@ export async function answerApproval(
   payload: { turn_id?: string | null; item_id?: string | null; request_id?: string | null; decision: string },
   csrfToken?: string | null
 ): Promise<BridgeActionResult> {
-  return runtimeRpc<BridgeActionResult>("answerApproval", { threadId, payload, csrfToken });
+  return runtimeRpc<BridgeActionResult>("threads.approval.answer", { threadId, payload, csrfToken });
 }
 
 export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
-  const result = await runtimeRpc<CodexGoal | { goal?: CodexGoal | null }>("getCodexGoal", { threadId });
+  const result = await runtimeRpc<CodexGoal | { goal?: CodexGoal | null }>("threads.goal.get", { threadId });
   return result && typeof result === "object" && "goal" in result
     ? result.goal ?? demoCodexGoal(threadId)
     : result as CodexGoal;
@@ -233,7 +233,7 @@ export async function saveCodexGoal(threadId: string, goal: CodexGoalSaveInput, 
       status: "active"
     };
   }
-  return runtimeRpc<CodexGoal>("saveCodexGoal", {
+  return runtimeRpc<CodexGoal>("threads.goal.save", {
     threadId,
     objective: goal.objective,
     tokenBudget: goal.token_budget ?? null,
@@ -251,7 +251,7 @@ export async function clearCodexGoal(threadId: string, csrfToken?: string | null
       status: "cleared"
     };
   }
-  return runtimeRpc<CodexGoal>("clearCodexGoal", { threadId, csrfToken });
+  return runtimeRpc<CodexGoal>("threads.goal.clear", { threadId, csrfToken });
 }
 
 export async function pauseCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -262,7 +262,7 @@ export async function pauseCodexGoal(threadId: string, csrfToken?: string | null
       status: "paused"
     };
   }
-  return runtimeRpc<CodexGoal>("pauseCodexGoal", { threadId, csrfToken });
+  return runtimeRpc<CodexGoal>("threads.goal.pause", { threadId, csrfToken });
 }
 
 export async function resumeCodexGoal(threadId: string, csrfToken?: string | null): Promise<CodexGoal> {
@@ -273,7 +273,7 @@ export async function resumeCodexGoal(threadId: string, csrfToken?: string | nul
       status: "active"
     };
   }
-  return runtimeRpc<CodexGoal>("resumeCodexGoal", { threadId, csrfToken });
+  return runtimeRpc<CodexGoal>("threads.goal.resume", { threadId, csrfToken });
 }
 
 export function subscribeThreadEvents(
