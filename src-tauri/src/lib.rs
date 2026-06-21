@@ -185,7 +185,6 @@ pub fn run() {
             commands::updates::getUpdateStatus,
             commands::updates::updatesCheck,
             commands::updates::updatesInstall,
-            commands::updates::updatesPrune,
             commands::updates::checkUpdate,
             commands::updates::installUpdateAndRestart,
             commands::settings::getProbeSettings,
@@ -400,10 +399,11 @@ log_dir = "{}"
         for retired in [
             command_path("settings", "startProbeJob"),
             command_path("updates", "runUpdateAction"),
+            command_path("updates", "updatesPrune"),
         ] {
             assert!(
                 !commands.contains(&retired),
-                "string action compatibility command must not be registered: {retired}"
+                "retired or Linux-only update command must not be registered: {retired}"
             );
         }
         for (module, stem) in [
@@ -442,7 +442,6 @@ log_dir = "{}"
             command_path("settings", "probeLogsDbExecute"),
             command_path("updates", "updatesCheck"),
             command_path("updates", "updatesInstall"),
-            command_path("updates", "updatesPrune"),
         ] {
             assert!(
                 commands.contains(&typed),

@@ -169,11 +169,6 @@ pub async fn updatesInstall(
     install_update_and_restart(app, state).await
 }
 
-#[tauri::command(rename = "updates.prune")]
-pub fn updatesPrune() -> std::result::Result<serde_json::Value, String> {
-    Err("当前运行时不支持备份清理动作".to_string())
-}
-
 fn update_job_id(action: &str) -> String {
     format!(
         "desktop-update-{action}-{}-{}",
