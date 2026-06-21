@@ -634,10 +634,10 @@ describe("archive delete API compatibility", () => {
     const {
       getProbeLogsDbStatus,
       saveProbeSettings,
-      startProbeBarkTest,
-      startProbeHooksInstall,
-      startProbeLogsDbDryRun,
-      startProbeLogsDbExecute
+      runProbeBarkTest,
+      runProbeHooksInstall,
+      runProbeLogsDbDryRun,
+      runProbeLogsDbExecute
     } = api as typeof import("./api");
     expect(api.getProbeRunning).toBeUndefined();
     expect(api.getProbeReplyNeeded).toBeUndefined();
@@ -679,10 +679,10 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getProbeLogsDbStatus()).resolves.toMatchObject({ available: true, data: { path: "/root/.codex/logs_2.sqlite", retained_rows: 34 } });
-    await expect(startProbeBarkTest("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
-    await expect(startProbeHooksInstall("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
-    await expect(startProbeLogsDbDryRun("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
-    await expect(startProbeLogsDbExecute("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(runProbeBarkTest("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(runProbeHooksInstall("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(runProbeLogsDbDryRun("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(runProbeLogsDbExecute("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
     await saveProbeSettings({
       codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
       probe: {
@@ -1252,8 +1252,8 @@ describe("archive delete API compatibility", () => {
       startHiddenThreadDelete,
       getProbeSettings,
       saveProbeSettings,
-      startProbeBarkTest,
-      startProbeLogsDbDryRun,
+      runProbeBarkTest,
+      runProbeLogsDbDryRun,
       uploadFiles,
       deleteUpload,
       listJobs,
@@ -1361,8 +1361,8 @@ describe("archive delete API compatibility", () => {
       }
     });
     await saveProbeSettings({ probe: { enabled: false } }, "ignored-csrf");
-    await startProbeBarkTest("ignored-csrf");
-    await startProbeLogsDbDryRun("ignored-csrf");
+    await runProbeBarkTest("ignored-csrf");
+    await runProbeLogsDbDryRun("ignored-csrf");
     await deleteUpload("upload-a", "ignored-csrf");
     await listJobs();
     await getJob("job-a");
@@ -1409,7 +1409,9 @@ describe("archive delete API compatibility", () => {
       "`/api/",
       "@tauri-apps/api",
       "isDesktopRuntime(",
+      "isWebRuntime(",
       "runtimeDispatch(",
+      "__testRuntimeDispatch",
       "desktopCommand",
       "desktopArgs",
       "webCommand",

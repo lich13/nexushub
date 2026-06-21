@@ -202,10 +202,10 @@ impl ProbeAction {
 
     pub fn as_desktop_command(self) -> &'static str {
         match self {
-            Self::BarkTest => "startProbeBarkTest",
-            Self::InstallHooks => "startProbeHooksInstall",
-            Self::LogsDbDryRun => "startProbeLogsDbDryRun",
-            Self::LogsDbExecute => "startProbeLogsDbExecute",
+            Self::BarkTest => "probe.barkTest",
+            Self::InstallHooks => "probe.installHooks",
+            Self::LogsDbDryRun => "probe.logsDbDryRun",
+            Self::LogsDbExecute => "probe.logsDbExecute",
         }
     }
 }

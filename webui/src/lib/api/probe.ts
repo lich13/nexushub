@@ -192,19 +192,19 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
   return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("getProbeEvents", { limit }));
 }
 
-export async function startProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {
+export async function runProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {
   return startProbeCommand("probe.barkTest", "probe-bark-test", csrfToken);
 }
 
-export async function startProbeHooksInstall(csrfToken?: string | null): Promise<{ job_id: string }> {
+export async function runProbeHooksInstall(csrfToken?: string | null): Promise<{ job_id: string }> {
   return startProbeCommand("probe.installHooks", "probe-hooks-install", csrfToken);
 }
 
-export async function startProbeLogsDbDryRun(csrfToken?: string | null): Promise<{ job_id: string }> {
+export async function runProbeLogsDbDryRun(csrfToken?: string | null): Promise<{ job_id: string }> {
   return startProbeCommand("probe.logsDbDryRun", "probe-logs-db-dry-run", csrfToken);
 }
 
-export async function startProbeLogsDbExecute(csrfToken?: string | null): Promise<{ job_id: string }> {
+export async function runProbeLogsDbExecute(csrfToken?: string | null): Promise<{ job_id: string }> {
   return startProbeCommand("probe.logsDbExecute", "probe-logs-db-execute", csrfToken);
 }
 

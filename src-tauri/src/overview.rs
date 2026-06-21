@@ -830,12 +830,14 @@ mod tests {
     #[test]
     fn fixed_probe_command_uses_platform_daemon_path() {
         let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
-        let command = crate::commands::settings::fixed_probe_command_for_platform(
+        let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/Users/example");
+        let plan = nexushub_core::services::probe::plan_probe_action(
+            &config,
             &platform,
-            &PathBuf::from("/Users/example/Library/Application Support/NexusHub/config.toml"),
-            &["probe".to_string(), "bark-test".to_string()],
+            nexushub_core::services::probe::ProbeAction::BarkTest,
         )
         .unwrap();
+        let command = plan.job.unwrap().command;
 
         assert!(
             command.contains("'/Users/example/Library/Application Support/NexusHub/bin/nexushubd'"),

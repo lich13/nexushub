@@ -19,6 +19,40 @@ use nexushub_core::{
 };
 
 #[test]
+fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
+    assert_eq!(ProbeAction::BarkTest.as_rpc_action(), "bark-test");
+    assert_eq!(ProbeAction::BarkTest.as_desktop_command(), "probe.barkTest");
+    assert_eq!(ProbeAction::InstallHooks.as_rpc_action(), "hooks-install");
+    assert_eq!(
+        ProbeAction::InstallHooks.as_desktop_command(),
+        "probe.installHooks"
+    );
+    assert_eq!(ProbeAction::LogsDbDryRun.as_rpc_action(), "logs-db-dry-run");
+    assert_eq!(
+        ProbeAction::LogsDbDryRun.as_desktop_command(),
+        "probe.logsDbDryRun"
+    );
+    assert_eq!(
+        ProbeAction::LogsDbExecute.as_rpc_action(),
+        "logs-db-execute"
+    );
+    assert_eq!(
+        ProbeAction::LogsDbExecute.as_desktop_command(),
+        "probe.logsDbExecute"
+    );
+
+    assert_eq!(UpdateAction::Check.as_rpc_action(), "check");
+    assert_eq!(UpdateAction::Check.as_desktop_command(), "updates.check");
+    assert_eq!(UpdateAction::Install.as_rpc_action(), "install");
+    assert_eq!(
+        UpdateAction::Install.as_desktop_command(),
+        "updates.install"
+    );
+    assert_eq!(UpdateAction::Prune.as_rpc_action(), "prune");
+    assert_eq!(UpdateAction::Prune.as_desktop_command(), "updates.prune");
+}
+
+#[test]
 fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);

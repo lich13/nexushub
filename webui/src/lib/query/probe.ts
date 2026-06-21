@@ -6,10 +6,10 @@ import {
   getProbeStatus,
   listJobs,
   saveProbeSettings,
-  startProbeBarkTest,
-  startProbeHooksInstall,
-  startProbeLogsDbDryRun,
-  startProbeLogsDbExecute
+  runProbeBarkTest,
+  runProbeHooksInstall,
+  runProbeLogsDbDryRun,
+  runProbeLogsDbExecute
 } from "../api";
 import type { ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
@@ -78,10 +78,10 @@ export function useProbeActions(input: {
   };
 
   const runProbeCommand = (action: ProbeJobAction) => {
-    if (action === "bark-test") return startProbeBarkTest(input.csrfToken);
-    if (action === "hooks-install") return startProbeHooksInstall(input.csrfToken);
-    if (action === "logs-db-dry-run") return startProbeLogsDbDryRun(input.csrfToken);
-    return startProbeLogsDbExecute(input.csrfToken);
+    if (action === "bark-test") return runProbeBarkTest(input.csrfToken);
+    if (action === "hooks-install") return runProbeHooksInstall(input.csrfToken);
+    if (action === "logs-db-dry-run") return runProbeLogsDbDryRun(input.csrfToken);
+    return runProbeLogsDbExecute(input.csrfToken);
   };
 
   return {

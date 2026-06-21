@@ -36,6 +36,24 @@ pub enum UpdateAction {
     Prune,
 }
 
+impl UpdateAction {
+    pub fn as_rpc_action(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Install => "install",
+            Self::Prune => "prune",
+        }
+    }
+
+    pub fn as_desktop_command(self) -> &'static str {
+        match self {
+            Self::Check => "updates.check",
+            Self::Install => "updates.install",
+            Self::Prune => "updates.prune",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateFailureCategory {

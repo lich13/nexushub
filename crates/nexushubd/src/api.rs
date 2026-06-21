@@ -258,37 +258,18 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "probe.barkTest" | "startProbeBarkTest" => {
+        "probe.barkTest" => {
             start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
         }
-        "probe.installHooks" | "startProbeHooksInstall" => {
+        "probe.installHooks" => {
             start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
         }
-        "probe.logsDbDryRun" | "startProbeLogsDbDryRun" => {
+        "probe.logsDbDryRun" => {
             start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
         }
-        "probe.logsDbExecute" | "startProbeLogsDbExecute" => {
+        "probe.logsDbExecute" => {
             start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
         }
-        "startProbeJob" => match rpc_string(&args, "action").as_deref() {
-            Some("bark-test") => {
-                start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
-            }
-            Some("hooks-install") => {
-                start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
-            }
-            Some("logs-db-dry-run") => {
-                start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
-            }
-            Some("logs-db-execute") => {
-                start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
-            }
-            Some(action) => Err(api_error(
-                StatusCode::BAD_REQUEST,
-                &format!("unknown probe action: {action}"),
-            )),
-            None => Err(api_error(StatusCode::BAD_REQUEST, "action is required")),
-        },
         "dryRunArchiveDelete" => archive_delete_dry_run(State(state), headers).await,
         "startArchiveDelete" => {
             archive_delete_execute(
@@ -308,10 +289,8 @@ async fn rpc_dispatch(
             .await
         }
         "getUpdateStatus" => system_update_status(State(state), headers).await,
-        "updates.check" | "checkUpdate" => {
-            start_update_action(state, headers, UpdateAction::Check, None).await
-        }
-        "updates.install" | "installUpdateAndRestart" => {
+        "updates.check" => start_update_action(state, headers, UpdateAction::Check, None).await,
+        "updates.install" => {
             start_update_action(
                 state,
                 headers,
@@ -329,16 +308,6 @@ async fn rpc_dispatch(
             )
             .await
         }
-        "runUpdateAction" => match rpc_string(&args, "action").as_deref() {
-            Some("check") => system_update_precheck(State(state), headers).await,
-            Some("install") => system_update_install(State(state), headers).await,
-            Some("prune") => system_update_prune(State(state), headers).await,
-            Some(action) => Err(api_error(
-                StatusCode::BAD_REQUEST,
-                &format!("unknown update action: {action}"),
-            )),
-            None => Err(api_error(StatusCode::BAD_REQUEST, "action is required")),
-        },
         "listThreads" => list_threads(State(state), headers, Query(rpc_payload(&args)?)).await,
         "getThread" => {
             thread_detail(
@@ -566,10 +535,85 @@ async fn rpc_dispatch(
             )
             .await
         }
+        _ => rpc_dispatch_compat(state, command.as_str(), headers, args).await,
+    }
+}
+
+async fn rpc_dispatch_compat(
+    state: AppState,
+    command: &str,
+    headers: HeaderMap,
+    args: Value,
+) -> ApiResponse {
+    match command {
+        "startProbeBarkTest" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
+        }
+        "startProbeHooksInstall" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
+        }
+        "startProbeLogsDbDryRun" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
+        }
+        "startProbeLogsDbExecute" => {
+            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
+        }
+        "startProbeJob" => {
+            let action = rpc_probe_action(&args)?;
+            start_probe_action(state, headers, action).await
+        }
+        "checkUpdate" => start_update_action(state, headers, UpdateAction::Check, None).await,
+        "installUpdateAndRestart" => {
+            start_update_action(
+                state,
+                headers,
+                UpdateAction::Install,
+                Some("nexushub.update.install_started"),
+            )
+            .await
+        }
+        "runUpdateAction" => {
+            let action = rpc_update_action(&args)?;
+            start_update_action(state, headers, action, update_action_event(action)).await
+        }
         _ => Err(api_error(
             StatusCode::NOT_FOUND,
             &format!("unknown rpc command: {command}"),
         )),
+    }
+}
+
+fn rpc_probe_action(args: &Value) -> Result<probe_service::ProbeAction, ApiError> {
+    let action = rpc_string(args, "action")
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "action is required"))?;
+    action
+        .parse()
+        .map_err(|err: anyhow::Error| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+}
+
+fn rpc_update_action(args: &Value) -> Result<UpdateAction, ApiError> {
+    let action = rpc_string(args, "action")
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "action is required"))?;
+    for candidate in [
+        UpdateAction::Check,
+        UpdateAction::Install,
+        UpdateAction::Prune,
+    ] {
+        if action == candidate.as_rpc_action() {
+            return Ok(candidate);
+        }
+    }
+    Err(api_error(
+        StatusCode::BAD_REQUEST,
+        &format!("unknown update action: {action}"),
+    ))
+}
+
+fn update_action_event(action: UpdateAction) -> Option<&'static str> {
+    match action {
+        UpdateAction::Check => None,
+        UpdateAction::Install => Some("nexushub.update.install_started"),
+        UpdateAction::Prune => Some("nexushub.update.prune_started"),
     }
 }
 
@@ -4496,6 +4540,10 @@ mod tests {
             .split("\n#[cfg(test)]")
             .next()
             .expect("api source must include production section");
+        let typed_dispatch = source
+            .split("async fn rpc_dispatch_compat")
+            .next()
+            .expect("api source must include typed rpc dispatcher");
         for typed in [
             "\"probe.barkTest\"",
             "\"probe.installHooks\"",
@@ -4508,6 +4556,21 @@ mod tests {
             assert!(
                 source.contains(typed),
                 "RPC dispatcher must expose typed command {typed}"
+            );
+        }
+        for compat in [
+            "\"startProbeJob\"",
+            "\"runUpdateAction\"",
+            "\"startProbeBarkTest\"",
+            "\"startProbeHooksInstall\"",
+            "\"startProbeLogsDbDryRun\"",
+            "\"startProbeLogsDbExecute\"",
+            "\"checkUpdate\"",
+            "\"installUpdateAndRestart\"",
+        ] {
+            assert!(
+                !typed_dispatch.contains(compat),
+                "{compat} must live only in the explicit RPC compatibility dispatcher"
             );
         }
         for compat in ["\"startProbeJob\"", "\"runUpdateAction\""] {

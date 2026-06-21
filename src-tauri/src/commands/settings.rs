@@ -2,9 +2,9 @@
 
 use crate::overview::{
     DesktopActionResponse, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopGoal,
-    DesktopGoalRequest, DesktopLogsDbMaintainRequest, DesktopProbeEventsRequest,
-    DesktopProbeEventsResponse, DesktopProbeNotificationsRequest, DesktopProbeSettings,
-    DesktopProbeSettingsPatch, DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
+    DesktopGoalRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
+    DesktopProbeNotificationsRequest, DesktopProbeSettings, DesktopProbeSettingsPatch,
+    DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
 };
 use anyhow::Result;
 use nexushub_core::{
@@ -14,17 +14,15 @@ use nexushub_core::{
     },
     codex::ThreadSummary,
     config::{patch_probe_config_toml, Config, ProbeConfigFilePatch},
-    platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeRuntime},
     services::{
-        goals as goal_service, jobs as job_service,
+        goals as goal_service, jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
         uploads as upload_service,
     },
     uploads,
 };
 use serde_json::Value;
-use std::path::Path;
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 
@@ -57,88 +55,36 @@ pub fn saveProbeSettings(
     probe_save_settings_with_state(&state, request).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
-pub fn startProbeBarkTest(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopActionResponse, String> {
-    probe_bark_test_with_state(&state).map_err(|err| err.to_string())
-}
-
 #[tauri::command(rename = "probe.barkTest")]
 pub fn probeBarkTest(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    probe_bark_test_with_state(&state).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn startProbeHooksInstall(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopActionResponse, String> {
-    probe_hooks_install_with_state(&state).map_err(|err| err.to_string())
+    probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "probe.installHooks")]
 pub fn probeInstallHooks(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    probe_hooks_install_with_state(&state).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn startProbeLogsDbDryRun(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopActionResponse, String> {
-    probe_logs_db_maintain_with_state(
-        &state,
-        DesktopLogsDbMaintainRequest {
-            dry_run: Some(true),
-            compact: Some(false),
-        },
-    )
-    .map_err(|err| err.to_string())
+    probe_action_with_state(&state, probe_service::ProbeAction::InstallHooks)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "probe.logsDbDryRun")]
 pub fn probeLogsDbDryRun(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    probe_logs_db_maintain_with_state(
-        &state,
-        DesktopLogsDbMaintainRequest {
-            dry_run: Some(true),
-            compact: Some(false),
-        },
-    )
-    .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-pub fn startProbeLogsDbExecute(
-    state: tauri::State<'_, DesktopState>,
-) -> Result<DesktopActionResponse, String> {
-    probe_logs_db_maintain_with_state(
-        &state,
-        DesktopLogsDbMaintainRequest {
-            dry_run: Some(false),
-            compact: Some(false),
-        },
-    )
-    .map_err(|err| err.to_string())
+    probe_action_with_state(&state, probe_service::ProbeAction::LogsDbDryRun)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "probe.logsDbExecute")]
 pub fn probeLogsDbExecute(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<DesktopActionResponse, String> {
-    probe_logs_db_maintain_with_state(
-        &state,
-        DesktopLogsDbMaintainRequest {
-            dry_run: Some(false),
-            compact: Some(false),
-        },
-    )
-    .map_err(|err| err.to_string())
+    probe_action_with_state(&state, probe_service::ProbeAction::LogsDbExecute)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -403,24 +349,49 @@ pub(crate) fn test_probe_save_settings_with_state(
     probe_save_settings_with_state(state, request)
 }
 
+fn probe_action_with_state(
+    state: &DesktopState,
+    action: probe_service::ProbeAction,
+) -> Result<DesktopActionResponse> {
+    let device_key_configured = state
+        .db
+        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
+        .is_some_and(|value| !value.is_empty());
+    let plan = probe_service::plan_probe_action_with_device_key(
+        &state.config(),
+        state.platform(),
+        action,
+        device_key_configured,
+    )?;
+    match plan.execution {
+        probe_service::ProbeExecutionKind::FixedShellJob => {
+            probe_fixed_shell_job_with_state(state, action, plan)
+        }
+        probe_service::ProbeExecutionKind::LogsDbMaintenance => {
+            probe_logs_db_maintain_with_state(state, action, plan)
+        }
+    }
+}
+
 fn probe_logs_db_maintain_with_state(
     state: &DesktopState,
-    request: DesktopLogsDbMaintainRequest,
+    action: probe_service::ProbeAction,
+    plan: probe_service::ProbeActionPlan,
 ) -> Result<DesktopActionResponse> {
-    let dry_run = request.dry_run.unwrap_or(true);
-    let compact = request.compact.unwrap_or(false);
+    let maintenance = plan
+        .maintenance
+        .ok_or_else(|| anyhow::anyhow!("Probe logs DB action is missing maintenance metadata"))?;
+    let job = plan
+        .job
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Probe logs DB action is missing job metadata"))?;
+    let dry_run = maintenance.dry_run;
+    let compact = maintenance.compact;
     let job_id = format!(
         "desktop-probe-logs-db-{}",
         chrono::Utc::now().timestamp_micros()
     );
-    let title = if dry_run {
-        "Probe logs-db dry-run"
-    } else {
-        "Probe logs-db execute"
-    };
-    state
-        .db
-        .create_job(&job_id, "probe_logs_db_maintain", title)?;
+    state.db.create_job(&job_id, &job.kind, &job.title)?;
 
     let run = (|| -> Result<ProbeLogsDbMaintenanceResult> {
         let result = ProbeRuntime::new(state.config(), state.platform().clone())
@@ -440,7 +411,7 @@ fn probe_logs_db_maintain_with_state(
             )?;
             state.db.finish_job(&job_id, "succeeded", Some(0), None)?;
             Ok(ok_action(
-                "startProbeLogsDbExecute",
+                action.as_desktop_command(),
                 "Probe logs-db maintenance completed",
                 None,
                 Some(job_id),
@@ -458,90 +429,44 @@ fn probe_logs_db_maintain_with_state(
     }
 }
 
-fn probe_bark_test_with_state(state: &DesktopState) -> Result<DesktopActionResponse> {
-    let device_key_configured = state
-        .db
-        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
-        .is_some_and(|value| !value.is_empty());
-    let runtime = ProbeRuntime::new(state.config(), state.platform().clone());
-    let plan = runtime.bark_test_plan(device_key_configured);
+fn probe_fixed_shell_job_with_state(
+    state: &DesktopState,
+    action: probe_service::ProbeAction,
+    plan: probe_service::ProbeActionPlan,
+) -> Result<DesktopActionResponse> {
+    let command = action.as_desktop_command();
+    let diagnostic_plan = plan.diagnostic_plan.clone();
+    let job = plan
+        .job
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Probe action is missing job metadata"))?;
     let binary = state.platform().daemon_binary();
     if !binary.is_file() {
         return Ok(unavailable_action(
-            "startProbeBarkTest",
+            command,
             &format!(
-                "Probe Bark test requires local nexushubd binary; plan is available but job cannot start: {}",
+                "Probe action requires local nexushubd binary; plan is available but job cannot start: {}",
                 binary.display()
             ),
         )
-        .with_data(serde_json::to_value(plan)?));
+        .with_data(serde_json::to_value(diagnostic_plan)?));
     }
-    match fixed_probe_command_for_platform(
-        state.platform(),
-        &state.platform().config_file,
-        &["probe".to_string(), "bark-test".to_string()],
-    ) {
-        Ok(command) => {
-            let job_id = state.jobs.start_exclusive_shell_job(
-                "probe_bark_test",
-                "探针 Bark 测试",
-                command,
-                "probe_bark",
-            )?;
-            Ok(ok_action(
-                "startProbeBarkTest",
-                "started local Probe Bark test job",
-                None,
-                Some(job_id),
-                Some(serde_json::to_value(plan)?),
-            ))
-        }
-        Err(err) => Ok(unavailable_action(
-            "startProbeBarkTest",
-            &format!(
-                "Probe Bark test requires local nexushubd binary; plan is available but job cannot start: {err}"
-            ),
-        )
-        .with_data(serde_json::to_value(plan)?)),
-    }
-}
-
-fn probe_hooks_install_with_state(state: &DesktopState) -> Result<DesktopActionResponse> {
-    let binary = state.platform().daemon_binary();
-    if !binary.is_file() {
-        return Ok(unavailable_action(
-            "startProbeHooksInstall",
-            &format!(
-                "Probe Hook install requires local nexushubd binary: {}",
-                binary.display()
-            ),
-        ));
-    }
-    match fixed_probe_command_for_platform(
-        state.platform(),
-        &state.platform().config_file,
-        &["probe".to_string(), "hooks-install".to_string()],
-    ) {
-        Ok(command) => {
-            let job_id = state.jobs.start_exclusive_shell_job(
-                "probe_hooks_install",
-                "探针 Hook 安装",
-                command,
-                "probe_hooks",
-            )?;
-            Ok(ok_action(
-                "startProbeHooksInstall",
-                "started local Probe Hook install job",
-                None,
-                Some(job_id),
-                None,
-            ))
-        }
-        Err(err) => Ok(unavailable_action(
-            "startProbeHooksInstall",
-            &format!("Probe Hook install job cannot start: {err}"),
-        )),
-    }
+    let job_id = if let Some(group) = job.exclusive_group.as_deref() {
+        state
+            .jobs
+            .start_exclusive_shell_job(&job.kind, &job.title, job.command.clone(), group)?
+    } else {
+        state
+            .jobs
+            .start_shell_job(&job.kind, &job.title, job.command.clone())?
+    };
+    Ok(ok_action(
+        command,
+        "started local Probe job",
+        None,
+        Some(job_id),
+        Some(serde_json::to_value(diagnostic_plan)?),
+    ))
 }
 
 fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
@@ -657,32 +582,6 @@ fn ok_action(
 
 fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
     job_service::action_unavailable(command, message).into()
-}
-
-pub(crate) fn fixed_probe_command_for_platform(
-    platform: &PlatformPaths,
-    config_path: &Path,
-    args: &[String],
-) -> Result<String> {
-    if args.first().is_none_or(|arg| arg != "probe") {
-        anyhow::bail!("unsupported Probe job");
-    }
-    let binary = platform.daemon_binary();
-    let mut parts = vec![
-        binary.display().to_string(),
-        "--config".to_string(),
-        config_path.display().to_string(),
-    ];
-    parts.extend(args.iter().cloned());
-    Ok(parts
-        .iter()
-        .map(|part| shell_quote(part))
-        .collect::<Vec<_>>()
-        .join(" "))
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 impl From<nexushub_core::config::ProbeSettingsPatch> for DesktopProbeSettingsPatch {

@@ -5,7 +5,7 @@ use anyhow::Result;
 use nexushub_core::config::Config;
 use nexushub_core::db::JobRecord;
 use nexushub_core::platform::PlatformPaths;
-use nexushub_core::services::updates::{self, UpdateState, UpdateStatus};
+use nexushub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -69,6 +69,8 @@ pub async fn check_update_status(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
+    let _plan = updates::plan_update_action(&state.config(), state.platform(), UpdateAction::Check)
+        .map_err(|err| err.to_string())?;
     let job_id = update_job_id("check");
     state
         .db
@@ -104,6 +106,9 @@ pub async fn install_update_and_restart(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {
+    let _plan =
+        updates::plan_update_action(&state.config(), state.platform(), UpdateAction::Install)
+            .map_err(|err| err.to_string())?;
     let job_id = update_job_id("install");
     state
         .db
@@ -137,28 +142,12 @@ pub async fn install_update_and_restart(
     }
 }
 
-#[tauri::command]
-pub async fn checkUpdate(
-    app: AppHandle,
-    state: tauri::State<'_, DesktopState>,
-) -> std::result::Result<DesktopUpdateCheckResponse, String> {
-    check_update_status(app, state).await
-}
-
 #[tauri::command(rename = "updates.check")]
 pub async fn updatesCheck(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
     check_update_status(app, state).await
-}
-
-#[tauri::command]
-pub async fn installUpdateAndRestart(
-    app: AppHandle,
-    state: tauri::State<'_, DesktopState>,
-) -> std::result::Result<DesktopUpdateInstallResponse, String> {
-    install_update_and_restart(app, state).await
 }
 
 #[tauri::command(rename = "updates.install")]

@@ -67,12 +67,9 @@ describe("NexusHub runtime transport", () => {
       command,
       args
     }));
-    const { runtimeDispatch } = await loadRuntime(true);
+    const { runtimeRpc } = await loadRuntime(true);
 
-    const result = await runtimeDispatch({
-      command: "listThreads",
-      args: { status: "all", q: "plan", limit: 20 }
-    });
+    const result = await runtimeRpc("listThreads", { status: "all", q: "plan", limit: 20 });
 
     expect(result).toEqual({
       command: "listThreads",
@@ -85,8 +82,8 @@ describe("NexusHub runtime transport", () => {
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
     const { runtimeRpc } = await loadRuntime(true);
 
-    await expect(runtimeRpc("checkUpdate", { csrfToken: "csrf-token" })).resolves.toEqual({
-      command: "checkUpdate",
+    await expect(runtimeRpc("updates.check", { csrfToken: "csrf-token" })).resolves.toEqual({
+      command: "updates.check",
       args: undefined
     });
   });
@@ -172,5 +169,12 @@ describe("NexusHub runtime transport", () => {
     expect(runtimeDispatchOptionsBody).not.toContain("webArgs");
     expect(runtimeSource).not.toContain("systemd");
     expect(runtimeSource).not.toContain("Nginx");
+  });
+
+  test("runtime kind checks and dispatch are not production-facing exports", () => {
+    expect(runtimeSource).not.toMatch(/export function isDesktopRuntime\b/);
+    expect(runtimeSource).not.toMatch(/export function isWebRuntime\b/);
+    expect(runtimeSource).not.toMatch(/export async function runtimeDispatch\b/);
+    expect(runtimeSource).not.toContain("__testRuntimeDispatch");
   });
 });

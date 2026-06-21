@@ -62,11 +62,11 @@ export function getRuntimeKind(): RuntimeKind {
   return "web";
 }
 
-export function isDesktopRuntime(): boolean {
+function isDesktopRuntime(): boolean {
   return getRuntimeKind() === "desktop";
 }
 
-export function isWebRuntime(): boolean {
+function isWebRuntime(): boolean {
   return getRuntimeKind() === "web";
 }
 
@@ -217,7 +217,7 @@ export async function invokeDesktop<T = unknown>(
   );
 }
 
-export async function runtimeDispatch<T = unknown>(
+async function runtimeDispatch<T = unknown>(
   options: RuntimeDispatchOptions<T>,
 ): Promise<T> {
   if (isDesktopRuntime()) {

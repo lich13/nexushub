@@ -185,8 +185,6 @@ pub fn run() {
             commands::updates::getUpdateStatus,
             commands::updates::updatesCheck,
             commands::updates::updatesInstall,
-            commands::updates::checkUpdate,
-            commands::updates::installUpdateAndRestart,
             commands::settings::getProbeSettings,
             commands::settings::saveProbeSettings,
             commands::settings::getProbeLogsDbStatus,
@@ -195,10 +193,6 @@ pub fn run() {
             commands::settings::probeInstallHooks,
             commands::settings::probeLogsDbDryRun,
             commands::settings::probeLogsDbExecute,
-            commands::settings::startProbeBarkTest,
-            commands::settings::startProbeHooksInstall,
-            commands::settings::startProbeLogsDbDryRun,
-            commands::settings::startProbeLogsDbExecute,
             commands::settings::dryRunArchiveDelete,
             commands::settings::startArchiveDelete,
             commands::settings::dryRunHiddenThreadDelete,
@@ -458,6 +452,68 @@ log_dir = "{}"
                 "frontend workflow must use typed command registration instead of desktop_* compat: {command}"
             );
         }
+    }
+
+    #[test]
+    fn tauri_invoke_handler_registers_only_typed_probe_and_update_commands() {
+        let commands = registered_invoke_command_paths();
+        for legacy in [
+            command_path("updates", "checkUpdate"),
+            command_path("updates", "installUpdateAndRestart"),
+            command_path("settings", "startProbeBarkTest"),
+            command_path("settings", "startProbeHooksInstall"),
+            command_path("settings", "startProbeLogsDbDryRun"),
+            command_path("settings", "startProbeLogsDbExecute"),
+        ] {
+            assert!(
+                !commands.contains(&legacy),
+                "legacy WebUI compatibility command must not be registered in Tauri: {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_command_modules_do_not_define_legacy_probe_or_update_wrappers() {
+        for (source, legacy) in [
+            (
+                include_str!("commands/updates.rs"),
+                "pub async fn checkUpdate",
+            ),
+            (
+                include_str!("commands/updates.rs"),
+                "pub async fn installUpdateAndRestart",
+            ),
+            (
+                include_str!("commands/settings.rs"),
+                "pub fn startProbeBarkTest",
+            ),
+            (
+                include_str!("commands/settings.rs"),
+                "pub fn startProbeHooksInstall",
+            ),
+            (
+                include_str!("commands/settings.rs"),
+                "pub fn startProbeLogsDbDryRun",
+            ),
+            (
+                include_str!("commands/settings.rs"),
+                "pub fn startProbeLogsDbExecute",
+            ),
+        ] {
+            assert!(
+                !source.contains(legacy),
+                "legacy Tauri command wrapper must not be defined: {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_update_commands_do_not_plan_linux_prune_actions() {
+        let source = include_str!("commands/updates.rs");
+        assert!(
+            !source.contains("UpdateAction::Prune"),
+            "macOS Tauri update commands must not expose Linux update prune"
+        );
     }
 
     #[test]
