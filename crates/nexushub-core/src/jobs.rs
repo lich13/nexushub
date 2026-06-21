@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    future::Future,
     path::Path,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -103,7 +104,7 @@ impl JobRunner {
         let running = self.running.clone();
         let id_for_task = id.clone();
         let exclusive_group = exclusive_group.map(str::to_string);
-        tokio::spawn(async move {
+        spawn_job_task(async move {
             let result = run_shell_command(
                 &db,
                 &tx,
@@ -158,7 +159,7 @@ impl JobRunner {
             args,
             prompt,
         };
-        tokio::spawn(async move {
+        spawn_job_task(async move {
             let result = run_codex_command(&db, &tx, &running, &id_for_task, command).await;
             if let Err(err) = result {
                 let _ = db.append_job_output(&id_for_task, &format!("\nerror: {err}\n"));
@@ -262,6 +263,29 @@ async fn run_shell_command(
 
 fn exclusive_group_key(group: &str) -> String {
     format!("exclusive:{group}")
+}
+
+fn spawn_job_task<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("nexushub-job-runtime".to_string())
+        .spawn(move || {
+            match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(future),
+                Err(err) => eprintln!("failed to start NexusHub job runtime: {err}"),
+            }
+        })
+        .expect("spawn NexusHub job runtime thread");
 }
 
 async fn run_codex_command(
@@ -400,8 +424,8 @@ where
 mod tests {
     use super::{codex_command_shape, JobRunner};
     use crate::db::PanelDb;
-    use std::path::Path;
-    use std::time::Duration;
+    use std::{fs, path::Path, thread, time::Duration};
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn exclusive_shell_jobs_reject_same_group_until_finished() {
@@ -457,6 +481,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn shell_jobs_start_without_current_tokio_runtime() {
+        let db_path =
+            std::env::temp_dir().join(format!("nexushub-job-runner-{}.sqlite", Uuid::new_v4()));
+        let db = PanelDb::open(&db_path).unwrap();
+        let runner = JobRunner::new(db.clone());
+
+        let job_id = runner
+            .start_exclusive_shell_job(
+                "probe_bark_test",
+                "Probe Bark test",
+                "true".to_string(),
+                "probe:bark-test",
+            )
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let job = db.job(&job_id).unwrap().expect("job exists");
+            if job.status == "succeeded" {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for job {job_id}, last status {}",
+                    job.status
+                );
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        drop(runner);
+        drop(db);
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_file(db_path.with_extension("sqlite-wal"));
+        let _ = fs::remove_file(db_path.with_extension("sqlite-shm"));
     }
 
     #[test]

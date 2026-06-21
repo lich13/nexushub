@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-21
-> **Mode**: V0.1.118_CC_SWITCH_HARD_DELETE_FINAL_AUDIT
+> **Mode**: V0.1.119_JOB_RUNTIME_CRASH_FIX
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.118 cc-switch hard-delete final audit<br>
-**Active Task**: `v0.1.118` hard-deletes legacy Linux REST and retired compatibility command entry points, keeps Linux Web traffic on `/api/rpc/:command` plus upload/events transport endpoints, aligns WebUI/Tauri on dot command names, and keeps `CLAUDE.md` intentionally absent.
+**Active Phase**: v0.1.119 macOS JobRunner crash fix<br>
+**Active Task**: `v0.1.119` keeps the `v0.1.118` hard-deleted command surface intact and fixes the macOS Probe Bark crash by allowing shared `JobRunner` shell/Codex jobs to start safely from Tauri synchronous commands without an existing Tokio runtime.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.118_CC_SWITCH_HARD_DELETE_FINAL_AUDIT
+  mode: V0.1.119_JOB_RUNTIME_CRASH_FIX
   strategy: "cc-switch style shared services with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
@@ -121,7 +121,8 @@ adaptive:
 | 2026-06-20 | v0.1.109 cc-switch service closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.109`; moves Goal DTO/status/view planning and Linux update shell job specs into core services, removes the last update prune runtime-kind branch from the frontend domain API, and preserves `CLAUDE.md` as intentionally absent. |
 | 2026-06-20 | v0.1.111 cc-switch final service-layer closure | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.111`; centralizes upload planning in core, splits frontend API implementations into domain modules behind a thin barrel, keeps runtime as transport only, removes retired desktop `_command` wrappers from registration, and keeps Linux-only WebUI surfaces capability-gated. |
 | 2026-06-20 | v0.1.112 cc-switch unified architecture backfill | M | P/R pass locally | 0 | Bumps workspace/package/Tauri versions to `0.1.112`; shares steer/follow-up planning and desktop upload batch validation through core, adds explicit cleanup capabilities, moves App actions behind query/state facades, keeps typed Tauri commands free of retired string action multiplexers, and preserves `CLAUDE.md` as intentionally absent. |
-| 2026-06-21 | v0.1.118 cc-switch hard-delete final audit | M | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.118`; adds the shared dot-command registry, hard-deletes legacy Linux REST routes and retired RPC aliases, keeps macOS on typed Tauri commands without Linux WebUI-only surfaces, and keeps `CLAUDE.md` intentionally absent. |
+| 2026-06-21 | v0.1.118 cc-switch hard-delete final audit | M | P/R pass | 0 | Bumped workspace/package/Tauri versions to `0.1.118`; added the shared dot-command registry, hard-deleted legacy Linux REST routes and retired RPC aliases, kept macOS on typed Tauri commands without Linux WebUI-only surfaces, and kept `CLAUDE.md` intentionally absent. |
+| 2026-06-21 | v0.1.119 macOS JobRunner crash fix | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.119`; fixes Probe Bark and other shared shell/Codex jobs launched from Tauri synchronous commands by giving `JobRunner` a no-current-runtime fallback, while preserving the hard-deleted `v0.1.118` API surface. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -138,7 +139,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.118
+git ls-remote --tags origin refs/tags/v0.1.119
 ```
 
 ## Next Steps
@@ -149,7 +150,7 @@ git ls-remote --tags origin refs/tags/v0.1.118
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.118 Acceptance Matrix
+## v0.1.119 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
@@ -188,3 +189,4 @@ git ls-remote --tags origin refs/tags/v0.1.118
 | 2026-06-20 | v0.1.111-cc-switch-final-service-layer-closure | Closes the final cc-switch alignment gaps: upload validation/storage planning is shared in core, frontend domain APIs are split behind `runtime` transport, desktop compat `_command` wrappers stay retired, and macOS keeps Linux WebUI-only operations unavailable. |
 | 2026-06-20 | v0.1.112-cc-switch-unified-architecture-backfill | Closes the remaining unified-architecture gaps: shared core plans thread steer/follow-up and desktop upload validation, cleanup capabilities are explicit, frontend mutations sit behind query/state facades, and Linux WebUI-only operations stay unavailable on macOS. |
 | 2026-06-21 | v0.1.118-cc-switch-hard-delete-final-audit | Closes the final audited cc-switch alignment gaps by hard-deleting old Linux REST routes and retired RPC/Tauri command aliases, using the shared dot-command registry across Linux RPC, Tauri, and WebUI, and keeping `CLAUDE.md` intentionally absent. |
+| 2026-06-21 | v0.1.119-job-runtime-crash-fix | Fixes the macOS Probe Bark crash found during native App acceptance by making shared `JobRunner` background jobs safe to start without an existing Tokio runtime, while keeping Linux REST hard-deleted and `CLAUDE.md` intentionally absent. |
