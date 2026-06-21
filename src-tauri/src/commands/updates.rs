@@ -201,6 +201,7 @@ fn apply_recent_check_job(
         return;
     }
     if job.output.contains("no signed app update available") {
+        status.latest_version = Some(status.current_version.clone());
         status.update_available = Some(false);
         status.state = UpdateState::Idle;
     }
@@ -245,7 +246,7 @@ async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Re
             state
                 .db
                 .append_job_output(job_id, "no signed app update available\n")?;
-            status.latest_version = None;
+            status.latest_version = Some(status.current_version.clone());
             status.update_available = Some(false);
             status.state = UpdateState::Idle;
         }

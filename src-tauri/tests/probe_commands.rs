@@ -191,3 +191,41 @@ async fn desktop_update_status_ignores_stale_older_signed_check_result() {
         nexushub_core::services::updates::UpdateState::Idle
     );
 }
+
+#[tokio::test]
+async fn desktop_update_status_remembers_recent_signed_no_update_result() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = desktop_state(&temp);
+
+    state
+        .db
+        .create_job(
+            "desktop-update-check-no-update",
+            "nexushub_update_check",
+            "NexusHub app update check",
+        )
+        .unwrap();
+    state
+        .db
+        .append_job_output(
+            "desktop-update-check-no-update",
+            "checking signed Tauri updater feed\nno signed app update available\n",
+        )
+        .unwrap();
+    state
+        .db
+        .finish_job("desktop-update-check-no-update", "succeeded", Some(0), None)
+        .unwrap();
+
+    let status = desktop_update_status_with_state(&state, None, None).unwrap();
+
+    assert_eq!(
+        status.latest_version.as_deref(),
+        Some(status.current_version.as_str())
+    );
+    assert_eq!(status.update_available, Some(false));
+    assert_eq!(
+        status.state,
+        nexushub_core::services::updates::UpdateState::Idle
+    );
+}

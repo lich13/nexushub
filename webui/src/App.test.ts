@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import appSource from "./App.tsx?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
-import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary } from "./types";
+import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
 type AppExports = typeof import("./App") & {
   buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
@@ -110,6 +110,7 @@ type AppExports = typeof import("./App") & {
     current: import("./types").ArchiveDeletePlan | null,
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
+  canStartUpdateInstall?: (status?: UpdateStatus | null) => boolean;
   desktopRuntimeVisibleCopy?: () => string[];
   runtimeCapabilitiesForRuntime?: (runtime?: boolean | "web" | "desktop") => RuntimeCapabilityMatrix;
   navigationLabelsForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => string[];
@@ -1360,6 +1361,27 @@ describe("conversation helpers", () => {
       hidden_source_counts: { subagent: 3 },
       integrity: "ok"
     })).toBe(true);
+  });
+
+  test("update install action requires an explicit available update", async () => {
+    const app = await loadApp();
+    const baseStatus: UpdateStatus = {
+      current_version: "0.1.116",
+      latest_version: "0.1.116",
+      update_available: false,
+      channel: "stable",
+      method: "macos_tauri_updater",
+      state: "idle",
+      failure_category: null,
+      recommended_action: "No update available.",
+      capabilities: ["check", "confirm_install", "job_history", "signature_verification"]
+    };
+
+    expect(app.canStartUpdateInstall?.(undefined)).toBe(false);
+    expect(app.canStartUpdateInstall?.(null)).toBe(false);
+    expect(app.canStartUpdateInstall?.({ ...baseStatus, update_available: null })).toBe(false);
+    expect(app.canStartUpdateInstall?.(baseStatus)).toBe(false);
+    expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.117", update_available: true })).toBe(true);
   });
 
 });

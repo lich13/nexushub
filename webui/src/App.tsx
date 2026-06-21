@@ -2362,6 +2362,10 @@ export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null |
   return (plan?.hidden_threads ?? 0) > 0;
 }
 
+export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
+  return status?.update_available === true;
+}
+
 export function archivePlanAfterExecute(current: ArchiveDeletePlan | null, result: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">): ArchiveDeletePlan | null {
   if (!current) return current;
   return {
@@ -4565,7 +4569,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
           <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.updateServiceLabels ? "Precheck" : "Check"}</button>
-          <button className="primary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.updateServiceLabels ? "Update" : "Install"}</button>
+          <button className="primary-button" disabled={jobMutation.isPending || !canStartUpdateInstall(update.data)} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.updateServiceLabels ? "Update" : "Install"}</button>
           {capabilities.backupPrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
         </div>
       </Panel>
