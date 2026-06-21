@@ -646,13 +646,12 @@ mod tests {
 
         crate::commands::settings::test_probe_save_settings_with_state(
             &state,
-            DesktopProbeSettingsRequest {
-                codex: None,
-                probe: None,
-                notifications: Some(DesktopProbeNotificationsRequest {
+            settings_service::ProbeSettingsSaveRequest {
+                notifications: Some(settings_service::ProbeNotificationsSavePatch {
                     device_key: Some("  shared-device-key  ".to_string()),
-                    patch: ProbeNotificationsConfigPatch::default(),
+                    ..Default::default()
                 }),
+                ..Default::default()
             },
         )
         .unwrap();

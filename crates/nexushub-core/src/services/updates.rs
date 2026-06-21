@@ -1,5 +1,6 @@
 use crate::{
     config::Config,
+    db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::commands,
     services::system::{require_capability, Capability},
@@ -97,6 +98,13 @@ pub struct LinuxUpdateJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MacosUpdaterJobSpec {
+    pub kind: String,
+    pub title: String,
+    pub initial_output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeUpdateSpec {
     pub command: String,
 }
@@ -110,6 +118,10 @@ pub struct UpdateActionPlan {
     pub linux_job: Option<LinuxUpdateJobSpec>,
     pub native: Option<NativeUpdateSpec>,
 }
+
+pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed Tauri updater feed\n";
+pub const MACOS_UPDATER_NO_UPDATE_OUTPUT: &str = "no signed app update available\n";
+const MACOS_UPDATER_AVAILABLE_PREFIX: &str = "signed app update available ";
 
 pub fn update_status(
     _config: &Config,
@@ -145,6 +157,23 @@ pub fn update_status(
         recommended_action,
         capabilities,
     }
+}
+
+pub fn update_status_with_recent_check_job(
+    config: &Config,
+    platform: &PlatformPaths,
+    latest_version: Option<&str>,
+    last_error: Option<&str>,
+    recent_check_job: Option<&JobRecord>,
+) -> UpdateStatus {
+    let mut status = update_status(config, platform, latest_version, last_error);
+    if latest_version.is_some() || last_error.is_some() || platform.kind != PlatformKind::Macos {
+        return status;
+    }
+    if let Some(job) = recent_check_job {
+        derive_macos_recent_check_status(&mut status, job, config, platform);
+    }
+    status
 }
 
 pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> UpdateJobPlan {
@@ -188,6 +217,27 @@ pub fn plan_update_action(
     })
 }
 
+pub fn macos_updater_job_spec(action: UpdateAction) -> Result<MacosUpdaterJobSpec> {
+    let (kind, title) = match action {
+        UpdateAction::Check => ("nexushub_update_check", "NexusHub app update check"),
+        UpdateAction::Install => ("nexushub_update_install", "NexusHub app update install"),
+        UpdateAction::Prune => anyhow::bail!("native updater does not support backup prune"),
+    };
+    Ok(MacosUpdaterJobSpec {
+        kind: kind.to_string(),
+        title: title.to_string(),
+        initial_output: MACOS_UPDATER_CHECKING_OUTPUT.to_string(),
+    })
+}
+
+pub fn macos_updater_update_available_output(version: &str) -> String {
+    format!("{MACOS_UPDATER_AVAILABLE_PREFIX}{}\n", version.trim())
+}
+
+pub fn macos_updater_no_update_output() -> &'static str {
+    MACOS_UPDATER_NO_UPDATE_OUTPUT
+}
+
 pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<LinuxUpdateJobSpec> {
     if plan.method != UpdateExecutionMethod::LinuxSystemdJob {
         anyhow::bail!("only Linux WebUI can start server update jobs");
@@ -216,6 +266,52 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
             exclusive_group,
         }),
     }
+}
+
+fn derive_macos_recent_check_status(
+    status: &mut UpdateStatus,
+    job: &JobRecord,
+    config: &Config,
+    platform: &PlatformPaths,
+) {
+    if job.kind != "nexushub_update_check" {
+        return;
+    }
+    if job.status == "failed" {
+        status.state = UpdateState::Failed;
+        return;
+    }
+    if job.status == "running" {
+        status.state = UpdateState::Checking;
+        return;
+    }
+    if let Some(version) = macos_signed_update_version_from_output(&job.output) {
+        *status = update_status(config, platform, Some(&version), None);
+        status.state = if status.update_available == Some(true) {
+            UpdateState::Ready
+        } else {
+            UpdateState::Idle
+        };
+        return;
+    }
+    if job
+        .output
+        .contains(MACOS_UPDATER_NO_UPDATE_OUTPUT.trim_end())
+    {
+        status.latest_version = Some(status.current_version.clone());
+        status.update_available = Some(false);
+        status.state = UpdateState::Idle;
+    }
+}
+
+fn macos_signed_update_version_from_output(output: &str) -> Option<String> {
+    output.lines().rev().find_map(|line| {
+        line.trim()
+            .strip_prefix(MACOS_UPDATER_AVAILABLE_PREFIX)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn non_empty_string(value: &str) -> Option<&str> {

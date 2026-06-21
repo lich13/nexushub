@@ -2,8 +2,10 @@ use nexushub_core::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
     services::updates::{
-        linux_update_job_spec, update_action_plan, update_status, UpdateAction,
-        UpdateExecutionMethod, UpdateFailureCategory, UpdateState,
+        linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
+        macos_updater_update_available_output, update_action_plan, update_status,
+        update_status_with_recent_check_job, UpdateAction, UpdateExecutionMethod,
+        UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
     },
 };
 
@@ -132,6 +134,116 @@ fn linux_update_job_specs_are_planned_in_core_service() {
             .to_string()
             .contains("only Linux WebUI")
     );
+}
+
+#[test]
+fn macos_updater_job_specs_and_output_markers_are_core_contracts() {
+    let check = macos_updater_job_spec(UpdateAction::Check).unwrap();
+    assert_eq!(check.kind, "nexushub_update_check");
+    assert_eq!(check.title, "NexusHub app update check");
+    assert_eq!(check.initial_output, MACOS_UPDATER_CHECKING_OUTPUT);
+
+    let install = macos_updater_job_spec(UpdateAction::Install).unwrap();
+    assert_eq!(install.kind, "nexushub_update_install");
+    assert_eq!(install.title, "NexusHub app update install");
+    assert_eq!(install.initial_output, MACOS_UPDATER_CHECKING_OUTPUT);
+
+    assert_eq!(
+        macos_updater_update_available_output("999.0.0"),
+        "signed app update available 999.0.0\n"
+    );
+    assert_eq!(
+        macos_updater_no_update_output(),
+        "no signed app update available\n"
+    );
+
+    let prune = macos_updater_job_spec(UpdateAction::Prune)
+        .unwrap_err()
+        .to_string();
+    assert!(prune.contains("native updater does not support backup prune"));
+}
+
+#[test]
+fn recent_macos_updater_check_job_derives_status_in_core() {
+    let config = Config::for_platform_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let available_job = job_record(
+        "succeeded",
+        &format!(
+            "{}{}",
+            MACOS_UPDATER_CHECKING_OUTPUT,
+            macos_updater_update_available_output("999.0.0")
+        ),
+    );
+
+    let available =
+        update_status_with_recent_check_job(&config, &platform, None, None, Some(&available_job));
+    assert_eq!(available.latest_version.as_deref(), Some("999.0.0"));
+    assert_eq!(available.update_available, Some(true));
+    assert_eq!(available.state, UpdateState::Ready);
+
+    let no_update_job = job_record(
+        "succeeded",
+        &format!(
+            "{}{}",
+            MACOS_UPDATER_CHECKING_OUTPUT,
+            macos_updater_no_update_output()
+        ),
+    );
+    let no_update =
+        update_status_with_recent_check_job(&config, &platform, None, None, Some(&no_update_job));
+    assert_eq!(
+        no_update.latest_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(no_update.update_available, Some(false));
+    assert_eq!(no_update.state, UpdateState::Idle);
+
+    let running_job = job_record("running", MACOS_UPDATER_CHECKING_OUTPUT);
+    let running =
+        update_status_with_recent_check_job(&config, &platform, None, None, Some(&running_job));
+    assert_eq!(running.state, UpdateState::Checking);
+
+    let failed_job = job_record("failed", "error: network timeout\n");
+    let failed =
+        update_status_with_recent_check_job(&config, &platform, None, None, Some(&failed_job));
+    assert_eq!(failed.state, UpdateState::Failed);
+}
+
+#[test]
+fn explicit_update_status_inputs_take_precedence_over_recent_check_job() {
+    let config = Config::for_platform_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let job = job_record(
+        "succeeded",
+        &format!(
+            "{}{}",
+            MACOS_UPDATER_CHECKING_OUTPUT,
+            macos_updater_update_available_output("999.0.0")
+        ),
+    );
+
+    let status =
+        update_status_with_recent_check_job(&config, &platform, Some("0.1.0"), None, Some(&job));
+
+    assert_eq!(status.latest_version.as_deref(), Some("0.1.0"));
+    assert_ne!(status.latest_version.as_deref(), Some("999.0.0"));
+}
+
+fn job_record(status: &str, output: &str) -> nexushub_core::db::JobRecord {
+    nexushub_core::db::JobRecord {
+        id: "job-a".to_string(),
+        kind: "nexushub_update_check".to_string(),
+        status: status.to_string(),
+        title: "NexusHub app update check".to_string(),
+        thread_id: None,
+        turn_id: None,
+        started_at: 10,
+        finished_at: None,
+        exit_code: None,
+        output: output.to_string(),
+        error: None,
+    }
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

@@ -45,6 +45,15 @@ pub struct UploadFacadePlan {
     pub plan: UploadStorePlan,
 }
 
+pub const ATTACHMENT_ID_LIMIT_MESSAGE: &str = "一次最多发送 5 个附件";
+
+pub fn validate_attachment_id_count(ids: &[String]) -> Result<()> {
+    if ids.len() > MAX_UPLOAD_FILES {
+        bail!(ATTACHMENT_ID_LIMIT_MESSAGE);
+    }
+    Ok(())
+}
+
 pub fn validate_upload_batch(items: &[UploadBatchItem]) -> Result<usize> {
     if items.is_empty() {
         bail!("没有可上传的文件");

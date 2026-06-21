@@ -1,5 +1,5 @@
 import type { SystemCapabilities, SystemStatus } from "../../types";
-import { selectRuntimeFallback } from "../api/shared";
+import { selectRuntimeFallback } from "../runtime";
 
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "web" | "desktop";

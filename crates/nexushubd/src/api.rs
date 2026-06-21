@@ -36,16 +36,14 @@ use nexushub_core::{
         security as security_service, settings as settings_service,
         threads::{
             apply_running_job_to_summary, build_threads_overview, filter_thread_summaries,
-            merge_running_jobs, prune_hidden_thread_summaries, thread_list_fetch_limit,
-            ThreadsQuery,
+            merge_running_jobs, normalize_thread_block_limit, normalize_thread_detail_block_limit,
+            prune_hidden_thread_summaries, thread_list_fetch_limit, ThreadsQuery,
         },
         updates::{self as update_service, UpdateAction},
         uploads as upload_service,
     },
     update,
-    uploads::{
-        self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES, MAX_UPLOAD_FILES,
-    },
+    uploads::{self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -59,8 +57,6 @@ use std::{
 use uuid::Uuid;
 
 type ApiResponse = Result<Response, ApiError>;
-const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
-const THREAD_DETAIL_MAX_BLOCK_LIMIT: usize = 500;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
 
 pub struct ApiError(Box<Response>);
@@ -803,23 +799,25 @@ async fn start_probe_action_with_compact(
         .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
     let platform = http_update_platform();
-    let plan = probe_service::plan_probe_action_with_device_key(
+    let config_path = probe_config_path();
+    let plan = probe_service::plan_probe_action_with_device_key_and_config_path(
         &state.config(),
         &platform,
         action,
         device_key_configured,
+        &config_path,
     )?;
     let spec = plan
         .job
         .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Probe job is unavailable"))?;
-    let mut args = spec.args.clone();
+    let mut command = spec.command.clone();
     if compact
         && matches!(
             action,
             probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
         )
     {
-        args.push("--compact".to_string());
+        command = format!("{command} {}", shell_quote("--compact"));
     }
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -827,9 +825,8 @@ async fn start_probe_action_with_compact(
         Some("probe"),
         Some(&spec.title),
         None,
-        json!({"args": args, "action": action.as_rpc_action()}),
+        json!({"args": spec.args, "action": action.as_rpc_action()}),
     )?;
-    let command = fixed_probe_shell_command(&state, &args);
     let group = spec.exclusive_group.as_deref().unwrap_or(&spec.kind);
     let id = state
         .jobs
@@ -955,37 +952,6 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
     );
     serde_json::to_value(settings_service::build_settings_view(config, secret_state))
         .map_err(anyhow::Error::from)
-}
-
-fn fixed_probe_shell_command(state: &AppState, args: &[String]) -> String {
-    let config_path = probe_config_path();
-    let mut parts = vec![
-        "/opt/nexushub/bin/nexushubd".to_string(),
-        "--config".to_string(),
-        config_path.display().to_string(),
-    ];
-    parts.extend(args.iter().cloned());
-    if args.first().is_some_and(|arg| arg == "nexushubd") {
-        return args
-            .iter()
-            .map(|part| shell_quote(part))
-            .collect::<Vec<_>>()
-            .join(" ");
-    }
-    if args.first().is_some_and(|arg| arg == "probe") {
-        return parts
-            .iter()
-            .map(|part| shell_quote(part))
-            .collect::<Vec<_>>()
-            .join(" ");
-    }
-    format!(
-        "printf '%s\\n' {}; exit 2",
-        shell_quote(&format!(
-            "Unsupported Probe job for {}",
-            state.config().codex.host_label
-        ))
-    )
 }
 
 fn shell_quote(value: &str) -> String {
@@ -1568,12 +1534,8 @@ fn prepare_request_attachments(
     state: &AppState,
     attachment_ids: &[String],
 ) -> Result<Vec<PreparedAttachment>, ApiError> {
-    if attachment_ids.len() > MAX_UPLOAD_FILES {
-        return Err(api_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "一次最多发送 5 个附件",
-        ));
-    }
+    upload_service::validate_attachment_id_count(attachment_ids)
+        .map_err(|err| api_error(StatusCode::PAYLOAD_TOO_LARGE, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let root = uploads::upload_root(&resolved.home);
     prepare_uploads(&root, attachment_ids)
@@ -2512,21 +2474,11 @@ fn archived_filter(status: Option<&str>) -> Option<bool> {
 }
 
 fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    if full.unwrap_or(false) {
-        None
-    } else {
-        Some(
-            limit
-                .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
-                .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT),
-        )
-    }
+    normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
 }
 
 fn block_page_limit(limit: Option<usize>) -> usize {
-    limit
-        .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
-        .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
+    normalize_thread_block_limit(limit)
 }
 
 #[cfg(test)]
@@ -3562,11 +3514,11 @@ mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        archived_filter, block_changed, fixed_probe_shell_command, load_probe_threads,
-        merge_thread_summaries, normalize_goal_response, probe_config_path, router,
-        rpc_required_string, rpc_wrapped_payload, rpc_wrapped_payload_or_empty,
-        seed_thread_event_blocks, thread_block_page, thread_event_block_key, thread_title,
-        turnstile_login_action, update_service, LoginRequest, TurnstileLoginAction, UpdateAction,
+        archived_filter, block_changed, load_probe_threads, merge_thread_summaries,
+        normalize_goal_response, probe_config_path, router, rpc_required_string,
+        rpc_wrapped_payload, rpc_wrapped_payload_or_empty, seed_thread_event_blocks,
+        thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
+        update_service, LoginRequest, TurnstileLoginAction, UpdateAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -4173,6 +4125,23 @@ mod tests {
                 "{compat} must not remain in the production RPC dispatcher"
             );
         }
+    }
+
+    #[test]
+    fn linux_probe_actions_execute_shared_core_job_command() {
+        let source = include_str!("api.rs")
+            .split("\nmod tests {")
+            .next()
+            .expect("api source must include production section");
+
+        assert!(
+            !source.contains("fixed_probe_shell_command("),
+            "Linux HTTP Probe actions must execute the command planned by nexushub-core"
+        );
+        assert!(
+            source.contains("spec.command"),
+            "Linux HTTP Probe actions should use ProbeFixedJobSpec.command"
+        );
     }
 
     #[tokio::test]
@@ -5567,9 +5536,6 @@ mod tests {
         let job_id = payload["job_id"].as_str().unwrap();
         let job = state.db.job(job_id).unwrap().unwrap();
         assert_eq!(job.kind, "probe_bark_test");
-        let command =
-            fixed_probe_shell_command(&state, &["probe".to_string(), "bark-test".to_string()]);
-        assert!(command.contains(config_path.to_string_lossy().as_ref()));
         let config_text = fs::read_to_string(&config_path).unwrap();
         assert!(config_text.contains("fresh-host"));
     }

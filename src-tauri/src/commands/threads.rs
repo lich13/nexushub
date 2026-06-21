@@ -18,6 +18,7 @@ use nexushub_core::{
     services::{
         jobs as job_service,
         threads::{self as thread_service, ThreadsQuery},
+        uploads as upload_service,
     },
     uploads,
 };
@@ -621,9 +622,7 @@ fn prepare_request_attachments(
     state: &DesktopState,
     attachment_ids: &[String],
 ) -> Result<Vec<uploads::PreparedAttachment>> {
-    if attachment_ids.len() > uploads::MAX_UPLOAD_FILES {
-        anyhow::bail!("一次最多发送 5 个附件");
-    }
+    upload_service::validate_attachment_id_count(attachment_ids)?;
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
     uploads::prepare_uploads(&root, attachment_ids)
 }
@@ -660,21 +659,11 @@ fn apply_running_job_to_detail(state: &DesktopState, detail: &mut ThreadDetail) 
 }
 
 fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    if full.unwrap_or(false) {
-        None
-    } else {
-        Some(
-            limit
-                .unwrap_or(thread_service::THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
-                .clamp(1, thread_service::THREAD_DETAIL_MAX_BLOCK_LIMIT),
-        )
-    }
+    thread_service::normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
 }
 
 fn block_page_limit(limit: Option<usize>) -> usize {
-    limit
-        .unwrap_or(thread_service::THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
-        .clamp(1, thread_service::THREAD_DETAIL_MAX_BLOCK_LIMIT)
+    thread_service::normalize_thread_block_limit(limit)
 }
 
 fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {

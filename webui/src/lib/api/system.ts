@@ -11,6 +11,7 @@ import type {
   SystemVersion
 } from "../../types";
 import { runtimeRpc } from "./transport";
+import { selectRuntimeFallback } from "./shared";
 import {
   isMissingEndpoint,
   jobIdFromRuntimeResult,
@@ -244,7 +245,7 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
         model: "gpt-5.5",
         service_tier: null,
         reasoning_effort: "xhigh",
-        cwd: "/home/ubuntu/codex-workspace",
+        cwd: selectRuntimeFallback({ web: "/home/ubuntu/codex-workspace", desktop: null }),
         permission_profile: "danger-full-access",
         approval_policy: "never",
         sandbox_mode: "danger-full-access",

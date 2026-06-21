@@ -319,7 +319,7 @@ const permissionPresets: Array<{ id: PermissionPresetId; label: string; descript
   { id: "full", label: "完全访问权限", description: "可不受限制地访问互联网和文件", icon: <CheckCircle2 size={17} /> },
   { id: "custom", label: "自定义 (config.toml)", description: "使用 config.toml 中定义的权限", icon: <SlidersHorizontal size={17} /> }
 ];
-const defaultCwd = "/home/ubuntu/codex-workspace";
+const defaultCwd = "";
 const defaultSessionTtlDays = 365;
 const secondsPerDay = 86400;
 

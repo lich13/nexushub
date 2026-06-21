@@ -3,8 +3,7 @@
 use crate::overview::{
     DesktopActionResponse, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopGoal,
     DesktopGoalRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
-    DesktopProbeNotificationsRequest, DesktopProbeSettings, DesktopProbeSettingsPatch,
-    DesktopProbeSettingsRequest, DesktopState, DesktopUploadFile,
+    DesktopProbeSettings, DesktopState, DesktopUploadFile,
 };
 use anyhow::Result;
 use nexushub_core::{
@@ -13,7 +12,7 @@ use nexushub_core::{
         ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
     },
     codex::ThreadSummary,
-    config::{patch_probe_config_toml, Config, ProbeConfigFilePatch},
+    config::{patch_probe_config_toml, Config},
     probe::{redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeRuntime},
     services::{
         goals as goal_service, jobs as job_service, probe as probe_service,
@@ -38,21 +37,7 @@ pub fn saveProbeSettings(
     state: tauri::State<'_, DesktopState>,
     settings: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings, String> {
-    let normalized = settings.normalize().map_err(|err| err.to_string())?;
-    let request = DesktopProbeSettingsRequest {
-        codex: normalized.config_patch.codex,
-        probe: normalized
-            .config_patch
-            .probe
-            .map(DesktopProbeSettingsPatch::from),
-        notifications: normalized.bark_device_key.map(|device_key| {
-            DesktopProbeNotificationsRequest {
-                device_key: Some(device_key),
-                patch: Default::default(),
-            }
-        }),
-    };
-    probe_save_settings_with_state(&state, request).map_err(|err| err.to_string())
+    probe_save_settings_with_state(&state, settings).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "probe.barkTest")]
@@ -303,35 +288,18 @@ fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSetting
 
 fn probe_save_settings_with_state(
     state: &DesktopState,
-    request: DesktopProbeSettingsRequest,
+    request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
+    let plan = settings_service::plan_probe_settings_save(state.platform(), request)?;
     let config_path = state.platform().config_file.clone();
     if !config_path.exists() {
         anyhow::bail!("config file not found: {}", config_path.display());
     }
-    let (mut probe_patch, mut device_key) = request
-        .probe
-        .map(DesktopProbeSettingsPatch::into_config_patch)
-        .unwrap_or_default();
-    if let Some(notifications) = request.notifications {
-        if let Some(top_level_device_key) =
-            settings_service::normalize_bark_device_key(notifications.device_key)
-        {
-            device_key = Some(top_level_device_key);
-        }
-        let mut nested = probe_patch.notifications.unwrap_or_default();
-        settings_service::merge_probe_notification_patch(&mut nested, notifications.patch);
-        probe_patch.notifications = Some(nested);
-    }
-    let patch = settings_service::normalize_probe_config_file_patch(ProbeConfigFilePatch {
-        codex: request.codex,
-        probe: Some(probe_patch),
-    })?;
     let text = std::fs::read_to_string(&config_path)?;
-    let updated = patch_probe_config_toml(&text, &patch)?;
+    let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
     std::fs::write(&config_path, updated)?;
     let response_config = Config::load(&config_path)?;
-    if let Some(device_key) = device_key {
+    if let Some(device_key) = plan.bark_device_key {
         state.db.set_secret_setting_bytes(
             settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
             device_key.as_bytes(),
@@ -344,7 +312,7 @@ fn probe_save_settings_with_state(
 #[cfg(test)]
 pub(crate) fn test_probe_save_settings_with_state(
     state: &DesktopState,
-    request: DesktopProbeSettingsRequest,
+    request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
     probe_save_settings_with_state(state, request)
 }
@@ -584,21 +552,166 @@ fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
     job_service::action_unavailable(command, message).into()
 }
 
-impl From<nexushub_core::config::ProbeSettingsPatch> for DesktopProbeSettingsPatch {
-    fn from(value: nexushub_core::config::ProbeSettingsPatch) -> Self {
-        Self {
-            enabled: value.enabled,
-            poll_seconds: value.poll_seconds,
-            recent_limit: value.recent_limit,
-            hooks: value.hooks,
-            notifications: value
-                .notifications
-                .map(|patch| DesktopProbeNotificationsRequest {
-                    device_key: None,
-                    patch,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexushub_core::{
+        crypto::SecretBox,
+        db::PanelDb,
+        platform::{PlatformKind, PlatformPaths},
+        services::settings::{ProbeNotificationsSavePatch, ProbeSettingsSavePatch},
+    };
+
+    fn command_test_state(kind: PlatformKind) -> (tempfile::TempDir, DesktopState, PlatformPaths) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = Config::for_platform_kind_with_home(kind, temp.path());
+        config.paths.data_dir = temp.path().join("data");
+        config.paths.db_path = temp.path().join("panel.sqlite");
+        config.paths.log_dir = temp.path().join("logs");
+        config.codex.home = temp.path().join("codex-home");
+        config.codex.workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+        std::fs::create_dir_all(&config.paths.log_dir).unwrap();
+        std::fs::create_dir_all(&config.codex.home).unwrap();
+        std::fs::create_dir_all(&config.codex.workspace).unwrap();
+        let mut platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
+        platform.kind = kind;
+        std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
+        std::fs::write(&platform.config_file, toml::to_string(&config).unwrap()).unwrap();
+        let db =
+            PanelDb::open_with_secret_box(&config.paths.db_path, SecretBox::deterministic_dev())
+                .unwrap();
+        let state = DesktopState::new(config, db, platform.clone());
+        (temp, state, platform)
+    }
+
+    #[test]
+    fn probe_settings_save_command_uses_core_plan_for_normalization_and_secret_write() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let saved = test_probe_save_settings_with_state(
+            &state,
+            ProbeSettingsSaveRequest {
+                probe: Some(ProbeSettingsSavePatch {
+                    poll_seconds: Some(1),
+                    recent_limit: Some(999),
+                    notifications: Some(ProbeNotificationsSavePatch {
+                        server_url: Some(" https://api.day.app ".to_string()),
+                        group: Some("  ".to_string()),
+                        device_key: Some(" nested-key ".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
                 }),
-            observability: value.observability,
-            logs_db: value.logs_db,
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some(" top-key ".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(saved.probe.poll_seconds, 5);
+        assert_eq!(saved.probe.recent_limit, 500);
+        assert_eq!(saved.probe.notifications.server_url, "https://api.day.app");
+        assert_eq!(saved.probe.notifications.group, "NexusHub");
+        assert_eq!(
+            state
+                .db
+                .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)
+                .unwrap()
+                .as_deref(),
+            Some(b"top-key".as_slice())
+        );
+    }
+
+    #[test]
+    fn probe_settings_save_command_honors_core_capability_gate() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Windows);
+
+        let err = test_probe_save_settings_with_state(&state, ProbeSettingsSaveRequest::default())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("settings is unavailable on windows"), "{err}");
+    }
+
+    #[test]
+    fn probe_fixed_shell_job_consumes_core_job_command_without_rebuilding_it() {
+        let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
+        std::fs::create_dir_all(platform.daemon_binary().parent().unwrap()).unwrap();
+        std::fs::write(
+            platform.daemon_binary(),
+            "#!/bin/sh\necho core-command-marker\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(platform.daemon_binary())
+                .unwrap()
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(platform.daemon_binary(), permissions).unwrap();
         }
+        let core_plan = probe_service::plan_probe_action_with_device_key(
+            &state.config(),
+            state.platform(),
+            probe_service::ProbeAction::BarkTest,
+            false,
+        )
+        .unwrap();
+        let expected_command = core_plan.job.as_ref().unwrap().command.clone();
+
+        let response = probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
+            .expect("Probe action should start a fixed job");
+        let job_id = response.job_id.expect("job id");
+        let job = state.db.job(&job_id).unwrap().expect("job record");
+
+        assert!(response.available);
+        assert_eq!(job.kind, core_plan.job.as_ref().unwrap().kind);
+        assert_eq!(job.title, core_plan.job.as_ref().unwrap().title);
+        assert!(expected_command.contains("--config"));
+        assert!(expected_command.contains("probe bark-test"));
+    }
+
+    #[test]
+    fn settings_command_source_does_not_duplicate_probe_save_normalization() {
+        let source = settings_source_before_test_module();
+
+        assert!(
+            source.contains("settings_service::plan_probe_settings_save"),
+            "probe.settings.save must use the shared core save plan"
+        );
+        assert!(
+            !source.contains("normalize_probe_config_file_patch"),
+            "Tauri adapter must not duplicate core Probe settings normalization"
+        );
+        assert!(
+            !source.contains("merge_probe_notification_patch"),
+            "Tauri adapter must not merge Probe notification patches itself"
+        );
+    }
+
+    #[test]
+    fn probe_action_source_uses_core_plan_job_command() {
+        let source = settings_source_before_test_module();
+
+        assert!(
+            source.contains("job.command.clone()"),
+            "Probe action execution must pass the core plan job.command into JobRunner"
+        );
+        assert!(
+            !source.contains("fixed_probe_shell_command"),
+            "Tauri adapter must not rebuild Probe shell commands"
+        );
+    }
+
+    fn settings_source_before_test_module() -> &'static str {
+        include_str!("settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings source before test module")
     }
 }

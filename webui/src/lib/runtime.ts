@@ -49,6 +49,10 @@ function getRuntimeKind(): RuntimeKind {
   return "web";
 }
 
+export function selectRuntimeFallback<T>(options: { web: T; desktop: T }): T {
+  return getRuntimeKind() === "desktop" ? options.desktop : options.web;
+}
+
 function apiBase(): string {
   const raw = import.meta.env.VITE_API_BASE;
   const value = typeof raw === "string" ? raw.trim() : "";

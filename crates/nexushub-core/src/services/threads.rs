@@ -300,6 +300,20 @@ pub fn prune_hidden_thread_summaries(
         .collect()
 }
 
+pub fn normalize_thread_detail_block_limit(limit: Option<usize>, full: bool) -> Option<usize> {
+    if full {
+        None
+    } else {
+        Some(normalize_thread_block_limit(limit))
+    }
+}
+
+pub fn normalize_thread_block_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
+        .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
+}
+
 fn apply_running_job_to_thread_list(
     threads: &mut Vec<ThreadSummary>,
     job: &JobRecord,
@@ -350,17 +364,11 @@ fn required_thread_id(value: &str) -> anyhow::Result<String> {
 }
 
 fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    if full.unwrap_or(false) {
-        None
-    } else {
-        Some(block_page_limit(limit))
-    }
+    normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
 }
 
 fn block_page_limit(limit: Option<usize>) -> usize {
-    limit
-        .unwrap_or(THREAD_DETAIL_DEFAULT_BLOCK_LIMIT)
-        .clamp(1, THREAD_DETAIL_MAX_BLOCK_LIMIT)
+    normalize_thread_block_limit(limit)
 }
 
 fn thread_status_filter_needs_full_scan(status: Option<&str>) -> bool {

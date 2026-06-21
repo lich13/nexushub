@@ -8,14 +8,19 @@ use nexushub_core::{
             archive_thread_response, cancel_followup_response, plan_thread_command_with_capability,
             rename_thread_response, ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest,
         },
-        probe::{plan_probe_action, ProbeAction, ProbeExecutionKind},
+        probe::{
+            plan_probe_action, plan_probe_action_with_config_path, ProbeAction, ProbeExecutionKind,
+        },
         system::Capability,
         threads::{
+            normalize_thread_block_limit, normalize_thread_detail_block_limit,
             plan_thread_blocks_request, plan_thread_cleanup_action, plan_thread_detail_request,
             ThreadCleanupAction, ThreadDetailRequest,
         },
         updates::{plan_update_action, UpdateAction, UpdateExecutionMethod},
-        uploads::{plan_store_uploads_with_capability, UploadBatchItem},
+        uploads::{
+            plan_store_uploads_with_capability, validate_attachment_id_count, UploadBatchItem,
+        },
     },
 };
 
@@ -142,6 +147,39 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
         .args
         .contains(&"--dry-run".to_string()));
     assert!(!execute.maintenance.as_ref().unwrap().dry_run);
+}
+
+#[test]
+fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
+    let config = Config::for_platform_kind(PlatformKind::Linux);
+    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+
+    let default_plan = plan_probe_action(&config, &platform, ProbeAction::BarkTest).unwrap();
+    let default_command = &default_plan.job.as_ref().unwrap().command;
+    assert_eq!(
+        default_command,
+        "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe bark-test"
+    );
+
+    let custom_config = std::path::Path::new("/tmp/nexushub custom/config.toml");
+    let override_plan = plan_probe_action_with_config_path(
+        &config,
+        &platform,
+        ProbeAction::BarkTest,
+        custom_config,
+    )
+    .unwrap();
+    let override_job = override_plan.job.as_ref().unwrap();
+
+    assert_eq!(
+        override_job.command,
+        "/opt/nexushub/bin/nexushubd --config '/tmp/nexushub custom/config.toml' probe bark-test"
+    );
+    assert_eq!(
+        override_job.args,
+        vec!["probe".to_string(), "bark-test".to_string()]
+    );
+    assert!(!override_job.command.contains("/opt/nexushub/config.toml"));
 }
 
 #[test]
@@ -322,6 +360,38 @@ fn thread_detail_cleanup_followup_upload_facades_are_capability_gated() {
         },
     )
     .is_err());
+}
+
+#[test]
+fn thread_limit_and_attachment_id_count_helpers_are_shared_core_contracts() {
+    assert_eq!(normalize_thread_detail_block_limit(None, false), Some(120));
+    assert_eq!(
+        normalize_thread_detail_block_limit(Some(999), false),
+        Some(500)
+    );
+    assert_eq!(normalize_thread_detail_block_limit(Some(0), false), Some(1));
+    assert_eq!(normalize_thread_detail_block_limit(Some(25), true), None);
+
+    assert_eq!(normalize_thread_block_limit(None), 120);
+    assert_eq!(normalize_thread_block_limit(Some(0)), 1);
+    assert_eq!(normalize_thread_block_limit(Some(999)), 500);
+
+    let ids = vec![
+        "a".to_string(),
+        "b".to_string(),
+        "c".to_string(),
+        "d".to_string(),
+        "e".to_string(),
+    ];
+    assert!(validate_attachment_id_count(&ids).is_ok());
+    let too_many = ids
+        .into_iter()
+        .chain(std::iter::once("f".to_string()))
+        .collect::<Vec<_>>();
+    assert!(validate_attachment_id_count(&too_many)
+        .unwrap_err()
+        .to_string()
+        .contains("一次最多发送 5 个附件"));
 }
 
 #[test]

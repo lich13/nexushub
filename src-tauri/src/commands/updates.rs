@@ -3,9 +3,11 @@
 use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::config::Config;
-use nexushub_core::db::JobRecord;
 use nexushub_core::platform::PlatformPaths;
-use nexushub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
+use nexushub_core::services::{
+    commands,
+    updates::{self, UpdateAction, UpdateState, UpdateStatus},
+};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -16,19 +18,22 @@ pub fn desktop_update_status_with_state(
     last_error: Option<&str>,
 ) -> Result<UpdateStatus> {
     let config = state.config();
-    let mut status =
-        desktop_update_status_for(&config, state.platform(), latest_version, last_error)?;
-    if latest_version.is_none() && last_error.is_none() {
-        if let Some(job) = state
+    let recent_check_job = if latest_version.is_none() && last_error.is_none() {
+        state
             .db
             .list_jobs(25)?
             .into_iter()
             .find(|job| job.kind == "nexushub_update_check")
-        {
-            apply_recent_check_job(&mut status, &job, &config, state.platform());
-        }
-    }
-    Ok(status)
+    } else {
+        None
+    };
+    Ok(updates::update_status_with_recent_check_job(
+        &config,
+        state.platform(),
+        latest_version,
+        last_error,
+        recent_check_job.as_ref(),
+    ))
 }
 
 #[tauri::command(rename = "updates.status")]
@@ -36,20 +41,6 @@ pub fn getUpdateStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<UpdateStatus, String> {
     desktop_update_status_with_state(&state, None, None).map_err(|err| err.to_string())
-}
-
-pub fn desktop_update_status_for(
-    config: &Config,
-    platform: &PlatformPaths,
-    latest_version: Option<&str>,
-    last_error: Option<&str>,
-) -> Result<UpdateStatus> {
-    Ok(updates::update_status(
-        config,
-        platform,
-        latest_version,
-        last_error,
-    ))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,20 +59,17 @@ async fn check_update_status(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateCheckResponse, String> {
-    let _plan = updates::plan_update_action(&state.config(), state.platform(), UpdateAction::Check)
-        .map_err(|err| err.to_string())?;
-    let job_id = update_job_id("check");
+    let job =
+        native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Check)
+            .map_err(|err| err.to_string())?;
+    let job_id = update_job_id(job.id_action);
     state
         .db
-        .create_job(
-            &job_id,
-            "nexushub_update_check",
-            "NexusHub app update check",
-        )
+        .create_job(&job_id, &job.spec.kind, &job.spec.title)
         .map_err(|err| err.to_string())?;
     state
         .db
-        .append_job_output(&job_id, "checking signed Tauri updater feed\n")
+        .append_job_output(&job_id, &job.spec.initial_output)
         .map_err(|err| err.to_string())?;
 
     match check_update(&app, &state, &job_id).await {
@@ -104,21 +92,17 @@ async fn install_update_and_restart(
     app: AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<DesktopUpdateInstallResponse, String> {
-    let _plan =
-        updates::plan_update_action(&state.config(), state.platform(), UpdateAction::Install)
+    let job =
+        native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Install)
             .map_err(|err| err.to_string())?;
-    let job_id = update_job_id("install");
+    let job_id = update_job_id(job.id_action);
     state
         .db
-        .create_job(
-            &job_id,
-            "nexushub_update_install",
-            "NexusHub app update install",
-        )
+        .create_job(&job_id, &job.spec.kind, &job.spec.title)
         .map_err(|err| err.to_string())?;
     state
         .db
-        .append_job_output(&job_id, "checking signed Tauri updater feed\n")
+        .append_job_output(&job_id, &job.spec.initial_output)
         .map_err(|err| err.to_string())?;
 
     match install_update(&app, &state, &job_id).await {
@@ -164,44 +148,33 @@ fn update_job_id(action: &str) -> String {
     )
 }
 
-fn apply_recent_check_job(
-    status: &mut UpdateStatus,
-    job: &JobRecord,
-    config: &Config,
-    platform: &PlatformPaths,
-) {
-    if job.status == "failed" {
-        status.state = UpdateState::Failed;
-        return;
-    }
-    if job.status == "running" {
-        status.state = UpdateState::Checking;
-        return;
-    }
-    if let Some(version) = signed_update_version_from_output(&job.output) {
-        *status = updates::update_status(config, platform, Some(&version), None);
-        status.state = if status.update_available == Some(true) {
-            UpdateState::Ready
-        } else {
-            UpdateState::Idle
-        };
-        return;
-    }
-    if job.output.contains("no signed app update available") {
-        status.latest_version = Some(status.current_version.clone());
-        status.update_available = Some(false);
-        status.state = UpdateState::Idle;
-    }
+#[derive(Debug)]
+struct NativeUpdateJobPlan {
+    id_action: &'static str,
+    spec: updates::MacosUpdaterJobSpec,
 }
 
-fn signed_update_version_from_output(output: &str) -> Option<String> {
-    output.lines().rev().find_map(|line| {
-        line.trim()
-            .strip_prefix("signed app update available ")
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
+fn native_update_job_plan_for_action(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: UpdateAction,
+) -> Result<NativeUpdateJobPlan> {
+    let plan = updates::plan_update_action(config, platform, action)?;
+    let native = plan
+        .native
+        .ok_or_else(|| anyhow::anyhow!("update action did not produce a native updater spec"))?;
+    Ok(NativeUpdateJobPlan {
+        id_action: native_update_id_action(&native.command)?,
+        spec: updates::macos_updater_job_spec(action)?,
     })
+}
+
+fn native_update_id_action(command: &str) -> Result<&'static str> {
+    match command {
+        commands::UPDATES_CHECK => Ok("check"),
+        commands::UPDATES_INSTALL => Ok("install"),
+        command => anyhow::bail!("unsupported native update command: {command}"),
+    }
 }
 
 async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Result<UpdateStatus> {
@@ -218,7 +191,7 @@ async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Re
         Some(update) => {
             state.db.append_job_output(
                 job_id,
-                &format!("signed app update available {}\n", update.version),
+                &updates::macos_updater_update_available_output(&update.version),
             )?;
             status.latest_version = Some(update.version.clone());
             status.update_available =
@@ -232,7 +205,7 @@ async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Re
         None => {
             state
                 .db
-                .append_job_output(job_id, "no signed app update available\n")?;
+                .append_job_output(job_id, updates::macos_updater_no_update_output())?;
             status.latest_version = Some(status.current_version.clone());
             status.update_available = Some(false);
             status.state = UpdateState::Idle;
@@ -253,7 +226,7 @@ async fn install_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> 
     else {
         state
             .db
-            .append_job_output(job_id, "no signed app update available\n")?;
+            .append_job_output(job_id, updates::macos_updater_no_update_output())?;
         return Ok(false);
     };
 
@@ -276,4 +249,104 @@ async fn install_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> 
         .db
         .append_job_output(job_id, "signed app update installed\n")?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexushub_core::{
+        db::JobRecord,
+        platform::{PlatformKind, PlatformPaths},
+    };
+
+    #[test]
+    fn native_update_commands_are_validated_against_core_plan() {
+        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+
+        let check =
+            native_update_job_plan_for_action(&config, &platform, UpdateAction::Check).unwrap();
+        assert_eq!(check.id_action, "check");
+        assert_eq!(check.spec.kind, "nexushub_update_check");
+
+        let install =
+            native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
+        assert_eq!(install.id_action, "install");
+        assert_eq!(install.spec.kind, "nexushub_update_install");
+
+        let prune_action = {
+            use UpdateAction as Action;
+            Action::Prune
+        };
+        let prune = native_update_job_plan_for_action(&config, &platform, prune_action)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            prune.contains("prune_backups is unavailable on macos"),
+            "{prune}"
+        );
+    }
+
+    #[test]
+    fn recent_check_job_output_keeps_no_update_status_explicit() {
+        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let job = job_record(
+            "succeeded",
+            "checking signed Tauri updater feed\nno signed app update available\n",
+        );
+
+        let status =
+            updates::update_status_with_recent_check_job(&config, &platform, None, None, Some(&job));
+
+        assert_eq!(status.state, UpdateState::Idle);
+        assert_eq!(
+            status.latest_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(status.update_available, Some(false));
+    }
+
+    #[test]
+    fn update_command_source_uses_core_recent_check_and_marker_helpers() {
+        let command_source = include_str!("updates.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("updates production source");
+
+        assert!(
+            command_source.contains("updates::update_status_with_recent_check_job"),
+            "Tauri commands should let core derive recent update check status"
+        );
+        assert!(
+            command_source.contains("updates::macos_updater_job_spec"),
+            "Tauri commands should use core job metadata for native updater jobs"
+        );
+        assert!(
+            command_source.contains("updates::macos_updater_update_available_output")
+                && command_source.contains("updates::macos_updater_no_update_output"),
+            "Tauri commands should use core updater output marker helpers"
+        );
+        assert!(
+            !command_source.contains("fn apply_recent_check_job")
+                && !command_source.contains("fn signed_update_version_from_output"),
+            "Tauri commands must not duplicate recent check status parsing"
+        );
+    }
+
+    fn job_record(status: &str, output: &str) -> JobRecord {
+        JobRecord {
+            id: "job-1".to_string(),
+            kind: "nexushub_update_check".to_string(),
+            status: status.to_string(),
+            title: "NexusHub app update check".to_string(),
+            thread_id: None,
+            turn_id: None,
+            started_at: 1,
+            finished_at: Some(2),
+            exit_code: Some(0),
+            output: output.to_string(),
+            error: None,
+        }
+    }
 }

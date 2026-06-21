@@ -93,14 +93,40 @@ pub fn plan_probe_action(
     plan_probe_action_with_device_key(config, platform, action, false)
 }
 
+pub fn plan_probe_action_with_config_path(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: ProbeAction,
+    config_path: impl AsRef<Path>,
+) -> Result<ProbeActionPlan> {
+    plan_probe_action_with_device_key_and_config_path(config, platform, action, false, config_path)
+}
+
 pub fn plan_probe_action_with_device_key(
     config: &Config,
     platform: &PlatformPaths,
     action: ProbeAction,
     device_key_configured: bool,
 ) -> Result<ProbeActionPlan> {
+    plan_probe_action_with_device_key_and_config_path(
+        config,
+        platform,
+        action,
+        device_key_configured,
+        &platform.config_file,
+    )
+}
+
+pub fn plan_probe_action_with_device_key_and_config_path(
+    config: &Config,
+    platform: &PlatformPaths,
+    action: ProbeAction,
+    device_key_configured: bool,
+    config_path: impl AsRef<Path>,
+) -> Result<ProbeActionPlan> {
     let required_capability = probe_action_capability(action);
     require_capability(platform, required_capability)?;
+    let config_path = config_path.as_ref();
     let runtime = probe_core::ProbeRuntime::new(config.clone(), platform.clone());
     let diagnostic_plan = match action {
         ProbeAction::BarkTest => Some(runtime.bark_test_plan(device_key_configured)),
@@ -111,7 +137,7 @@ pub fn plan_probe_action_with_device_key(
             Some(runtime.plan_action(probe_core::ProbeActionPlanKind::LogsDbMaintain)?)
         }
     };
-    let job = Some(probe_fixed_job_spec(platform, action)?);
+    let job = Some(probe_fixed_job_spec(platform, action, config_path)?);
     let maintenance = match action {
         ProbeAction::LogsDbDryRun => Some(ProbeLogsDbMaintenanceSpec {
             dry_run: true,
@@ -230,6 +256,7 @@ fn probe_action_capability(action: ProbeAction) -> Capability {
 fn probe_fixed_job_spec(
     platform: &PlatformPaths,
     action: ProbeAction,
+    config_path: &Path,
 ) -> Result<ProbeFixedJobSpec> {
     let (kind, title, args, exclusive_group) = match action {
         ProbeAction::BarkTest => (
@@ -261,17 +288,21 @@ fn probe_fixed_job_spec(
     Ok(ProbeFixedJobSpec {
         kind: kind.to_string(),
         title: title.to_string(),
-        command: fixed_probe_shell_command(platform, &args),
+        command: fixed_probe_shell_command(platform, config_path, &args),
         args,
         exclusive_group: Some(exclusive_group.to_string()),
     })
 }
 
-fn fixed_probe_shell_command(platform: &PlatformPaths, args: &[String]) -> String {
+fn fixed_probe_shell_command(
+    platform: &PlatformPaths,
+    config_path: &Path,
+    args: &[String],
+) -> String {
     let mut parts = vec![
         platform.daemon_binary().display().to_string(),
         "--config".to_string(),
-        platform.config_file.display().to_string(),
+        config_path.display().to_string(),
     ];
     parts.extend(args.iter().cloned());
     parts

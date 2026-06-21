@@ -619,7 +619,7 @@ describe("archive delete API compatibility", () => {
       linux_update_job: false,
       prune_backups: false
     });
-    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i);
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i);
   });
 
   test("Claude Code demo overview includes read-only MCP install and cache summaries", async () => {
@@ -1449,6 +1449,8 @@ describe("archive delete API compatibility", () => {
     expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
     expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
     expect(domainApiSource).not.toContain("SystemCapabilities =");
+    expect(domainCapabilitiesSource).not.toContain("../api/");
+    expect(domainCapabilitiesSource).not.toContain('from "../api');
     expect(domainCapabilitiesSource).not.toContain("linuxBackupPrune");
     expect(domainCapabilitiesSource).not.toContain("linuxUpdateLabels");
     for (const token of forbiddenDomainTokens) {
@@ -1466,6 +1468,20 @@ describe("archive delete API compatibility", () => {
     expect(appSource).not.toContain("webCommand");
     expect(appSource).not.toContain('"/api/');
     expect(appSource).not.toContain("'/api/");
+  });
+
+  test("desktop demo and default run config do not leak Linux workspace paths", async () => {
+    const { getCodexConfig } = await loadDesktopDemoApi();
+    const app = await import("../App");
+
+    const codexConfig = await getCodexConfig();
+
+    expect(codexConfig.available).toBe(true);
+    expect(codexConfig.available ? codexConfig.data?.cwd : null).not.toBe("/home/ubuntu/codex-workspace");
+    expect(app.defaultRunConfig().cwd).not.toBe("/home/ubuntu/codex-workspace");
+    expect(app.buildPayload("go", app.defaultRunConfig())).not.toMatchObject({
+      cwd: "/home/ubuntu/codex-workspace"
+    });
   });
 
   test("uses protocol endpoints for Plan and approval actions", async () => {
@@ -1630,7 +1646,7 @@ describe("archive delete API compatibility", () => {
       model: "gpt-5.5",
       service_tier: null,
       reasoning_effort: "xhigh",
-      cwd: "/home/ubuntu/codex-workspace",
+      cwd: null,
       permission_profile: null,
       approval_policy: null,
       sandbox_mode: null,
