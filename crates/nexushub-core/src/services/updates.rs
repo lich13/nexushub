@@ -125,6 +125,61 @@ pub struct UpdateActionPlan {
     pub native: Option<NativeUpdateSpec>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct UpdateUseCases<'a> {
+    config: &'a Config,
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> UpdateUseCases<'a> {
+    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
+        Self { config, platform }
+    }
+
+    pub fn status(
+        self,
+        latest_version: Option<&str>,
+        last_error: Option<&str>,
+    ) -> Result<UpdateStatusFacadePlan> {
+        update_status_with_capability(self.config, self.platform, latest_version, last_error)
+    }
+
+    pub fn status_with_recent_check_job(
+        self,
+        latest_version: Option<&str>,
+        last_error: Option<&str>,
+        recent_check_job: Option<&JobRecord>,
+    ) -> Result<UpdateStatusFacadePlan> {
+        require_capability(self.platform, Capability::AppUpdater)?;
+        Ok(UpdateStatusFacadePlan {
+            required_capability: Capability::AppUpdater,
+            status: update_status_with_recent_check_job(
+                self.config,
+                self.platform,
+                latest_version,
+                last_error,
+                recent_check_job,
+            ),
+        })
+    }
+
+    pub fn action_plan(self, action: UpdateAction) -> Result<UpdateActionPlan> {
+        plan_update_action(self.config, self.platform, action)
+    }
+
+    pub fn check_plan(self) -> Result<UpdateActionPlan> {
+        self.action_plan(UpdateAction::Check)
+    }
+
+    pub fn install_plan(self) -> Result<UpdateActionPlan> {
+        self.action_plan(UpdateAction::Install)
+    }
+
+    pub fn prune_plan(self) -> Result<UpdateActionPlan> {
+        self.action_plan(UpdateAction::Prune)
+    }
+}
+
 pub const MACOS_UPDATER_CHECKING_OUTPUT: &str = "checking signed Tauri updater feed\n";
 pub const MACOS_UPDATER_NO_UPDATE_OUTPUT: &str = "no signed app update available\n";
 const MACOS_UPDATER_AVAILABLE_PREFIX: &str = "signed app update available ";

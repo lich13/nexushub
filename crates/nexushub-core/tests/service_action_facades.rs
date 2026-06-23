@@ -23,6 +23,11 @@ use nexushub_core::{
         },
         probe::{
             plan_probe_action, plan_probe_action_with_config_path, ProbeAction, ProbeExecutionKind,
+            ProbeUseCases,
+        },
+        settings::{
+            ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
+            ProbeSettingsSaveRequest, SettingsUseCases,
         },
         system::Capability,
         threads::{
@@ -31,7 +36,7 @@ use nexushub_core::{
             plan_threads_list_request, thread_blocks_page_for_plan, ThreadCleanupAction,
             ThreadDetailRequest, ThreadsQuery,
         },
-        updates::{plan_update_action, UpdateAction, UpdateExecutionMethod},
+        updates::{plan_update_action, UpdateAction, UpdateExecutionMethod, UpdateUseCases},
         uploads::{
             plan_delete_upload_with_capability, plan_store_uploads_with_capability,
             plan_upload_validation_with_capability, validate_attachment_id_count, UploadBatchItem,
@@ -243,6 +248,85 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
 
     let err = plan_update_action(&mac_config, &mac, UpdateAction::Prune)
         .expect_err("backup prune is a Linux-only update action");
+    assert!(err
+        .to_string()
+        .contains("prune_backups is unavailable on macos"));
+
+    std::fs::remove_dir_all(mac_home).unwrap();
+}
+
+#[test]
+fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
+    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
+    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+
+    let probe = ProbeUseCases::new(&linux_config, &linux);
+    let bark = probe.action(ProbeAction::BarkTest).unwrap();
+    assert_eq!(bark.required_capability, Capability::Probe);
+    assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
+    assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
+
+    let logs_dry_run = probe.logs_db_maintenance_plan(true).unwrap();
+    assert_eq!(
+        logs_dry_run.required_capability,
+        Capability::ProbeLogMaintenance
+    );
+    assert_eq!(logs_dry_run.action, ProbeAction::LogsDbDryRun);
+    assert!(logs_dry_run.maintenance.as_ref().unwrap().dry_run);
+
+    let settings = SettingsUseCases::new(&linux_config, &linux);
+    let view = settings
+        .probe_settings_view(ProbeSecretState::Configured)
+        .unwrap();
+    assert_eq!(view.required_capability, Capability::Settings);
+    assert!(view.settings.notifications.device_key_configured);
+
+    let save = settings
+        .save_probe_settings(ProbeSettingsSaveRequest {
+            probe: Some(ProbeSettingsSavePatch {
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some(" use-case-bark-key ".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(save.required_capability, Capability::Settings);
+    assert_eq!(save.bark_device_key.as_deref(), Some("use-case-bark-key"));
+    let serialized = serde_json::to_string(&save).unwrap();
+    assert!(serialized.contains("[configured]"));
+    assert!(!serialized.contains("use-case-bark-key"));
+
+    let updates = UpdateUseCases::new(&linux_config, &linux);
+    let check = updates.check_plan().unwrap();
+    assert_eq!(check.required_capability, Capability::LinuxUpdateJob);
+    assert_eq!(check.action, UpdateAction::Check);
+    assert_eq!(check.method, UpdateExecutionMethod::LinuxSystemdJob);
+    let install = updates.install_plan().unwrap();
+    assert_eq!(install.action, UpdateAction::Install);
+    let prune = updates.prune_plan().unwrap();
+    assert_eq!(prune.required_capability, Capability::PruneBackups);
+    assert_eq!(prune.action, UpdateAction::Prune);
+
+    let mac_home = temp_dir("nexushub-use-cases-macos");
+    std::fs::create_dir_all(&mac_home).unwrap();
+    let mac_config = Config::for_platform_kind_with_home(PlatformKind::Macos, &mac_home);
+    let mac = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let mac_updates = UpdateUseCases::new(&mac_config, &mac);
+
+    assert_eq!(
+        mac_updates.check_plan().unwrap().required_capability,
+        Capability::AppUpdater
+    );
+    assert_eq!(
+        mac_updates.install_plan().unwrap().method,
+        UpdateExecutionMethod::MacosTauriUpdater
+    );
+    let err = mac_updates
+        .prune_plan()
+        .expect_err("macOS must not expose Linux backup pruning");
     assert!(err
         .to_string()
         .contains("prune_backups is unavailable on macos"));

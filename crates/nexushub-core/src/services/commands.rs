@@ -27,6 +27,9 @@ pub const THREADS_RENAME: &str = "threads.rename";
 pub const THREADS_FORK: &str = "threads.fork";
 pub const THREADS_FOLLOWUPS_LIST: &str = "threads.followups.list";
 pub const THREADS_FOLLOWUPS_ENQUEUE: &str = "threads.followups.enqueue";
+pub const THREADS_FOLLOWUPS_CLAIM: &str = "threads.followups.claim";
+pub const THREADS_FOLLOWUPS_SUBMIT: &str = "threads.followups.submit";
+pub const THREADS_FOLLOWUPS_ERROR: &str = "threads.followups.error";
 pub const THREADS_FOLLOWUPS_CANCEL: &str = "threads.followups.cancel";
 pub const THREADS_PLAN_ACCEPT: &str = "threads.plan.accept";
 pub const THREADS_PLAN_REVISE: &str = "threads.plan.revise";
@@ -91,6 +94,9 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     THREADS_FORK,
     THREADS_FOLLOWUPS_LIST,
     THREADS_FOLLOWUPS_ENQUEUE,
+    THREADS_FOLLOWUPS_CLAIM,
+    THREADS_FOLLOWUPS_SUBMIT,
+    THREADS_FOLLOWUPS_ERROR,
     THREADS_FOLLOWUPS_CANCEL,
     THREADS_PLAN_ACCEPT,
     THREADS_PLAN_REVISE,

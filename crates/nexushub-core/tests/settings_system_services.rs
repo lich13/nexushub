@@ -10,7 +10,8 @@ use nexushub_core::{
             plan_save_goal, GoalUpdateRequest,
         },
         security::{
-            plan_password_change, plan_security_patch, public_security_view, security_view,
+            plan_password_change, plan_password_change_with_capability, plan_security_patch,
+            public_security_view, public_security_view_with_capability, security_view,
             PasswordChangeRequest, SecurityPatch,
         },
         settings::{
@@ -39,6 +40,7 @@ fn linux_capabilities_expose_web_host_only_features() {
     assert!(capabilities.probe_log_maintenance);
     assert!(capabilities.thread_archive_actions);
     assert!(capabilities.web_auth);
+    assert!(capabilities.csrf);
     assert!(capabilities.security_settings);
     assert!(capabilities.turnstile);
     assert!(capabilities.systemd);
@@ -70,6 +72,7 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
     assert!(capabilities.probe_log_maintenance);
     assert!(capabilities.thread_archive_actions);
     assert!(!capabilities.web_auth);
+    assert!(!capabilities.csrf);
     assert!(!capabilities.security_settings);
     assert!(!capabilities.turnstile);
     assert!(!capabilities.systemd);
@@ -90,6 +93,7 @@ fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
 
     for capability in [
         Capability::WebAuth,
+        Capability::Csrf,
         Capability::Turnstile,
         Capability::SecuritySettings,
         Capability::AdminPassword,
@@ -106,6 +110,7 @@ fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
     }
 
     assert!(!capabilities.web_auth);
+    assert!(!capabilities.csrf);
     assert!(!capabilities.turnstile);
     assert!(!capabilities.security_settings);
     assert!(!capabilities.admin_password);
@@ -551,8 +556,86 @@ fn password_change_plan_keeps_auth_hashing_in_adapter_but_centralizes_validation
 }
 
 #[test]
+fn auth_public_settings_and_admin_password_facades_are_linux_only() {
+    let config = Config::for_platform_kind(PlatformKind::Linux);
+    let settings = SecuritySettings {
+        turnstile_enabled: true,
+        turnstile_required: true,
+        turnstile_site_key: None,
+        turnstile_secret_configured: false,
+        session_ttl_seconds: 900,
+    };
+    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+
+    let public = public_security_view_with_capability(
+        &linux,
+        settings,
+        &config.security,
+        Some("signin".to_string()),
+        true,
+        Some("https://example.com/nexushub/".to_string()),
+    )
+    .expect("Linux should expose public web auth settings");
+    assert_eq!(public.required_capability, Capability::WebAuth);
+    assert_eq!(public.public.turnstile_action, "signin");
+    assert!(public.public.turnstile_enabled);
+
+    let password = plan_password_change_with_capability(
+        &linux,
+        PasswordChangeRequest {
+            current_password: "old password".to_string(),
+            new_password: "new-password-123".to_string(),
+        },
+        true,
+    )
+    .expect("Linux should allow admin password changes");
+    assert_eq!(password.required_capability, Capability::AdminPassword);
+    assert_eq!(password.change.new_password, "new-password-123");
+
+    let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+    let macos_settings = SecuritySettings {
+        turnstile_enabled: true,
+        turnstile_required: true,
+        turnstile_site_key: None,
+        turnstile_secret_configured: false,
+        session_ttl_seconds: 900,
+    };
+    let err = public_security_view_with_capability(
+        &macos,
+        macos_settings,
+        &config.security,
+        None,
+        false,
+        None,
+    )
+    .expect_err("macOS should not expose WebUI login settings");
+    assert!(err.to_string().contains("web_auth is unavailable on macos"));
+
+    let err = plan_password_change_with_capability(
+        &macos,
+        PasswordChangeRequest {
+            current_password: "old password".to_string(),
+            new_password: "new-password-123".to_string(),
+        },
+        true,
+    )
+    .expect_err("macOS should not expose Linux WebUI admin password changes");
+    assert!(err
+        .to_string()
+        .contains("admin_password is unavailable on macos"));
+}
+
+#[test]
 fn core_services_do_not_import_host_frameworks_or_process_runners() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
+    for forbidden_dependency in ["axum", "tauri", "nexushubd", "src-tauri"] {
+        assert!(
+            !manifest.contains(forbidden_dependency),
+            "nexushub-core must not declare adapter/runtime dependency {forbidden_dependency}"
+        );
+    }
+
     for relative in [
         "src/services/probe.rs",
         "src/services/settings.rs",

@@ -1,10 +1,32 @@
 #![allow(non_snake_case)]
 
-use crate::overview::{
-    DesktopJobDetailRequest, DesktopJobResponse, DesktopJobsRequest, DesktopState,
-};
+use crate::overview::DesktopState;
 use anyhow::Result;
-use nexushub_core::{db::JobRecord, update::analyze_job_failure};
+use nexushub_core::{
+    db::JobRecord,
+    update::{analyze_job_failure, JobFailureAnalysis},
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopJobResponse {
+    #[serde(flatten)]
+    pub job: JobRecord,
+    pub failure_analysis: Option<JobFailureAnalysis>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopJobsRequest {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopJobDetailRequest {
+    pub id: String,
+}
 
 #[tauri::command(rename = "jobs.list")]
 pub fn listJobs(

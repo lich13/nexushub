@@ -212,6 +212,67 @@ pub struct FollowUpEnqueueFacadePlan {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FollowUpClaimRequest {
+    #[serde(alias = "thread_id")]
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpClaimPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub thread_id: String,
+    pub from_status: String,
+    pub to_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpSubmitPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub followup_id: String,
+    pub thread_id: String,
+    pub action: JobActionRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpSubmitResultRequest {
+    #[serde(alias = "followup_id", alias = "followUpId")]
+    pub followup_id: String,
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpSubmitResultPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub followup_id: String,
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpErrorRequest {
+    #[serde(alias = "followup_id", alias = "followUpId")]
+    pub followup_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpErrorPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub followup_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FollowUpCancelRequest {
     #[serde(alias = "thread_id")]
     pub thread_id: String,
@@ -472,6 +533,73 @@ pub fn plan_followup_enqueue_with_capability(
     Ok(FollowUpEnqueueFacadePlan {
         required_capability: Capability::Jobs,
         followup,
+    })
+}
+
+pub fn plan_followup_claim_with_capability(
+    platform: &PlatformPaths,
+    request: FollowUpClaimRequest,
+) -> Result<FollowUpClaimPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(FollowUpClaimPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_CLAIM.to_string(),
+        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
+        from_status: "pending".to_string(),
+        to_status: "submitting".to_string(),
+    })
+}
+
+pub fn plan_followup_submit_with_capability(
+    platform: &PlatformPaths,
+    followup: &ThreadFollowUp,
+) -> Result<FollowUpSubmitPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    if followup.status != "submitting" {
+        return Err(anyhow!("follow-up must be claimed before submit"));
+    }
+    let followup_id =
+        non_empty_owned(&followup.id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    let thread_id = required_command_thread_id(Some(&followup.thread_id), None)?;
+    let mut request = followup_request(followup);
+    request.thread_id = Some(thread_id.clone());
+    Ok(FollowUpSubmitPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_SUBMIT.to_string(),
+        followup_id,
+        thread_id,
+        action: request.into_job_action(CodexActionKind::Resume),
+    })
+}
+
+pub fn plan_followup_submitted_with_capability(
+    platform: &PlatformPaths,
+    request: FollowUpSubmitResultRequest,
+) -> Result<FollowUpSubmitResultPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let followup_id =
+        non_empty_owned(&request.followup_id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    Ok(FollowUpSubmitResultPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_SUBMIT.to_string(),
+        followup_id,
+        result: request.result,
+    })
+}
+
+pub fn plan_followup_error_with_capability(
+    platform: &PlatformPaths,
+    request: FollowUpErrorRequest,
+) -> Result<FollowUpErrorPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let followup_id =
+        non_empty_owned(&request.followup_id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    let error = non_empty_owned(&request.error).ok_or_else(|| anyhow!("error is required"))?;
+    Ok(FollowUpErrorPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_ERROR.to_string(),
+        followup_id,
+        error,
     })
 }
 
@@ -770,6 +898,35 @@ pub fn enqueue_planned_followup(
     db.enqueue_followup(&followup.thread_id, &followup.message, followup.options)
 }
 
+pub fn claim_next_followup_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: FollowUpClaimRequest,
+) -> Result<Option<ThreadFollowUp>> {
+    let plan = plan_followup_claim_with_capability(platform, request)?;
+    db.claim_next_pending_followup(&plan.thread_id)
+}
+
+pub fn mark_followup_submitted_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: FollowUpSubmitResultRequest,
+) -> Result<ActionResponse> {
+    let plan = plan_followup_submitted_with_capability(platform, request)?;
+    db.mark_followup_submitted(&plan.followup_id, plan.result.clone())?;
+    Ok(followup_submitted_response(&plan))
+}
+
+pub fn mark_followup_error_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: FollowUpErrorRequest,
+) -> Result<ActionResponse> {
+    let plan = plan_followup_error_with_capability(platform, request)?;
+    db.mark_followup_error(&plan.followup_id, &plan.error)?;
+    Ok(followup_error_response(&plan))
+}
+
 pub fn cancel_followup_with_capability(
     db: &PanelDb,
     platform: &PlatformPaths,
@@ -783,6 +940,26 @@ pub fn cancel_followup_with_capability(
         plan.followup_id,
         cancelled,
     ))
+}
+
+pub fn followup_submitted_response(plan: &FollowUpSubmitResultPlan) -> ActionResponse {
+    action_ok(
+        &plan.command,
+        "follow-up submitted",
+        None,
+        None,
+        Some(json!({"followup_id": plan.followup_id, "result": plan.result})),
+    )
+}
+
+pub fn followup_error_response(plan: &FollowUpErrorPlan) -> ActionResponse {
+    action_ok(
+        &plan.command,
+        "follow-up marked as failed",
+        None,
+        None,
+        Some(json!({"followup_id": plan.followup_id, "error": plan.error})),
+    )
 }
 
 pub fn thread_message_options_json(request: &ThreadMessageRequest) -> Value {

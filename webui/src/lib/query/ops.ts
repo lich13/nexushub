@@ -13,6 +13,7 @@ import {
 } from "../api";
 import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
 import { systemQueryKeys } from "./system";
+import { preservePreviousQueryData } from "./shared";
 
 export const opsQueryKeys = {
   systemStatus: systemQueryKeys.status,
@@ -28,20 +29,20 @@ export function useOpsQueries() {
       queryFn: getSystemStatus,
       refetchInterval: 8000,
       staleTime: 5000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     update: useQuery({
       queryKey: opsQueryKeys.updateStatus,
       queryFn: getUpdateStatus,
       refetchInterval: 30000,
       staleTime: 15000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     jobs: useQuery({
       queryKey: opsQueryKeys.jobs,
       queryFn: listJobs,
       refetchInterval: 5000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     })
   };
 }
@@ -120,8 +121,4 @@ export function useOpsActions(input: {
       }
     })
   };
-}
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
 }

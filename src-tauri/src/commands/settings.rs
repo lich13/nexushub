@@ -1,10 +1,7 @@
 #![allow(non_snake_case)]
 
-use crate::overview::{
-    DesktopActionResponse, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse, DesktopGoal,
-    DesktopGoalRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
-    DesktopProbeSettings, DesktopState, DesktopUploadFile,
-};
+use super::DesktopActionResponse;
+use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::{
     codex::ThreadSummary,
@@ -21,9 +18,87 @@ use nexushub_core::{
     },
     uploads,
 };
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopGoal {
+    pub available: bool,
+    pub enabled: bool,
+    pub thread_id: Option<String>,
+    pub objective: Option<String>,
+    pub token_budget: Option<u64>,
+    pub status: String,
+    pub completed_at: Option<i64>,
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopGoalRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    pub objective: Option<String>,
+    #[serde(alias = "tokenBudget", alias = "token_budget")]
+    pub token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopProbeSettings {
+    pub codex: Value,
+    pub probe: nexushub_core::config::ProbeConfig,
+    pub notifications: Value,
+    pub logs_db: nexushub_core::config::ProbeLogsDbConfig,
+}
+
+impl From<settings_service::SettingsView> for DesktopProbeSettings {
+    fn from(view: settings_service::SettingsView) -> Self {
+        Self {
+            codex: serde_json::to_value(view.codex).unwrap_or_else(|_| json!({})),
+            probe: view.probe,
+            notifications: serde_json::to_value(view.notifications).unwrap_or_else(|_| json!({})),
+            logs_db: view.logs_db,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopProbeEventsResponse {
+    pub events: Vec<nexushub_core::db::ProbeEvent>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopDeleteUploadResponse {
+    pub ok: bool,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopUploadFile {
+    pub name: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopProbeEventsRequest {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopDeleteUploadRequest {
+    pub id: String,
+}
 
 #[tauri::command(rename = "probe.settings.get")]
 pub fn getProbeSettings(
@@ -256,18 +331,23 @@ pub(crate) fn store_uploads_with_state(
 }
 
 fn save_goal_with_state(state: &DesktopState, request: DesktopGoalRequest) -> Result<DesktopGoal> {
-    let view = goal_service::save_goal_with_capability(&state.db, state.platform(), goal_service::GoalUpdateRequest {
-        thread_id: Some(request.thread_id),
-        objective: request.objective,
-        token_budget: request.token_budget,
-        status: None,
-        enabled: None,
-    })?;
+    let view = goal_service::save_goal_with_capability(
+        &state.db,
+        state.platform(),
+        goal_service::GoalUpdateRequest {
+            thread_id: Some(request.thread_id),
+            objective: request.objective,
+            token_budget: request.token_budget,
+            status: None,
+            enabled: None,
+        },
+    )?;
     Ok(goal_from_view(view))
 }
 
 fn clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    let view = goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
+    let view =
+        goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
     Ok(goal_from_view(view))
 }
 
@@ -289,9 +369,12 @@ fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSetting
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    Ok(DesktopProbeSettings::from(
-        settings_service::build_settings_view(&config, secret_state),
-    ))
+    let plan = settings_service::probe_settings_view_with_capability(
+        &config,
+        state.platform(),
+        secret_state,
+    )?;
+    Ok(DesktopProbeSettings::from(plan.settings))
 }
 
 fn probe_save_settings_with_state(
@@ -307,10 +390,10 @@ fn probe_save_settings_with_state(
     let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
     std::fs::write(&config_path, updated)?;
     let response_config = Config::load(&config_path)?;
-    if let Some(device_key) = plan.bark_device_key {
+    for secret_write in plan.secret_writes {
         state.db.set_secret_setting_bytes(
-            settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
-            device_key.as_bytes(),
+            &secret_write.setting_key,
+            secret_write.secret_value.as_bytes(),
         )?;
     }
     state.replace_config(response_config);
@@ -446,31 +529,19 @@ fn probe_fixed_shell_job_with_state(
 }
 
 fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
-    cleanup_service::dry_run_archived_with_capability(
-        state.platform(),
-        &state.codex_paths(),
-    )
+    cleanup_service::dry_run_archived_with_capability(state.platform(), &state.codex_paths())
 }
 
 fn archive_delete_execute_with_state(state: &DesktopState) -> Result<ArchiveDeleteResult> {
-    cleanup_service::execute_archived_with_capability(
-        state.platform(),
-        &state.codex_paths(),
-    )
+    cleanup_service::execute_archived_with_capability(state.platform(), &state.codex_paths())
 }
 
 fn hidden_delete_dry_run_with_state(state: &DesktopState) -> Result<HiddenThreadDeletePlan> {
-    cleanup_service::dry_run_hidden_with_capability(
-        state.platform(),
-        &state.codex_paths(),
-    )
+    cleanup_service::dry_run_hidden_with_capability(state.platform(), &state.codex_paths())
 }
 
 fn hidden_delete_execute_with_state(state: &DesktopState) -> Result<HiddenThreadDeleteResult> {
-    cleanup_service::execute_hidden_with_capability(
-        state.platform(),
-        &state.codex_paths(),
-    )
+    cleanup_service::execute_hidden_with_capability(state.platform(), &state.codex_paths())
 }
 
 fn probe_events_with_state(

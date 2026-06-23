@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getCodexConfig, listModels, listPermissionProfiles } from "../api";
+import { preservePreviousQueryData } from "./shared";
 
 export const codexQueryKeys = {
   models: ["codex-models"] as const,
@@ -12,7 +13,7 @@ export function useCodexModelQuery() {
     queryKey: codexQueryKeys.models,
     queryFn: listModels,
     staleTime: 60000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -21,7 +22,7 @@ export function useCodexPermissionProfilesQuery() {
     queryKey: codexQueryKeys.permissionProfiles,
     queryFn: listPermissionProfiles,
     staleTime: 60000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -30,10 +31,6 @@ export function useCodexConfigQuery() {
     queryKey: codexQueryKeys.config,
     queryFn: getCodexConfig,
     staleTime: 60000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
-}
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
 }

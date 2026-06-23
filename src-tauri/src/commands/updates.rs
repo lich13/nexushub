@@ -296,8 +296,13 @@ mod tests {
             "checking signed Tauri updater feed\nno signed app update available\n",
         );
 
-        let status =
-            updates::update_status_with_recent_check_job(&config, &platform, None, None, Some(&job));
+        let status = updates::update_status_with_recent_check_job(
+            &config,
+            &platform,
+            None,
+            None,
+            Some(&job),
+        );
 
         assert_eq!(status.state, UpdateState::Idle);
         assert_eq!(

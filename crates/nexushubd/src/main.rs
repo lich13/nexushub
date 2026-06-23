@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod linux_adapter;
 mod state;
 mod turnstile;
 

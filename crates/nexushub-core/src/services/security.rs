@@ -41,6 +41,13 @@ pub struct SecurityPatchFacadePlan {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct PublicSecurityViewFacadePlan {
+    pub required_capability: Capability,
+    pub public: PublicSecurityView,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SecuritySettingWrite {
     pub key: &'static str,
     pub value: String,
@@ -81,6 +88,13 @@ pub struct PasswordChangeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PasswordChangePlan {
     pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordChangeFacadePlan {
+    pub required_capability: Capability,
+    pub change: PasswordChangePlan,
 }
 
 pub fn security_view(
@@ -140,6 +154,27 @@ pub fn public_security_view(
         admin_configured,
         base_url,
     }
+}
+
+pub fn public_security_view_with_capability(
+    platform: &PlatformPaths,
+    settings: SecuritySettings,
+    config: &SecurityConfig,
+    stored_turnstile_action: Option<String>,
+    admin_configured: bool,
+    base_url: Option<String>,
+) -> anyhow::Result<PublicSecurityViewFacadePlan> {
+    require_capability(platform, Capability::WebAuth)?;
+    Ok(PublicSecurityViewFacadePlan {
+        required_capability: Capability::WebAuth,
+        public: public_security_view(
+            settings,
+            config,
+            stored_turnstile_action,
+            admin_configured,
+            base_url,
+        ),
+    })
 }
 
 pub fn plan_security_patch(patch: SecurityPatch) -> anyhow::Result<SecurityPatchPlan> {
@@ -215,6 +250,18 @@ pub fn plan_password_change(
     }
     Ok(PasswordChangePlan {
         new_password: request.new_password,
+    })
+}
+
+pub fn plan_password_change_with_capability(
+    platform: &PlatformPaths,
+    request: PasswordChangeRequest,
+    current_password_matches: bool,
+) -> anyhow::Result<PasswordChangeFacadePlan> {
+    require_capability(platform, Capability::AdminPassword)?;
+    Ok(PasswordChangeFacadePlan {
+        required_capability: Capability::AdminPassword,
+        change: plan_password_change(request, current_password_matches)?,
     })
 }
 

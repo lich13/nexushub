@@ -176,6 +176,7 @@ export type SystemCapabilities = {
   job_history: boolean;
   app_updater: boolean;
   web_auth: boolean;
+  csrf: boolean;
   security_settings: boolean;
   turnstile: boolean;
   systemd: boolean;

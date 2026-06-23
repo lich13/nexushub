@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
@@ -119,6 +119,28 @@ type ThreadQueryExports = typeof import("./lib/query/threads") & {
   rollbackOptimisticThreadArchive?: (qc: QueryClient, snapshot: unknown) => void;
   applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
   rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
+  connectThreadRealtimeSubscription?: (input: {
+    threadId: string;
+    messageStore: {
+      isActive: (threadId: string) => boolean;
+      applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
+      applySummary: (threadId: string, summary: ThreadSummary) => void;
+      setFeedback: (threadId: string, message: string | null) => void;
+    };
+    threadCache: {
+      updateThreadListCaches: (summary: ThreadSummary) => void;
+      invalidateThreads: (refetchType?: "active" | "all" | "inactive" | "none") => void;
+      invalidateThread: (threadId: string, refetchType?: "active" | "all" | "inactive" | "none") => void;
+    };
+    applyThreadTitleOverride?: (summary: ThreadSummary) => ThreadSummary;
+    onBeforeActiveBlocks?: () => void;
+    subscribe?: (threadId: string, handlers: {
+      onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
+      onSummary?: (summary: ThreadSummary, threadId: string) => void;
+      onError?: (message: string, threadId: string) => void;
+    }) => () => void;
+  }) => () => void;
+  useThreadRealtimeSubscription?: unknown;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -174,6 +196,12 @@ const forbiddenComponentTokens = [
   "'/api/",
   "`/api/",
   "@tauri-apps/api",
+  "runtimeRpc(",
+  "fetch(",
+  "EventSource",
+  "useQueryClient",
+  "setQueryData",
+  "invalidateQueries",
   "isDesktopRuntime(",
   "desktop_api_command",
   "desktopApiRoute",
@@ -348,6 +376,70 @@ describe("conversation helpers", () => {
       const source = extractFunctionSource(component);
       expectSourceToAvoidTokens(source, component, forbiddenComponentTokens);
     }
+  });
+
+  test("App delegates realtime lifecycle, query placeholders, failure copy, and action gating to lib helpers", async () => {
+    const threadQuery = await loadThreadQuery();
+
+    expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
+    expect(typeof threadQuery.useThreadRealtimeSubscription).toBe("function");
+    expect(appSource).toContain("useThreadRealtimeSubscription");
+    expect(appSource).not.toContain("subscribeThreadEvents");
+    expect(appSource).not.toMatch(/export function (opsWorkspacePanelTitles|opsWorkspaceVisibleCopy|desktopRuntimeVisibleCopy|canShowForkAction|approvalActionMode|preservePreviousQueryData|slashCommandsForRuntime|failureCategoryLabel|jobFailureAnalysisView|jobOutputView)\b/);
+    expect(appSource).not.toMatch(/const (linuxFailureLabels|genericFailureLabels|desktopUnsupportedSlashCommands|controlledSlashActions|unavailableSlashCommands)\b/);
+  });
+
+  test("thread query realtime helper owns subscription side effects", async () => {
+    const threadQuery = await loadThreadQuery();
+    expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
+    if (!threadQuery.connectThreadRealtimeSubscription) return;
+
+    let handlers: {
+      onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
+      onSummary?: (summary: ThreadSummary, threadId: string) => void;
+      onError?: (message: string, threadId: string) => void;
+    } = {};
+    const unsubscribe = vi.fn();
+    const messageStore = {
+      isActive: vi.fn((threadId: string) => threadId === "thread-a"),
+      applyRealtimeBlocks: vi.fn(),
+      applySummary: vi.fn(),
+      setFeedback: vi.fn()
+    };
+    const threadCache = {
+      updateThreadListCaches: vi.fn(),
+      invalidateThreads: vi.fn(),
+      invalidateThread: vi.fn()
+    };
+
+    const cleanup = threadQuery.connectThreadRealtimeSubscription({
+      threadId: "thread-a",
+      messageStore,
+      threadCache,
+      applyThreadTitleOverride: (summary) => ({ ...summary, title: `${summary.title} local` }),
+      onBeforeActiveBlocks: vi.fn(),
+      subscribe: (_threadId, nextHandlers) => {
+        handlers = nextHandlers as typeof handlers;
+        return unsubscribe;
+      }
+    });
+
+    const block: MessageBlock = { id: "block-a", role: "assistant", kind: "message", text: "hello", questions: [] };
+    const summary: ThreadSummary = { id: "thread-a", title: "Remote", status: "Recent", message_count: 2 };
+
+    handlers.onBlocks?.([block], "thread-a");
+    handlers.onSummary?.(summary, "thread-a");
+    handlers.onError?.("stream disconnected", "thread-a");
+    cleanup();
+
+    expect(messageStore.applyRealtimeBlocks).toHaveBeenCalledWith("thread-a", [block]);
+    expect(messageStore.applySummary).toHaveBeenCalledWith("thread-a", expect.objectContaining({ title: "Remote local" }));
+    expect(threadCache.updateThreadListCaches).toHaveBeenCalledWith(expect.objectContaining({ title: "Remote local" }));
+    expect(threadCache.invalidateThreads).toHaveBeenCalledWith();
+    expect(messageStore.setFeedback).toHaveBeenCalledWith("thread-a", "stream disconnected");
+    expect(threadCache.invalidateThread).toHaveBeenCalledWith("thread-a", "all");
+    expect(threadCache.invalidateThreads).toHaveBeenCalledWith("all");
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   test("components consume query/state layer instead of direct domain API functions", () => {

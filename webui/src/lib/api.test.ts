@@ -624,6 +624,7 @@ describe("archive delete API compatibility", () => {
 
   test("demo fixture builder accepts explicit runtime fixtures with complete capabilities", async () => {
     const {
+      buildDemoFixture,
       buildDemoPlatformOverview,
       buildDemoSecurity,
       buildDemoSystemStatus
@@ -631,6 +632,7 @@ describe("archive delete API compatibility", () => {
     const capabilityKeys = [
       "admin_password",
       "app_updater",
+      "csrf",
       "job_history",
       "jobs",
       "linux_update_job",
@@ -689,6 +691,23 @@ describe("archive delete API compatibility", () => {
     expect(macPlatform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
     expect(macSecurity).toEqual({});
     expect(JSON.stringify([macPlatform, { ...macSystem, capabilities: undefined }, macSecurity])).not.toMatch(
+      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i
+    );
+
+    expect(typeof buildDemoFixture).toBe("function");
+    const macFixture = buildDemoFixture("macos-tauri");
+    const linuxFixture = buildDemoFixture("linux-web");
+    expect(macFixture).toMatchObject({
+      platform: { kind: "macos", service_kind: "tauri" },
+      system: { capabilities: { web_auth: false, linux_update_job: false, prune_backups: false } },
+      security: {}
+    });
+    expect(linuxFixture).toMatchObject({
+      platform: { kind: "linux", service_kind: "systemd" },
+      system: { capabilities: { web_auth: true, linux_update_job: true, prune_backups: true } },
+      security: { turnstile_expected_hostname: "661313.xyz" }
+    });
+    expect(JSON.stringify({ ...macFixture, system: { ...macFixture.system, capabilities: undefined } })).not.toMatch(
       /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i
     );
   });
@@ -985,6 +1004,7 @@ describe("archive delete API compatibility", () => {
       job_history: true,
       app_updater: true,
       web_auth: true,
+      csrf: true,
       security_settings: true,
       turnstile: true,
       systemd: true,
@@ -1000,6 +1020,7 @@ describe("archive delete API compatibility", () => {
     const macCore: SystemStatus["capabilities"] = {
       ...linuxCore,
       web_auth: false,
+      csrf: false,
       security_settings: false,
       turnstile: false,
       systemd: false,

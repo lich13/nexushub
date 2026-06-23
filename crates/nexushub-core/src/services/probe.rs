@@ -30,6 +30,57 @@ pub struct ProbeStatusFacadePlan {
     pub status: ProbeStatusAggregation,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProbeUseCases<'a> {
+    config: &'a Config,
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> ProbeUseCases<'a> {
+    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
+        Self { config, platform }
+    }
+
+    pub fn status(self) -> Result<ProbeStatusFacadePlan> {
+        probe_status_with_capability(self.config, self.platform)
+    }
+
+    pub fn action(self, action: ProbeAction) -> Result<ProbeActionPlan> {
+        plan_probe_action(self.config, self.platform, action)
+    }
+
+    pub fn action_with_device_key(
+        self,
+        action: ProbeAction,
+        device_key_configured: bool,
+    ) -> Result<ProbeActionPlan> {
+        plan_probe_action_with_device_key(self.config, self.platform, action, device_key_configured)
+    }
+
+    pub fn action_with_device_key_and_config_path(
+        self,
+        action: ProbeAction,
+        device_key_configured: bool,
+        config_path: impl AsRef<Path>,
+    ) -> Result<ProbeActionPlan> {
+        plan_probe_action_with_device_key_and_config_path(
+            self.config,
+            self.platform,
+            action,
+            device_key_configured,
+            config_path,
+        )
+    }
+
+    pub fn logs_db_maintenance_plan(self, dry_run: bool) -> Result<ProbeActionPlan> {
+        self.action(if dry_run {
+            ProbeAction::LogsDbDryRun
+        } else {
+            ProbeAction::LogsDbExecute
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProbeAction {
     #[serde(rename = "barkTest", alias = "bark-test")]

@@ -59,7 +59,22 @@ import {
   type RuntimeCapabilityMatrix
 } from "./lib/query/system";
 import {
-  subscribeThreadEvents,
+  OPS_PANEL_TITLES,
+  approvalActionMode,
+  canShowForkAction,
+  capabilitiesForInput,
+  failureCategoryLabel,
+  jobFailureAnalysisView,
+  jobOutputView,
+  type RuntimeCapabilityInput
+} from "./lib/domain/runtimeViewModel";
+import {
+  slashCommandAction,
+  slashCommands,
+  slashCommandsForRuntime,
+  type SlashCommand
+} from "./lib/domain/slashCommands";
+import {
   type ThreadCacheSnapshot,
   type ThreadSendPayload,
   useThreadCacheActions,
@@ -71,6 +86,7 @@ import {
   useThreadDetailQuery,
   useThreadGoalActions,
   useThreadGoalQuery,
+  useThreadRealtimeSubscription,
   useThreadsQuery,
   useUploadActions
 } from "./lib/query/threads";
@@ -131,106 +147,26 @@ import type {
 
 export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
 export { mergeThreadSummaryIntoListCache } from "./lib/query/threads";
+export {
+  approvalActionMode,
+  canShowForkAction,
+  desktopRuntimeVisibleCopy,
+  failureCategoryLabel,
+  jobFailureAnalysisView,
+  jobOutputView,
+  opsWorkspacePanelTitles,
+  opsWorkspaceVisibleCopy
+} from "./lib/domain/runtimeViewModel";
+export { slashCommandAction, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
+export { preservePreviousQueryData } from "./lib/query/shared";
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
-type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
-const DEFAULT_RUNTIME_CAPABILITIES = bootstrapRuntimeCapabilities();
-
-function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
-  return input ?? DEFAULT_RUNTIME_CAPABILITIES;
-}
-
-const OPS_PANEL_TITLES = {
-  system: "系统状态",
-  updates: "NexusHub 更新",
-  archivedCleanup: "归档线程清理",
-  hiddenCleanup: "隐藏线程清理",
-  jobs: "Job History"
-} as const;
-
-export function opsWorkspacePanelTitles(desktop?: RuntimeCapabilityInput): string[] {
-  const capabilities = capabilitiesForInput(desktop);
-  const titles = [
-    OPS_PANEL_TITLES.system,
-    OPS_PANEL_TITLES.updates,
-    ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
-    OPS_PANEL_TITLES.jobs
-  ];
-  return titles;
-}
-
-export function opsWorkspaceVisibleCopy(desktop?: RuntimeCapabilityInput): string[] {
-  const capabilities = capabilitiesForInput(desktop);
-  const copy = [
-    ...opsWorkspacePanelTitles(desktop),
-    "Hostname",
-    ...(capabilities.publicEndpointStatus ? ["Public endpoint"] : []),
-    ...(capabilities.codexStatePaths ? ["state DB", "Codex Home", "State DB"] : []),
-    "Hidden threads",
-    "Sources",
-    "Current",
-    "Latest",
-    "Update",
-    capabilities.updateServiceLabels ? "Precheck" : "Check",
-    capabilities.updateServiceLabels ? "Update" : "Install",
-    ...(capabilities.updatePrune ? ["Prune"] : []),
-    ...(capabilities.threadCleanup ? [
-      "Dry-run",
-      "清理归档",
-      "确认清理归档",
-      "扫描隐藏线程",
-      "清理隐藏线程",
-      "确认清理隐藏",
-      "active",
-      "archived",
-      "integrity",
-      "session index",
-      "rollout 文件",
-      "visible",
-      "hidden",
-      "sources",
-      "rollout 删除结果"
-    ] : []),
-    failureCategoryLabel("systemd_failure", capabilities),
-    failureCategoryLabel("nginx_failure", capabilities),
-    failureCategoryLabel("permission_denied_sudo", capabilities)
-  ];
-  return copy;
-}
 
 const codexLocalCopy = {
   loginSubtitle: "Codex 本地状态控制台",
   threadListEyebrow: "Codex 本地线程"
 };
-
-export function desktopRuntimeVisibleCopy(): string[] {
-  return [
-    codexLocalCopy.threadListEyebrow,
-    "Goal",
-    "Plan Mode",
-    "线程工具",
-    "名称与归档",
-    "线程标题",
-    "重命名",
-    "归档",
-    "恢复",
-    "复制与路径",
-    "线程 ID",
-    "会话文件",
-    "复制 ID",
-    "复制文件路径",
-    "复制 codex resume+ID"
-  ];
-}
-
-export function canShowForkAction(desktop?: RuntimeCapabilityInput): boolean {
-  return capabilitiesForInput(desktop).forkAction;
-}
-
-export function approvalActionMode(desktop?: RuntimeCapabilityInput): "interactive" | "unsupported" {
-  return capabilitiesForInput(desktop).approvalActions ? "interactive" : "unsupported";
-}
 type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 type RunConfig = {
   model: string;
@@ -324,17 +260,6 @@ const defaultCwd = "";
 const defaultSessionTtlDays = 365;
 const secondsPerDay = 86400;
 
-export function preservePreviousQueryData<T>(previous: T | undefined): T | undefined {
-  return previous;
-}
-
-type SlashCommand = {
-  command: string;
-  description: string;
-  usageHint: string;
-  requiresThread?: boolean;
-};
-
 type PluginMentionCandidate = {
   id: string;
   label: string;
@@ -342,70 +267,6 @@ type PluginMentionCandidate = {
   unavailableReason?: string | null;
   plugin?: PluginInfo;
 };
-
-type SlashCommandAction =
-  | { kind: "archive_thread" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "stop_thread" | "toggle_fast" | "toggle_plan_mode"; command: string; message?: string }
-  | { kind: "focus_control" | "insert_template" | "requires_thread" | "unavailable" | "unknown"; command: string; message: string };
-
-type ControlledSlashActionKind = "archive_thread" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "stop_thread" | "toggle_fast" | "toggle_plan_mode";
-
-export const slashCommands: SlashCommand[] = [
-  { command: "/permissions", description: "调整权限与审批模式", usageHint: "/permissions" },
-  { command: "/ide", description: "加入 IDE 上下文", usageHint: "/ide" },
-  { command: "/keymap", description: "查看或调整 TUI 快捷键", usageHint: "/keymap" },
-  { command: "/vim", description: "切换 Vim 输入模式", usageHint: "/vim" },
-  { command: "/sandbox-add-read-dir", description: "添加沙盒只读目录，Windows 专用", usageHint: "/sandbox-add-read-dir <path>" },
-  { command: "/agent", description: "切换或查看子代理线程", usageHint: "/agent", requiresThread: true },
-  { command: "/apps", description: "浏览 apps 与 connectors", usageHint: "/apps" },
-  { command: "/plugins", description: "浏览插件", usageHint: "/plugins" },
-  { command: "/hooks", description: "查看生命周期 hooks", usageHint: "/hooks" },
-  { command: "/clear", description: "清空当前输入或开启新会话语义", usageHint: "/clear" },
-  { command: "/archive", description: "归档当前会话", usageHint: "/archive", requiresThread: true },
-  { command: "/compact", description: "压缩当前上下文", usageHint: "/compact", requiresThread: true },
-  { command: "/copy", description: "复制最新回复", usageHint: "/copy", requiresThread: true },
-  { command: "/diff", description: "查看当前 diff", usageHint: "/diff", requiresThread: true },
-  { command: "/exit", description: "退出当前会话", usageHint: "/exit", requiresThread: true },
-  { command: "/quit", description: "退出当前会话", usageHint: "/quit", requiresThread: true },
-  { command: "/experimental", description: "查看实验功能", usageHint: "/experimental" },
-  { command: "/approve", description: "批准一次自动审查拒绝后的重试", usageHint: "/approve", requiresThread: true },
-  { command: "/memories", description: "查看记忆设置", usageHint: "/memories" },
-  { command: "/skills", description: "浏览或使用技能", usageHint: "/skills" },
-  { command: "/feedback", description: "提交反馈", usageHint: "/feedback" },
-  { command: "/init", description: "生成 AGENTS.md", usageHint: "/init" },
-  { command: "/logout", description: "退出登录", usageHint: "/logout" },
-  { command: "/mcp", description: "查看 MCP 工具", usageHint: "/mcp" },
-  { command: "/mention", description: "引用文件或目录", usageHint: "/mention <path>" },
-  { command: "/model", description: "切换模型或推理等级", usageHint: "/model" },
-  { command: "/fast", description: "切换 Fast 服务层", usageHint: "/fast" },
-  { command: "/plan", description: "切换计划模式，可带内联提示", usageHint: "/plan [prompt]" },
-  { command: "/personality", description: "切换沟通风格", usageHint: "/personality" },
-  { command: "/ps", description: "查看后台终端", usageHint: "/ps", requiresThread: true },
-  { command: "/stop", description: "停止后台终端", usageHint: "/stop", requiresThread: true },
-  { command: "/fork", description: "分叉当前对话", usageHint: "/fork", requiresThread: true },
-  { command: "/side", description: "开启旁路对话", usageHint: "/side [prompt]", requiresThread: true },
-  { command: "/btw", description: "开启旁路对话别名", usageHint: "/btw [prompt]", requiresThread: true },
-  { command: "/raw", description: "切换原始滚动输出", usageHint: "/raw", requiresThread: true },
-  { command: "/resume", description: "恢复历史会话", usageHint: "/resume" },
-  { command: "/new", description: "新建会话", usageHint: "/new" },
-  { command: "/review", description: "请求工作区 review", usageHint: "/review" },
-  { command: "/status", description: "查看会话状态", usageHint: "/status" },
-  { command: "/debug-config", description: "查看配置层诊断", usageHint: "/debug-config" },
-  { command: "/statusline", description: "配置状态栏", usageHint: "/statusline" },
-  { command: "/title", description: "配置终端标题", usageHint: "/title" },
-  { command: "/theme", description: "选择语法主题", usageHint: "/theme" }
-];
-
-const desktopUnsupportedSlashCommands = new Set(["/fork"]);
-
-export function slashCommandsForRuntime(desktop?: RuntimeCapabilityInput): SlashCommand[] {
-  const capabilities = capabilitiesForInput(desktop);
-  return slashCommands.filter((item) => {
-    if (!capabilities.forkAction && desktopUnsupportedSlashCommands.has(item.command)) return false;
-    if (!capabilities.threadArchiveActions && item.command === "/archive") return false;
-    if (!capabilities.logout && item.command === "/logout") return false;
-    return true;
-  });
-}
 
 type TurnstileWidgetId = string;
 
@@ -1519,67 +1380,6 @@ export function slashCommandKeyAction({
   return { action: "none" };
 }
 
-const controlledSlashActions: Record<string, ControlledSlashActionKind> = {
-  "/new": "open_new_thread",
-  "/resume": "open_resume",
-  "/archive": "archive_thread",
-  "/fork": "fork_thread",
-  "/stop": "stop_thread",
-  "/fast": "toggle_fast",
-  "/plan": "toggle_plan_mode",
-  "/status": "open_status",
-  "/debug-config": "open_debug_config",
-  "/copy": "copy_latest",
-  "/plugins": "open_plugins",
-  "/apps": "open_plugins",
-  "/skills": "open_plugins"
-};
-
-const focusSlashCommands = new Set(["/model", "/permissions", "/title"]);
-const templateSlashCommands = new Set(["/compact", "/diff", "/mention", "/review", "/side", "/btw", "/raw", "/init", "/approve"]);
-const unavailableSlashCommands: Record<string, string> = {
-  "/ide": "Web 端暂不支持注入 IDE 上下文；可在本机 Codex TUI 中使用该命令。",
-  "/vim": "Web 端暂不支持 Vim 输入模式；请使用浏览器输入法或本机 TUI。",
-  "/keymap": "Web 端暂不支持 TUI 快捷键设置；浏览器快捷键由系统和浏览器管理。",
-  "/theme": "Web 端暂不支持 TUI 主题切换；NexusHub 使用固定设计系统。",
-  "/exit": "Web 端暂不需要退出 TUI；关闭页面或切换线程即可。",
-  "/quit": "Web 端暂不需要退出 TUI；关闭页面或切换线程即可。",
-  "/sandbox-add-read-dir": "Web 端暂不支持动态添加沙盒只读目录；请通过 Codex 配置或受控权限预设处理。",
-  "/agent": "Web 端暂不支持切换子代理控制台；可在线程列表查看主线程。",
-  "/hooks": "Web 端 Hook 维护在探针页面处理。",
-  "/clear": "Web 端不清空历史线程；可清空当前输入或新建线程。",
-  "/experimental": "Web 端暂不暴露实验开关。",
-  "/memories": "Web 端暂不管理本机记忆；请在 Codex TUI 或本地文件中查看。",
-  "/feedback": "Web 端暂不接入反馈通道。",
-  "/logout": "请使用左下角退出登录按钮。",
-  "/mcp": "Web 端暂不直接操作 MCP；可在插件/Provider 页面查看可用能力。",
-  "/personality": "Web 端暂不支持切换 Personality。请在 Codex 配置中调整。",
-  "/ps": "Web 端暂不显示后台终端列表；当前固定运维任务在 Job History 中查看。",
-  "/statusline": "Web 端暂不配置 TUI 状态栏。"
-};
-
-export function slashCommandAction(command: string, hasThread = true, desktop?: RuntimeCapabilityInput): SlashCommandAction {
-  const normalized = command.trim().replace(/\s+/g, " ");
-  const known = slashCommandsForRuntime(desktop).find((item) => item.command === normalized);
-  if (!known) return { kind: "unknown", command: normalized, message: "未知 Slash 命令" };
-  if (known.requiresThread && !hasThread) {
-    return { kind: "requires_thread", command: normalized, message: "该命令需要已有线程，请先选择或创建线程。" };
-  }
-  const controlled = controlledSlashActions[normalized];
-  if (controlled) return { kind: controlled, command: normalized };
-  if (focusSlashCommands.has(normalized)) {
-    return { kind: "focus_control", command: normalized, message: "请使用输入框下方的同名控制项调整。" };
-  }
-  if (templateSlashCommands.has(normalized)) {
-    return { kind: "insert_template", command: normalized, message: "已插入命令模板，请补充参数后发送。" };
-  }
-  return {
-    kind: "unavailable",
-    command: normalized,
-    message: unavailableSlashCommands[normalized] ?? "Web 端暂不支持该 TUI 命令；请使用现有面板或本机 Codex TUI。"
-  };
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -1904,7 +1704,7 @@ function SlashCommandTextarea({
   hasThread,
   plugins,
   pluginsUnavailable = false,
-  capabilities = DEFAULT_RUNTIME_CAPABILITIES,
+  capabilities = capabilitiesForInput(),
   onSlashCommand,
   onSubmitShortcut,
   disabled = false
@@ -2531,28 +2331,13 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     previousThreadIdRef.current = threadId;
   }, [detail.summary.title, messageStore, renameDirty, threadId]);
 
-  useEffect(() => {
-    const unsubscribe = subscribeThreadEvents(threadId, {
-      onBlocks: (incomingBlocks, eventThreadId) => {
-        if (messageStore.isActive(eventThreadId)) {
-          updateMessageFollowState();
-        }
-        messageStore.applyRealtimeBlocks(eventThreadId, incomingBlocks);
-      },
-      onSummary: (next, eventThreadId) => {
-        const stableSummary = applyThreadTitleOverride(next);
-        messageStore.applySummary(eventThreadId, stableSummary as ThreadSummary);
-        threadCache.updateThreadListCaches(stableSummary as ThreadSummary);
-        threadCache.invalidateThreads();
-      },
-      onError: (message, eventThreadId) => {
-        messageStore.setFeedback(eventThreadId, message);
-        threadCache.invalidateThread(eventThreadId, "all");
-        threadCache.invalidateThreads("all");
-      }
-    });
-    return unsubscribe;
-  }, [messageStore, threadCache, threadId, updateMessageFollowState]);
+  useThreadRealtimeSubscription({
+    threadId,
+    messageStore,
+    threadCache,
+    applyThreadTitleOverride,
+    onBeforeActiveBlocks: updateMessageFollowState
+  });
 
   const pending = useMemo(() => currentPendingElicitation(summary.pending_elicitation, summary.active_turn_id) ?? pendingFromBlocks(blocks, summary.status, summary.active_turn_id), [summary.pending_elicitation, summary.status, summary.active_turn_id, blocks]);
   const planBlock = useMemo(() => latestActionBlock(blocks, summary.status, summary.active_turn_id, isPlanBlock), [blocks, summary.status, summary.active_turn_id]);
@@ -5015,80 +4800,6 @@ function threadStatusLabel(status?: ThreadStatus | string | null): string {
   if (status === "Running") return "运行中";
   if (status === "Archived") return "归档";
   return "最近";
-}
-
-const linuxFailureLabels: Record<string, string> = {
-  systemd_failure: "systemd 失败",
-  nginx_failure: "Nginx 失败",
-  permission_denied_sudo: "权限或 sudo 失败"
-};
-
-const genericFailureLabels: Record<string, string> = {
-  systemd_failure: "服务失败",
-  nginx_failure: "更新失败",
-  permission_denied_sudo: "权限失败"
-};
-
-export function failureCategoryLabel(category: string, capabilities?: RuntimeCapabilityInput): string {
-  const resolvedCapabilities = capabilitiesForInput(capabilities);
-  if (!resolvedCapabilities.updateServiceLabels && genericFailureLabels[category]) {
-    return genericFailureLabels[category];
-  }
-  const labels: Record<string, string> = {
-    release_missing: "Release 缺失",
-    download_sha256_mismatch: "下载或校验失败",
-    ...linuxFailureLabels,
-    read_only_file_system: "文件系统只读/安装目录不可写",
-    codex_auth_failure: "Codex 认证失败",
-    sqlite_integrity_failure: "SQLite 完整性失败",
-    network_tls_eof: "网络或 TLS 中断",
-    codex_local_state_unavailable: "Codex 本地状态不可用",
-    app_server_unavailable: "Codex 本地状态不可用",
-    unknown: "未知失败"
-  };
-  return labels[category] ?? category;
-}
-
-export function jobFailureAnalysisView(
-  analysis: NonNullable<JobRecord["failure_analysis"]>,
-  capabilities?: RuntimeCapabilityInput
-): { label: string; explanation: string; suggestions: string[] } {
-  const resolvedCapabilities = capabilitiesForInput(capabilities);
-  const label = failureCategoryLabel(analysis.category, resolvedCapabilities);
-  if (resolvedCapabilities.updateServiceLabels) {
-    return {
-      label,
-      explanation: analysis.explanation,
-      suggestions: analysis.suggestions
-    };
-  }
-  const sanitize = (value: string) => sanitizeDesktopFailureCopy(value, label);
-  return {
-    label,
-    explanation: sanitize(analysis.explanation),
-    suggestions: analysis.suggestions.map(sanitize)
-  };
-}
-
-function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
-  const sanitized = value
-    .replace(/\bsystemd\b/gi, "服务")
-    .replace(/\bnginx\b/gi, "服务")
-    .replace(/管理员密码/g, "权限")
-    .replace(/Linux prune/gi, "清理")
-    .replace(/Linux update/gi, "更新")
-    .replace(/\bLinux\b/g, "当前宿主")
-    .replace(/\bsudo\b/gi, "权限")
-    .trim();
-  return sanitized || fallback;
-}
-
-export function jobOutputView(value: string, capabilities?: RuntimeCapabilityInput): string {
-  const output = value.trim() || "no output";
-  const resolvedCapabilities = capabilitiesForInput(capabilities);
-  return resolvedCapabilities.updateServiceLabels
-    ? output
-    : sanitizeDesktopFailureCopy(output, "任务输出不可用");
 }
 
 export function optionalUnavailableMessage(

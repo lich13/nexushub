@@ -581,6 +581,103 @@ log_dir = "{}"
     }
 
     #[test]
+    fn overview_only_keeps_desktop_state_home_and_startup_types() {
+        let overview_source = include_str!("overview.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("overview source must include production section");
+
+        for forbidden in [
+            "pub struct DesktopActionResponse",
+            "pub struct DesktopThreadBlockPage",
+            "pub struct DesktopProbeSettings",
+            "pub struct DesktopJobResponse",
+            "pub struct DesktopProbeEventsResponse",
+            "pub struct DesktopDeleteUploadResponse",
+            "pub struct DesktopUploadFile",
+            "pub struct ThreadListRequest",
+            "pub struct ThreadDetailRequest",
+            "pub struct ThreadBlocksRequest",
+            "pub struct DesktopSendMessageRequest",
+            "pub struct DesktopStopRequest",
+            "pub struct DesktopThreadIdRequest",
+            "pub struct DesktopRenameThreadRequest",
+            "pub struct DesktopPlanAcceptRequest",
+            "pub struct DesktopPlanReviseRequest",
+            "pub struct DesktopElicitationAnswerRequest",
+            "pub struct DesktopJobsRequest",
+            "pub struct DesktopJobDetailRequest",
+            "pub struct DesktopDeleteUploadRequest",
+            "pub struct DesktopFollowupRequest",
+            "pub struct DesktopCancelFollowupRequest",
+        ] {
+            assert!(
+                !overview_source.contains(forbidden),
+                "overview.rs must not define command adapter DTO: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_thread_commands_use_core_thread_query_and_detail_plans() {
+        let threads_source = include_str!("commands/threads.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(include_str!("commands/threads.rs"));
+
+        for required in [
+            "thread_service::plan_threads_list_request",
+            "thread_service::plan_thread_detail_request",
+            "thread_service::plan_thread_blocks_request",
+            "thread_service::window_thread_detail_for_plan",
+            "thread_service::thread_blocks_page_for_plan",
+            "job_service::plan_thread_send_with_capability",
+            "job_service::plan_thread_steer_with_capability",
+        ] {
+            assert!(
+                threads_source.contains(required),
+                "Tauri thread adapter must consume shared core plan: {required}"
+            );
+        }
+
+        for forbidden in [
+            "window_thread_detail(",
+            "detail_block_limit(",
+            "block_page_limit(",
+            "thread_service::normalize_thread_detail_block_limit",
+            "thread_service::normalize_thread_block_limit",
+        ] {
+            assert!(
+                !threads_source.contains(forbidden),
+                "Tauri thread adapter must not duplicate core thread paging logic: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_settings_commands_use_core_settings_view_and_secret_write_plans() {
+        let settings_source = include_str!("commands/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings source must include production section");
+
+        for required in [
+            "settings_service::probe_settings_view_with_capability",
+            "for secret_write in plan.secret_writes",
+        ] {
+            assert!(
+                settings_source.contains(required),
+                "Tauri settings adapter must consume shared core settings facade: {required}"
+            );
+        }
+
+        assert!(
+            !settings_source.contains("if let Some(device_key) = plan.bark_device_key"),
+            "Tauri settings adapter must not special-case Probe secret writes outside the core plan"
+        );
+    }
+
+    #[test]
     fn tauri_commands_do_not_reimplement_migrated_goal_or_followup_transactions() {
         let settings_source = include_str!("commands/settings.rs")
             .split("\n#[cfg(test)]\nmod tests")

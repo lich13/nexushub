@@ -1,13 +1,11 @@
+use crate::commands::settings::DesktopGoal;
 use anyhow::{anyhow, Result};
 use nexushub_core::{
     archive::{ArchiveDeletePlan, HiddenThreadDeletePlan},
-    codex::{resolve_codex_paths, CodexPaths, MessageBlock, ThreadSummary},
-    config::{
-        CodexProbeConfigPatch, Config, ProbeHooksConfigPatch, ProbeLogsDbConfigPatch,
-        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
-    },
+    codex::{resolve_codex_paths, CodexPaths, ThreadSummary},
+    config::Config,
     crypto::SecretBox,
-    db::{JobRecord, PanelDb, ProbeEvent},
+    db::PanelDb,
     jobs::JobRunner,
     local::{
         default_codex_models, default_permission_profiles, local_codex_config,
@@ -16,12 +14,9 @@ use nexushub_core::{
     },
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeLogsDbStatus, ProbeRuntime, ProbeStatus},
-    services::{jobs as job_service, settings as settings_service},
     system::{system_status_with_paths, SystemStatus},
-    update::JobFailureAnalysis,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -70,37 +65,6 @@ pub struct DesktopHome {
     pub hidden_plan: Option<HiddenThreadDeletePlan>,
     pub goal: DesktopGoal,
     pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopGoal {
-    pub available: bool,
-    pub enabled: bool,
-    pub thread_id: Option<String>,
-    pub objective: Option<String>,
-    pub token_budget: Option<u64>,
-    pub status: String,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadListRequest {
-    pub status: Option<String>,
-    pub query: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopGoalRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub objective: Option<String>,
-    #[serde(alias = "tokenBudget", alias = "token_budget")]
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -159,299 +123,6 @@ impl DesktopState {
 
 fn default_local_desktop_workspace() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join("nexushub-workspace"))
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopActionResponse {
-    pub ok: bool,
-    pub available: bool,
-    pub command: String,
-    pub message: String,
-    pub thread_id: Option<String>,
-    pub job_id: Option<String>,
-    pub data: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopThreadBlockPage {
-    pub thread_id: String,
-    pub blocks: Vec<MessageBlock>,
-    pub total_blocks: usize,
-    pub has_more_blocks: bool,
-    pub before_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeSettings {
-    pub codex: Value,
-    pub probe: nexushub_core::config::ProbeConfig,
-    pub notifications: Value,
-    pub logs_db: nexushub_core::config::ProbeLogsDbConfig,
-}
-
-impl From<settings_service::SettingsView> for DesktopProbeSettings {
-    fn from(view: settings_service::SettingsView) -> Self {
-        Self {
-            codex: serde_json::to_value(view.codex).unwrap_or_else(|_| json!({})),
-            probe: view.probe,
-            notifications: serde_json::to_value(view.notifications).unwrap_or_else(|_| json!({})),
-            logs_db: view.logs_db,
-        }
-    }
-}
-
-impl DesktopActionResponse {
-    pub(crate) fn with_data(mut self, data: Value) -> Self {
-        self.data = Some(data);
-        self
-    }
-}
-
-impl From<job_service::ActionResponse> for DesktopActionResponse {
-    fn from(value: job_service::ActionResponse) -> Self {
-        Self {
-            ok: value.ok,
-            available: value.available,
-            command: value.command,
-            message: value.message,
-            thread_id: value.thread_id,
-            job_id: value.job_id,
-            data: value.data,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopJobResponse {
-    #[serde(flatten)]
-    pub job: JobRecord,
-    pub failure_analysis: Option<JobFailureAnalysis>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeEventsResponse {
-    pub events: Vec<ProbeEvent>,
-    pub limit: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopDeleteUploadResponse {
-    pub ok: bool,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopUploadFile {
-    pub name: String,
-    pub mime: String,
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadDetailRequest {
-    pub id: String,
-    pub limit: Option<usize>,
-    pub full: Option<bool>,
-    pub before: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadBlocksRequest {
-    pub id: String,
-    pub limit: Option<usize>,
-    pub before: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopSendMessageRequest {
-    #[serde(default, alias = "threadId", alias = "thread_id")]
-    pub thread_id: Option<String>,
-    pub message: String,
-    #[serde(default)]
-    pub attachments: Vec<String>,
-    pub model: Option<String>,
-    #[serde(alias = "service_tier")]
-    pub service_tier: Option<String>,
-    #[serde(alias = "reasoning_effort")]
-    pub reasoning_effort: Option<String>,
-    pub cwd: Option<String>,
-    #[serde(alias = "permission_profile")]
-    pub permission_profile: Option<String>,
-    #[serde(alias = "approval_policy")]
-    pub approval_policy: Option<String>,
-    #[serde(alias = "sandbox_mode")]
-    pub sandbox_mode: Option<String>,
-    #[serde(alias = "network_access")]
-    pub network_access: Option<bool>,
-    #[serde(alias = "collaboration_mode")]
-    pub collaboration_mode: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopStopRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "job_id")]
-    pub job_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopThreadIdRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopRenameThreadRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopPlanAcceptRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "item_id")]
-    pub item_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopPlanReviseRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "item_id")]
-    pub item_id: Option<String>,
-    pub instructions: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopElicitationAnswerRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub answers: std::collections::HashMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeSettingsRequest {
-    pub codex: Option<CodexProbeConfigPatch>,
-    pub probe: Option<DesktopProbeSettingsPatch>,
-    pub notifications: Option<DesktopProbeNotificationsRequest>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeSettingsPatch {
-    pub enabled: Option<bool>,
-    pub poll_seconds: Option<u64>,
-    pub recent_limit: Option<usize>,
-    pub hooks: Option<ProbeHooksConfigPatch>,
-    pub notifications: Option<DesktopProbeNotificationsRequest>,
-    pub observability: Option<ProbeObservabilityConfigPatch>,
-    pub logs_db: Option<ProbeLogsDbConfigPatch>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeNotificationsRequest {
-    pub device_key: Option<String>,
-    #[serde(flatten)]
-    pub patch: ProbeNotificationsConfigPatch,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopLogsDbMaintainRequest {
-    #[serde(alias = "dry_run")]
-    pub dry_run: Option<bool>,
-    pub compact: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopJobsRequest {
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopJobDetailRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopProbeEventsRequest {
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopDeleteUploadRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopFollowupRequest {
-    pub thread_id: String,
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopCancelFollowupRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "followUpId", alias = "followupId", alias = "followup_id")]
-    pub followup_id: String,
-}
-
-impl DesktopProbeSettingsPatch {
-    pub(crate) fn into_config_patch(self) -> (ProbeSettingsPatch, Option<String>) {
-        let (notifications, device_key) = match self.notifications {
-            Some(notifications) => (
-                Some(notifications.patch),
-                settings_service::normalize_bark_device_key(notifications.device_key),
-            ),
-            None => (None, None),
-        };
-        (
-            ProbeSettingsPatch {
-                enabled: self.enabled,
-                poll_seconds: self.poll_seconds,
-                recent_limit: self.recent_limit,
-                hooks: self.hooks,
-                notifications,
-                observability: self.observability,
-                logs_db: self.logs_db,
-            },
-            device_key,
-        )
-    }
 }
 
 pub fn nexus_paths_for_home(home: impl Into<PathBuf>) -> NexusPaths {
@@ -573,7 +244,14 @@ fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexushub_core::uploads;
+    use crate::commands::{
+        settings::{DesktopDeleteUploadRequest, DesktopUploadFile},
+        threads::DesktopSendMessageRequest,
+    };
+    use nexushub_core::{
+        services::{jobs as job_service, settings as settings_service},
+        uploads,
+    };
 
     fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {
         let temp = tempfile::tempdir().unwrap();

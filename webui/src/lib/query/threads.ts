@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import {
   acceptPlan,
   answerApproval,
@@ -43,6 +43,7 @@ import type {
   UploadOutcome
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
+import { preservePreviousQueryData } from "./shared";
 
 export const threadQueryKeys = {
   threads: (status?: string, q?: string) => status === undefined && q === undefined ? ["threads"] as const : ["threads", status, q] as const,
@@ -56,6 +57,39 @@ export const threadQueryKeys = {
 
 type ThreadMessageStoreClear = {
   clear: (threadId: string) => void;
+};
+
+type ThreadRefetchType = "active" | "all" | "inactive" | "none";
+
+type ThreadRealtimeMessageStore = {
+  isActive: (threadId: string) => boolean;
+  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
+  applySummary: (threadId: string, summary: ThreadSummary) => void;
+  setFeedback: (threadId: string, message: string | null) => void;
+};
+
+type ThreadRealtimeCacheActions = {
+  updateThreadListCaches: (summary: ThreadSummary) => void;
+  invalidateThreads: (refetchType?: ThreadRefetchType) => void;
+  invalidateThread: (threadId: string, refetchType?: ThreadRefetchType) => void;
+};
+
+type ThreadRealtimeSubscribe = (
+  threadId: string,
+  handlers: {
+    onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
+    onSummary?: (summary: ThreadSummary, threadId: string) => void;
+    onError?: (message: string, threadId: string) => void;
+  }
+) => () => void;
+
+export type ThreadRealtimeSubscriptionInput = {
+  threadId: string;
+  messageStore: ThreadRealtimeMessageStore;
+  threadCache: ThreadRealtimeCacheActions;
+  applyThreadTitleOverride?: (summary: ThreadSummary) => ThreadSummary;
+  onBeforeActiveBlocks?: () => void;
+  subscribe?: ThreadRealtimeSubscribe;
 };
 
 type QueryCacheSnapshotEntry = {
@@ -258,6 +292,54 @@ export function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary)
   }
 }
 
+function identityThreadSummary(summary: ThreadSummary): ThreadSummary {
+  return summary;
+}
+
+export function connectThreadRealtimeSubscription(input: ThreadRealtimeSubscriptionInput): () => void {
+  const transformSummary = input.applyThreadTitleOverride ?? identityThreadSummary;
+  const subscribe = input.subscribe ?? subscribeThreadEvents;
+  return subscribe(input.threadId, {
+    onBlocks: (incomingBlocks, eventThreadId) => {
+      if (input.messageStore.isActive(eventThreadId)) {
+        input.onBeforeActiveBlocks?.();
+      }
+      input.messageStore.applyRealtimeBlocks(eventThreadId, incomingBlocks);
+    },
+    onSummary: (next, eventThreadId) => {
+      const stableSummary = transformSummary(next);
+      input.messageStore.applySummary(eventThreadId, stableSummary);
+      input.threadCache.updateThreadListCaches(stableSummary);
+      input.threadCache.invalidateThreads();
+    },
+    onError: (message, eventThreadId) => {
+      input.messageStore.setFeedback(eventThreadId, message);
+      input.threadCache.invalidateThread(eventThreadId, "all");
+      input.threadCache.invalidateThreads("all");
+    }
+  });
+}
+
+export function useThreadRealtimeSubscription(input: ThreadRealtimeSubscriptionInput): void {
+  const {
+    threadId,
+    messageStore,
+    threadCache,
+    applyThreadTitleOverride,
+    onBeforeActiveBlocks,
+    subscribe
+  } = input;
+
+  useEffect(() => connectThreadRealtimeSubscription({
+    threadId,
+    messageStore,
+    threadCache,
+    applyThreadTitleOverride,
+    onBeforeActiveBlocks,
+    subscribe
+  }), [threadId, messageStore, threadCache, applyThreadTitleOverride, onBeforeActiveBlocks, subscribe]);
+}
+
 export function applyOptimisticThreadRestore(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
   const snapshot = snapshotThreadCaches(qc, threadId);
   const cached = cachedThreadSummary(qc, threadId);
@@ -348,7 +430,7 @@ export function useThreadsQuery(input: {
     },
     refetchInterval: 5000,
     staleTime: 3000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -366,7 +448,7 @@ export function useThreadDetailQuery(input: {
     },
     enabled: Boolean(input.threadId),
     refetchInterval: (query) => input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary),
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -375,7 +457,7 @@ export function usePluginsQuery() {
     queryKey: threadQueryKeys.plugins,
     queryFn: listPlugins,
     staleTime: 30000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -384,7 +466,7 @@ export function useFollowUpsQuery(threadId: string, running: boolean) {
     queryKey: threadQueryKeys.followUps(threadId),
     queryFn: () => listFollowUps(threadId),
     refetchInterval: running ? 3000 : 8000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -539,7 +621,7 @@ export function useThreadGoalQuery(threadId: string) {
     enabled: Boolean(threadId),
     staleTime: 5000,
     refetchInterval: 15000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
 }
 
@@ -617,7 +699,3 @@ export function useUploadActions(input: {
 
 export { subscribeThreadEvents };
 export type { FollowUpQueueState, ThreadDetailOptions, ThreadSendPayload };
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
-}

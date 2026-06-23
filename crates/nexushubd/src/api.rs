@@ -3,6 +3,7 @@ use crate::{
         expired_session_cookie, expires_at, random_token, require_auth, require_csrf,
         session_cookie, verify_password, SESSION_COOKIE,
     },
+    linux_adapter,
     state::{
         AppState, CachedProbeStatus, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature,
     },
@@ -23,7 +24,7 @@ use axum::{
 use nexushub_core::{
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
-    config::{patch_probe_config_toml, Config},
+    config::Config,
     db::{JobRecord, NewSession},
     local,
     platform::{PlatformKind, PlatformPaths},
@@ -41,6 +42,7 @@ use nexushub_core::{
         },
         updates::{self as update_service, UpdateAction},
         uploads as upload_service,
+        use_cases::NexusHubUseCases,
     },
     update,
     uploads::{self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES},
@@ -687,30 +689,12 @@ async fn patch_probe_settings(
             &format!("config file not found: {}", config_path.display()),
         ));
     }
-    let plan = settings_service::plan_probe_settings_save(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        request,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let text = fs::read_to_string(&config_path).map_err(anyhow::Error::from)?;
-    let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
-    fs::write(&config_path, updated).map_err(anyhow::Error::from)?;
-    let response_config = Config::load(&config_path)?;
-    if let Some(device_key) = plan.bark_device_key {
-        state.db.set_secret_setting_bytes(
-            settings_service::PROBE_BARK_DEVICE_KEY_SETTING,
-            device_key.as_bytes(),
-        )?;
-    }
-    state.replace_config(response_config.clone());
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "probe_settings.updated",
-        Some("probe"),
-        Some("settings"),
-        None,
-        json!({"config_path": config_path}),
-    )?;
+    let platform = http_update_platform();
+    let plan = settings_service::SettingsUseCases::new(&state.config(), &platform)
+        .save_probe_settings(request)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let response_config =
+        linux_adapter::apply_probe_settings_save_plan(&state, &auth, &config_path, plan)?;
     ok(probe_settings_value_for_config(&state, &response_config)?)
 }
 
@@ -794,43 +778,10 @@ async fn start_probe_action_with_compact(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let device_key_configured = state
-        .db
-        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
-        .is_some_and(|value| !value.is_empty());
     let platform = http_update_platform();
     let config_path = probe_config_path();
-    let plan = probe_service::plan_probe_action_with_device_key_and_config_path(
-        &state.config(),
-        &platform,
-        action,
-        device_key_configured,
-        &config_path,
-    )?;
-    let spec = plan
-        .job
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Probe job is unavailable"))?;
-    let mut command = spec.command.clone();
-    if compact
-        && matches!(
-            action,
-            probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
-        )
-    {
-        command = format!("{command} {}", shell_quote("--compact"));
-    }
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        &format!("{}.started", spec.kind),
-        Some("probe"),
-        Some(&spec.title),
-        None,
-        json!({"args": spec.args, "action": action.as_rpc_action()}),
-    )?;
-    let group = spec.exclusive_group.as_deref().unwrap_or(&spec.kind);
-    let id = state
-        .jobs
-        .start_exclusive_shell_job(&spec.kind, &spec.title, command, group)
+    let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;
+    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, compact)
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
@@ -954,10 +905,6 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
         .map_err(anyhow::Error::from)
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 pub(crate) async fn load_probe_threads(
     state: &AppState,
     status: &'static str,
@@ -1036,9 +983,11 @@ async fn upload_files(
                 bytes: bytes.to_vec(),
             });
         }
-        let facade =
-            upload_service::plan_store_uploads_with_capability(&http_update_platform(), items)
-                .map_err(|err| upload_service_error(err.to_string()))?;
+        let platform = http_update_platform();
+        let facade = NexusHubUseCases::new(&platform)
+            .uploads()
+            .store(items)
+            .map_err(|err| upload_service_error(err.to_string()))?;
         let plan = facade.plan;
         let total_files = plan.total_files;
         let total_bytes = plan.total_bytes;
@@ -1077,7 +1026,10 @@ async fn delete_upload_file(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = upload_service::plan_delete_upload_with_capability(&http_update_platform(), &id)
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .uploads()
+        .delete(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let root = uploads::upload_root(&resolved.home);
@@ -1509,27 +1461,29 @@ async fn create_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let spec = job_service::build_codex_job_spec(
-        &payload.into_job_action(job_service::CodexActionKind::Exec),
-        state.config().codex.workspace.clone(),
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let resolved = state.resolved_codex_paths();
-    let job_id = state.jobs.start_codex_job(
-        &spec.title,
-        &resolved.home,
-        &spec.cwd,
-        spec.args,
-        spec.prompt,
-    )?;
-    state.db.link_job_thread(&job_id, None, None)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.create.job_started",
-        Some("job"),
-        Some(&job_id),
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .create(payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let action = plan
+        .command
+        .action
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "thread create plan missing action"))?;
+    let spec = job_service::build_codex_job_spec(&action, state.config().codex.workspace.clone())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let cwd = spec.cwd.display().to_string();
+    let job_id = linux_adapter::start_codex_job_spec(
+        &state,
+        &auth,
+        spec,
         None,
-        json!({"cwd": spec.cwd.display().to_string()}),
+        linux_adapter::CodexJobAuditPlan {
+            action: "thread.create.job_started",
+            resource_kind: "job",
+            resource_id: None,
+            metadata: json!({"cwd": cwd}),
+        },
     )?;
     ok(job_service::codex_action_submitted(None, Some(job_id)))
 }
@@ -1556,24 +1510,31 @@ async fn send_message(
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
     payload.thread_id = Some(id.clone());
-    let spec = codex_resume_job_spec(&state, payload)
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .send(job_service::ThreadSendRequest {
+            thread_id: Some(id.clone()),
+            message: payload,
+        })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let resolved = state.resolved_codex_paths();
-    let job_id = state.jobs.start_codex_job(
-        &spec.title,
-        &resolved.home,
-        &spec.cwd,
-        spec.args,
-        spec.prompt,
-    )?;
-    state.db.link_job_thread(&job_id, Some(&id), None)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.message.job_started",
-        Some("thread"),
+    let action = plan
+        .command
+        .action
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "thread send plan missing action"))?;
+    let spec = job_service::build_codex_job_spec(&action, state.config().codex.workspace.clone())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let job_id = linux_adapter::start_codex_job_spec(
+        &state,
+        &auth,
+        spec,
         Some(&id),
-        None,
-        json!({"job_id": job_id}),
+        linux_adapter::CodexJobAuditPlan {
+            action: "thread.message.job_started",
+            resource_kind: "thread",
+            resource_id: Some(&id),
+            metadata: json!({}),
+        },
     )?;
     ok(job_service::codex_action_submitted(Some(id), Some(job_id)))
 }
@@ -1587,15 +1548,16 @@ async fn steer_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let followup = job_service::enqueue_followup_with_capability(
-        &state.db,
-        &http_update_platform(),
-        job_service::ThreadSteerRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .enqueue_followup(job_service::ThreadSteerRequest {
             thread_id: Some(id.clone()),
             message: payload,
-        },
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let followup = job_service::enqueue_planned_followup(&state.db, plan.followup)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued_after_steer_fallback",
@@ -1616,14 +1578,15 @@ async fn list_followups(
     Path(id): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let items = job_service::list_followups_with_capability(
-        &state.db,
-        &http_update_platform(),
-        job_service::FollowUpListRequest {
-            thread_id: id,
-            limit: Some(20),
-        },
-    )?;
+    let platform = http_update_platform();
+    let plan =
+        NexusHubUseCases::new(&platform)
+            .threads()
+            .followups(job_service::FollowUpListRequest {
+                thread_id: id,
+                limit: Some(20),
+            })?;
+    let items = linux_adapter::list_followups_plan(&state, plan)?;
     ok(json!({ "items": job_service::followup_views(items) }))
 }
 
@@ -1636,15 +1599,16 @@ async fn enqueue_followup(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let followup = job_service::enqueue_followup_with_capability(
-        &state.db,
-        &http_update_platform(),
-        job_service::ThreadSteerRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .enqueue_followup(job_service::ThreadSteerRequest {
             thread_id: Some(id.clone()),
             message: payload,
-        },
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let followup = job_service::enqueue_planned_followup(&state.db, plan.followup)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued",
@@ -1663,15 +1627,15 @@ async fn cancel_followup(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let response = job_service::cancel_followup_with_capability(
-        &state.db,
-        &http_update_platform(),
-        job_service::FollowUpCancelRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .cancel_followup(job_service::FollowUpCancelRequest {
             thread_id: id.clone(),
             followup_id: followup_id.clone(),
-        },
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let response = linux_adapter::cancel_followup_plan(&state, plan)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.cancelled",
@@ -1731,7 +1695,7 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
     };
     let mut request = job_service::followup_request(&followup);
     request.thread_id = Some(thread_id.clone());
-    let spec = match codex_resume_job_spec(state, request) {
+    let mut spec = match codex_resume_job_spec(state, request) {
         Ok(spec) => spec,
         Err(err) => {
             let message = err.to_string();
@@ -1740,16 +1704,9 @@ async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadD
             return;
         }
     };
-    let resolved = state.resolved_codex_paths();
-    match state.jobs.start_codex_job(
-        "Codex queued follow-up",
-        &resolved.home,
-        &spec.cwd,
-        spec.args,
-        spec.prompt,
-    ) {
+    spec.title = "Codex queued follow-up".to_string();
+    match linux_adapter::start_codex_resume_spec(state, spec, &thread_id) {
         Ok(job_id) => {
-            let _ = state.db.link_job_thread(&job_id, Some(&thread_id), None);
             let _ = state
                 .db
                 .mark_followup_submitted(&followup.id, json!({"job_id": job_id}));
@@ -1797,15 +1754,15 @@ async fn stop_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let payload = payload.map(|Json(value)| value);
-    let plan = job_service::plan_thread_stop_with_capability(
-        &http_update_platform(),
-        job_service::ThreadStopRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .stop(job_service::ThreadStopRequest {
             thread_id: id,
             turn_id: payload.as_ref().and_then(|value| value.turn_id.clone()),
             job_id: payload.as_ref().and_then(|value| value.job_id.clone()),
-        },
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let active_job_id = plan
         .requires_active_job_lookup
         .then(|| derive_active_job_id(&state, &plan.thread_id))
@@ -1824,16 +1781,9 @@ async fn stop_thread(
             return Err(api_error(StatusCode::BAD_REQUEST, &err.to_string()));
         }
     };
-    let cancelled = state.jobs.cancel_job(&stop.job_id)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.stop.job_cancel",
-        Some("job"),
-        Some(&stop.job_id),
-        None,
-        json!({"thread_id": &stop.thread_id, "cancelled": cancelled}),
-    )?;
-    ok(job_service::thread_stop_response(&stop, cancelled))
+    ok(linux_adapter::cancel_thread_stop_plan(
+        &state, &auth, &stop,
+    )?)
 }
 
 async fn archive_thread(
@@ -1843,19 +1793,14 @@ async fn archive_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = job_service::plan_thread_archive_with_capability(&http_update_platform(), &id)
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .archive(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let paths = state.codex_paths();
-    codex::set_thread_archived(&paths, &plan.thread_id, true)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.archived",
-        Some("thread"),
-        Some(&plan.thread_id),
-        None,
-        json!({}),
-    )?;
-    ok(job_service::thread_state_action_response(&plan)?)
+    ok(linux_adapter::apply_thread_state_action_plan(
+        &state, &auth, &plan,
+    )?)
 }
 
 async fn restore_thread(
@@ -1865,19 +1810,14 @@ async fn restore_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = job_service::plan_thread_restore_with_capability(&http_update_platform(), &id)
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .restore(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let paths = state.codex_paths();
-    codex::set_thread_archived(&paths, &plan.thread_id, false)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.restored",
-        Some("thread"),
-        Some(&plan.thread_id),
-        None,
-        json!({}),
-    )?;
-    ok(job_service::thread_state_action_response(&plan)?)
+    ok(linux_adapter::apply_thread_state_action_plan(
+        &state, &auth, &plan,
+    )?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1893,26 +1833,17 @@ async fn rename_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = job_service::plan_thread_rename_with_capability(
-        &http_update_platform(),
-        job_service::ThreadRenameRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .rename(job_service::ThreadRenameRequest {
             thread_id: id,
             name: payload.name,
-        },
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let name = plan.name.as_deref().unwrap_or_default();
-    let paths = state.codex_paths();
-    codex::set_thread_title(&paths, &plan.thread_id, name)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.renamed",
-        Some("thread"),
-        Some(&plan.thread_id),
-        None,
-        json!({"name": name}),
-    )?;
-    ok(job_service::thread_state_action_response(&plan)?)
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::apply_thread_state_action_plan(
+        &state, &auth, &plan,
+    )?)
 }
 
 async fn fork_thread(
@@ -2069,20 +2000,7 @@ fn start_codex_resume_job(
         state.config().codex.workspace.clone(),
     )
     .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let resolved = state.resolved_codex_paths();
-    let job_id = state
-        .jobs
-        .start_codex_job(
-            &spec.title,
-            &resolved.home,
-            &spec.cwd,
-            spec.args,
-            spec.prompt,
-        )
-        .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
-    state
-        .db
-        .link_job_thread(&job_id, Some(thread_id), None)
+    let job_id = linux_adapter::start_codex_resume_spec(state, spec, thread_id)
         .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
     Ok(job_service::codex_action_submitted(
         Some(thread_id.to_string()),
@@ -2341,29 +2259,8 @@ async fn start_update_action(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
-    let plan = update_service::plan_update_action(&state.config(), &platform, action)?;
-    let spec = plan
-        .linux_job
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Linux update job is unavailable"))?;
-    if let Some(audit_action) = audit_action {
-        state.db.record_audit(
-            Some(&auth.admin_id),
-            audit_action,
-            Some("system"),
-            Some("updates"),
-            None,
-            json!({ "action": format!("{action:?}") }),
-        )?;
-    }
-    let id = if let Some(group) = spec.exclusive_group.as_deref() {
-        state
-            .jobs
-            .start_exclusive_shell_job(&spec.kind, &spec.title, spec.command, group)?
-    } else {
-        state
-            .jobs
-            .start_shell_job(&spec.kind, &spec.title, spec.command)?
-    };
+    let plan = linux_adapter::linux_update_action_plan(&state, &platform, action)?;
+    let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
     ok(json!({"job_id": id}))
 }
 
@@ -2374,11 +2271,11 @@ fn http_update_platform() -> PlatformPaths {
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let _plan = cleanup_service::plan_cleanup_action(
-        &http_update_platform(),
-        cleanup_service::CleanupAction::ArchiveDeleteDryRun,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let platform = http_update_platform();
+    let _plan = NexusHubUseCases::new(&platform)
+        .cleanup()
+        .archive_delete_dry_run()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
     ok(cleanup_service::dry_run_archived_with_capability(
         &http_update_platform(),
@@ -2398,11 +2295,11 @@ async fn archive_delete_execute(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = cleanup_service::plan_cleanup_action(
-        &http_update_platform(),
-        cleanup_service::CleanupAction::ArchiveDeleteExecute,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .cleanup()
+        .archive_delete_execute()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     if plan.requires_confirmation && !payload.confirmed {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -2429,11 +2326,11 @@ async fn hidden_threads_delete_dry_run(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let _plan = cleanup_service::plan_cleanup_action(
-        &http_update_platform(),
-        cleanup_service::CleanupAction::HiddenDeleteDryRun,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let platform = http_update_platform();
+    let _plan = NexusHubUseCases::new(&platform)
+        .cleanup()
+        .hidden_delete_dry_run()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
     ok(cleanup_service::dry_run_hidden_with_capability(
         &http_update_platform(),
@@ -2448,11 +2345,11 @@ async fn hidden_threads_delete_execute(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = cleanup_service::plan_cleanup_action(
-        &http_update_platform(),
-        cleanup_service::CleanupAction::HiddenDeleteExecute,
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .cleanup()
+        .hidden_delete_execute()
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     if plan.requires_confirmation && !payload.confirmed {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -4177,18 +4074,55 @@ mod tests {
 
     #[test]
     fn linux_probe_actions_execute_shared_core_job_command() {
-        let source = include_str!("api.rs")
+        let api_source = include_str!("api.rs")
             .split("\nmod tests {")
             .next()
             .expect("api source must include production section");
+        let adapter_source = include_str!("linux_adapter.rs");
 
         assert!(
-            !source.contains("fixed_probe_shell_command("),
-            "Linux HTTP Probe actions must execute the command planned by nexushub-core"
+            api_source.contains("linux_adapter::linux_probe_action_plan"),
+            "Linux HTTP Probe handlers should request the shared core Probe plan through the adapter"
         );
         assert!(
-            source.contains("spec.command"),
-            "Linux HTTP Probe actions should use ProbeFixedJobSpec.command"
+            api_source.contains("linux_adapter::start_probe_action_plan"),
+            "Linux HTTP Probe handlers should delegate Linux execution to the adapter"
+        );
+        assert!(
+            !api_source.contains("patch_probe_config_toml"),
+            "api.rs must not patch Probe config TOML directly"
+        );
+        assert!(
+            !api_source.contains("start_exclusive_shell_job(&spec.kind"),
+            "api.rs must not start Probe shell jobs directly"
+        );
+        for forbidden in [
+            "state.jobs.start_codex_job(",
+            "state.jobs.cancel_job(",
+            "codex::set_thread_archived(",
+            "codex::set_thread_title(",
+            "start_shell_job(&spec.kind",
+        ] {
+            assert!(
+                !api_source.contains(forbidden),
+                "api.rs must execute host-specific thread/job plans through linux_adapter: {forbidden}"
+            );
+        }
+        assert!(
+            adapter_source.contains("spec.command"),
+            "Linux adapter should execute ProbeFixedJobSpec.command planned by nexushub-core"
+        );
+        assert!(
+            adapter_source.contains("patch_probe_config_toml"),
+            "Linux adapter is the only nexushubd module that applies Probe settings TOML patches"
+        );
+        assert!(
+            adapter_source.contains("ProbeUseCases::new"),
+            "Linux adapter should request Probe action plans through ProbeUseCases"
+        );
+        assert!(
+            adapter_source.contains("UpdateUseCases::new"),
+            "Linux adapter should request update action plans through UpdateUseCases"
         );
     }
 
@@ -4200,23 +4134,18 @@ mod tests {
             .expect("api source must include production section");
 
         for required in [
+            "NexusHubUseCases::new",
+            "linux_adapter::start_codex_job_spec",
+            "linux_adapter::start_codex_resume_spec",
+            "linux_adapter::cancel_thread_stop_plan",
+            "linux_adapter::apply_thread_state_action_plan",
+            "linux_adapter::cancel_followup_plan",
             "goal_service::goal_get_response_with_capability",
             "goal_service::save_goal_with_capability",
             "goal_service::clear_goal_with_capability",
             "goal_service::pause_goal_with_capability",
             "goal_service::resume_goal_with_capability",
-            "job_service::list_followups_with_capability",
-            "job_service::enqueue_followup_with_capability",
-            "job_service::cancel_followup_with_capability",
-            "job_service::plan_thread_archive_with_capability",
-            "job_service::plan_thread_restore_with_capability",
-            "job_service::plan_thread_rename_with_capability",
-            "job_service::thread_state_action_response",
-            "job_service::plan_thread_stop_with_capability",
             "job_service::resolve_thread_stop_job",
-            "job_service::thread_stop_response",
-            "upload_service::plan_store_uploads_with_capability",
-            "upload_service::plan_delete_upload_with_capability",
             "cleanup_service::dry_run_archived_with_capability",
             "cleanup_service::execute_archived_with_capability",
             "cleanup_service::dry_run_hidden_with_capability",

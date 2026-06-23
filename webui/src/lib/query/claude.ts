@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getClaudeCodeOverview, getPlatformOverview, listProviders } from "../api";
+import { preservePreviousQueryData } from "./shared";
 
 export const claudeQueryKeys = {
   providers: ["providers"] as const,
@@ -13,23 +14,19 @@ export function useClaudeQueries() {
       queryKey: claudeQueryKeys.providers,
       queryFn: listProviders,
       refetchInterval: 30000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     overview: useQuery({
       queryKey: claudeQueryKeys.overview,
       queryFn: getClaudeCodeOverview,
       refetchInterval: 30000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     platform: useQuery({
       queryKey: claudeQueryKeys.platform,
       queryFn: getPlatformOverview,
       refetchInterval: 30000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     })
   };
-}
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
 }

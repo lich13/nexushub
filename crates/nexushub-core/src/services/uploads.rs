@@ -1,4 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,7 +12,7 @@ use crate::{
     services::system::{require_capability, Capability},
     uploads::{
         self as upload_core, UploadKind, UploadOutcome, UploadRecord, MAX_TOTAL_UPLOAD_BYTES,
-        MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
+        MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES, UPLOAD_TTL_SECONDS,
     },
 };
 use uuid::Uuid;
@@ -62,6 +66,23 @@ pub struct UploadValidationPlan {
 pub struct UploadDeletePlan {
     pub required_capability: Capability,
     pub id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadRetentionRequest {
+    #[serde(default, alias = "protectedUploadIds", alias = "protected_upload_ids")]
+    pub protected_ids: Vec<String>,
+    #[serde(default, alias = "ttlSeconds", alias = "ttl_seconds")]
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadRetentionPlan {
+    pub required_capability: Capability,
+    pub ttl_seconds: u64,
+    pub protected_ids: Vec<String>,
 }
 
 pub const ATTACHMENT_ID_LIMIT_MESSAGE: &str = "一次最多发送 5 个附件";
@@ -170,6 +191,31 @@ pub fn plan_delete_upload_with_capability(
     })
 }
 
+pub fn plan_upload_retention_with_capability(
+    platform: &PlatformPaths,
+    request: UploadRetentionRequest,
+) -> Result<UploadRetentionPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(UploadRetentionPlan {
+        required_capability: Capability::Jobs,
+        ttl_seconds: request.ttl_seconds.unwrap_or(UPLOAD_TTL_SECONDS).max(1),
+        protected_ids: normalize_upload_ids(&request.protected_ids)?,
+    })
+}
+
+pub fn execute_upload_retention_plan(root: &Path, plan: &UploadRetentionPlan) -> Result<usize> {
+    let protected_ids = plan
+        .protected_ids
+        .iter()
+        .cloned()
+        .collect::<HashSet<String>>();
+    upload_core::cleanup_stale_uploads_except(
+        root,
+        Duration::from_secs(plan.ttl_seconds.max(1)),
+        &protected_ids,
+    )
+}
+
 pub fn store_upload_plan(root: &Path, plan: UploadStorePlan) -> Result<UploadOutcome> {
     let mut files: Vec<UploadRecord> = Vec::with_capacity(plan.items.len());
     let result: Result<UploadOutcome> = (|| {
@@ -192,6 +238,21 @@ pub fn store_upload_plan(root: &Path, plan: UploadStorePlan) -> Result<UploadOut
     }
 
     result.with_context(|| format!("store uploads in {}", root.display()))
+}
+
+fn normalize_upload_ids(ids: &[String]) -> Result<Vec<String>> {
+    let mut normalized = BTreeSet::new();
+    for raw in ids {
+        let id = raw.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if Uuid::parse_str(id).is_err() {
+            bail!("invalid upload id");
+        }
+        normalized.insert(id.to_string());
+    }
+    Ok(normalized.into_iter().collect())
 }
 
 fn upload_mime(original_name: &str, safe_name: &str, mime: Option<&str>) -> String {

@@ -8,6 +8,7 @@ import {
   type RuntimeCapabilityMatrix
 } from "../domain/capabilities";
 import type { SystemStatus } from "../../types";
+import { preservePreviousQueryData } from "./shared";
 
 export const systemQueryKeys = {
   status: ["system-status"] as const
@@ -38,12 +39,8 @@ export function useSystemStatusQuery(options: { enabled?: boolean; refetchInterv
     enabled: options.enabled,
     refetchInterval: options.refetchInterval,
     staleTime: 5000,
-    placeholderData: keepPreviousData
+    placeholderData: preservePreviousQueryData
   });
-}
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
 }
 
 export { runtimeCapabilitiesForRuntime };

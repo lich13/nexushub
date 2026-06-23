@@ -8,7 +8,7 @@ use crate::{
     services::system::{require_capability, Capability},
 };
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoalUpdateRequest {
     #[serde(default, alias = "threadId")]
     pub thread_id: Option<String>,
@@ -22,7 +22,7 @@ pub struct GoalUpdateRequest {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoalGetRequest {
     #[serde(default, alias = "threadId")]
     pub thread_id: Option<String>,
@@ -124,7 +124,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalUpdatePlan {
     pub thread_id: String,
     pub objective: Option<String>,
@@ -134,19 +134,19 @@ pub struct GoalUpdatePlan {
     pub blocked_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalCommandPlan {
     pub command: GoalCommandKind,
     pub update: GoalUpdatePlan,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalCommandFacadePlan {
     pub required_capability: Capability,
     pub command: GoalCommandPlan,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalGetPlan {
     pub required_capability: Capability,
     pub thread_id: Option<String>,

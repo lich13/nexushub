@@ -47,6 +47,32 @@ pub struct ProbeSettingsViewPlan {
     pub settings: SettingsView,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsUseCases<'a> {
+    config: &'a Config,
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> SettingsUseCases<'a> {
+    pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
+        Self { config, platform }
+    }
+
+    pub fn probe_settings_view(
+        self,
+        bark_device_key: ProbeSecretState,
+    ) -> Result<ProbeSettingsViewPlan> {
+        probe_settings_view_with_capability(self.config, self.platform, bark_device_key)
+    }
+
+    pub fn save_probe_settings(
+        self,
+        request: ProbeSettingsSaveRequest,
+    ) -> Result<ProbeSettingsSavePlan> {
+        plan_probe_settings_save(self.platform, request)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexSettingsView {
     pub home: Option<String>,

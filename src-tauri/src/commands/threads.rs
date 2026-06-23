@@ -1,28 +1,24 @@
 #![allow(non_snake_case)]
 
-use crate::overview::{
-    DesktopActionResponse, DesktopCancelFollowupRequest, DesktopElicitationAnswerRequest,
-    DesktopFollowupRequest, DesktopPlanAcceptRequest, DesktopPlanReviseRequest,
-    DesktopRenameThreadRequest, DesktopSendMessageRequest, DesktopState, DesktopStopRequest,
-    DesktopThreadBlockPage, DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest,
-    ThreadListRequest,
-};
+use super::DesktopActionResponse;
+use crate::overview::DesktopState;
 
 use anyhow::Result;
 use nexushub_core::{
     codex::{
         archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
-        set_thread_title, thread_detail, window_thread_detail, ThreadDetail, ThreadSummary,
+        set_thread_title, thread_detail, ThreadDetail, ThreadSummary,
     },
     db::ThreadFollowUp,
     services::{
         jobs as job_service,
-        threads::{self as thread_service, ThreadsQuery},
+        threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
         uploads as upload_service,
     },
     uploads,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +45,130 @@ pub struct PlanActionPayload {
     #[serde(alias = "item_id")]
     pub item_id: Option<String>,
     pub instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadListRequest {
+    pub status: Option<String>,
+    pub query: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadDetailRequest {
+    pub id: String,
+    pub limit: Option<usize>,
+    pub full: Option<bool>,
+    pub before: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadBlocksRequest {
+    pub id: String,
+    pub limit: Option<usize>,
+    pub before: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopSendMessageRequest {
+    #[serde(default, alias = "threadId", alias = "thread_id")]
+    pub thread_id: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    pub model: Option<String>,
+    #[serde(alias = "service_tier")]
+    pub service_tier: Option<String>,
+    #[serde(alias = "reasoning_effort")]
+    pub reasoning_effort: Option<String>,
+    pub cwd: Option<String>,
+    #[serde(alias = "permission_profile")]
+    pub permission_profile: Option<String>,
+    #[serde(alias = "approval_policy")]
+    pub approval_policy: Option<String>,
+    #[serde(alias = "sandbox_mode")]
+    pub sandbox_mode: Option<String>,
+    #[serde(alias = "network_access")]
+    pub network_access: Option<bool>,
+    #[serde(alias = "collaboration_mode")]
+    pub collaboration_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopStopRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(alias = "turn_id")]
+    pub turn_id: Option<String>,
+    #[serde(alias = "job_id")]
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopThreadIdRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopRenameThreadRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopPlanAcceptRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(alias = "turn_id")]
+    pub turn_id: Option<String>,
+    #[serde(alias = "item_id")]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopPlanReviseRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(alias = "turn_id")]
+    pub turn_id: Option<String>,
+    #[serde(alias = "item_id")]
+    pub item_id: Option<String>,
+    pub instructions: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopElicitationAnswerRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    pub answers: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopFollowupRequest {
+    pub thread_id: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopCancelFollowupRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(alias = "followUpId", alias = "followupId", alias = "followup_id")]
+    pub followup_id: String,
 }
 
 fn thread_id_request(thread_id: String) -> DesktopThreadIdRequest {
@@ -97,7 +217,7 @@ pub fn getThreadBlocks(
     state: tauri::State<'_, DesktopState>,
     id: String,
     options: Option<ThreadDetailOptions>,
-) -> Result<Option<DesktopThreadBlockPage>, String> {
+) -> Result<Option<ThreadBlocksPage>, String> {
     let options = options.unwrap_or_default();
     thread_blocks_with_state(
         &state,
@@ -331,58 +451,64 @@ fn thread_detail_with_state(
     state: &DesktopState,
     request: ThreadDetailRequest,
 ) -> Result<Option<ThreadDetail>> {
+    let plan = thread_service::plan_thread_detail_request(
+        state.platform(),
+        thread_service::ThreadDetailRequest {
+            id: request.id,
+            limit: request.limit,
+            full: request.full,
+            before: request.before,
+        },
+    )?;
     let paths = state.codex_paths();
-    let detail = thread_detail(&paths, &request.id)?;
+    let detail = thread_detail(&paths, &plan.thread_id)?;
     let Some(mut detail) = detail else {
         return Ok(None);
     };
     apply_running_job_to_detail(state, &mut detail)?;
-    Ok(Some(window_thread_detail(
-        detail,
-        detail_block_limit(request.limit, request.full),
-        request.before.as_deref(),
+    Ok(Some(thread_service::window_thread_detail_for_plan(
+        detail, &plan,
     )))
 }
 
 fn thread_blocks_with_state(
     state: &DesktopState,
     request: ThreadBlocksRequest,
-) -> Result<Option<DesktopThreadBlockPage>> {
-    let Some(detail) = thread_detail_with_state(
-        state,
-        ThreadDetailRequest {
-            id: request.id.clone(),
-            limit: Some(block_page_limit(request.limit)),
-            full: Some(false),
-            before: request.before,
-        },
-    )?
-    else {
+) -> Result<Option<ThreadBlocksPage>> {
+    let plan = thread_service::plan_thread_blocks_request(
+        state.platform(),
+        &request.id,
+        request.limit,
+        request.before,
+    )?;
+    let paths = state.codex_paths();
+    let detail = thread_detail(&paths, &plan.thread_id)?;
+    let Some(mut detail) = detail else {
         return Ok(None);
     };
-    Ok(Some(DesktopThreadBlockPage {
-        thread_id: request.id,
-        blocks: detail.blocks,
-        total_blocks: detail.total_blocks,
-        has_more_blocks: detail.has_more_blocks,
-        before_cursor: detail.before_cursor,
-    }))
+    apply_running_job_to_detail(state, &mut detail)?;
+    Ok(Some(thread_service::thread_blocks_page_for_plan(
+        detail, &plan,
+    )))
 }
 
 fn send_message_with_state(
     state: &DesktopState,
-    mut request: DesktopSendMessageRequest,
+    request: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let Some(thread_id) = request
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return start_codex_new_thread_job(state, request);
-    };
-    request.thread_id = Some(thread_id.to_string());
-    start_codex_job_from_request(state, request, job_service::CodexActionKind::Resume)
+    let attachments = prepare_request_attachments(state, &request.attachments)?;
+    let facade = job_service::plan_thread_send_with_capability(
+        state.platform(),
+        job_service::ThreadSendRequest {
+            thread_id: request.thread_id.clone(),
+            message: request.into_thread_message(attachments),
+        },
+    )?;
+    let action = facade
+        .command
+        .action
+        .ok_or_else(|| anyhow::anyhow!("thread send plan is missing Codex job action"))?;
+    start_codex_job_from_action(state, action)
 }
 
 fn steer_thread_with_state(
@@ -390,14 +516,18 @@ fn steer_thread_with_state(
     request: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let followup = job_service::enqueue_followup_with_capability(
-        &state.db,
+    let facade = job_service::plan_thread_steer_with_capability(
         state.platform(),
         job_service::ThreadSteerRequest {
-        thread_id: request.thread_id.clone(),
-        message: request.into_thread_message(attachments),
+            thread_id: request.thread_id.clone(),
+            message: request.into_thread_message(attachments),
         },
     )?;
+    let followup = facade
+        .command
+        .followup
+        .ok_or_else(|| anyhow::anyhow!("thread steer plan is missing follow-up action"))?;
+    let followup = job_service::enqueue_planned_followup(&state.db, followup)?;
     Ok(job_service::codex_action_submitted(
         Some(followup.thread_id),
         None,
@@ -473,7 +603,8 @@ fn archive_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = job_service::plan_thread_archive_with_capability(state.platform(), &request.thread_id)?;
+    let plan =
+        job_service::plan_thread_archive_with_capability(state.platform(), &request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, true)?;
     Ok(job_service::thread_state_action_response(&plan)?.into())
 }
@@ -482,7 +613,8 @@ fn restore_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = job_service::plan_thread_restore_with_capability(state.platform(), &request.thread_id)?;
+    let plan =
+        job_service::plan_thread_restore_with_capability(state.platform(), &request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, false)?;
     Ok(job_service::thread_state_action_response(&plan)?.into())
 }
@@ -564,13 +696,6 @@ fn cancel_followup_with_state(
     .into())
 }
 
-fn start_codex_new_thread_job(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    start_codex_job_from_request(state, request, job_service::CodexActionKind::Exec)
-}
-
 fn start_codex_resume_job(
     state: &DesktopState,
     thread_id: &str,
@@ -593,6 +718,22 @@ fn start_codex_job_from_request(
     kind: job_service::CodexActionKind,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let spec = codex_job_spec_for_request(state, request, kind)?;
+    start_codex_job_from_spec(state, spec)
+}
+
+fn start_codex_job_from_action(
+    state: &DesktopState,
+    action: job_service::JobActionRequest,
+) -> Result<nexushub_core::jobs::CodexActionResult> {
+    let config = state.config();
+    let spec = job_service::build_codex_job_spec(&action, config.codex.workspace.clone())?;
+    start_codex_job_from_spec(state, spec)
+}
+
+fn start_codex_job_from_spec(
+    state: &DesktopState,
+    spec: job_service::CodexJobSpec,
+) -> Result<nexushub_core::jobs::CodexActionResult> {
     let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
         &spec.title,
@@ -616,9 +757,22 @@ pub(crate) fn codex_job_spec_for_request(
     kind: job_service::CodexActionKind,
 ) -> Result<job_service::CodexJobSpec> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let action = request
-        .into_thread_message(attachments)
-        .into_job_action(kind);
+    let message = request.into_thread_message(attachments);
+    let facade = job_service::plan_thread_command_with_capability(
+        state.platform(),
+        job_service::ThreadCommandRequest {
+            command: match kind {
+                job_service::CodexActionKind::Exec => job_service::ThreadCommandKind::Create,
+                job_service::CodexActionKind::Resume => job_service::ThreadCommandKind::Resume,
+            },
+            thread_id: message.thread_id.clone(),
+            message,
+        },
+    )?;
+    let action = facade
+        .command
+        .action
+        .ok_or_else(|| anyhow::anyhow!("thread command plan is missing Codex job action"))?;
     let config = state.config();
     job_service::build_codex_job_spec(&action, config.codex.workspace.clone())
 }
@@ -643,13 +797,13 @@ fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String>
 
 fn thread_list_with_jobs(state: &DesktopState, query: ThreadsQuery) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    let fetch_limit = thread_service::thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    let plan = thread_service::plan_threads_list_request(state.platform(), query)?;
     let hidden_thread_ids = hidden_thread_ids(&paths).unwrap_or_default();
     let archived_thread_ids = archived_thread_ids(&paths).unwrap_or_default();
     Ok(thread_service::build_threads_overview(
-        list_threads(&paths, None, query.q.as_deref(), fetch_limit)?,
+        list_threads(&paths, None, plan.query.q.as_deref(), plan.fetch_limit)?,
         state.db.running_thread_jobs()?,
-        query,
+        plan.query,
         &hidden_thread_ids,
         &archived_thread_ids,
     )
@@ -661,14 +815,6 @@ fn apply_running_job_to_detail(state: &DesktopState, detail: &mut ThreadDetail) 
         thread_service::apply_running_job_to_summary(&mut detail.summary, &job);
     }
     Ok(())
-}
-
-fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    thread_service::normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
-}
-
-fn block_page_limit(limit: Option<usize>) -> usize {
-    thread_service::normalize_thread_block_limit(limit)
 }
 
 fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {

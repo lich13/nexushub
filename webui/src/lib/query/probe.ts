@@ -13,6 +13,7 @@ import {
 } from "../api";
 import type { ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
+import { preservePreviousQueryData } from "./shared";
 
 export const probeQueryKeys = {
   status: ["probe-status"] as const,
@@ -29,34 +30,34 @@ export function useProbeQueries() {
       queryFn: getProbeStatus,
       refetchInterval: 15000,
       staleTime: 10000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     settings: useQuery({
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
       refetchInterval: 30000,
       staleTime: 15000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     logsDbStatus: useQuery({
       queryKey: probeQueryKeys.logsDbStatus,
       queryFn: getProbeLogsDbStatus,
       refetchInterval: 30000,
       staleTime: 15000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     events: useQuery({
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
       refetchInterval: 15000,
       staleTime: 10000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     }),
     jobs: useQuery({
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
       refetchInterval: 5000,
-      placeholderData: keepPreviousData
+      placeholderData: preservePreviousQueryData
     })
   };
 }
@@ -114,8 +115,4 @@ export function useProbeActions(input: {
       onError: (error: Error) => input.onSaveError(error)
     })
   };
-}
-
-function keepPreviousData<T>(previous: T | undefined): T | undefined {
-  return previous;
 }

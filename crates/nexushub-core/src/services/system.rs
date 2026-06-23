@@ -19,6 +19,7 @@ pub enum Capability {
     ProbeLogMaintenance,
     ThreadArchiveActions,
     WebAuth,
+    Csrf,
     SecuritySettings,
     Turnstile,
     Systemd,
@@ -43,6 +44,7 @@ impl Capability {
             Self::ProbeLogMaintenance => "probe_log_maintenance",
             Self::ThreadArchiveActions => "thread_archive_actions",
             Self::WebAuth => "web_auth",
+            Self::Csrf => "csrf",
             Self::SecuritySettings => "security_settings",
             Self::Turnstile => "turnstile",
             Self::Systemd => "systemd",
@@ -69,6 +71,7 @@ impl Capability {
             | Self::ProbeLogMaintenance
             | Self::ThreadArchiveActions => shared_core,
             Self::WebAuth
+            | Self::Csrf
             | Self::SecuritySettings
             | Self::Turnstile
             | Self::Systemd
@@ -94,6 +97,7 @@ pub struct SystemCapabilities {
     pub probe_log_maintenance: bool,
     pub thread_archive_actions: bool,
     pub web_auth: bool,
+    pub csrf: bool,
     pub security_settings: bool,
     pub turnstile: bool,
     pub systemd: bool,
@@ -128,6 +132,7 @@ pub fn system_capabilities(_config: &Config, platform: &PlatformPaths) -> System
         probe_log_maintenance: Capability::ProbeLogMaintenance.is_supported_on(platform),
         thread_archive_actions: Capability::ThreadArchiveActions.is_supported_on(platform),
         web_auth: Capability::WebAuth.is_supported_on(platform),
+        csrf: Capability::Csrf.is_supported_on(platform),
         security_settings: Capability::SecuritySettings.is_supported_on(platform),
         turnstile: Capability::Turnstile.is_supported_on(platform),
         systemd: Capability::Systemd.is_supported_on(platform),
