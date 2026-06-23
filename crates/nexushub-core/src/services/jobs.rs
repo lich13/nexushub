@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    db::ThreadFollowUp,
+    db::{PanelDb, ThreadFollowUp},
     jobs::CodexActionResult,
     platform::PlatformPaths,
     services::commands,
@@ -171,6 +171,109 @@ pub struct ThreadCommandFacadePlan {
     pub command: ThreadCommandPlan,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSendRequest {
+    #[serde(default, alias = "thread_id")]
+    pub thread_id: Option<String>,
+    pub message: ThreadMessageRequest,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSteerRequest {
+    #[serde(default, alias = "thread_id")]
+    pub thread_id: Option<String>,
+    pub message: ThreadMessageRequest,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpListRequest {
+    #[serde(alias = "thread_id")]
+    pub thread_id: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpListPlan {
+    pub required_capability: Capability,
+    pub thread_id: String,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpEnqueueFacadePlan {
+    pub required_capability: Capability,
+    pub followup: ThreadFollowUpPlan,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpCancelRequest {
+    #[serde(alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(alias = "followup_id", alias = "followUpId")]
+    pub followup_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpCancelPlan {
+    pub required_capability: Capability,
+    pub thread_id: String,
+    pub followup_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStopRequest {
+    #[serde(alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(default, alias = "turn_id")]
+    pub turn_id: Option<String>,
+    #[serde(default, alias = "job_id")]
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStopPlan {
+    pub required_capability: Capability,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub job_id: Option<String>,
+    pub requires_active_job_lookup: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStopJobPlan {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRenameRequest {
+    #[serde(alias = "thread_id")]
+    pub thread_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStateActionPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub thread_id: String,
+    pub archived: Option<bool>,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexJobSpec {
@@ -304,6 +407,161 @@ pub fn plan_thread_command_with_capability(
     Ok(ThreadCommandFacadePlan {
         required_capability: Capability::Jobs,
         command: normalize_thread_command_request(request)?,
+    })
+}
+
+pub fn plan_thread_send_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadSendRequest,
+) -> Result<ThreadCommandFacadePlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let command = if non_empty(request.thread_id.as_deref())
+        .or_else(|| non_empty(request.message.thread_id.as_deref()))
+        .is_some()
+    {
+        ThreadCommandKind::Resume
+    } else {
+        ThreadCommandKind::Create
+    };
+    Ok(ThreadCommandFacadePlan {
+        required_capability: Capability::Jobs,
+        command: normalize_thread_command_request(ThreadCommandRequest {
+            command,
+            thread_id: request.thread_id,
+            message: request.message,
+        })?,
+    })
+}
+
+pub fn plan_thread_steer_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadSteerRequest,
+) -> Result<ThreadCommandFacadePlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(ThreadCommandFacadePlan {
+        required_capability: Capability::Jobs,
+        command: plan_steer_thread_as_followup(ThreadCommandRequest {
+            command: ThreadCommandKind::FollowUp,
+            thread_id: request.thread_id,
+            message: request.message,
+        })?,
+    })
+}
+
+pub fn plan_followup_list_with_capability(
+    platform: &PlatformPaths,
+    request: FollowUpListRequest,
+) -> Result<FollowUpListPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    Ok(FollowUpListPlan {
+        required_capability: Capability::Jobs,
+        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
+        limit: normalize_followup_limit(request.limit),
+    })
+}
+
+pub fn plan_followup_enqueue_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadSteerRequest,
+) -> Result<FollowUpEnqueueFacadePlan> {
+    let plan = plan_thread_steer_with_capability(platform, request)?;
+    let followup = plan
+        .command
+        .followup
+        .ok_or_else(|| anyhow!("missing follow-up plan"))?;
+    Ok(FollowUpEnqueueFacadePlan {
+        required_capability: Capability::Jobs,
+        followup,
+    })
+}
+
+pub fn plan_followup_cancel_with_capability(
+    platform: &PlatformPaths,
+    request: FollowUpCancelRequest,
+) -> Result<FollowUpCancelPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let followup_id =
+        non_empty_owned(&request.followup_id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    Ok(FollowUpCancelPlan {
+        required_capability: Capability::Jobs,
+        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
+        followup_id,
+    })
+}
+
+pub fn plan_thread_stop_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadStopRequest,
+) -> Result<ThreadStopPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let job_id = non_empty(request.job_id.as_deref()).map(str::to_string);
+    Ok(ThreadStopPlan {
+        required_capability: Capability::Jobs,
+        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
+        turn_id: non_empty(request.turn_id.as_deref()).map(str::to_string),
+        requires_active_job_lookup: job_id.is_none(),
+        job_id,
+    })
+}
+
+pub fn resolve_thread_stop_job(
+    plan: &ThreadStopPlan,
+    active_job_id: Option<String>,
+) -> Result<ThreadStopJobPlan> {
+    let job_id = plan
+        .job_id
+        .as_deref()
+        .and_then(|value| non_empty(Some(value)))
+        .map(str::to_string)
+        .or_else(|| non_empty(active_job_id.as_deref()).map(str::to_string))
+        .ok_or_else(|| anyhow!("stop requires job_id or an active fallback job"))?;
+    Ok(ThreadStopJobPlan {
+        thread_id: plan.thread_id.clone(),
+        turn_id: plan.turn_id.clone(),
+        job_id,
+    })
+}
+
+pub fn thread_stop_response(plan: &ThreadStopJobPlan, cancelled: bool) -> ActionResponse {
+    action_ok(
+        commands::THREADS_STOP,
+        if cancelled {
+            "sent TERM to local Codex job"
+        } else {
+            "local job is no longer running"
+        },
+        Some(plan.thread_id.clone()),
+        Some(plan.job_id.clone()),
+        Some(json!({"turn_id": plan.turn_id, "cancelled": cancelled})),
+    )
+}
+
+pub fn plan_thread_archive_with_capability(
+    platform: &PlatformPaths,
+    thread_id: &str,
+) -> Result<ThreadStateActionPlan> {
+    plan_thread_archive_state_action(platform, thread_id, true)
+}
+
+pub fn plan_thread_restore_with_capability(
+    platform: &PlatformPaths,
+    thread_id: &str,
+) -> Result<ThreadStateActionPlan> {
+    plan_thread_archive_state_action(platform, thread_id, false)
+}
+
+pub fn plan_thread_rename_with_capability(
+    platform: &PlatformPaths,
+    request: ThreadRenameRequest,
+) -> Result<ThreadStateActionPlan> {
+    require_capability(platform, Capability::ThreadArchiveActions)?;
+    let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
+    Ok(ThreadStateActionPlan {
+        required_capability: Capability::ThreadArchiveActions,
+        command: commands::THREADS_RENAME.to_string(),
+        thread_id: required_command_thread_id(Some(&request.thread_id), None)?,
+        archived: None,
+        name: Some(name),
     })
 }
 
@@ -456,6 +714,18 @@ pub fn rename_thread_response(thread_id: String, name: &str) -> Result<ActionRes
     ))
 }
 
+pub fn thread_state_action_response(plan: &ThreadStateActionPlan) -> Result<ActionResponse> {
+    match plan.command.as_str() {
+        commands::THREADS_ARCHIVE => Ok(archive_thread_response(plan.thread_id.clone(), true)),
+        commands::THREADS_RESTORE => Ok(archive_thread_response(plan.thread_id.clone(), false)),
+        commands::THREADS_RENAME => rename_thread_response(
+            plan.thread_id.clone(),
+            plan.name.as_deref().unwrap_or_default(),
+        ),
+        _ => Err(anyhow!("unsupported thread state action: {}", plan.command)),
+    }
+}
+
 pub fn cancel_followup_response(
     command: &str,
     thread_id: String,
@@ -473,6 +743,46 @@ pub fn cancel_followup_response(
         None,
         Some(json!({"followup_id": followup_id, "cancelled": cancelled})),
     )
+}
+
+pub fn list_followups_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: FollowUpListRequest,
+) -> Result<Vec<ThreadFollowUp>> {
+    let plan = plan_followup_list_with_capability(platform, request)?;
+    db.list_followups(&plan.thread_id, plan.limit as u32)
+}
+
+pub fn enqueue_followup_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: ThreadSteerRequest,
+) -> Result<ThreadFollowUp> {
+    let plan = plan_followup_enqueue_with_capability(platform, request)?;
+    enqueue_planned_followup(db, plan.followup)
+}
+
+pub fn enqueue_planned_followup(
+    db: &PanelDb,
+    followup: ThreadFollowUpPlan,
+) -> Result<ThreadFollowUp> {
+    db.enqueue_followup(&followup.thread_id, &followup.message, followup.options)
+}
+
+pub fn cancel_followup_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: FollowUpCancelRequest,
+) -> Result<ActionResponse> {
+    let plan = plan_followup_cancel_with_capability(platform, request)?;
+    let cancelled = db.cancel_followup(&plan.thread_id, &plan.followup_id)?;
+    Ok(cancel_followup_response(
+        commands::THREADS_FOLLOWUPS_CANCEL,
+        plan.thread_id,
+        plan.followup_id,
+        cancelled,
+    ))
 }
 
 pub fn thread_message_options_json(request: &ThreadMessageRequest) -> Value {
@@ -712,6 +1022,30 @@ fn required_command_thread_id(
         .or_else(|| non_empty(message_thread_id))
         .map(str::to_string)
         .ok_or_else(|| anyhow!("thread_id is required"))
+}
+
+fn normalize_followup_limit(limit: Option<u32>) -> u32 {
+    limit.unwrap_or(20).clamp(1, 200)
+}
+
+fn plan_thread_archive_state_action(
+    platform: &PlatformPaths,
+    thread_id: &str,
+    archived: bool,
+) -> Result<ThreadStateActionPlan> {
+    require_capability(platform, Capability::ThreadArchiveActions)?;
+    Ok(ThreadStateActionPlan {
+        required_capability: Capability::ThreadArchiveActions,
+        command: if archived {
+            commands::THREADS_ARCHIVE
+        } else {
+            commands::THREADS_RESTORE
+        }
+        .to_string(),
+        thread_id: required_command_thread_id(Some(thread_id), None)?,
+        archived: Some(archived),
+        name: None,
+    })
 }
 
 fn string_option(options: &Value, key: &str) -> Option<String> {

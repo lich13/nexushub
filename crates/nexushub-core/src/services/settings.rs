@@ -42,6 +42,12 @@ pub struct SettingsView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeSettingsViewPlan {
+    pub required_capability: Capability,
+    pub settings: SettingsView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexSettingsView {
     pub home: Option<String>,
     pub configured_codex_home: Option<String>,
@@ -88,6 +94,18 @@ pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -
         ),
         logs_db: config.probe.logs_db.clone(),
     }
+}
+
+pub fn probe_settings_view_with_capability(
+    config: &Config,
+    platform: &PlatformPaths,
+    bark_device_key: ProbeSecretState,
+) -> Result<ProbeSettingsViewPlan> {
+    require_capability(platform, Capability::Settings)?;
+    Ok(ProbeSettingsViewPlan {
+        required_capability: Capability::Settings,
+        settings: build_settings_view(config, bark_device_key),
+    })
 }
 
 pub fn probe_notifications_settings_view(
@@ -185,14 +203,25 @@ pub struct ProbeNotificationsSavePatch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NormalizedProbeSettingsPatch {
     pub config_patch: ProbeConfigFilePatch,
+    #[serde(default, skip_serializing)]
     pub bark_device_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretSettingWritePlan {
+    pub setting_key: String,
+    #[serde(default, skip_serializing)]
+    pub secret_value: String,
+    pub audit_value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeSettingsSavePlan {
     pub required_capability: Capability,
     pub config_patch: ProbeConfigFilePatch,
+    #[serde(default, skip_serializing)]
     pub bark_device_key: Option<String>,
+    pub secret_writes: Vec<SecretSettingWritePlan>,
 }
 
 pub fn plan_probe_settings_save(
@@ -201,10 +230,17 @@ pub fn plan_probe_settings_save(
 ) -> Result<ProbeSettingsSavePlan> {
     require_capability(platform, Capability::Settings)?;
     let normalized = normalize_probe_settings_save_request(request)?;
+    let secret_writes = normalized
+        .bark_device_key
+        .as_deref()
+        .map(bark_device_key_write_plan)
+        .into_iter()
+        .collect();
     Ok(ProbeSettingsSavePlan {
         required_capability: Capability::Settings,
         config_patch: normalized.config_patch,
         bark_device_key: normalized.bark_device_key,
+        secret_writes,
     })
 }
 
@@ -292,6 +328,14 @@ impl ProbeNotificationsSavePatch {
             },
             normalize_bark_device_key(self.device_key),
         )
+    }
+}
+
+fn bark_device_key_write_plan(secret_value: &str) -> SecretSettingWritePlan {
+    SecretSettingWritePlan {
+        setting_key: PROBE_BARK_DEVICE_KEY_SETTING.to_string(),
+        secret_value: secret_value.to_string(),
+        audit_value: "[configured]".to_string(),
     }
 }
 

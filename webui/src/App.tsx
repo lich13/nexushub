@@ -1,4 +1,3 @@
-import { QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   Bot,
@@ -61,8 +60,9 @@ import {
 } from "./lib/query/system";
 import {
   subscribeThreadEvents,
-  threadQueryKeys,
+  type ThreadCacheSnapshot,
   type ThreadSendPayload,
+  useThreadCacheActions,
   useCreateThreadMutation,
   useFollowUpsQuery,
   usePluginsQuery,
@@ -130,6 +130,7 @@ import type {
 } from "./types";
 
 export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
+export { mergeThreadSummaryIntoListCache } from "./lib/query/threads";
 
 type View = "codex" | "claude" | "probe" | "ops" | "security";
 type SelectedThread = string | "__new" | null;
@@ -732,7 +733,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   setView: (view: View) => void;
   capabilities: RuntimeCapabilityMatrix;
 }) {
-  const qc = useQueryClient();
+  const threadCache = useThreadCacheActions();
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
@@ -759,19 +760,16 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
 
   useEffect(() => {
     if (!resolvedSelected || rawSelectedDetail?.summary.status !== "Archived") return;
-    clearArchivedThreadClientState(qc, messageStore, resolvedSelected);
+    threadCache.clearArchivedThreadClientState(messageStore, resolvedSelected);
     if (selectedId === resolvedSelected) {
       setSelectedId(nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected));
     }
-  }, [messageStore, qc, resolvedSelected, rawSelectedDetail, selectedId, visibleThreads]);
+  }, [messageStore, threadCache, resolvedSelected, rawSelectedDetail, selectedId, visibleThreads]);
 
   useEffect(() => {
     if (!resolvedSelected || !selectedThreadSummary) return;
-    qc.setQueryData<ThreadDetail>(["thread", resolvedSelected], (current) => {
-      if (!current) return current;
-      return mergeThreadDetailSummaryFromList(current, selectedThreadSummary);
-    });
-  }, [qc, resolvedSelected, selectedThreadSummary]);
+    threadCache.mergeThreadDetailSummary(resolvedSelected, selectedThreadSummary);
+  }, [threadCache, resolvedSelected, selectedThreadSummary]);
 
   useEffect(() => {
     messageStore.setActive(resolvedSelected);
@@ -807,7 +805,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
       selectedId={resolvedSelected}
       onSelect={selectThread}
       onNew={() => selectThread("__new")}
-      onRefresh={() => qc.invalidateQueries({ queryKey: ["threads"] })}
+      onRefresh={() => threadCache.invalidateThreads()}
       loading={threads.isLoading}
     />
   );
@@ -1123,144 +1121,6 @@ export function threadMatchesListFilter(thread: Partial<ThreadSummary>, status =
   ].some((value) => String(value ?? "").toLowerCase().includes(needle));
 }
 
-export function mergeThreadSummaryIntoListCache(
-  rows: ThreadSummary[] | undefined,
-  incoming: ThreadSummary,
-  status = "all",
-  q = ""
-): ThreadSummary[] | undefined {
-  if (!rows) return rows;
-  const existing = rows.find((thread) => thread.id === incoming.id);
-  const merged = existing ? mergeIncomingThreadSummary(existing, incoming) as ThreadSummary : incoming;
-  const matches = threadMatchesListFilter(merged, status, q);
-  if (!matches) {
-    return existing ? rows.filter((thread) => thread.id !== incoming.id) : rows;
-  }
-  if (existing) {
-    return rows.map((thread) => thread.id === incoming.id ? merged : thread);
-  }
-  return [merged, ...rows];
-}
-
-export function removeThreadFromListCaches(qc: QueryClient, threadId: string): void {
-  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
-    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
-      rows ? rows.filter((thread) => thread.id !== threadId) : rows
-    );
-  }
-}
-
-export function clearArchivedThreadClientState(
-  qc: QueryClient,
-  messageStore: Pick<ThreadMessageStoreController, "clear">,
-  threadId: string
-): void {
-  removeThreadFromListCaches(qc, threadId);
-  qc.removeQueries({ queryKey: ["thread", threadId], exact: true });
-  messageStore.clear(threadId);
-}
-
-type QueryCacheSnapshotEntry = {
-  queryKey: QueryKey;
-  existed: boolean;
-  data: unknown;
-};
-
-type ThreadCacheSnapshot = {
-  entries: QueryCacheSnapshotEntry[];
-};
-
-function snapshotQueryCache(qc: QueryClient, queryKey: QueryKey): QueryCacheSnapshotEntry {
-  return {
-    queryKey,
-    existed: Boolean(qc.getQueryCache().find({ queryKey, exact: true })),
-    data: qc.getQueryData(queryKey)
-  };
-}
-
-function snapshotThreadCaches(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
-  const entries = qc.getQueryCache().findAll({ queryKey: ["threads"] }).map((query) => snapshotQueryCache(qc, query.queryKey));
-  entries.push(snapshotQueryCache(qc, ["thread", threadId]));
-  return { entries };
-}
-
-function restoreQueryCacheSnapshot(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
-  if (!snapshot) return;
-  for (const entry of snapshot.entries) {
-    if (entry.existed) {
-      qc.setQueryData(entry.queryKey, entry.data);
-    } else {
-      qc.removeQueries({ queryKey: entry.queryKey, exact: true });
-    }
-  }
-}
-
-export function applyOptimisticThreadTitle(qc: QueryClient, threadId: string, title: string): ThreadCacheSnapshot {
-  const snapshot = snapshotThreadCaches(qc, threadId);
-  const nextTitle = title.trim();
-  if (nextTitle) {
-    updateSavedThreadTitleCaches(qc, threadId, nextTitle);
-  }
-  return snapshot;
-}
-
-export function rollbackOptimisticThreadTitle(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
-  restoreQueryCacheSnapshot(qc, snapshot);
-}
-
-export function applyOptimisticThreadArchive(
-  qc: QueryClient,
-  messageStore: Pick<ThreadMessageStoreController, "clear">,
-  threadId: string
-): ThreadCacheSnapshot {
-  const snapshot = snapshotThreadCaches(qc, threadId);
-  clearArchivedThreadClientState(qc, messageStore, threadId);
-  return snapshot;
-}
-
-export function rollbackOptimisticThreadArchive(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
-  restoreQueryCacheSnapshot(qc, snapshot);
-}
-
-export function applyOptimisticThreadRestore(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
-  const snapshot = snapshotThreadCaches(qc, threadId);
-  const cached = cachedThreadSummary(qc, threadId);
-  if (!cached) return snapshot;
-  const restored: ThreadSummary = {
-    ...cached,
-    status: "Recent",
-    archived_at: null
-  };
-  updateThreadListCaches(qc, restored);
-  qc.setQueryData<ThreadDetail>(["thread", threadId], (current) => {
-    if (!current) return current;
-    return {
-      ...current,
-      summary: {
-        ...mergeIncomingThreadSummary(current.summary, restored),
-        status: "Recent",
-        archived_at: null
-      } as ThreadSummary
-    };
-  });
-  return snapshot;
-}
-
-export function rollbackOptimisticThreadRestore(qc: QueryClient, snapshot?: ThreadCacheSnapshot | null): void {
-  restoreQueryCacheSnapshot(qc, snapshot);
-}
-
-function cachedThreadSummary(qc: QueryClient, threadId: string): ThreadSummary | null {
-  const detail = qc.getQueryData<ThreadDetail>(["thread", threadId]);
-  if (detail?.summary.id === threadId) return detail.summary;
-  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
-    const rows = qc.getQueryData<ThreadSummary[]>(query.queryKey);
-    const match = rows?.find((thread) => thread.id === threadId);
-    if (match) return match;
-  }
-  return null;
-}
-
 export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
   const visible = filterVisibleThreadSummaries(threads);
   const removedIndex = visible.findIndex((thread) => thread.id === removedThreadId);
@@ -1272,30 +1132,6 @@ export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], remove
 
 export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null): detail is ThreadDetail {
   return Boolean(threadId && detail?.summary.id === threadId && detail.summary.status !== "Archived");
-}
-
-function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary) {
-  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
-    const { status, q } = threadListFilterFromQueryKey(query.queryKey);
-    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
-      mergeThreadSummaryIntoListCache(rows, incoming, status, q)
-    );
-  }
-}
-
-function threadListFilterFromQueryKey(queryKey: QueryKey): { status: string; q: string } {
-  const [, statusOrFilter = "all", qValue = ""] = queryKey as [unknown, unknown?, unknown?];
-  if (typeof statusOrFilter === "object" && statusOrFilter) {
-    const filter = statusOrFilter as { status?: unknown; q?: unknown };
-    return {
-      status: typeof filter.status === "string" ? filter.status : "all",
-      q: typeof filter.q === "string" ? filter.q : ""
-    };
-  }
-  return {
-    status: typeof statusOrFilter === "string" ? statusOrFilter : "all",
-    q: typeof qValue === "string" ? qValue : ""
-  };
 }
 
 export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
@@ -1937,17 +1773,6 @@ function probeJobActionLabel(action: ProbeJobAction | undefined): string {
     default:
       return "Probe job";
   }
-}
-
-function updateSavedThreadTitleCaches(qc: QueryClient, threadId: string, title: string) {
-  for (const query of qc.getQueryCache().findAll({ queryKey: ["threads"] })) {
-    qc.setQueryData<ThreadSummary[]>(query.queryKey, (rows) =>
-      rows ? mergeSavedThreadTitle(rows, threadId, title) : rows
-    );
-  }
-  qc.setQueryData<ThreadDetail>(["thread", threadId], (current) =>
-    current ? { ...current, summary: { ...current.summary, title } } : current
-  );
 }
 
 function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
@@ -2634,7 +2459,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   nextThreadAfterArchive: string | null;
   capabilities: RuntimeCapabilityMatrix;
 }) {
-  const qc = useQueryClient();
+  const threadCache = useThreadCacheActions();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2717,17 +2542,17 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       onSummary: (next, eventThreadId) => {
         const stableSummary = applyThreadTitleOverride(next);
         messageStore.applySummary(eventThreadId, stableSummary as ThreadSummary);
-        updateThreadListCaches(qc, stableSummary as ThreadSummary);
-        qc.invalidateQueries({ queryKey: ["threads"] });
+        threadCache.updateThreadListCaches(stableSummary as ThreadSummary);
+        threadCache.invalidateThreads();
       },
       onError: (message, eventThreadId) => {
         messageStore.setFeedback(eventThreadId, message);
-        qc.invalidateQueries({ queryKey: ["thread", eventThreadId], refetchType: "all" });
-        qc.invalidateQueries({ queryKey: ["threads"], refetchType: "all" });
+        threadCache.invalidateThread(eventThreadId, "all");
+        threadCache.invalidateThreads("all");
       }
     });
     return unsubscribe;
-  }, [messageStore, qc, threadId, updateMessageFollowState]);
+  }, [messageStore, threadCache, threadId, updateMessageFollowState]);
 
   const pending = useMemo(() => currentPendingElicitation(summary.pending_elicitation, summary.active_turn_id) ?? pendingFromBlocks(blocks, summary.status, summary.active_turn_id), [summary.pending_elicitation, summary.status, summary.active_turn_id, blocks]);
   const planBlock = useMemo(() => latestActionBlock(blocks, summary.status, summary.active_turn_id, isPlanBlock), [blocks, summary.status, summary.active_turn_id]);
@@ -2808,14 +2633,14 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       }
       messageStore.setFeedback(resultThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
+      threadCache.invalidateJobs();
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(resultThreadId);
     },
     onStopSuccess: ({ threadId: stoppedThreadId }) => {
       messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", stoppedThreadId] });
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(stoppedThreadId);
     },
     onSteerSuccess: ({ threadId: resultThreadId, result }) => {
       messageStore.setLastResult(resultThreadId, result);
@@ -2825,23 +2650,20 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         setRunConfig((current) => runConfigAfterSuccessfulSend(current));
       }
       messageStore.setFeedback(resultThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["thread-followups", resultThreadId] });
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", resultThreadId] });
+      threadCache.invalidateFollowUps(resultThreadId);
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(resultThreadId);
     },
-    onCancelFollowUpSuccess: ({ threadId: cancelledThreadId }) => {
+    onFollowUpCancelSuccess: ({ threadId: cancelledThreadId }) => {
       messageStore.setFeedback(cancelledThreadId, "跟进已取消");
-      qc.invalidateQueries({ queryKey: ["thread-followups", cancelledThreadId] });
+      threadCache.invalidateFollowUps(cancelledThreadId);
     },
     onArchiveMutate: async (variables) => {
-      await Promise.all([
-        qc.cancelQueries({ queryKey: ["threads"] }),
-        qc.cancelQueries({ queryKey: ["thread", variables.threadId] })
-      ]);
+      await threadCache.cancelThreadsAndThread(variables.threadId);
       const wasArchived = variables.status === "Archived";
       const snapshot = wasArchived
-        ? applyOptimisticThreadRestore(qc, variables.threadId)
-        : applyOptimisticThreadArchive(qc, messageStore, variables.threadId);
+        ? threadCache.applyOptimisticThreadRestore(variables.threadId)
+        : threadCache.applyOptimisticThreadArchive(messageStore, variables.threadId);
       if (!wasArchived) {
         onSelect(nextThreadAfterArchive);
       }
@@ -2853,9 +2675,9 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     onArchiveError: (err, variables, context) => {
       const archiveContext = context as { snapshot?: ThreadCacheSnapshot; wasArchived?: boolean } | undefined;
       if (archiveContext?.wasArchived) {
-        rollbackOptimisticThreadRestore(qc, archiveContext.snapshot);
+        threadCache.rollbackOptimisticThreadRestore(archiveContext.snapshot);
       } else {
-        rollbackOptimisticThreadArchive(qc, archiveContext?.snapshot);
+        threadCache.rollbackOptimisticThreadArchive(archiveContext?.snapshot);
         if (variables?.threadId) {
           onSelect(variables.threadId);
         }
@@ -2863,18 +2685,15 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
     },
     onArchiveSettled: (variables) => {
-      qc.invalidateQueries({ queryKey: ["threads"] });
+      threadCache.invalidateThreads();
       if (variables?.threadId) {
-        qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
+        threadCache.invalidateThread(variables.threadId);
       }
     },
     onRenameMutate: async (variables) => {
       const title = variables.title.trim();
-      await Promise.all([
-        qc.cancelQueries({ queryKey: ["threads"] }),
-        qc.cancelQueries({ queryKey: ["thread", variables.threadId] })
-      ]);
-      const snapshot = applyOptimisticThreadTitle(qc, variables.threadId, title);
+      await threadCache.cancelThreadsAndThread(variables.threadId);
+      const snapshot = threadCache.applyOptimisticThreadTitle(variables.threadId, title);
       if (title) {
         setLocalThreadTitleOverride(variables.threadId, title);
         setRenameValue(title);
@@ -2887,7 +2706,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       messageStore.setFeedback(renamedThreadId, "线程名称已更新");
       if (title) {
         setLocalThreadTitleOverride(renamedThreadId, title);
-        applyOptimisticThreadTitle(qc, renamedThreadId, title);
+        threadCache.applyOptimisticThreadTitle(renamedThreadId, title);
       }
     },
     onRenameError: (err, variables, context) => {
@@ -2895,8 +2714,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       if (variables?.threadId) {
         clearLocalThreadTitleOverride(variables.threadId);
       }
-      rollbackOptimisticThreadTitle(qc, renameContext?.snapshot);
-      const restoredTitle = cachedThreadSummary(qc, variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
+      threadCache.rollbackOptimisticThreadTitle(renameContext?.snapshot);
+      const restoredTitle = threadCache.cachedThreadSummary(variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
       if (variables?.threadId === summary.id && restoredTitle) {
         setRenameValue(restoredTitle);
         setRenameDirty(false);
@@ -2905,22 +2724,22 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
     },
     onRenameSettled: (variables) => {
-      qc.invalidateQueries({ queryKey: ["threads"] });
+      threadCache.invalidateThreads();
       if (variables?.threadId) {
-        qc.invalidateQueries({ queryKey: ["thread", variables.threadId] });
+        threadCache.invalidateThread(variables.threadId);
       }
     },
     onForkSuccess: ({ threadId: forkedThreadId, result }) => {
       messageStore.setLastResult(forkedThreadId, result);
       messageStore.setFeedback(forkedThreadId, actionMessage(result));
       if (result.thread_id) onSelect(result.thread_id);
-      qc.invalidateQueries({ queryKey: ["threads"] });
+      threadCache.invalidateThreads();
     },
     onBridgeActionSuccess: ({ threadId: actionThreadId, result }) => {
       messageStore.setLastResult(actionThreadId, result);
       messageStore.setFeedback(actionThreadId, actionMessage(result));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["thread", actionThreadId] });
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(actionThreadId);
     },
     onActionError: (err, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
   });
@@ -2928,7 +2747,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const sendMutation = threadActions.send;
   const stopMutation = threadActions.stop;
   const steerMutation = threadActions.steer;
-  const cancelFollowUpMutation = threadActions.cancelFollowUp;
+  const followUpCancelMutation = threadActions.followUpCancel;
   const archiveMutation = threadActions.archive;
   const renameMutation = threadActions.rename;
   const forkMutation = threadActions.fork;
@@ -3031,13 +2850,13 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         messageStore.setFeedback(threadId, action.message ?? "已执行");
         break;
     }
-  }, [archiveMutation, blocks, capabilities, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, qc, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
+  }, [archiveMutation, blocks, capabilities, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
   const stopPending = stopMutation.isPending && stopMutation.variables?.threadId === summary.id;
   const steerPending = steerMutation.isPending && steerMutation.variables?.threadId === summary.id;
-  const cancelFollowUpPending = cancelFollowUpMutation.isPending && cancelFollowUpMutation.variables?.threadId === summary.id;
+  const followUpCancelPending = followUpCancelMutation.isPending && followUpCancelMutation.variables?.threadId === summary.id;
   const forkPending = forkMutation.isPending && forkMutation.variables?.threadId === summary.id;
   const renamePending = renameMutation.isPending && renameMutation.variables?.threadId === summary.id;
   const archivePending = archiveMutation.isPending && archiveMutation.variables?.threadId === summary.id;
@@ -3264,8 +3083,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
           {followUpItems.length > 0 && (
             <FollowUpQueue
               items={followUpItems}
-              onCancel={(item) => cancelFollowUpMutation.mutate({ threadId: summary.id, followUpId: item.id })}
-              cancelling={cancelFollowUpPending}
+              onCancel={(item) => followUpCancelMutation.mutate({ threadId: summary.id, followUpId: item.id })}
+              cancelling={followUpCancelPending}
             />
           )}
           <div className="composer-actions">
@@ -3372,7 +3191,6 @@ function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
   csrfToken?: string | null;
   onFeedback: (message: string | null) => void;
 }) {
-  const qc = useQueryClient();
   const goal = useThreadGoalQuery(threadId);
   const [objective, setObjective] = useState("");
   const [tokenBudget, setTokenBudget] = useState("");
@@ -3391,19 +3209,13 @@ function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
     setError(null);
   }, [threadId]);
 
-  const setGoalCache = useCallback((next: CodexGoal) => {
-    qc.setQueryData<CodexGoal>(["thread-goal", threadId], next);
-  }, [qc, threadId]);
-
   const afterGoalSuccess = useCallback((next: CodexGoal, message: string) => {
-    setGoalCache(next);
     setDirty(false);
     setObjective(next.objective ?? "");
     setTokenBudget(next.token_budget === null || next.token_budget === undefined ? "" : String(next.token_budget));
     setError(null);
     onFeedback(message);
-    qc.invalidateQueries({ queryKey: ["thread-goal", threadId] });
-  }, [onFeedback, qc, setGoalCache, threadId]);
+  }, [onFeedback]);
 
   const onGoalError = useCallback((err: Error) => {
     setError(err.message);
@@ -3668,7 +3480,6 @@ function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
   onCreated: (id: string) => void;
   capabilities: RuntimeCapabilityMatrix;
 }) {
-  const qc = useQueryClient();
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
@@ -3695,8 +3506,6 @@ function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
       setDraft("");
       attachments.clearUploads();
       setRunConfig((current) => runConfigAfterSuccessfulSend(current));
-      qc.invalidateQueries({ queryKey: ["threads"] });
-      qc.invalidateQueries({ queryKey: ["jobs"] });
       if (next.thread_id) onCreated(next.thread_id);
     },
     onError: (err: Error) => setFeedback(err.message)

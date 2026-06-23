@@ -622,6 +622,77 @@ describe("archive delete API compatibility", () => {
     expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i);
   });
 
+  test("demo fixture builder accepts explicit runtime fixtures with complete capabilities", async () => {
+    const {
+      buildDemoPlatformOverview,
+      buildDemoSecurity,
+      buildDemoSystemStatus
+    } = await import("./domain/demoCore");
+    const capabilityKeys = [
+      "admin_password",
+      "app_updater",
+      "job_history",
+      "jobs",
+      "linux_update_job",
+      "nginx",
+      "probe",
+      "probe_log_maintenance",
+      "prune_backups",
+      "public_endpoint",
+      "security_settings",
+      "settings",
+      "status",
+      "systemd",
+      "thread_archive_actions",
+      "thread_cleanup",
+      "threads",
+      "turnstile",
+      "web_auth"
+    ];
+
+    const linuxPlatform = buildDemoPlatformOverview("linux-web");
+    const linuxSystem = buildDemoSystemStatus("linux-web");
+    const linuxSecurity = buildDemoSecurity("linux-web");
+    const macPlatform = buildDemoPlatformOverview("macos-tauri");
+    const macSystem = buildDemoSystemStatus("macos-tauri");
+    const macSecurity = buildDemoSecurity("macos-tauri");
+
+    expect(Object.keys(linuxSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
+    expect(Object.keys(macSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
+    expect(linuxSystem.capabilities).toMatchObject({
+      web_auth: true,
+      security_settings: true,
+      turnstile: true,
+      systemd: true,
+      nginx: true,
+      public_endpoint: true,
+      admin_password: true,
+      linux_update_job: true,
+      prune_backups: true
+    });
+    expect(macSystem.capabilities).toMatchObject({
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false,
+      thread_cleanup: true,
+      probe_log_maintenance: true,
+      thread_archive_actions: true
+    });
+    expect(linuxPlatform).toMatchObject({ kind: "linux", service_kind: "systemd" });
+    expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "661313.xyz");
+    expect(macPlatform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
+    expect(macSecurity).toEqual({});
+    expect(JSON.stringify([macPlatform, { ...macSystem, capabilities: undefined }, macSecurity])).not.toMatch(
+      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i
+    );
+  });
+
   test("Claude Code demo overview includes read-only MCP install and cache summaries", async () => {
     vi.unstubAllEnvs();
     vi.resetModules();
@@ -1428,6 +1499,8 @@ describe("archive delete API compatibility", () => {
       "desktopArgs",
       "webCommand",
       "webArgs",
+      "runtimeValue",
+      "selectRuntimeFallback",
       "desktop_api_command",
       "desktopApiRoute",
       "invokeDesktopApi",
@@ -1449,8 +1522,11 @@ describe("archive delete API compatibility", () => {
     expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
     expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
     expect(domainApiSource).not.toContain("SystemCapabilities =");
+    expect(domainApiSource).not.toContain('from "../runtime"');
+    expect(domainApiSource).not.toContain('from "./shared";\nexport { selectRuntimeFallback');
     expect(domainCapabilitiesSource).not.toContain("../api/");
     expect(domainCapabilitiesSource).not.toContain('from "../api');
+    expect(domainCapabilitiesSource).not.toContain('from "../runtime"');
     expect(domainCapabilitiesSource).not.toContain("linuxBackupPrune");
     expect(domainCapabilitiesSource).not.toContain("linuxUpdateLabels");
     for (const token of forbiddenDomainTokens) {
@@ -1464,10 +1540,29 @@ describe("archive delete API compatibility", () => {
     expect(appSource).not.toContain('runtimeRpc("desktopApi"');
     expect(appSource).not.toContain("invoke(");
     expect(appSource).not.toContain("runtimeDispatch(");
+    expect(appSource).not.toContain("runtimeRpc(");
+    expect(appSource).not.toContain("fetch(");
+    expect(appSource).not.toContain("new EventSource");
+    expect(appSource).not.toContain("EventSource");
     expect(appSource).not.toContain("desktopCommand");
     expect(appSource).not.toContain("webCommand");
     expect(appSource).not.toContain('"/api/');
     expect(appSource).not.toContain("'/api/");
+  });
+
+  test("production API commands are unified dot commands with upload and events as transport exceptions", () => {
+    const commands = [
+      ...domainApiSource.matchAll(/runtimeRpc(?:<[^>]+>)?\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
+    ].map((match) => match[1]);
+
+    expect(commands.length).toBeGreaterThan(30);
+    expect(commands.every((command) => command.includes("."))).toBe(true);
+    expect(domainApiSource).not.toMatch(/runtimeRpc(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
+    expect(runtimeSource).toContain('webFormRpc<T>("uploadFiles"');
+    expect(runtimeSource).toContain("createRuntimeThreadEventSource");
+    expect(runtimeSource).toContain("/api/rpc/threadEvents/");
   });
 
   test("desktop demo and default run config do not leak Linux workspace paths", async () => {

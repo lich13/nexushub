@@ -7,34 +7,12 @@ import {
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
-import { jobIdFromRuntimeResult, selectRuntimeFallback, USE_DEMO } from "./shared";
+import { demoUpdateStatus } from "./demo";
+import { jobIdFromRuntimeResult, USE_DEMO } from "./shared";
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
-    return selectRuntimeFallback({
-      desktop: {
-        current_version: "0.1.100",
-        latest_version: "v0.1.103",
-        update_available: true,
-        channel: "stable",
-        method: "macos_tauri_updater",
-        state: "idle",
-        failure_category: null,
-        recommended_action: "Confirm install in the Tauri updater after signature verification.",
-        capabilities: ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
-      },
-      web: {
-        current_version: "0.1.100",
-        latest_version: "v0.1.103",
-        update_available: true,
-        channel: "stable",
-        method: "linux_systemd_job",
-        state: "idle",
-        failure_category: null,
-        recommended_action: "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
-        capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
-      }
-    });
+    return demoUpdateStatus();
   }
   return runtimeRpc<UpdateStatus>("updates.status");
 }

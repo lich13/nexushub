@@ -21,7 +21,6 @@ use axum::{
     Json, Router,
 };
 use nexushub_core::{
-    archive,
     claude_code::{self, ClaudePaths},
     codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{patch_probe_config_toml, Config},
@@ -31,7 +30,8 @@ use nexushub_core::{
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        commands as rpc_commands, goals as goal_service, jobs as job_service,
+        cleanup as cleanup_service, commands as rpc_commands, goals as goal_service,
+        jobs as job_service,
         probe::{self as probe_service, probe_threads_for_status_with_paths},
         security as security_service, settings as settings_service,
         threads::{
@@ -1036,8 +1036,10 @@ async fn upload_files(
                 bytes: bytes.to_vec(),
             });
         }
-        let plan = upload_service::plan_store_uploads(items)
-            .map_err(|err| upload_service_error(err.to_string()))?;
+        let facade =
+            upload_service::plan_store_uploads_with_capability(&http_update_platform(), items)
+                .map_err(|err| upload_service_error(err.to_string()))?;
+        let plan = facade.plan;
         let total_files = plan.total_files;
         let total_bytes = plan.total_bytes;
         let outcome = upload_service::store_upload_plan(&root, plan)
@@ -1075,16 +1077,18 @@ async fn delete_upload_file(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let plan = upload_service::plan_delete_upload_with_capability(&http_update_platform(), &id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let resolved = state.resolved_codex_paths();
     let root = uploads::upload_root(&resolved.home);
-    let deleted = uploads::delete_upload(&root, &id)
+    let deleted = uploads::delete_upload(&root, &plan.id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     if deleted {
         state.db.record_audit(
             Some(&auth.admin_id),
             "uploads.delete",
             Some("upload"),
-            Some(&id),
+            Some(&plan.id),
             None,
             json!({}),
         )?;
@@ -1583,34 +1587,25 @@ async fn steer_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let plan = job_service::plan_steer_thread_as_followup(job_service::ThreadCommandRequest {
-        command: job_service::ThreadCommandKind::FollowUp,
-        thread_id: Some(id.clone()),
-        message: payload,
-    })
+    let followup = job_service::enqueue_followup_with_capability(
+        &state.db,
+        &http_update_platform(),
+        job_service::ThreadSteerRequest {
+            thread_id: Some(id.clone()),
+            message: payload,
+        },
+    )
     .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let followup_plan = plan
-        .followup
-        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "missing follow-up plan"))?;
-
-    let followup = state
-        .db
-        .enqueue_followup(
-            &followup_plan.thread_id,
-            &followup_plan.message,
-            followup_plan.options,
-        )
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued_after_steer_fallback",
         Some("thread"),
-        Some(&followup_plan.thread_id),
+        Some(&followup.thread_id),
         None,
         json!({"followup_id": followup.id}),
     )?;
     ok(job_service::codex_action_submitted(
-        Some(followup_plan.thread_id),
+        Some(followup.thread_id),
         None,
     ))
 }
@@ -1621,7 +1616,15 @@ async fn list_followups(
     Path(id): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!({ "items": job_service::followup_views(state.db.list_followups(&id, 20)?) }))
+    let items = job_service::list_followups_with_capability(
+        &state.db,
+        &http_update_platform(),
+        job_service::FollowUpListRequest {
+            thread_id: id,
+            limit: Some(20),
+        },
+    )?;
+    ok(json!({ "items": job_service::followup_views(items) }))
 }
 
 async fn enqueue_followup(
@@ -1633,10 +1636,15 @@ async fn enqueue_followup(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     payload.prepared_attachments = prepare_request_attachments(&state, &payload.attachments)?;
-    let (message, options) = payload
-        .into_followup_message_and_options()
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let followup = state.db.enqueue_followup(&id, &message, options)?;
+    let followup = job_service::enqueue_followup_with_capability(
+        &state.db,
+        &http_update_platform(),
+        job_service::ThreadSteerRequest {
+            thread_id: Some(id.clone()),
+            message: payload,
+        },
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.enqueued",
@@ -1655,21 +1663,24 @@ async fn cancel_followup(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let cancelled = state.db.cancel_followup(&id, &followup_id)?;
+    let response = job_service::cancel_followup_with_capability(
+        &state.db,
+        &http_update_platform(),
+        job_service::FollowUpCancelRequest {
+            thread_id: id.clone(),
+            followup_id: followup_id.clone(),
+        },
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.followup.cancelled",
         Some("thread"),
         Some(&id),
         None,
-        json!({"followup_id": followup_id, "cancelled": cancelled}),
+        json!({"followup_id": followup_id, "cancelled": response.data.as_ref().and_then(|data| data.get("cancelled")).and_then(Value::as_bool).unwrap_or(false)}),
     )?;
-    ok(job_service::cancel_followup_response(
-        "cancelFollowUp",
-        id,
-        followup_id,
-        cancelled,
-    ))
+    ok(response)
 }
 
 fn apply_running_jobs_to_threads(
@@ -1786,35 +1797,43 @@ async fn stop_thread(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let payload = payload.map(|Json(value)| value);
-    let requested_turn_id = payload.as_ref().and_then(|value| value.turn_id.clone());
-    let job_id = payload
-        .as_ref()
-        .and_then(|value| value.job_id.clone())
-        .or_else(|| derive_active_job_id(&state, &id));
-    if let Some(job_id) = job_id.as_deref() {
-        let cancelled = state.jobs.cancel_job(job_id)?;
-        state.db.record_audit(
-            Some(&auth.admin_id),
-            "thread.stop.job_cancel",
-            Some("job"),
-            Some(job_id),
-            None,
-            json!({"thread_id": id, "cancelled": cancelled}),
-        )?;
-        return ok(json!({"ok": cancelled, "bridge": false, "job_id": job_id}));
-    }
+    let plan = job_service::plan_thread_stop_with_capability(
+        &http_update_platform(),
+        job_service::ThreadStopRequest {
+            thread_id: id,
+            turn_id: payload.as_ref().and_then(|value| value.turn_id.clone()),
+            job_id: payload.as_ref().and_then(|value| value.job_id.clone()),
+        },
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let active_job_id = plan
+        .requires_active_job_lookup
+        .then(|| derive_active_job_id(&state, &plan.thread_id))
+        .flatten();
+    let stop = match job_service::resolve_thread_stop_job(&plan, active_job_id) {
+        Ok(stop) => stop,
+        Err(err) => {
+            state.db.record_audit(
+                Some(&auth.admin_id),
+                "thread.stop.requested",
+                Some("thread"),
+                Some(&plan.thread_id),
+                None,
+                json!({"turn_id": plan.turn_id}),
+            )?;
+            return Err(api_error(StatusCode::BAD_REQUEST, &err.to_string()));
+        }
+    };
+    let cancelled = state.jobs.cancel_job(&stop.job_id)?;
     state.db.record_audit(
         Some(&auth.admin_id),
-        "thread.stop.requested",
-        Some("thread"),
-        Some(&id),
+        "thread.stop.job_cancel",
+        Some("job"),
+        Some(&stop.job_id),
         None,
-        json!({"turn_id": requested_turn_id}),
+        json!({"thread_id": &stop.thread_id, "cancelled": cancelled}),
     )?;
-    Err(api_error(
-        StatusCode::BAD_REQUEST,
-        "stop requires job_id or an active fallback job",
-    ))
+    ok(job_service::thread_stop_response(&stop, cancelled))
 }
 
 async fn archive_thread(
@@ -1824,17 +1843,19 @@ async fn archive_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let plan = job_service::plan_thread_archive_with_capability(&http_update_platform(), &id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
-    codex::set_thread_archived(&paths, &id, true)?;
+    codex::set_thread_archived(&paths, &plan.thread_id, true)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.archived",
         Some("thread"),
-        Some(&id),
+        Some(&plan.thread_id),
         None,
         json!({}),
     )?;
-    ok(json!({"ok": true}))
+    ok(job_service::thread_state_action_response(&plan)?)
 }
 
 async fn restore_thread(
@@ -1844,17 +1865,19 @@ async fn restore_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let plan = job_service::plan_thread_restore_with_capability(&http_update_platform(), &id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
-    codex::set_thread_archived(&paths, &id, false)?;
+    codex::set_thread_archived(&paths, &plan.thread_id, false)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.restored",
         Some("thread"),
-        Some(&id),
+        Some(&plan.thread_id),
         None,
         json!({}),
     )?;
-    ok(json!({"ok": true}))
+    ok(job_service::thread_state_action_response(&plan)?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1870,21 +1893,26 @@ async fn rename_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "name cannot be empty"));
-    }
+    let plan = job_service::plan_thread_rename_with_capability(
+        &http_update_platform(),
+        job_service::ThreadRenameRequest {
+            thread_id: id,
+            name: payload.name,
+        },
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    let name = plan.name.as_deref().unwrap_or_default();
     let paths = state.codex_paths();
-    codex::set_thread_title(&paths, &id, name)?;
+    codex::set_thread_title(&paths, &plan.thread_id, name)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "thread.renamed",
         Some("thread"),
-        Some(&id),
+        Some(&plan.thread_id),
         None,
         json!({"name": name}),
     )?;
-    ok(json!({"ok": true, "bridge": false}))
+    ok(job_service::thread_state_action_response(&plan)?)
 }
 
 async fn fork_thread(
@@ -2237,12 +2265,13 @@ async fn codex_goal_get(
     Query(query): Query<GoalQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let Some(thread_id) = non_empty(query.thread_id.as_deref()) else {
-        return ok(goal_service::goal_empty("missing_thread"));
-    };
-    ok(goal_service::goal_response(
-        state.db.get_thread_goal(thread_id)?.as_ref(),
-    ))
+    ok(goal_service::goal_get_response_with_capability(
+        &state.db,
+        &http_update_platform(),
+        goal_service::GoalGetRequest {
+            thread_id: query.thread_id,
+        },
+    )?)
 }
 
 async fn codex_goal_set(
@@ -2252,11 +2281,10 @@ async fn codex_goal_set(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = goal_service::plan_goal_update(payload)
-        .map(|plan| plan.update)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
-    ok(goal_service::goal_response(Some(&goal)))
+    ok(
+        goal_service::save_goal_with_capability(&state.db, &http_update_platform(), payload)
+            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
+    )
 }
 
 async fn codex_goal_clear(
@@ -2266,11 +2294,12 @@ async fn codex_goal_clear(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = goal_service::plan_clear_goal_update(payload.thread_id.as_deref())
-        .map(|plan| plan.update)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
-    ok(goal_service::goal_response(Some(&goal)))
+    ok(goal_service::clear_goal_with_capability(
+        &state.db,
+        &http_update_platform(),
+        payload.thread_id.as_deref(),
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn codex_goal_pause(
@@ -2280,14 +2309,12 @@ async fn codex_goal_pause(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let existing = state.db.get_thread_goal(&thread_id)?;
-    let plan = goal_service::plan_pause_goal_update(&thread_id, existing.as_ref())
-        .map(|plan| plan.update)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
-    ok(goal_service::goal_response(Some(&goal)))
+    ok(goal_service::pause_goal_with_capability(
+        &state.db,
+        &http_update_platform(),
+        payload.thread_id.as_deref().unwrap_or_default(),
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn codex_goal_resume(
@@ -2297,14 +2324,12 @@ async fn codex_goal_resume(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let thread_id = goal_service::required_thread_id(payload.thread_id.as_deref())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let existing = state.db.get_thread_goal(&thread_id)?;
-    let plan = goal_service::plan_resume_goal_update(&thread_id, existing.as_ref())
-        .map(|plan| plan.update)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
-    ok(goal_service::goal_response(Some(&goal)))
+    ok(goal_service::resume_goal_with_capability(
+        &state.db,
+        &http_update_platform(),
+        payload.thread_id.as_deref().unwrap_or_default(),
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn start_update_action(
@@ -2349,8 +2374,16 @@ fn http_update_platform() -> PlatformPaths {
 async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let _plan = cleanup_service::plan_cleanup_action(
+        &http_update_platform(),
+        cleanup_service::CleanupAction::ArchiveDeleteDryRun,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
-    ok(archive::plan_delete_archived(&paths)?)
+    ok(cleanup_service::dry_run_archived_with_capability(
+        &http_update_platform(),
+        &paths,
+    )?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2365,14 +2398,20 @@ async fn archive_delete_execute(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if !payload.confirmed {
+    let plan = cleanup_service::plan_cleanup_action(
+        &http_update_platform(),
+        cleanup_service::CleanupAction::ArchiveDeleteExecute,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    if plan.requires_confirmation && !payload.confirmed {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "archive deletion must be confirmed",
         ));
     }
     let paths = state.codex_paths();
-    let result = archive::execute_delete_archived(&paths)?;
+    let result =
+        cleanup_service::execute_archived_with_capability(&http_update_platform(), &paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "archives.delete.execute",
@@ -2390,8 +2429,16 @@ async fn hidden_threads_delete_dry_run(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    let _plan = cleanup_service::plan_cleanup_action(
+        &http_update_platform(),
+        cleanup_service::CleanupAction::HiddenDeleteDryRun,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let paths = state.codex_paths();
-    ok(archive::plan_delete_hidden(&paths)?)
+    ok(cleanup_service::dry_run_hidden_with_capability(
+        &http_update_platform(),
+        &paths,
+    )?)
 }
 
 async fn hidden_threads_delete_execute(
@@ -2401,14 +2448,19 @@ async fn hidden_threads_delete_execute(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    if !payload.confirmed {
+    let plan = cleanup_service::plan_cleanup_action(
+        &http_update_platform(),
+        cleanup_service::CleanupAction::HiddenDeleteExecute,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    if plan.requires_confirmation && !payload.confirmed {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "hidden thread deletion must be confirmed",
         ));
     }
     let paths = state.codex_paths();
-    let result = archive::execute_delete_hidden(&paths)?;
+    let result = cleanup_service::execute_hidden_with_capability(&http_update_platform(), &paths)?;
     state.db.record_audit(
         Some(&auth.admin_id),
         "hidden_threads.delete.execute",
@@ -3466,10 +3518,6 @@ fn goal_unavailable(status: &str) -> Value {
     })
 }
 
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
 fn client_ip(headers: &HeaderMap, state: &AppState, source: Option<SocketAddr>) -> Option<String> {
     if state.config().server.trust_forwarded_headers {
         if let Some(ip) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -4142,6 +4190,70 @@ mod tests {
             source.contains("spec.command"),
             "Linux HTTP Probe actions should use ProbeFixedJobSpec.command"
         );
+    }
+
+    #[test]
+    fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
+        let source = include_str!("api.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("api source must include production section");
+
+        for required in [
+            "goal_service::goal_get_response_with_capability",
+            "goal_service::save_goal_with_capability",
+            "goal_service::clear_goal_with_capability",
+            "goal_service::pause_goal_with_capability",
+            "goal_service::resume_goal_with_capability",
+            "job_service::list_followups_with_capability",
+            "job_service::enqueue_followup_with_capability",
+            "job_service::cancel_followup_with_capability",
+            "job_service::plan_thread_archive_with_capability",
+            "job_service::plan_thread_restore_with_capability",
+            "job_service::plan_thread_rename_with_capability",
+            "job_service::thread_state_action_response",
+            "job_service::plan_thread_stop_with_capability",
+            "job_service::resolve_thread_stop_job",
+            "job_service::thread_stop_response",
+            "upload_service::plan_store_uploads_with_capability",
+            "upload_service::plan_delete_upload_with_capability",
+            "cleanup_service::dry_run_archived_with_capability",
+            "cleanup_service::execute_archived_with_capability",
+            "cleanup_service::dry_run_hidden_with_capability",
+            "cleanup_service::execute_hidden_with_capability",
+        ] {
+            assert!(
+                source.contains(required),
+                "Linux RPC handlers must call the shared core facade/plan: {required}"
+            );
+        }
+
+        for forbidden in [
+            "state.db.get_thread_goal(",
+            "state.db.upsert_thread_goal(",
+            "state.db.delete_thread_goal(",
+            "state.db.update_thread_goal_status(",
+            "state.db.list_followups(",
+            "state.db.enqueue_followup(",
+            "state.db.cancel_followup(",
+            "payload.name.trim()",
+            "job_service::archive_thread_response(",
+            "job_service::rename_thread_response(",
+            "upload_service::plan_store_uploads(items)",
+            "uploads::delete_upload(&root, &id)",
+            "archive::plan_delete_archived(",
+            "archive::execute_delete_archived(",
+            "archive::plan_delete_hidden(",
+            "archive::execute_delete_hidden(",
+            "\"stopThread\"",
+            "\"bridge\": false",
+            "\"cancelFollowUp\"",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "Linux RPC handlers must not reimplement migrated goal/follow-up transactions: {forbidden}"
+            );
+        }
     }
 
     #[tokio::test]

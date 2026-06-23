@@ -525,7 +525,7 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
     });
     let archive_plan = None;
     let hidden_plan = None;
-    let goal = crate::commands::settings::first_thread_goal(&config, threads.first());
+    let goal = crate::commands::settings::first_thread_goal(state, threads.first());
 
     Ok(DesktopHome {
         overview,

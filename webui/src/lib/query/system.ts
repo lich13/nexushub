@@ -13,10 +13,8 @@ export const systemQueryKeys = {
   status: ["system-status"] as const
 };
 
-const BOOTSTRAP_RUNTIME_CAPABILITIES = runtimeCapabilities();
-
 export function bootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
-  return BOOTSTRAP_RUNTIME_CAPABILITIES;
+  return runtimeCapabilities();
 }
 
 export function useBootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
@@ -25,7 +23,7 @@ export function useBootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
 
 export function useRuntimeCapabilities(
   status?: Pick<SystemStatus, "capabilities"> | null,
-  fallback: RuntimeCapabilityMatrix = BOOTSTRAP_RUNTIME_CAPABILITIES,
+  fallback: RuntimeCapabilityMatrix = bootstrapRuntimeCapabilities(),
 ): RuntimeCapabilityMatrix {
   return useMemo(
     () => runtimeCapabilitiesFromSystemStatus(status, fallback),

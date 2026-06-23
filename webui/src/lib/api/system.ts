@@ -11,17 +11,15 @@ import type {
   SystemVersion
 } from "../../types";
 import { runtimeRpc } from "./transport";
-import { selectRuntimeFallback } from "./shared";
 import {
   isMissingEndpoint,
-  jobIdFromRuntimeResult,
   normalizeModels,
   normalizeOptionalResult,
   normalizePermissionProfiles,
   normalizeProbeRuntimePayload,
   USE_DEMO
 } from "./shared";
-import { demoPlatformOverview, demoSystemStatus } from "./demo";
+import { demoCodexConfig, demoPlatformOverview, demoSystemStatus } from "./demo";
 
 export async function getSystemStatus(): Promise<SystemStatus> {
   if (USE_DEMO) {
@@ -241,17 +239,7 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
   if (USE_DEMO) {
     return {
       available: true,
-      data: {
-        model: "gpt-5.5",
-        service_tier: null,
-        reasoning_effort: "xhigh",
-        cwd: selectRuntimeFallback({ web: "/home/ubuntu/codex-workspace", desktop: null }),
-        permission_profile: "danger-full-access",
-        approval_policy: "never",
-        sandbox_mode: "danger-full-access",
-        network_access: true,
-        collaboration_mode: null
-      }
+      data: demoCodexConfig()
     };
   }
   try {

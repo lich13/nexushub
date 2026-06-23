@@ -581,6 +581,89 @@ log_dir = "{}"
     }
 
     #[test]
+    fn tauri_commands_do_not_reimplement_migrated_goal_or_followup_transactions() {
+        let settings_source = include_str!("commands/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings source must include production section");
+        let threads_source = include_str!("commands/threads.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(include_str!("commands/threads.rs"));
+
+        for required in [
+            "goal_service::goal_get_response_with_capability",
+            "goal_service::save_goal_with_capability",
+            "goal_service::clear_goal_with_capability",
+            "goal_service::pause_goal_with_capability",
+            "goal_service::resume_goal_with_capability",
+            "upload_service::plan_store_uploads_with_capability",
+            "upload_service::plan_delete_upload_with_capability",
+            "cleanup_service::dry_run_archived_with_capability",
+            "cleanup_service::execute_archived_with_capability",
+            "cleanup_service::dry_run_hidden_with_capability",
+            "cleanup_service::execute_hidden_with_capability",
+        ] {
+            assert!(
+                settings_source.contains(required),
+                "Tauri settings commands must call the shared core facade/plan: {required}"
+            );
+        }
+        for required in [
+            "job_service::list_followups_with_capability",
+            "job_service::enqueue_followup_with_capability",
+            "job_service::cancel_followup_with_capability",
+            "job_service::plan_thread_archive_with_capability",
+            "job_service::plan_thread_restore_with_capability",
+            "job_service::plan_thread_rename_with_capability",
+            "job_service::thread_state_action_response",
+            "job_service::plan_thread_stop_with_capability",
+            "job_service::resolve_thread_stop_job",
+            "job_service::thread_stop_response",
+        ] {
+            assert!(
+                threads_source.contains(required),
+                "Tauri thread commands must call the shared core facade/plan: {required}"
+            );
+        }
+
+        for forbidden in [
+            "open_panel_db(config)",
+            ".get_thread_goal(",
+            ".upsert_thread_goal(",
+            ".delete_thread_goal(",
+            ".update_thread_goal_status(",
+            "upload_service::plan_desktop_batch_uploads(",
+            "uploads::delete_upload(&root, &request.id)",
+            "plan_delete_archived(",
+            "execute_delete_archived(",
+            "plan_delete_hidden(",
+            "execute_delete_hidden(",
+        ] {
+            assert!(
+                !settings_source.contains(forbidden),
+                "Tauri settings commands must not reimplement migrated goal transactions: {forbidden}"
+            );
+        }
+        for forbidden in [
+            ".list_followups(",
+            ".enqueue_followup(",
+            ".cancel_followup(",
+            "request.name.trim()",
+            "job_service::archive_thread_response(",
+            "job_service::rename_thread_response(",
+            "command: \"stopThread\"",
+            "\"stopThread\"",
+            "\"cancelFollowUp\"",
+        ] {
+            assert!(
+                !threads_source.contains(forbidden),
+                "Tauri thread commands must not reimplement migrated follow-up transactions: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn overview_does_not_export_desktop_business_helper_functions() {
         let overview_source = include_str!("overview.rs")
             .split("\n#[cfg(test)]")

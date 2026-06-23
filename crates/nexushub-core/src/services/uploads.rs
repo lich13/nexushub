@@ -11,6 +11,7 @@ use crate::{
         MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES,
     },
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +44,24 @@ pub struct UploadStorePlan {
 pub struct UploadFacadePlan {
     pub required_capability: Capability,
     pub plan: UploadStorePlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadValidationPlan {
+    pub required_capability: Capability,
+    pub total_files: usize,
+    pub total_bytes: usize,
+    pub max_files: usize,
+    pub max_file_bytes: usize,
+    pub max_total_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadDeletePlan {
+    pub required_capability: Capability,
+    pub id: String,
 }
 
 pub const ATTACHMENT_ID_LIMIT_MESSAGE: &str = "一次最多发送 5 个附件";
@@ -113,8 +132,42 @@ pub fn plan_store_uploads_with_capability(
     })
 }
 
+pub fn plan_upload_validation_with_capability(
+    platform: &PlatformPaths,
+    items: &[UploadBatchItem],
+) -> Result<UploadValidationPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let total_bytes = validate_upload_batch(items)?;
+    Ok(UploadValidationPlan {
+        required_capability: Capability::Jobs,
+        total_files: items.len(),
+        total_bytes,
+        max_files: MAX_UPLOAD_FILES,
+        max_file_bytes: MAX_UPLOAD_FILE_BYTES,
+        max_total_bytes: MAX_TOTAL_UPLOAD_BYTES,
+    })
+}
+
 pub fn plan_desktop_batch_uploads(items: Vec<UploadBatchItem>) -> Result<UploadStorePlan> {
     plan_store_uploads(items)
+}
+
+pub fn plan_delete_upload_with_capability(
+    platform: &PlatformPaths,
+    id: impl AsRef<str>,
+) -> Result<UploadDeletePlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let id = id.as_ref().trim();
+    if id.is_empty() {
+        bail!("upload id is required");
+    }
+    if Uuid::parse_str(id).is_err() {
+        bail!("invalid upload id");
+    }
+    Ok(UploadDeletePlan {
+        required_capability: Capability::Jobs,
+        id: id.to_string(),
+    })
 }
 
 pub fn store_upload_plan(root: &Path, plan: UploadStorePlan) -> Result<UploadOutcome> {

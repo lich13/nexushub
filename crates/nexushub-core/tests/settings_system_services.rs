@@ -15,9 +15,11 @@ use nexushub_core::{
         },
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
-            normalize_probe_settings_patch, ProbeSecretState, ProbeSettingsSaveRequest,
+            normalize_probe_settings_patch, plan_probe_settings_save,
+            probe_settings_view_with_capability, ProbeNotificationsSavePatch, ProbeSecretState,
+            ProbeSettingsSavePatch, ProbeSettingsSaveRequest, PROBE_BARK_DEVICE_KEY_SETTING,
         },
-        system::system_capabilities,
+        system::{require_capability, system_capabilities, Capability},
     },
 };
 
@@ -78,6 +80,40 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
     assert!(!capabilities.prune_backups);
 
     std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
+    let config = Config::for_platform_kind(PlatformKind::Macos);
+    let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+    let capabilities = system_capabilities(&config, &platform);
+
+    for capability in [
+        Capability::WebAuth,
+        Capability::Turnstile,
+        Capability::SecuritySettings,
+        Capability::AdminPassword,
+        Capability::Systemd,
+        Capability::Nginx,
+        Capability::PublicEndpoint,
+        Capability::LinuxUpdateJob,
+        Capability::PruneBackups,
+    ] {
+        assert!(
+            require_capability(&platform, capability).is_err(),
+            "{capability:?} must stay unavailable on macOS"
+        );
+    }
+
+    assert!(!capabilities.web_auth);
+    assert!(!capabilities.turnstile);
+    assert!(!capabilities.security_settings);
+    assert!(!capabilities.admin_password);
+    assert!(!capabilities.systemd);
+    assert!(!capabilities.nginx);
+    assert!(!capabilities.public_endpoint);
+    assert!(!capabilities.linux_update_job);
+    assert!(!capabilities.prune_backups);
 }
 
 #[test]
@@ -164,6 +200,36 @@ fn settings_view_reports_secret_state_without_returning_secret() {
     assert!(view.notifications.device_key.is_none());
     assert!(!serialized.contains("bark-key-123"));
     assert!(!serialized.contains("device_key\":\""));
+}
+
+#[test]
+fn probe_settings_get_facade_is_shared_and_redacts_bark_secret() {
+    let mut config = Config::for_platform_kind(PlatformKind::Linux);
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.server_url = "https://bark.example.com".to_string();
+
+    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    let plan = probe_settings_view_with_capability(&config, &linux, ProbeSecretState::Configured)
+        .expect("Linux should expose shared Probe settings");
+    let serialized = serde_json::to_string(&plan).unwrap();
+
+    assert_eq!(plan.required_capability, Capability::Settings);
+    assert!(plan.settings.notifications.device_key_configured);
+    assert!(plan.settings.notifications.device_key.is_none());
+    assert!(!serialized.contains("secret-bark-key"));
+    assert!(!serialized.contains("device_key\":\""));
+
+    let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+    assert!(
+        probe_settings_view_with_capability(&config, &macos, ProbeSecretState::Missing).is_ok()
+    );
+
+    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+    let err = probe_settings_view_with_capability(&config, &windows, ProbeSecretState::Missing)
+        .expect_err("Windows should not expose shared settings");
+    assert!(err
+        .to_string()
+        .contains("settings is unavailable on windows"));
 }
 
 #[test]
@@ -334,6 +400,38 @@ fn probe_settings_save_request_keeps_nested_bark_key_when_top_level_is_blank() {
 }
 
 #[test]
+fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
+    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let plan = plan_probe_settings_save(
+        &platform,
+        ProbeSettingsSaveRequest {
+            probe: Some(ProbeSettingsSavePatch {
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some("  secret-bark-key  ".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("Linux should allow shared Probe settings save");
+
+    assert_eq!(plan.required_capability, Capability::Settings);
+    assert_eq!(plan.bark_device_key.as_deref(), Some("secret-bark-key"));
+    assert_eq!(plan.secret_writes.len(), 1);
+    let write = &plan.secret_writes[0];
+    assert_eq!(write.setting_key, PROBE_BARK_DEVICE_KEY_SETTING);
+    assert_eq!(write.secret_value, "secret-bark-key");
+    assert_eq!(write.audit_value, "[configured]");
+
+    let serialized = serde_json::to_string(&plan).unwrap();
+    assert!(serialized.contains(PROBE_BARK_DEVICE_KEY_SETTING));
+    assert!(serialized.contains("[configured]"));
+    assert!(!serialized.contains("secret-bark-key"));
+}
+
+#[test]
 fn security_views_use_core_defaults_and_linux_web_host_shape() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let settings = SecuritySettings {
@@ -450,6 +548,39 @@ fn password_change_plan_keeps_auth_hashing_in_adapter_but_centralizes_validation
     .unwrap_err()
     .to_string();
     assert!(short_password.contains("at least 12"));
+}
+
+#[test]
+fn core_services_do_not_import_host_frameworks_or_process_runners() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "src/services/probe.rs",
+        "src/services/settings.rs",
+        "src/services/security.rs",
+        "src/services/system.rs",
+        "src/services/updates.rs",
+        "src/services/commands.rs",
+        "src/services/mod.rs",
+    ] {
+        let path = manifest_dir.join(relative);
+        let source = std::fs::read_to_string(&path).unwrap();
+        for forbidden in [
+            "use axum",
+            "axum::",
+            "use tauri",
+            "tauri::",
+            "HeaderMap",
+            "HeaderValue",
+            "std::process::Command",
+            "tokio::process::Command",
+            "Command::new",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{relative} must stay adapter-neutral and not contain {forbidden}"
+            );
+        }
+    }
 }
 
 fn temp_dir(label: &str) -> std::path::PathBuf {

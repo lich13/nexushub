@@ -4,11 +4,15 @@ use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codex::{ThreadDetail, ThreadStatus, ThreadSummary},
+    codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
     db::JobRecord,
     platform::PlatformPaths,
-    services::commands,
     services::system::{require_capability, Capability},
+};
+
+pub use crate::services::cleanup::{
+    plan_cleanup_action as plan_thread_cleanup_action, CleanupAction as ThreadCleanupAction,
+    CleanupActionPlan as ThreadCleanupPlan, CleanupTarget as ThreadCleanupTarget,
 };
 
 pub const THREAD_DETAIL_DEFAULT_BLOCK_LIMIT: usize = 120;
@@ -30,6 +34,15 @@ pub struct ThreadsOverview {
     pub fetch_limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListPlan {
+    pub required_capability: Capability,
+    pub query: ThreadsQuery,
+    pub fetch_limit: usize,
+    pub response_limit: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailRequest {
@@ -49,43 +62,14 @@ pub struct ThreadDetailPlan {
     pub before: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThreadCleanupAction {
-    #[serde(rename = "archiveDeleteDryRun", alias = "archive-delete-dry-run")]
-    ArchiveDeleteDryRun,
-    #[serde(rename = "archiveDeleteExecute", alias = "archive-delete-execute")]
-    ArchiveDeleteExecute,
-    #[serde(rename = "hiddenDeleteDryRun", alias = "hidden-delete-dry-run")]
-    HiddenDeleteDryRun,
-    #[serde(rename = "hiddenDeleteExecute", alias = "hidden-delete-execute")]
-    HiddenDeleteExecute,
-}
-
-impl ThreadCleanupAction {
-    pub fn as_rpc_action(self) -> &'static str {
-        match self {
-            Self::ArchiveDeleteDryRun => commands::CLEANUP_ARCHIVE_DRY_RUN,
-            Self::ArchiveDeleteExecute => commands::CLEANUP_ARCHIVE_EXECUTE,
-            Self::HiddenDeleteDryRun => commands::CLEANUP_HIDDEN_DRY_RUN,
-            Self::HiddenDeleteExecute => commands::CLEANUP_HIDDEN_EXECUTE,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadCleanupPlan {
-    pub required_capability: Capability,
-    pub action: ThreadCleanupAction,
-    pub target: ThreadCleanupTarget,
-    pub execute: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadCleanupTarget {
-    Archived,
-    Hidden,
+pub struct ThreadBlocksPage {
+    pub thread_id: String,
+    pub blocks: Vec<MessageBlock>,
+    pub total_blocks: usize,
+    pub has_more_blocks: bool,
+    pub before_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +110,33 @@ pub fn build_threads_overview(
     }
 }
 
+pub fn plan_threads_list_request(
+    platform: &PlatformPaths,
+    mut query: ThreadsQuery,
+) -> anyhow::Result<ThreadListPlan> {
+    require_capability(platform, Capability::Threads)?;
+    query.status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    query.q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let response_limit = requested_thread_limit(query.limit);
+    let fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
+    Ok(ThreadListPlan {
+        required_capability: Capability::Threads,
+        query,
+        fetch_limit,
+        response_limit,
+    })
+}
+
 pub fn plan_thread_detail_request(
     platform: &PlatformPaths,
     request: ThreadDetailRequest,
@@ -159,30 +170,25 @@ pub fn plan_thread_blocks_request(
     )
 }
 
-pub fn plan_thread_cleanup_action(
-    platform: &PlatformPaths,
-    action: ThreadCleanupAction,
-) -> anyhow::Result<ThreadCleanupPlan> {
-    require_capability(platform, Capability::ThreadCleanup)?;
-    let (target, execute) = match action {
-        ThreadCleanupAction::ArchiveDeleteDryRun => (ThreadCleanupTarget::Archived, false),
-        ThreadCleanupAction::ArchiveDeleteExecute => (ThreadCleanupTarget::Archived, true),
-        ThreadCleanupAction::HiddenDeleteDryRun => (ThreadCleanupTarget::Hidden, false),
-        ThreadCleanupAction::HiddenDeleteExecute => (ThreadCleanupTarget::Hidden, true),
-    };
-    Ok(ThreadCleanupPlan {
-        required_capability: Capability::ThreadCleanup,
-        action,
-        target,
-        execute,
-    })
-}
-
 pub fn window_thread_detail_for_plan(
     detail: ThreadDetail,
     plan: &ThreadDetailPlan,
 ) -> ThreadDetail {
     crate::codex::window_thread_detail(detail, plan.block_limit, plan.before.as_deref())
+}
+
+pub fn thread_blocks_page_for_plan(
+    detail: ThreadDetail,
+    plan: &ThreadDetailPlan,
+) -> ThreadBlocksPage {
+    let window = window_thread_detail_for_plan(detail, plan);
+    ThreadBlocksPage {
+        thread_id: plan.thread_id.clone(),
+        blocks: window.blocks,
+        total_blocks: window.total_blocks,
+        has_more_blocks: window.has_more_blocks,
+        before_cursor: window.before_cursor,
+    }
 }
 
 pub fn apply_thread_list_runtime_state(

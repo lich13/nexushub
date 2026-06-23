@@ -8,7 +8,7 @@ use crate::overview::{
     ThreadListRequest,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use nexushub_core::{
     codex::{
         archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
@@ -23,7 +23,6 @@ use nexushub_core::{
     uploads,
 };
 use serde::Deserialize;
-use serde_json::json;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -391,17 +390,14 @@ fn steer_thread_with_state(
     request: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let plan = job_service::plan_steer_thread_as_followup(job_service::ThreadCommandRequest {
-        command: job_service::ThreadCommandKind::FollowUp,
+    let followup = job_service::enqueue_followup_with_capability(
+        &state.db,
+        state.platform(),
+        job_service::ThreadSteerRequest {
         thread_id: request.thread_id.clone(),
         message: request.into_thread_message(attachments),
-    })?;
-    let followup = plan
-        .followup
-        .ok_or_else(|| anyhow!("missing follow-up plan"))?;
-    state
-        .db
-        .enqueue_followup(&followup.thread_id, &followup.message, followup.options)?;
+        },
+    )?;
     Ok(job_service::codex_action_submitted(
         Some(followup.thread_id),
         None,
@@ -412,30 +408,26 @@ fn stop_thread_with_state(
     state: &DesktopState,
     request: DesktopStopRequest,
 ) -> Result<DesktopActionResponse> {
-    let job_id = request
-        .job_id
-        .clone()
-        .or_else(|| derive_active_job_id(state, &request.thread_id));
-    let Some(job_id) = job_id else {
+    let plan = job_service::plan_thread_stop_with_capability(
+        state.platform(),
+        job_service::ThreadStopRequest {
+            thread_id: request.thread_id,
+            turn_id: request.turn_id,
+            job_id: request.job_id,
+        },
+    )?;
+    let active_job_id = plan
+        .requires_active_job_lookup
+        .then(|| derive_active_job_id(state, &plan.thread_id))
+        .flatten();
+    let Ok(stop) = job_service::resolve_thread_stop_job(&plan, active_job_id) else {
         return Ok(unavailable_action(
-            "stopThread",
+            nexushub_core::services::commands::THREADS_STOP,
             "stop requires a running local fallback job; Codex app-server stop is not available in the native read model",
         ));
     };
-    let cancelled = state.jobs.cancel_job(&job_id)?;
-    Ok(DesktopActionResponse {
-        ok: cancelled,
-        available: true,
-        command: "stopThread".to_string(),
-        message: if cancelled {
-            "sent TERM to local Codex job".to_string()
-        } else {
-            "local job is no longer running".to_string()
-        },
-        thread_id: Some(request.thread_id),
-        job_id: Some(job_id),
-        data: Some(json!({"turn_id": request.turn_id})),
-    })
+    let cancelled = state.jobs.cancel_job(&stop.job_id)?;
+    Ok(job_service::thread_stop_response(&stop, cancelled).into())
 }
 
 fn accept_plan_with_state(
@@ -481,28 +473,34 @@ fn archive_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    set_thread_archived(&state.codex_paths(), &request.thread_id, true)?;
-    Ok(job_service::archive_thread_response(request.thread_id, true).into())
+    let plan = job_service::plan_thread_archive_with_capability(state.platform(), &request.thread_id)?;
+    set_thread_archived(&state.codex_paths(), &plan.thread_id, true)?;
+    Ok(job_service::thread_state_action_response(&plan)?.into())
 }
 
 fn restore_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    set_thread_archived(&state.codex_paths(), &request.thread_id, false)?;
-    Ok(job_service::archive_thread_response(request.thread_id, false).into())
+    let plan = job_service::plan_thread_restore_with_capability(state.platform(), &request.thread_id)?;
+    set_thread_archived(&state.codex_paths(), &plan.thread_id, false)?;
+    Ok(job_service::thread_state_action_response(&plan)?.into())
 }
 
 fn rename_thread_with_state(
     state: &DesktopState,
     request: DesktopRenameThreadRequest,
 ) -> Result<DesktopActionResponse> {
-    let name = request.name.trim();
-    if name.is_empty() {
-        anyhow::bail!("name cannot be empty");
-    }
-    set_thread_title(&state.codex_paths(), &request.thread_id, name)?;
-    job_service::rename_thread_response(request.thread_id, name).map(Into::into)
+    let plan = job_service::plan_thread_rename_with_capability(
+        state.platform(),
+        job_service::ThreadRenameRequest {
+            thread_id: request.thread_id,
+            name: request.name,
+        },
+    )?;
+    let name = plan.name.as_deref().unwrap_or_default();
+    set_thread_title(&state.codex_paths(), &plan.thread_id, name)?;
+    job_service::thread_state_action_response(&plan).map(Into::into)
 }
 
 fn fork_thread_unavailable(request: DesktopThreadIdRequest) -> DesktopActionResponse {
@@ -518,9 +516,14 @@ fn list_followups_with_state(
     state: &DesktopState,
     request: DesktopFollowupRequest,
 ) -> Result<Vec<ThreadFollowUp>> {
-    state
-        .db
-        .list_followups(&request.thread_id, request.limit.unwrap_or(20).min(200))
+    job_service::list_followups_with_capability(
+        &state.db,
+        state.platform(),
+        job_service::FollowUpListRequest {
+            thread_id: request.thread_id,
+            limit: request.limit,
+        },
+    )
 }
 
 fn enqueue_followup_with_state(
@@ -536,26 +539,28 @@ fn enqueue_followup_with_state(
     else {
         anyhow::bail!("thread_id is required");
     };
-    let thread_id = thread_id.to_string();
-    let (message, options) = request
-        .into_thread_message(attachments)
-        .into_followup_message_and_options()?;
-    state.db.enqueue_followup(&thread_id, &message, options)
+    job_service::enqueue_followup_with_capability(
+        &state.db,
+        state.platform(),
+        job_service::ThreadSteerRequest {
+            thread_id: Some(thread_id.to_string()),
+            message: request.into_thread_message(attachments),
+        },
+    )
 }
 
 fn cancel_followup_with_state(
     state: &DesktopState,
     request: DesktopCancelFollowupRequest,
 ) -> Result<DesktopActionResponse> {
-    let cancelled = state
-        .db
-        .cancel_followup(&request.thread_id, &request.followup_id)?;
-    Ok(job_service::cancel_followup_response(
-        "cancelFollowUp",
-        request.thread_id,
-        request.followup_id,
-        cancelled,
-    )
+    Ok(job_service::cancel_followup_with_capability(
+        &state.db,
+        state.platform(),
+        job_service::FollowUpCancelRequest {
+            thread_id: request.thread_id,
+            followup_id: request.followup_id,
+        },
+    )?
     .into())
 }
 

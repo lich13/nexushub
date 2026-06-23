@@ -1,5 +1,4 @@
 import type { SystemCapabilities, SystemStatus } from "../../types";
-import { selectRuntimeFallback } from "../runtime";
 
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "web" | "desktop";
@@ -49,6 +48,18 @@ const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   approvalActions: false
 };
 
+type RuntimeCapabilityGlobal = typeof globalThis & {
+  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
+  __TAURI_INTERNALS__?: unknown;
+};
+
+function bootstrapRuntimeKind(): RuntimeCapabilityMatrix["runtimeKind"] {
+  const target = globalThis as RuntimeCapabilityGlobal;
+  return target.__NEXUSHUB_DESKTOP_RUNTIME__ || target.__TAURI_INTERNALS__
+    ? "desktop"
+    : "web";
+}
+
 function runtimeCapabilitiesFromCore(
   core: SystemCapabilities,
   runtimeKind: RuntimeCapabilityMatrix["runtimeKind"],
@@ -71,10 +82,7 @@ function runtimeCapabilitiesFromCore(
 }
 
 export function runtimeCapabilities(): RuntimeCapabilityMatrix {
-  return selectRuntimeFallback({
-    web: webBootstrapCapabilities,
-    desktop: desktopBootstrapCapabilities
-  });
+  return runtimeCapabilitiesForRuntime(bootstrapRuntimeKind());
 }
 
 export function runtimeCapabilitiesForRuntime(

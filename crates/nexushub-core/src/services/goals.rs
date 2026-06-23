@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{ThreadGoal, ThreadGoalUpdate},
+    db::{PanelDb, ThreadGoal, ThreadGoalUpdate},
     platform::PlatformPaths,
     services::commands,
     services::system::{require_capability, Capability},
@@ -20,6 +20,12 @@ pub struct GoalUpdateRequest {
     pub status: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct GoalGetRequest {
+    #[serde(default, alias = "threadId")]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +146,13 @@ pub struct GoalCommandFacadePlan {
     pub command: GoalCommandPlan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalGetPlan {
+    pub required_capability: Capability,
+    pub thread_id: Option<String>,
+    pub missing_thread: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoalView {
     pub available: bool,
@@ -223,6 +236,31 @@ pub fn plan_goal_command_with_capability(
     })
 }
 
+pub fn plan_goal_get_with_capability(
+    platform: &PlatformPaths,
+    request: GoalGetRequest,
+) -> Result<GoalGetPlan> {
+    require_capability(platform, Capability::Threads)?;
+    let thread_id = request
+        .thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Ok(GoalGetPlan {
+        required_capability: Capability::Threads,
+        missing_thread: thread_id.is_none(),
+        thread_id,
+    })
+}
+
+pub fn plan_goal_save_with_capability(
+    platform: &PlatformPaths,
+    request: GoalUpdateRequest,
+) -> Result<GoalCommandFacadePlan> {
+    plan_goal_command_with_capability(platform, request)
+}
+
 pub fn plan_clear_goal(thread_id: &str) -> Result<GoalUpdatePlan> {
     Ok(GoalUpdatePlan {
         thread_id: required_thread_id(Some(thread_id))?,
@@ -238,6 +276,17 @@ pub fn plan_clear_goal_update(thread_id: Option<&str>) -> Result<GoalCommandPlan
     Ok(GoalCommandPlan {
         command: GoalCommandKind::Clear,
         update: plan_clear_goal(thread_id.unwrap_or_default())?,
+    })
+}
+
+pub fn plan_goal_clear_with_capability(
+    platform: &PlatformPaths,
+    thread_id: Option<&str>,
+) -> Result<GoalCommandFacadePlan> {
+    require_capability(platform, Capability::Threads)?;
+    Ok(GoalCommandFacadePlan {
+        required_capability: Capability::Threads,
+        command: plan_clear_goal_update(thread_id)?,
     })
 }
 
@@ -259,6 +308,18 @@ pub fn plan_pause_goal_update(
     })
 }
 
+pub fn plan_goal_pause_with_capability(
+    platform: &PlatformPaths,
+    thread_id: &str,
+    existing: Option<&ThreadGoal>,
+) -> Result<GoalCommandFacadePlan> {
+    require_capability(platform, Capability::Threads)?;
+    Ok(GoalCommandFacadePlan {
+        required_capability: Capability::Threads,
+        command: plan_pause_goal_update(thread_id, existing)?,
+    })
+}
+
 pub fn plan_resume_goal_update(
     thread_id: &str,
     existing: Option<&ThreadGoal>,
@@ -266,6 +327,18 @@ pub fn plan_resume_goal_update(
     Ok(GoalCommandPlan {
         command: GoalCommandKind::Resume,
         update: plan_goal_status_for_thread(thread_id, existing, "active")?,
+    })
+}
+
+pub fn plan_goal_resume_with_capability(
+    platform: &PlatformPaths,
+    thread_id: &str,
+    existing: Option<&ThreadGoal>,
+) -> Result<GoalCommandFacadePlan> {
+    require_capability(platform, Capability::Threads)?;
+    Ok(GoalCommandFacadePlan {
+        required_capability: Capability::Threads,
+        command: plan_resume_goal_update(thread_id, existing)?,
     })
 }
 
@@ -337,6 +410,65 @@ pub fn goal_enabled(goal: &ThreadGoal) -> bool {
             goal.status.as_str(),
             "active" | "running" | "complete" | "completed" | "blocked" | "paused"
         )
+}
+
+pub fn goal_get_response_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: GoalGetRequest,
+) -> Result<GoalView> {
+    let plan = plan_goal_get_with_capability(platform, request)?;
+    let Some(thread_id) = plan.thread_id.as_deref() else {
+        return Ok(goal_empty("missing_thread"));
+    };
+    Ok(goal_response(db.get_thread_goal(thread_id)?.as_ref()))
+}
+
+pub fn apply_goal_command(db: &PanelDb, command: GoalCommandPlan) -> Result<GoalView> {
+    let goal = db.upsert_thread_goal(command.update.as_thread_goal_update())?;
+    Ok(goal_response(Some(&goal)))
+}
+
+pub fn save_goal_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    request: GoalUpdateRequest,
+) -> Result<GoalView> {
+    let plan = plan_goal_save_with_capability(platform, request)?;
+    apply_goal_command(db, plan.command)
+}
+
+pub fn clear_goal_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    thread_id: Option<&str>,
+) -> Result<GoalView> {
+    let plan = plan_goal_clear_with_capability(platform, thread_id)?;
+    apply_goal_command(db, plan.command)
+}
+
+pub fn pause_goal_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    thread_id: &str,
+) -> Result<GoalView> {
+    require_capability(platform, Capability::Threads)?;
+    let thread_id = required_thread_id(Some(thread_id))?;
+    let existing = db.get_thread_goal(&thread_id)?;
+    let plan = plan_goal_pause_with_capability(platform, &thread_id, existing.as_ref())?;
+    apply_goal_command(db, plan.command)
+}
+
+pub fn resume_goal_with_capability(
+    db: &PanelDb,
+    platform: &PlatformPaths,
+    thread_id: &str,
+) -> Result<GoalView> {
+    require_capability(platform, Capability::Threads)?;
+    let thread_id = required_thread_id(Some(thread_id))?;
+    let existing = db.get_thread_goal(&thread_id)?;
+    let plan = plan_goal_resume_with_capability(platform, &thread_id, existing.as_ref())?;
+    apply_goal_command(db, plan.command)
 }
 
 pub fn normalize_goal_status(

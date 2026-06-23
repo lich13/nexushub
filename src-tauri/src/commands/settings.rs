@@ -7,14 +7,14 @@ use crate::overview::{
 };
 use anyhow::Result;
 use nexushub_core::{
-    archive::{
-        execute_delete_archived, execute_delete_hidden, plan_delete_archived, plan_delete_hidden,
-        ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
-    },
     codex::ThreadSummary,
     config::{patch_probe_config_toml, Config},
     probe::{redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeRuntime},
     services::{
+        cleanup::{
+            self as cleanup_service, ArchiveDeletePlan, ArchiveDeleteResult,
+            HiddenThreadDeletePlan, HiddenThreadDeleteResult,
+        },
         goals as goal_service, jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
         uploads as upload_service,
@@ -139,18 +139,15 @@ pub fn getCodexGoal(
     threadId: Option<String>,
     thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
-    let thread_id = threadId
-        .or(thread_id)
-        .ok_or_else(|| "threadId is required".to_string())?;
-    let view = match state
-        .db
-        .get_thread_goal(&thread_id)
-        .map_err(|err| err.to_string())?
-    {
-        Some(goal) => goal_service::goal_response(Some(&goal)),
-        None => goal_service::goal_empty("idle"),
-    };
-    Ok(goal_with_thread_id(view, Some(thread_id)))
+    let view = goal_service::goal_get_response_with_capability(
+        &state.db,
+        state.platform(),
+        goal_service::GoalGetRequest {
+            thread_id: threadId.or(thread_id),
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(goal_from_view(view))
 }
 
 #[tauri::command(rename = "threads.goal.save")]
@@ -213,13 +210,21 @@ pub fn resumeCodexGoal(
 }
 
 pub(crate) fn first_thread_goal(
-    config: &Config,
+    state: &DesktopState,
     first_thread: Option<&ThreadSummary>,
 ) -> DesktopGoal {
     let Some(thread) = first_thread else {
         return goal_from_view(goal_service::goal_empty("missing_thread"));
     };
-    get_goal(config, &thread.id).unwrap_or_else(|err| DesktopGoal {
+    goal_service::goal_get_response_with_capability(
+        &state.db,
+        state.platform(),
+        goal_service::GoalGetRequest {
+            thread_id: Some(thread.id.clone()),
+        },
+    )
+    .map(goal_from_view)
+    .unwrap_or_else(|err| DesktopGoal {
         available: false,
         enabled: false,
         thread_id: Some(thread.id.clone()),
@@ -236,7 +241,8 @@ pub(crate) fn store_uploads_with_state(
     files: Vec<DesktopUploadFile>,
 ) -> Result<uploads::UploadOutcome> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let plan = upload_service::plan_desktop_batch_uploads(
+    let facade = upload_service::plan_store_uploads_with_capability(
+        state.platform(),
         files
             .into_iter()
             .map(|file| upload_service::UploadBatchItem {
@@ -246,31 +252,33 @@ pub(crate) fn store_uploads_with_state(
             })
             .collect(),
     )?;
-    upload_service::store_upload_plan(&root, plan)
+    upload_service::store_upload_plan(&root, facade.plan)
 }
 
 fn save_goal_with_state(state: &DesktopState, request: DesktopGoalRequest) -> Result<DesktopGoal> {
-    let plan = goal_service::plan_save_goal(goal_service::GoalUpdateRequest {
+    let view = goal_service::save_goal_with_capability(&state.db, state.platform(), goal_service::GoalUpdateRequest {
         thread_id: Some(request.thread_id),
         objective: request.objective,
         token_budget: request.token_budget,
         status: None,
         enabled: None,
     })?;
-    upsert_goal_with_state(state, plan.as_thread_goal_update())
+    Ok(goal_from_view(view))
 }
 
 fn clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    let plan = goal_service::plan_clear_goal(thread_id)?;
-    upsert_goal_with_state(state, plan.as_thread_goal_update())
+    let view = goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
+    Ok(goal_from_view(view))
 }
 
 fn pause_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    update_existing_goal_status_with_state(state, thread_id, "paused")
+    let view = goal_service::pause_goal_with_capability(&state.db, state.platform(), thread_id)?;
+    Ok(goal_from_view(view))
 }
 
 fn resume_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    update_existing_goal_status_with_state(state, thread_id, "active")
+    let view = goal_service::resume_goal_with_capability(&state.db, state.platform(), thread_id)?;
+    Ok(goal_from_view(view))
 }
 
 fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
@@ -438,19 +446,31 @@ fn probe_fixed_shell_job_with_state(
 }
 
 fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
-    plan_delete_archived(&state.codex_paths())
+    cleanup_service::dry_run_archived_with_capability(
+        state.platform(),
+        &state.codex_paths(),
+    )
 }
 
 fn archive_delete_execute_with_state(state: &DesktopState) -> Result<ArchiveDeleteResult> {
-    execute_delete_archived(&state.codex_paths())
+    cleanup_service::execute_archived_with_capability(
+        state.platform(),
+        &state.codex_paths(),
+    )
 }
 
 fn hidden_delete_dry_run_with_state(state: &DesktopState) -> Result<HiddenThreadDeletePlan> {
-    plan_delete_hidden(&state.codex_paths())
+    cleanup_service::dry_run_hidden_with_capability(
+        state.platform(),
+        &state.codex_paths(),
+    )
 }
 
 fn hidden_delete_execute_with_state(state: &DesktopState) -> Result<HiddenThreadDeleteResult> {
-    execute_delete_hidden(&state.codex_paths())
+    cleanup_service::execute_hidden_with_capability(
+        state.platform(),
+        &state.codex_paths(),
+    )
 }
 
 fn probe_events_with_state(
@@ -475,7 +495,8 @@ fn delete_upload_with_state(
     request: DesktopDeleteUploadRequest,
 ) -> Result<DesktopDeleteUploadResponse> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let deleted = uploads::delete_upload(&root, &request.id)?;
+    let plan = upload_service::plan_delete_upload_with_capability(state.platform(), request.id)?;
+    let deleted = uploads::delete_upload(&root, &plan.id)?;
     Ok(DesktopDeleteUploadResponse { ok: true, deleted })
 }
 
@@ -485,40 +506,6 @@ pub(crate) fn test_delete_upload_with_state(
     request: DesktopDeleteUploadRequest,
 ) -> Result<DesktopDeleteUploadResponse> {
     delete_upload_with_state(state, request)
-}
-
-fn get_goal(config: &Config, thread_id: &str) -> Result<DesktopGoal> {
-    let db = crate::overview::open_panel_db(config)?;
-    let Some(goal) = db.get_thread_goal(thread_id)? else {
-        return Ok(goal_with_thread_id(
-            goal_service::goal_empty("idle"),
-            Some(thread_id.to_string()),
-        ));
-    };
-    Ok(goal_response(&goal))
-}
-
-fn upsert_goal_with_state(
-    state: &DesktopState,
-    update: nexushub_core::db::ThreadGoalUpdate<'_>,
-) -> Result<DesktopGoal> {
-    let goal = state.db.upsert_thread_goal(update)?;
-    Ok(goal_response(&goal))
-}
-
-fn update_existing_goal_status_with_state(
-    state: &DesktopState,
-    thread_id: &str,
-    status: &'static str,
-) -> Result<DesktopGoal> {
-    let existing = state.db.get_thread_goal(thread_id)?;
-    let plan = goal_service::plan_goal_status_for_thread(thread_id, existing.as_ref(), status)?;
-    let goal = state.db.upsert_thread_goal(plan.as_thread_goal_update())?;
-    Ok(goal_response(&goal))
-}
-
-pub(crate) fn goal_response(goal: &nexushub_core::db::ThreadGoal) -> DesktopGoal {
-    goal_from_view(goal_service::goal_response(Some(goal)))
 }
 
 fn goal_from_view(view: goal_service::GoalView) -> DesktopGoal {

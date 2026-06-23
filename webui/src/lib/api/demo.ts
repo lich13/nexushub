@@ -1,41 +1,100 @@
 import type {
+  CodexConfig,
   CodexGoal,
   PlatformOverview,
   ProbeSettings,
   ProbeStatus,
   SecuritySettings,
+  SessionUser,
   SystemStatus,
-  ThreadSummary
+  ThreadSummary,
+  UpdateStatus
 } from "../../types";
-import { selectRuntimeFallback } from "./shared";
 import {
-  demoDesktopPlatformOverview,
-  demoDesktopSecurity,
-  demoDesktopSystemStatus,
-  demoWebPlatformOverview,
-  demoWebSecurity,
-  demoWebSystemStatus
+  buildDemoPlatformOverview,
+  buildDemoSecurity,
+  buildDemoSystemStatus,
+  type DemoFixtureKey
 } from "../domain/demoCore";
 
-export function demoPlatformOverview(): PlatformOverview {
-  return selectRuntimeFallback({
-    web: demoWebPlatformOverview,
-    desktop: demoDesktopPlatformOverview
-  });
+type DemoRuntimeGlobal = typeof globalThis & {
+  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
+  __TAURI_INTERNALS__?: unknown;
+};
+
+export function currentDemoFixtureKey(): DemoFixtureKey {
+  const target = globalThis as DemoRuntimeGlobal;
+  return target.__NEXUSHUB_DESKTOP_RUNTIME__ || target.__TAURI_INTERNALS__
+    ? "macos-tauri"
+    : "linux-web";
 }
 
-export function demoSystemStatus(): SystemStatus {
-  return selectRuntimeFallback({
-    web: demoWebSystemStatus,
-    desktop: demoDesktopSystemStatus
-  });
+export function demoSessionUser(username = "admin"): SessionUser {
+  return currentDemoFixtureKey() === "macos-tauri"
+    ? {
+      id: "desktop",
+      username: "desktop",
+      csrf_token: null,
+      session_id: "desktop"
+    }
+    : {
+      id: "dev",
+      username,
+      csrf_token: "dev-csrf"
+    };
 }
 
-export function demoSecurity(): SecuritySettings {
-  return selectRuntimeFallback({
-    web: demoWebSecurity,
-    desktop: demoDesktopSecurity
-  });
+export function demoPlatformOverview(fixture: DemoFixtureKey = currentDemoFixtureKey()): PlatformOverview {
+  return buildDemoPlatformOverview(fixture);
+}
+
+export function demoSystemStatus(fixture: DemoFixtureKey = currentDemoFixtureKey()): SystemStatus {
+  return buildDemoSystemStatus(fixture);
+}
+
+export function demoSecurity(fixture: DemoFixtureKey = currentDemoFixtureKey()): SecuritySettings {
+  return buildDemoSecurity(fixture);
+}
+
+export function demoUpdateStatus(fixture: DemoFixtureKey = currentDemoFixtureKey()): UpdateStatus {
+  if (fixture === "macos-tauri") {
+    return {
+      current_version: "0.1.100",
+      latest_version: "v0.1.103",
+      update_available: true,
+      channel: "stable",
+      method: "macos_tauri_updater",
+      state: "idle",
+      failure_category: null,
+      recommended_action: "Confirm install in the Tauri updater after signature verification.",
+      capabilities: ["check", "confirm_install", "job_history", "signature_verification", "restart_after_install"]
+    };
+  }
+  return {
+    current_version: "0.1.100",
+    latest_version: "v0.1.103",
+    update_available: true,
+    channel: "stable",
+    method: "linux_systemd_job",
+    state: "idle",
+    failure_category: null,
+    recommended_action: "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
+    capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
+  };
+}
+
+export function demoCodexConfig(fixture: DemoFixtureKey = currentDemoFixtureKey()): CodexConfig {
+  return {
+    model: "gpt-5.5",
+    service_tier: null,
+    reasoning_effort: "xhigh",
+    cwd: fixture === "macos-tauri" ? null : "/home/ubuntu/codex-workspace",
+    permission_profile: "danger-full-access",
+    approval_policy: "never",
+    sandbox_mode: "danger-full-access",
+    network_access: true,
+    collaboration_mode: null
+  };
 }
 
 export function demoProbeStatus(): ProbeStatus {
@@ -80,18 +139,18 @@ export function demoProbeStatus(): ProbeStatus {
 }
 
 export function demoProbeSettings(): ProbeSettings {
-  const platform = demoPlatformOverview();
-  const system = demoSystemStatus();
-  const runtimeProbeSettings = selectRuntimeFallback({
-    web: {
-      logsPath: "/root/.codex/logs_2.sqlite",
-      workspace: "/home/ubuntu/codex-workspace"
-    },
-    desktop: {
+  const fixture = currentDemoFixtureKey();
+  const platform = demoPlatformOverview(fixture);
+  const system = demoSystemStatus(fixture);
+  const runtimeProbeSettings = fixture === "macos-tauri"
+    ? {
       logsPath: "~/Library/Application Support/NexusHub/logs_2.sqlite",
       workspace: "~/Documents"
     }
-  });
+    : {
+      logsPath: "/root/.codex/logs_2.sqlite",
+      workspace: "/home/ubuntu/codex-workspace"
+    };
   return {
     codex: {
       home: system.codex_home,

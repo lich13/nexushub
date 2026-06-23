@@ -1,10 +1,10 @@
 import type { PlatformOverview, SecuritySettings, SystemCapabilities, SystemStatus } from "../../types";
 
-type DemoPlatform = "web" | "desktop";
+export type DemoFixtureKey = "linux-web" | "macos-tauri";
 
 const macApplicationSupport = "~/Library/Application Support/NexusHub";
 
-function buildDemoCapabilities(platform: DemoPlatform): SystemCapabilities {
+function buildDemoCapabilities(fixture: DemoFixtureKey): SystemCapabilities {
   const shared = {
     threads: true,
     jobs: true,
@@ -17,7 +17,7 @@ function buildDemoCapabilities(platform: DemoPlatform): SystemCapabilities {
     probe_log_maintenance: true,
     thread_archive_actions: true
   };
-  if (platform === "desktop") {
+  if (fixture === "macos-tauri") {
     return {
       ...shared,
       web_auth: false,
@@ -45,8 +45,8 @@ function buildDemoCapabilities(platform: DemoPlatform): SystemCapabilities {
   };
 }
 
-export function buildDemoPlatformOverview(platform: DemoPlatform): PlatformOverview {
-  if (platform === "desktop") {
+export function buildDemoPlatformOverview(fixture: DemoFixtureKey): PlatformOverview {
+  if (fixture === "macos-tauri") {
     return {
       kind: "macos",
       data_dir: macApplicationSupport,
@@ -68,13 +68,13 @@ export function buildDemoPlatformOverview(platform: DemoPlatform): PlatformOverv
   };
 }
 
-export function buildDemoSystemStatus(platform: DemoPlatform): SystemStatus {
-  if (platform === "desktop") {
+export function buildDemoSystemStatus(fixture: DemoFixtureKey): SystemStatus {
+  if (fixture === "macos-tauri") {
     return {
       host_label: "local-macos",
       hostname: "macos",
       public_endpoint: null,
-      capabilities: buildDemoCapabilities("desktop"),
+      capabilities: buildDemoCapabilities("macos-tauri"),
       codex_home: "~/.codex",
       configured_codex_home: "~/.codex",
       resolved_codex_home: "~/.codex",
@@ -87,7 +87,7 @@ export function buildDemoSystemStatus(platform: DemoPlatform): SystemStatus {
     host_label: "43.155.235.227",
     hostname: "codex-cloud-root",
     public_endpoint: "https://661313.xyz/nexushub/",
-    capabilities: buildDemoCapabilities("web"),
+    capabilities: buildDemoCapabilities("linux-web"),
     codex_home: "/root/.codex",
     configured_codex_home: "/root/.codex",
     resolved_codex_home: "/root/.codex",
@@ -97,8 +97,8 @@ export function buildDemoSystemStatus(platform: DemoPlatform): SystemStatus {
   };
 }
 
-export function buildDemoSecurity(platform: DemoPlatform): SecuritySettings {
-  if (platform === "desktop") {
+export function buildDemoSecurity(fixture: DemoFixtureKey): SecuritySettings {
+  if (fixture === "macos-tauri") {
     return {} as SecuritySettings;
   }
   return {
@@ -112,9 +112,9 @@ export function buildDemoSecurity(platform: DemoPlatform): SecuritySettings {
   };
 }
 
-export const demoWebPlatformOverview: PlatformOverview = buildDemoPlatformOverview("web");
-export const demoDesktopPlatformOverview: PlatformOverview = buildDemoPlatformOverview("desktop");
-export const demoWebSystemStatus: SystemStatus = buildDemoSystemStatus("web");
-export const demoDesktopSystemStatus: SystemStatus = buildDemoSystemStatus("desktop");
-export const demoWebSecurity: SecuritySettings = buildDemoSecurity("web");
-export const demoDesktopSecurity: SecuritySettings = buildDemoSecurity("desktop");
+export const demoWebPlatformOverview: PlatformOverview = buildDemoPlatformOverview("linux-web");
+export const demoDesktopPlatformOverview: PlatformOverview = buildDemoPlatformOverview("macos-tauri");
+export const demoWebSystemStatus: SystemStatus = buildDemoSystemStatus("linux-web");
+export const demoDesktopSystemStatus: SystemStatus = buildDemoSystemStatus("macos-tauri");
+export const demoWebSecurity: SecuritySettings = buildDemoSecurity("linux-web");
+export const demoDesktopSecurity: SecuritySettings = buildDemoSecurity("macos-tauri");

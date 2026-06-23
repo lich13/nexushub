@@ -74,13 +74,6 @@ type AppExports = typeof import("./App") & {
   nextVisibleThreadIdAfterRemoval?: (threads: ThreadSummary[], removedThreadId: string) => string | null;
   shouldHydrateThreadDetail?: (threadId: string | null | undefined, detail?: { summary: ThreadSummary } | null) => boolean;
   resolvedSelectedThreadId?: (selectedId: string | "__new" | null) => string | null;
-  clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
-  applyOptimisticThreadTitle?: (qc: QueryClient, threadId: string, title: string) => unknown;
-  rollbackOptimisticThreadTitle?: (qc: QueryClient, snapshot: unknown) => void;
-  applyOptimisticThreadArchive?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => unknown;
-  rollbackOptimisticThreadArchive?: (qc: QueryClient, snapshot: unknown) => void;
-  applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
-  rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
   threadInspectorPanelTitles?: () => string[];
   setLocalThreadTitleOverride?: (threadId: string, title: string, now?: number) => void;
   clearLocalThreadTitleOverride?: (threadId: string) => void;
@@ -118,8 +111,22 @@ type AppExports = typeof import("./App") & {
   initialSessionForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => import("./types").SessionUser | null;
 };
 
+type ThreadQueryExports = typeof import("./lib/query/threads") & {
+  clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
+  applyOptimisticThreadTitle?: (qc: QueryClient, threadId: string, title: string) => unknown;
+  rollbackOptimisticThreadTitle?: (qc: QueryClient, snapshot: unknown) => void;
+  applyOptimisticThreadArchive?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => unknown;
+  rollbackOptimisticThreadArchive?: (qc: QueryClient, snapshot: unknown) => void;
+  applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
+  rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
+};
+
 async function loadApp(): Promise<AppExports> {
   return import("./App") as Promise<AppExports>;
+}
+
+async function loadThreadQuery(): Promise<ThreadQueryExports> {
+  return import("./lib/query/threads") as Promise<ThreadQueryExports>;
 }
 
 function extractThreadListSource(): string {
@@ -345,7 +352,15 @@ describe("conversation helpers", () => {
 
   test("components consume query/state layer instead of direct domain API functions", () => {
     expect(appSource, "App.tsx must not import the domain API barrel").not.toContain("from \"./lib/api\"");
+    expect(appSource, "App.tsx must not import React Query client primitives").not.toContain("@tanstack/react-query");
     expect(appSource, "App.tsx must not create raw mutations; use query/state action hooks").not.toContain("useMutation(");
+    expect(appSource, "App.tsx must not hold the query client").not.toContain("useQueryClient");
+    expect(appSource, "App.tsx must not write query cache directly").not.toContain("setQueryData");
+    expect(appSource, "App.tsx must not invalidate query cache directly").not.toContain("invalidateQueries");
+    expect(appSource, "App.tsx must not cancel query cache directly").not.toContain("cancelQueries");
+    expect(appSource, "App.tsx must not remove query cache directly").not.toContain("removeQueries");
+    expect(appSource, "App.tsx must not type against QueryClient").not.toMatch(/\bQueryClient\b/);
+    expect(appSource, "App.tsx must not type against QueryKey").not.toMatch(/\bQueryKey\b/);
 
     const appImportBlock = appSource.slice(0, appSource.indexOf("import { clearSession"));
     const queryProxiedApiFunctions = [
@@ -415,11 +430,19 @@ describe("conversation helpers", () => {
 
     const opsSource = extractFunctionSource("OpsWorkspace");
     const probeSource = extractProbeWorkspaceSource();
-    for (const source of [opsSource, probeSource]) {
+    const chatWorkspaceSource = extractFunctionSource("ChatWorkspace");
+    const conversationSource = extractFunctionSource("Conversation");
+    const emptyConversationSource = extractFunctionSource("EmptyConversation");
+    const goalPanelSource = extractFunctionSource("ThreadGoalPanel");
+    for (const source of [opsSource, probeSource, chatWorkspaceSource, conversationSource, emptyConversationSource, goalPanelSource]) {
       for (const name of queryProxiedApiFunctions) {
         expect(source, `workspace should not directly call ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
       }
       expect(source).not.toContain("useQueryClient");
+      expect(source).not.toContain("setQueryData");
+      expect(source).not.toContain("invalidateQueries");
+      expect(source).not.toContain("cancelQueries");
+      expect(source).not.toContain("removeQueries");
     }
   });
 
@@ -759,6 +782,7 @@ describe("conversation helpers", () => {
 
   test("saved title updates thread list cache values without waiting for a refetch", async () => {
     const app = await loadApp();
+    const threadQuery = await loadThreadQuery();
     const qc = new QueryClient();
     const threads: ThreadSummary[] = [
       { id: "thread-a", title: "旧标题", status: "Recent", message_count: 1 },
@@ -780,13 +804,13 @@ describe("conversation helpers", () => {
     qc.setQueryData(["threads", "running", ""], [threads[1]]);
     qc.setQueryData(["thread", "thread-a"], detail);
 
-    const snapshot = app.applyOptimisticThreadTitle?.(qc, "thread-a", "即时标题");
+    const snapshot = threadQuery.applyOptimisticThreadTitle?.(qc, "thread-a", "即时标题");
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].title).toBe("即时标题");
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "running", ""])?.[0].title).toBe("其他");
     expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.title).toBe("即时标题");
 
-    app.rollbackOptimisticThreadTitle?.(qc, snapshot);
+    threadQuery.rollbackOptimisticThreadTitle?.(qc, snapshot);
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].title).toBe("旧标题");
     expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.title).toBe("旧标题");
@@ -828,6 +852,7 @@ describe("conversation helpers", () => {
 
   test("archiving selects the next visible thread and clears every cached copy of the archived thread", async () => {
     const app = await loadApp();
+    const threadQuery = await loadThreadQuery();
     const qc = new QueryClient();
     const threads: ThreadSummary[] = [
       { id: "thread-a", title: "A", status: "Recent", message_count: 1 },
@@ -853,7 +878,7 @@ describe("conversation helpers", () => {
     expect(app.nextVisibleThreadIdAfterRemoval?.(threads, "thread-b")).toBe("thread-c");
     expect(app.nextVisibleThreadIdAfterRemoval?.(threads, "thread-c")).toBe("thread-b");
 
-    app.clearArchivedThreadClientState?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-b");
+    threadQuery.clearArchivedThreadClientState?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-b");
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-a", "thread-c", "thread-archived"]);
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "running", ""])?.map((thread) => thread.id)).toEqual(["thread-c"]);
@@ -865,7 +890,7 @@ describe("conversation helpers", () => {
   });
 
   test("archive and restore optimistic cache changes can roll back without empty flashes", async () => {
-    const app = await loadApp();
+    const threadQuery = await loadThreadQuery();
     const qc = new QueryClient();
     const threads: ThreadSummary[] = [
       { id: "thread-a", title: "A", status: "Recent", message_count: 1 },
@@ -882,13 +907,13 @@ describe("conversation helpers", () => {
     qc.setQueryData(["threads", "all", ""], threads);
     qc.setQueryData(["thread", "thread-a"], detail);
 
-    const archiveSnapshot = app.applyOptimisticThreadArchive?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-a");
+    const archiveSnapshot = threadQuery.applyOptimisticThreadArchive?.(qc, { clear: (threadId) => cleared.push(threadId) }, "thread-a");
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-b"]);
     expect(qc.getQueryData(["thread", "thread-a"])).toBeUndefined();
     expect(cleared).toEqual(["thread-a"]);
 
-    app.rollbackOptimisticThreadArchive?.(qc, archiveSnapshot);
+    threadQuery.rollbackOptimisticThreadArchive?.(qc, archiveSnapshot);
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.map((thread) => thread.id)).toEqual(["thread-a", "thread-b"]);
     expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Recent");
@@ -897,12 +922,12 @@ describe("conversation helpers", () => {
     qc.setQueryData(["threads", "all", ""], [archivedThread, threads[1]]);
     qc.setQueryData(["thread", "thread-a"], { ...detail, summary: archivedThread });
 
-    const restoreSnapshot = app.applyOptimisticThreadRestore?.(qc, "thread-a");
+    const restoreSnapshot = threadQuery.applyOptimisticThreadRestore?.(qc, "thread-a");
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].status).toBe("Recent");
     expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Recent");
 
-    app.rollbackOptimisticThreadRestore?.(qc, restoreSnapshot);
+    threadQuery.rollbackOptimisticThreadRestore?.(qc, restoreSnapshot);
 
     expect(qc.getQueryData<ThreadSummary[]>(["threads", "all", ""])?.[0].status).toBe("Archived");
     expect(qc.getQueryData<{ summary: ThreadSummary }>(["thread", "thread-a"])?.summary.status).toBe("Archived");

@@ -81,6 +81,12 @@ pub struct UpdateStatus {
     pub capabilities: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateStatusFacadePlan {
+    pub required_capability: Capability,
+    pub status: UpdateStatus,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateJobPlan {
     pub action: UpdateAction,
@@ -157,6 +163,19 @@ pub fn update_status(
         recommended_action,
         capabilities,
     }
+}
+
+pub fn update_status_with_capability(
+    config: &Config,
+    platform: &PlatformPaths,
+    latest_version: Option<&str>,
+    last_error: Option<&str>,
+) -> Result<UpdateStatusFacadePlan> {
+    require_capability(platform, Capability::AppUpdater)?;
+    Ok(UpdateStatusFacadePlan {
+        required_capability: Capability::AppUpdater,
+        status: update_status(config, platform, latest_version, last_error),
+    })
 }
 
 pub fn update_status_with_recent_check_job(

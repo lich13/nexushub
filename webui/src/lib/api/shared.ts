@@ -1,8 +1,7 @@
 import type { CodexModel, OptionalResult, PermissionProfile } from "../../types";
-import { RuntimeUnavailableError, selectRuntimeFallback } from "../runtime";
+import { RuntimeUnavailableError } from "./transport";
 
 export const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
-export { selectRuntimeFallback };
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {

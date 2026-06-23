@@ -3,7 +3,8 @@ import type {
   SessionUser
 } from "../../types";
 import { runtimeRpc } from "./transport";
-import { selectRuntimeFallback, USE_DEMO } from "./shared";
+import { USE_DEMO } from "./shared";
+import { demoSessionUser } from "./demo";
 
 function desktopSessionUser(): SessionUser {
   return {
@@ -27,10 +28,7 @@ export async function getPublicSettings(): Promise<PublicSettings> {
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
   if (USE_DEMO) {
-    return selectRuntimeFallback<SessionUser>({
-      web: { id: "dev", username, csrf_token: "dev-csrf" },
-      desktop: desktopSessionUser()
-    });
+    return demoSessionUser(username);
   }
   return runtimeRpc<SessionUser>("auth.login", { username, password, turnstile_token: turnstileToken ?? null });
 }
@@ -42,10 +40,7 @@ export async function logout(csrfToken?: string | null): Promise<void> {
 
 export async function me(): Promise<SessionUser> {
   if (USE_DEMO) {
-    return selectRuntimeFallback<SessionUser>({
-      web: { id: "dev", username: "admin", csrf_token: "dev-csrf" },
-      desktop: desktopSessionUser()
-    });
+    return demoSessionUser();
   }
   return runtimeRpc<SessionUser>("auth.me");
 }
