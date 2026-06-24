@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
-        list_threads, resolve_codex_paths, rollout_completion_last_agent_message,
-        rollout_completion_last_agent_message_with_source, rollout_hook_stop_message_with_source,
+        list_threads, resolve_codex_paths, rollout_completion_last_agent_message_with_source,
+        rollout_hook_stop_message_with_source,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -25,6 +25,7 @@ use nexushub_core::{
         ProbeLogsDbMaintenanceResult, ProbeRuntime,
         DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS,
     },
+    services::probe as probe_service,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -41,10 +42,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
-const PROBE_PASSIVE_SENT_MARKER_PREFIX: &str = "probe_passive_sent_marker:";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
-const PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS: i64 = 10 * 60;
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
 static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -356,13 +355,12 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 config.probe.logs_db.max_delete_rows_per_run,
                 dry_run,
             )?;
-            let mut stored = serde_json::to_value(&result)?;
-            add_probe_events_maintenance_fields(
-                &mut stored,
+            let stored = probe_service::probe_logs_db_stored_result(
+                &result,
                 probe_events_deleted,
                 probe_dedupe_deleted,
                 dry_run,
-            );
+            )?;
             db.set_setting(
                 PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
                 &serde_json::to_string(&stored)?,
@@ -1009,23 +1007,22 @@ fn hook_stop_cli_output(result: &HookStopResult) -> Result<(String, String)> {
 async fn record_probe_event_with_bark(
     config: &Config,
     db: &PanelDb,
-    mut event: nexushub_core::probe::ProbeBuiltEvent,
+    event: nexushub_core::probe::ProbeBuiltEvent,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
-    normalize_probe_event_dedupe_key(&mut event);
-    if passive_unresolved_action_sent(db, &event)? {
-        let mut outcome = ProbeEventOutcome::from_claim(&event, false);
-        outcome.recorded = false;
-        outcome.duplicate = true;
-        let relevant_switch_enabled = probe_event_bark_switch_enabled(config, &event.kind);
+    let record_plan = probe_service::probe_event_record_plan(event);
+    let event = record_plan.event;
+    if passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())? {
         let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
         let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+        let decision =
+            probe_service::probe_bark_delivery_decision(config, &event.kind, configured, true);
         return Ok((
-            outcome,
+            record_plan.duplicate_outcome,
             ProbeBarkOutcome::skipped(
                 "sent_marker",
-                config.probe.notifications.enabled,
-                relevant_switch_enabled,
-                configured,
+                decision.notifications_enabled,
+                decision.relevant_switch_enabled,
+                decision.device_key_configured,
             ),
         ));
     }
@@ -1034,240 +1031,43 @@ async fn record_probe_event_with_bark(
         &event.dedupe_key,
         event.ttl_seconds,
     )?;
-    let mut outcome = ProbeEventOutcome::from_claim(&event, claimed);
     let bark = handle_probe_event_bark(config, db, &event, claimed).await?;
-    if claimed {
-        let mut payload = event.payload.clone();
-        merge_bark_outcome_payload(&mut payload, &bark)?;
-        if payload["bark"]["chunk_count"].is_null() {
-            let chunk_count = bark_body_chunks(&event.bark_body, PROBE_BARK_BODY_CHUNK_BYTES).len();
-            payload["bark"]["chunk_count"] = json!(chunk_count);
-        }
-        payload["dedupe"] = json!({
-            "namespace": &event.dedupe_namespace,
-            "key": &event.dedupe_key,
-            "claimed": claimed,
-            "duplicate": !claimed,
-            "status": if claimed { "claimed" } else { "duplicate" },
-        });
-        payload["bark_status"] = json!(probe_bark_status_label(&bark));
-        payload["dedupe_status"] = json!(if claimed { "claimed" } else { "duplicate" });
+    let write_plan = probe_service::probe_event_record_write_plan(
+        &event,
+        claimed,
+        &bark,
+        probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref()),
+    )?;
+    if let Some(record) = write_plan.record {
         db.record_probe_event(NewProbeEvent {
-            kind: &event.kind,
-            thread_id: event.thread_id.as_deref(),
-            title: Some(&event.title),
-            message: Some(&event.message),
-            dedupe_key: Some(&event.dedupe_key),
-            source: &event.source,
-            payload,
+            kind: &record.kind,
+            thread_id: record.thread_id.as_deref(),
+            title: Some(&record.title),
+            message: Some(&record.message),
+            dedupe_key: Some(&record.dedupe_key),
+            source: &record.source,
+            payload: record.payload,
         })?;
-        mark_passive_unresolved_action_sent(db, &event)?;
-    } else {
-        outcome.recorded = false;
-        outcome.duplicate = true;
+    }
+    if let Some(marker) = write_plan.passive_marker {
+        mark_passive_unresolved_action_sent(db, marker)?;
     }
 
-    Ok((outcome, bark))
+    Ok((write_plan.outcome, bark))
 }
 
-fn normalize_probe_event_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
-    if event.kind != "reply-needed" {
-        return;
-    }
-    match event.payload.get("body_source").and_then(Value::as_str) {
-        Some("proposed_plan") => normalize_proposed_plan_dedupe_key(event),
-        Some("request_user_input") => normalize_request_user_input_dedupe_key(event),
-        _ => {}
-    }
-}
-
-fn normalize_proposed_plan_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let item_or_call_id = event
-        .payload
-        .get("item_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .unwrap_or(turn_id.as_str())
-        .to_string();
-    let plan_hash = proposed_plan_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-        event
-            .payload
-            .get("body_sha256")
-            .and_then(Value::as_str)
-            .and_then(|value| value.get(..16))
-            .unwrap_or("unknown")
-            .to_string()
-    });
-    event.dedupe_key = format!(
-        "{}:{}:{}:{}:{}",
-        dedupe_component(&event.kind),
-        dedupe_component(&thread_id),
-        dedupe_component(&turn_id),
-        dedupe_component(&item_or_call_id),
-        dedupe_component(&format!("plan_hash:{plan_hash}")),
-    );
-    event.payload["dedupe_plan_hash"] = json!(plan_hash);
-    event.payload["dedupe_item_or_call_id"] = json!(item_or_call_id);
-}
-
-fn normalize_request_user_input_dedupe_key(event: &mut nexushub_core::probe::ProbeBuiltEvent) {
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown")
-        .to_string();
-    let call_id = event
-        .payload
-        .get("call_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("item_id").and_then(Value::as_str))
-        .unwrap_or(turn_id.as_str())
-        .to_string();
-    let input_hash = request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-        event
-            .payload
-            .get("body_sha256")
-            .and_then(Value::as_str)
-            .and_then(|value| value.get(..16))
-            .unwrap_or("unknown")
-            .to_string()
-    });
-    event.dedupe_key = format!(
-        "{}:{}:{}:{}:{}",
-        dedupe_component(&event.kind),
-        dedupe_component(&thread_id),
-        dedupe_component(&turn_id),
-        dedupe_component(&call_id),
-        dedupe_component(&format!("input_hash:{input_hash}")),
-    );
-    event.payload["dedupe_input_hash"] = json!(input_hash);
-    event.payload["dedupe_item_or_call_id"] = json!(call_id);
-}
-
-fn passive_unresolved_action_sent(
-    db: &PanelDb,
-    event: &nexushub_core::probe::ProbeBuiltEvent,
-) -> Result<bool> {
-    let Some(key) = passive_unresolved_action_marker_key(event) else {
+fn passive_unresolved_action_sent(db: &PanelDb, key: Option<&str>) -> Result<bool> {
+    let Some(key) = key else {
         return Ok(false);
     };
-    Ok(db.get_setting(&key)?.is_some())
+    Ok(db.get_setting(key)?.is_some())
 }
 
 fn mark_passive_unresolved_action_sent(
     db: &PanelDb,
-    event: &nexushub_core::probe::ProbeBuiltEvent,
+    marker: probe_service::ProbePassiveMarkerWrite,
 ) -> Result<()> {
-    let Some(key) = passive_unresolved_action_marker_key(event) else {
-        return Ok(());
-    };
-    db.set_setting(
-        &key,
-        &json!({
-            "dedupe_key": event.dedupe_key,
-            "thread_id": event.thread_id,
-            "turn_id": event.turn_id,
-            "body_source": event.payload.get("body_source").and_then(Value::as_str),
-            "body_sha256": event.payload.get("body_sha256").and_then(Value::as_str),
-        })
-        .to_string(),
-    )
-}
-
-fn passive_unresolved_action_marker_key(
-    event: &nexushub_core::probe::ProbeBuiltEvent,
-) -> Option<String> {
-    if event.kind != "reply-needed" {
-        return None;
-    }
-    if event.payload.get("scan_source").and_then(Value::as_str) != Some("passive-scan") {
-        return None;
-    }
-    let body_source = event.payload.get("body_source").and_then(Value::as_str)?;
-    if !matches!(body_source, "proposed_plan" | "request_user_input") {
-        return None;
-    }
-    let thread_id = event
-        .thread_id
-        .as_deref()
-        .or_else(|| event.payload.get("thread_id").and_then(Value::as_str))
-        .unwrap_or("unknown");
-    let turn_id = event
-        .turn_id
-        .as_deref()
-        .or_else(|| event.payload.get("turn_id").and_then(Value::as_str))
-        .unwrap_or("unknown");
-    let action_id = event
-        .payload
-        .get("item_id")
-        .and_then(Value::as_str)
-        .or_else(|| event.payload.get("call_id").and_then(Value::as_str))
-        .unwrap_or(turn_id);
-    let content_key = if body_source == "proposed_plan" {
-        proposed_plan_hash_from_text(&event.bark_body)
-            .or_else(|| {
-                event
-                    .payload
-                    .get("body_sha256")
-                    .and_then(Value::as_str)
-                    .and_then(|value| value.get(..16))
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_else(|| "unknown".to_string())
-    } else {
-        request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-            event
-                .payload
-                .get("body_sha256")
-                .and_then(Value::as_str)
-                .and_then(|value| value.get(..16))
-                .unwrap_or("unknown")
-                .to_string()
-        })
-    };
-    Some(format!(
-        "{}{}:{}:{}:{}:{}:{}",
-        PROBE_PASSIVE_SENT_MARKER_PREFIX,
-        dedupe_component(body_source),
-        dedupe_component(thread_id),
-        dedupe_component(turn_id),
-        dedupe_component(action_id),
-        dedupe_component(&content_key),
-        dedupe_component(&event.kind),
-    ))
-}
-
-fn merge_bark_outcome_payload(payload: &mut Value, bark: &ProbeBarkOutcome) -> Result<()> {
-    let outcome = serde_json::to_value(bark)?;
-    if let Some(existing) = payload.get_mut("bark").and_then(Value::as_object_mut) {
-        if let Some(outcome_object) = outcome.as_object() {
-            for (key, value) in outcome_object {
-                existing.insert(key.clone(), value.clone());
-            }
-        }
-    } else {
-        payload["bark"] = outcome;
-    }
-    Ok(())
+    db.set_setting(&marker.key, &serde_json::to_string(&marker.value)?)
 }
 
 async fn handle_probe_event_bark(
@@ -1276,35 +1076,17 @@ async fn handle_probe_event_bark(
     event: &nexushub_core::probe::ProbeBuiltEvent,
     claimed: bool,
 ) -> Result<ProbeBarkOutcome> {
-    let relevant_switch_enabled = probe_event_bark_switch_enabled(config, &event.kind);
-    if !config.probe.notifications.enabled {
-        return Ok(ProbeBarkOutcome::skipped(
-            "notifications_disabled",
-            false,
-            relevant_switch_enabled,
-            false,
-        ));
-    }
-    if !relevant_switch_enabled {
-        return Ok(ProbeBarkOutcome::skipped(
-            "event_switch_disabled",
-            true,
-            false,
-            false,
-        ));
-    }
     let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
     let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
-    if !configured {
+    let decision =
+        probe_service::probe_bark_delivery_decision(config, &event.kind, configured, claimed);
+    if !decision.should_send {
         return Ok(ProbeBarkOutcome::skipped(
-            "device_key_missing",
-            true,
-            true,
-            false,
+            decision.skip_reason.as_deref().unwrap_or("skipped"),
+            decision.notifications_enabled,
+            decision.relevant_switch_enabled,
+            decision.device_key_configured,
         ));
-    }
-    if !claimed {
-        return Ok(ProbeBarkOutcome::skipped("dedupe", true, true, true));
     }
     send_bark_notification(
         config,
@@ -1317,27 +1099,6 @@ async fn handle_probe_event_bark(
         std::time::Duration::from_secs(8),
     )
     .await
-}
-
-fn probe_event_bark_switch_enabled(config: &Config, kind: &str) -> bool {
-    match kind {
-        "completion" => config.probe.notifications.notify_completion,
-        "reply-needed" => config.probe.notifications.notify_reply_needed,
-        "recoverable" => config.probe.notifications.notify_recoverable,
-        _ => config.probe.notifications.notify_completion,
-    }
-}
-
-fn probe_bark_status_label(bark: &ProbeBarkOutcome) -> &'static str {
-    if bark.sent {
-        "sent"
-    } else if bark.skipped && bark.reason.as_deref() == Some("dedupe") {
-        "dedupe_hit"
-    } else if bark.skipped {
-        "skipped"
-    } else {
-        "failed"
-    }
 }
 
 fn codex_stop_continue_output() -> Value {
@@ -1544,70 +1305,6 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
-}
-
-fn dedupe_component(value: &str) -> String {
-    let normalized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if normalized.is_empty() {
-        "unknown".to_string()
-    } else {
-        normalized
-    }
-}
-
-fn proposed_plan_hash_from_text(value: &str) -> Option<String> {
-    let plan = nexushub_core::codex::extract_proposed_plan_text(value)
-        .or_else(|| {
-            value
-                .split_once("Plan 摘要:")
-                .map(|(_, plan)| plan.trim().to_string())
-                .filter(|plan| !plan.is_empty())
-        })
-        .or_else(|| {
-            value
-                .split_once("待回复内容：")
-                .map(|(_, plan)| plan.trim().to_string())
-                .filter(|plan| !plan.is_empty())
-        })?;
-    Some(stable_hash64_hex(plan.trim()))
-}
-
-fn request_user_input_hash_from_text(value: &str) -> Option<String> {
-    let body = value
-        .split_once("待回复内容：")
-        .map(|(_, body)| body)
-        .unwrap_or(value);
-    let normalized = body
-        .lines()
-        .map(str::trim)
-        .filter(|line| {
-            !line.starts_with("时间：")
-                && !line.starts_with("时间:")
-                && !line.starts_with("事件时间：")
-                && !line.starts_with("事件时间:")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let normalized = normalized.trim();
-    (!normalized.is_empty()).then(|| stable_hash64_hex(normalized))
-}
-
-fn stable_hash64_hex(value: &str) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1907,32 +1604,31 @@ async fn run_probe_logs_db_maintenance_if_due(
 ) -> Result<ProbeLogsDbMaintenanceOutcome> {
     let _guard = PROBE_LOGS_DB_MAINTENANCE_LOCK.lock().await;
     let config = state.config();
-    if !config.probe.logs_db.enabled {
+    let last_maintain_updated_at = state
+        .db
+        .get_setting_with_updated_at(PROBE_LOGS_DB_LAST_MAINTAIN_SETTING)?
+        .map(|(_raw, updated_at)| updated_at);
+    let last_compact_updated_at = state
+        .db
+        .get_setting_with_updated_at(PROBE_LOGS_DB_LAST_COMPACT_SETTING)?
+        .map(|(_raw, updated_at)| updated_at);
+    let plan = probe_service::probe_logs_db_scheduler_plan(
+        &config,
+        last_maintain_updated_at,
+        last_compact_updated_at,
+        PanelDb::now(),
+    );
+    if !plan.should_run {
         return Ok(ProbeLogsDbMaintenanceOutcome {
             ran: false,
             result: None,
-            skip_reason: Some("logs_db_disabled".to_string()),
+            skip_reason: plan.skip_reason,
         });
     }
-    let interval_seconds =
-        i64::from(config.probe.logs_db.maintenance_interval_hours.max(1)) * 3_600;
-    if let Some((_raw, updated_at)) = state
-        .db
-        .get_setting_with_updated_at(PROBE_LOGS_DB_LAST_MAINTAIN_SETTING)?
-    {
-        if PanelDb::now().saturating_sub(updated_at) < interval_seconds {
-            return Ok(ProbeLogsDbMaintenanceOutcome {
-                ran: false,
-                result: None,
-                skip_reason: Some("not_due".to_string()),
-            });
-        }
-    }
 
-    let compact = probe_logs_db_compaction_due(&state.db, &config).await?;
     let worker_config = config.clone();
     let result = tokio::task::spawn_blocking(move || {
-        probe_runtime(&worker_config).maintain_logs_db_with_compaction(false, compact)
+        probe_runtime(&worker_config).maintain_logs_db_with_compaction(false, plan.compact)
     })
     .await
     .context("join probe logs DB maintenance worker")??;
@@ -1941,13 +1637,12 @@ async fn run_probe_logs_db_maintenance_if_due(
         config.probe.logs_db.max_delete_rows_per_run,
         false,
     )?;
-    let mut stored = serde_json::to_value(&result)?;
-    add_probe_events_maintenance_fields(
-        &mut stored,
+    let stored = probe_service::probe_logs_db_stored_result(
+        &result,
         probe_events_deleted,
         probe_dedupe_deleted,
         false,
-    );
+    )?;
     state.db.set_setting(
         PROBE_LOGS_DB_LAST_MAINTAIN_SETTING,
         &serde_json::to_string(&stored)?,
@@ -1975,8 +1670,8 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     for status in ["reply-needed", "recoverable"] {
         let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
         for thread in threads {
-            let (body, body_source) = probe_thread_notification_body(&thread, status);
-            if !probe_thread_passive_bark_fresh(&thread, status, body_source.as_deref()) {
+            let plan = probe_service::probe_passive_thread_notification_plan(&thread, status);
+            if !plan.fresh {
                 continue;
             }
             let transcript_path = thread
@@ -1989,11 +1684,11 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                     thread.active_turn_id.as_deref(),
                     Some(thread.id.as_str()),
                     transcript_path.as_deref(),
-                    body.as_deref(),
+                    plan.body.as_deref(),
                     status,
                 )
                 .with_thread_title(Some(thread.title.as_str()))
-                .with_body_source(body_source.as_deref())
+                .with_body_source(plan.body_source.as_deref())
                 .with_passive_scan_source(),
             );
             event.payload["thread_title"] = json!(thread.title.clone());
@@ -2007,14 +1702,8 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                     event.payload["call_id"] = json!(item_id);
                 }
             }
-            match status {
-                "reply-needed" => {
-                    event.payload["reason_label"] = json!("等待用户确认");
-                }
-                "recoverable" => {
-                    event.payload["reason_label"] = json!("异常/可恢复");
-                }
-                _ => {}
+            if let Some(reason_label) = plan.reason_label.as_deref() {
+                event.payload["reason_label"] = json!(reason_label);
             }
             let (outcome, bark) = record_probe_event_with_bark(&config, &state.db, event).await?;
             if outcome.recorded || bark.sent {
@@ -2023,229 +1712,6 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
         }
     }
     Ok(recorded)
-}
-
-fn probe_thread_notification_body(
-    thread: &nexushub_core::codex::ThreadSummary,
-    status: &str,
-) -> (Option<String>, Option<String>) {
-    if status == "reply-needed" {
-        if let Some(elicitation) = &thread.pending_elicitation {
-            if !thread_rollout_still_request_user_input_needed(thread) {
-                return (None, None);
-            }
-            return (
-                Some(format_pending_elicitation(elicitation)),
-                Some("request_user_input".to_string()),
-            );
-        }
-        if let Some(message) = thread
-            .latest_message
-            .as_deref()
-            .filter(|value| value.contains("<proposed_plan>") && value.contains("</proposed_plan>"))
-        {
-            if !thread_rollout_still_reply_needed(thread) {
-                return (None, None);
-            }
-            return (
-                Some(format_proposed_plan_reply_needed(
-                    &thread.id,
-                    thread.active_turn_id.as_deref().unwrap_or("-"),
-                    message,
-                )),
-                Some("proposed_plan".to_string()),
-            );
-        }
-        if let Some(path) = thread.rollout_path.as_deref() {
-            if let Ok(Some(message)) =
-                rollout_completion_last_agent_message(path, thread.active_turn_id.as_deref())
-            {
-                if message.contains("<proposed_plan>") && message.contains("</proposed_plan>") {
-                    if !thread_rollout_still_reply_needed(thread) {
-                        return (None, None);
-                    }
-                    return (
-                        Some(format_proposed_plan_reply_needed(
-                            &thread.id,
-                            thread.active_turn_id.as_deref().unwrap_or("-"),
-                            &message,
-                        )),
-                        Some("proposed_plan".to_string()),
-                    );
-                }
-            }
-        }
-    }
-    if status == "recoverable" {
-        if let Some(message) = thread.latest_message.as_deref() {
-            return (
-                Some(message.to_string()),
-                Some("latest_exception".to_string()),
-            );
-        }
-    }
-    (
-        thread.latest_message.clone(),
-        thread
-            .latest_message
-            .as_ref()
-            .map(|_| "latest_message".to_string()),
-    )
-}
-
-fn probe_thread_passive_bark_fresh(
-    thread: &nexushub_core::codex::ThreadSummary,
-    status: &str,
-    body_source: Option<&str>,
-) -> bool {
-    if status != "reply-needed" {
-        return true;
-    }
-    if !thread_updated_within(thread, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS) {
-        return false;
-    }
-    match body_source {
-        Some("request_user_input") => thread_rollout_still_request_user_input_needed(thread),
-        Some("proposed_plan") => thread_rollout_still_reply_needed(thread),
-        Some(_) | None => false,
-    }
-}
-
-fn thread_updated_within(
-    thread: &nexushub_core::codex::ThreadSummary,
-    max_age_seconds: i64,
-) -> bool {
-    let Some(updated_at) = thread.updated_at.as_deref() else {
-        return false;
-    };
-    let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(updated_at) else {
-        return false;
-    };
-    let age_seconds = chrono::Utc::now()
-        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
-        .num_seconds();
-    (0..=max_age_seconds).contains(&age_seconds)
-}
-
-fn thread_rollout_still_reply_needed(thread: &nexushub_core::codex::ThreadSummary) -> bool {
-    if thread.rollout_path.is_none() {
-        return true;
-    }
-    let mut refreshed = thread.clone();
-    if nexushub_core::codex::enrich_thread_from_rollout(&mut refreshed).is_err() {
-        return true;
-    }
-    let reply_needed = matches!(
-        refreshed.status,
-        nexushub_core::codex::ThreadStatus::ReplyNeeded
-    );
-    let has_plan_message = refreshed.latest_message.as_deref().is_some_and(|value| {
-        value.contains("<proposed_plan>") && value.contains("</proposed_plan>")
-    });
-    let same_turn = refreshed
-        .active_turn_id
-        .as_deref()
-        .is_some_and(|turn_id| Some(turn_id) == thread.active_turn_id.as_deref())
-        || (thread.active_turn_id.is_none() && refreshed.active_turn_id.is_none());
-    reply_needed && has_plan_message && same_turn
-}
-
-fn thread_rollout_still_request_user_input_needed(
-    thread: &nexushub_core::codex::ThreadSummary,
-) -> bool {
-    if thread.rollout_path.is_none() {
-        return thread.pending_elicitation.is_some();
-    }
-    let mut refreshed = thread.clone();
-    if nexushub_core::codex::enrich_thread_from_rollout(&mut refreshed).is_err() {
-        return false;
-    }
-    let reply_needed = matches!(
-        refreshed.status,
-        nexushub_core::codex::ThreadStatus::ReplyNeeded
-    );
-    let has_pending_elicitation = refreshed.pending_elicitation.is_some();
-    let same_turn = refreshed
-        .active_turn_id
-        .as_deref()
-        .is_some_and(|turn_id| Some(turn_id) == thread.active_turn_id.as_deref())
-        || (thread.active_turn_id.is_none() && refreshed.active_turn_id.is_none());
-    reply_needed && has_pending_elicitation && same_turn
-}
-
-fn format_pending_elicitation(elicitation: &nexushub_core::codex::PendingElicitation) -> String {
-    let mut lines = Vec::new();
-    for (index, question) in elicitation.questions.iter().enumerate() {
-        if index > 0 {
-            lines.push(String::new());
-        }
-        let number = index + 1;
-        lines.push(format!("问题 {number}：{}", question.question.trim()));
-        if let Some(header) = question
-            .header
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            lines.push(format!("标题：{header}"));
-        }
-        for (option_index, option) in question.options.iter().enumerate() {
-            let marker = option_index + 1;
-            lines.push(format!("选项 {marker}：{}", option.label.trim()));
-            if let Some(description) = option
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                lines.push(format!("说明：{description}"));
-            }
-        }
-    }
-    if lines.is_empty() {
-        "Codex 请求用户输入。".to_string()
-    } else {
-        lines.join("\n")
-    }
-}
-
-fn format_proposed_plan_reply_needed(_thread_id: &str, _turn_id: &str, raw: &str) -> String {
-    let plan_text = nexushub_core::codex::extract_proposed_plan_text(raw)
-        .unwrap_or_else(|| raw.trim().to_string());
-    plan_text.trim().to_string()
-}
-
-fn add_probe_events_maintenance_fields(
-    value: &mut Value,
-    events: usize,
-    dedupe: usize,
-    dry_run: bool,
-) {
-    if let Value::Object(object) = value {
-        object.insert(
-            "probe_events_target".to_string(),
-            Value::String("panel_probe_events".to_string()),
-        );
-        object.insert("probe_events_dry_run".to_string(), Value::Bool(dry_run));
-        object.insert("probe_events_deleted".to_string(), json!(events));
-        object.insert("probe_dedupe_deleted".to_string(), json!(dedupe));
-    }
-}
-
-async fn probe_logs_db_compaction_due(db: &PanelDb, config: &Config) -> Result<bool> {
-    if !config.probe.logs_db.auto_compact_when_codex_closed {
-        return Ok(false);
-    }
-    let interval_seconds = i64::from(config.probe.logs_db.compact_interval_hours.max(1)) * 3_600;
-    if let Some((_raw, updated_at)) =
-        db.get_setting_with_updated_at(PROBE_LOGS_DB_LAST_COMPACT_SETTING)?
-    {
-        if PanelDb::now().saturating_sub(updated_at) < interval_seconds {
-            return Ok(false);
-        }
-    }
-    let _ = config;
-    Ok(true)
 }
 
 #[cfg(test)]
@@ -3122,7 +2588,9 @@ hooks = false
             last_event_kind: None,
         };
 
-        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
 
         let body = body.expect("request_user_input body");
         assert_eq!(source.as_deref(), Some("request_user_input"));
@@ -3160,7 +2628,10 @@ hooks = false
             ..thread
         };
 
-        let (body, source) = probe_thread_notification_body(&plan_thread, "reply-needed");
+        let plan =
+            probe_service::probe_passive_thread_notification_plan(&plan_thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
 
         let body = body.expect("plan body");
         assert_eq!(source.as_deref(), Some("proposed_plan"));
@@ -3204,7 +2675,9 @@ hooks = false
             last_event_kind: Some("task_complete".to_string()),
         };
 
-        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
 
         assert_eq!(body, None);
         assert_eq!(source, None);
@@ -3219,7 +2692,9 @@ hooks = false
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
             updated_at: Some(
                 (chrono::Utc::now()
-                    - chrono::Duration::seconds(PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS + 60))
+                    - chrono::Duration::seconds(
+                        probe_service::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS + 60,
+                    ))
                 .to_rfc3339(),
             ),
             archived_at: None,
@@ -3236,11 +2711,8 @@ hooks = false
             last_event_kind: Some("task_complete".to_string()),
         };
 
-        assert!(!probe_thread_passive_bark_fresh(
-            &thread,
-            "reply-needed",
-            Some("proposed_plan")
-        ));
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        assert!(!plan.fresh);
     }
 
     #[tokio::test]
@@ -3255,16 +2727,14 @@ hooks = false
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
 
-        let body_one = format_proposed_plan_reply_needed(
-            "thread-plan",
-            "turn-plan",
+        let body_one = nexushub_core::codex::extract_proposed_plan_text(
             "<proposed_plan>\n# 第一版\n- A\n</proposed_plan>",
-        );
-        let body_two = format_proposed_plan_reply_needed(
-            "thread-plan",
-            "turn-plan",
+        )
+        .unwrap();
+        let body_two = nexushub_core::codex::extract_proposed_plan_text(
             "<proposed_plan>\n# 第二版\n- B\n</proposed_plan>",
-        );
+        )
+        .unwrap();
         let make_event = |body: &str| {
             probe_runtime(&config).build_event(
                 ProbeEventInput::hook_stop_with_context(
@@ -3321,11 +2791,10 @@ hooks = false
         let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
-        let body = format_proposed_plan_reply_needed(
-            "thread-plan-ttl",
-            "turn-plan-ttl",
+        let body = nexushub_core::codex::extract_proposed_plan_text(
             "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>",
-        );
+        )
+        .unwrap();
         let make_event = || {
             probe_runtime(&config).build_event(
                 ProbeEventInput::hook_stop_with_context(
@@ -3777,8 +3246,7 @@ hooks = false
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
         let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
-        let body =
-            format_proposed_plan_reply_needed("thread-plan-stable", "turn-plan-stable", raw_plan);
+        let body = nexushub_core::codex::extract_proposed_plan_text(raw_plan).unwrap();
         let event = probe_runtime(&config).build_event(
             ProbeEventInput::hook_stop_with_context(
                 Some("thread-plan-stable"),
@@ -3869,7 +3337,10 @@ hooks = false
                 last_event_kind: None,
             };
 
-            let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+            let plan =
+                probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+            let body = plan.body;
+            let source = plan.body_source;
 
             assert_eq!(body, None, "{name}");
             assert_eq!(source, None, "{name}");
@@ -3910,7 +3381,9 @@ hooks = false
             last_event_kind: Some("task_complete".to_string()),
         };
 
-        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
 
         assert_eq!(body, None);
         assert_eq!(source, None);
@@ -3933,7 +3406,11 @@ hooks = false
         )
         .unwrap();
         assert_eq!(
-            rollout_completion_last_agent_message(&rollout, Some("turn-plan")).unwrap(),
+            nexushub_core::codex::rollout_completion_last_agent_message(
+                &rollout,
+                Some("turn-plan"),
+            )
+            .unwrap(),
             None
         );
         let thread = nexushub_core::codex::ThreadSummary {
@@ -3953,7 +3430,9 @@ hooks = false
             last_event_kind: Some("task_complete".to_string()),
         };
 
-        let (body, source) = probe_thread_notification_body(&thread, "reply-needed");
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
 
         assert_eq!(body, None);
         assert_eq!(source, None);

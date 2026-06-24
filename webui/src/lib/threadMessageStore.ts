@@ -436,7 +436,7 @@ function mergeBlocksPreservingHistory(current: MessageBlock[], incoming: Message
   return next === retainedHistory ? current : next;
 }
 
-function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
+export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
   if (!incoming.length) return current;
   let changed = false;
   let next = current;
@@ -456,7 +456,7 @@ function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], m
   return changed ? next : current;
 }
 
-function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
+export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
   const existingIndex = current.findIndex((block) => block.id === next.id);
   if (existingIndex === -1) return [...current, next];
   const existing = current[existingIndex];

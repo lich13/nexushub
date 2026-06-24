@@ -53,7 +53,9 @@ import {
   type SelectedThread
 } from "../domain/codexViewModel";
 import {
+  mergeMessageBlocks,
   threadDetailFromMessageSlot,
+  upsertMessageBlock,
   useThreadMessageStoreController,
   type ThreadMessageSlot,
   type ThreadMessageStoreController
@@ -534,8 +536,10 @@ export function useHydrateThreadMessageStore(input: {
 }
 
 export {
+  mergeMessageBlocks,
   threadDetailFromMessageSlot,
   threadDetailFromMessageSlot as threadDetailFromSlot,
+  upsertMessageBlock,
   useThreadMessageStoreController
 };
 

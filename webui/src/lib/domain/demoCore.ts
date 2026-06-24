@@ -8,6 +8,7 @@ export type DemoFixture = {
 };
 
 const macApplicationSupport = "~/Library/Application Support/NexusHub";
+const linuxDemoRoot = "/srv/nexushub-demo";
 
 type CapabilityFieldValues = Record<DemoFixtureKey, boolean>;
 
@@ -94,23 +95,23 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
   return {
     platform: {
       kind: "linux",
-      data_dir: "/opt/nexushub",
-      config_file: "/opt/nexushub/config.toml",
-      webui_dir: "/opt/nexushub/webui",
-      log_dir: "/opt/nexushub/logs",
+      data_dir: linuxDemoRoot,
+      config_file: `${linuxDemoRoot}/config.toml`,
+      webui_dir: `${linuxDemoRoot}/webui`,
+      log_dir: `${linuxDemoRoot}/logs`,
       service_name: "nexushub",
       service_kind: "systemd"
     },
     system: {
-      host_label: "43.155.235.227",
-      hostname: "codex-cloud-root",
-      public_endpoint: "https://661313.xyz/nexushub/",
+      host_label: "demo-linux-web",
+      hostname: "demo-linux-web",
+      public_endpoint: "https://demo.nexushub.local/nexushub/",
       capabilities: buildDemoCapabilities("linux-web"),
       codex_home: "/root/.codex",
       configured_codex_home: "/root/.codex",
       resolved_codex_home: "/root/.codex",
       codex_home_source: "config",
-      panel_db: "/opt/nexushub/panel.sqlite",
+      panel_db: `${linuxDemoRoot}/panel.sqlite`,
       state_db_integrity: "ok"
     },
     security: {
@@ -119,7 +120,7 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
       turnstile_site_key: "",
       turnstile_secret_configured: false,
       session_ttl_seconds: 31536000,
-      turnstile_expected_hostname: "661313.xyz",
+      turnstile_expected_hostname: "demo.nexushub.local",
       turnstile_expected_action: "login"
     }
   };

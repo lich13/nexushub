@@ -249,18 +249,6 @@ mod tests {
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
         assert_eq!(install.spec.kind, "nexushub_update_install");
         assert!(update_job_id(&install.spec).starts_with("desktop-update-install-"));
-
-        let prune_action = {
-            use UpdateAction as Action;
-            Action::Prune
-        };
-        let prune = native_update_job_plan_for_action(&config, &platform, prune_action)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            prune.contains("prune_backups is unavailable on macos"),
-            "{prune}"
-        );
     }
 
     #[test]
@@ -317,6 +305,12 @@ mod tests {
             !command_source.contains("macos_updater_job_spec(action)"),
             "Tauri commands must consume the core update action plan macos_job instead of rebuilding job metadata"
         );
+        for forbidden in [concat!("UpdateAction", "::", "Prune"), "prune_backups"] {
+            assert!(
+                !command_source.contains(forbidden),
+                "macOS Tauri update executor must not carry Linux prune semantics: {forbidden}"
+            );
+        }
     }
 
     #[test]

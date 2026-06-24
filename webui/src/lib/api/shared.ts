@@ -1,7 +1,18 @@
 import type { CodexModel, OptionalResult, PermissionProfile } from "../../types";
 import { RuntimeUnavailableError } from "./transport";
+import type { DemoFixtureKey } from "../domain/demoCore";
 
 export const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
+
+let demoFixtureKey: DemoFixtureKey = "linux-web";
+
+export function configureDemoFixtureKey(fixture: DemoFixtureKey): void {
+  demoFixtureKey = fixture;
+}
+
+export function currentDemoFixtureKey(): DemoFixtureKey {
+  return demoFixtureKey;
+}
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {

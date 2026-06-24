@@ -8,11 +8,11 @@ import {
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
 import { demoUpdateJobId, demoUpdateStatus } from "./demo";
-import { jobIdFromRuntimeResult, USE_DEMO } from "./shared";
+import { currentDemoFixtureKey, jobIdFromRuntimeResult, USE_DEMO } from "./shared";
 
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
-    return demoUpdateStatus();
+    return demoUpdateStatus(currentDemoFixtureKey());
   }
   return callCommand<UpdateStatus>("updates.status");
 }

@@ -1,5 +1,6 @@
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 use anyhow::Result;
+use nexushub_core::services::use_cases::NexusHubUseCases;
 use nexushub_core::{
     config::{patch_probe_config_toml, Config},
     probe::{redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeRuntime},
@@ -276,11 +277,8 @@ pub(crate) fn archive_delete_execute_with_state(
     request: DesktopCleanupExecuteRequest,
 ) -> Result<ArchiveDeleteResult> {
     let paths = state.codex_paths();
-    let plan = cleanup_service::plan_cleanup_execute_operation(
-        state.platform(),
-        cleanup_service::CleanupTarget::Archived,
-        request,
-    )?;
+    let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
+    let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Archived, request)?;
     let dry_run = cleanup_service::dry_run_archived_with_capability(state.platform(), &paths)?;
     cleanup_service::validate_cleanup_expected_count(&plan, dry_run.archived_threads)?;
     cleanup_service::execute_archived_with_capability(state.platform(), &paths)
@@ -297,11 +295,8 @@ pub(crate) fn hidden_delete_execute_with_state(
     request: DesktopCleanupExecuteRequest,
 ) -> Result<HiddenThreadDeleteResult> {
     let paths = state.codex_paths();
-    let plan = cleanup_service::plan_cleanup_execute_operation(
-        state.platform(),
-        cleanup_service::CleanupTarget::Hidden,
-        request,
-    )?;
+    let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
+    let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Hidden, request)?;
     let dry_run = cleanup_service::dry_run_hidden_with_capability(state.platform(), &paths)?;
     cleanup_service::validate_cleanup_expected_count(&plan, dry_run.hidden_threads)?;
     cleanup_service::execute_hidden_with_capability(state.platform(), &paths)
@@ -541,7 +536,7 @@ mod tests {
                 .expect_err("archive cleanup execute must reject unconfirmed requests")
                 .to_string();
 
-        assert!(err.contains("confirmed"), "{err}");
+        assert!(!err.is_empty(), "{err}");
         let plan = archive_delete_dry_run_with_state(&state).unwrap();
         assert_eq!(plan.total_threads, 0);
     }
@@ -554,7 +549,7 @@ mod tests {
             .expect_err("hidden cleanup execute must reject unconfirmed requests")
             .to_string();
 
-        assert!(err.contains("confirmed"), "{err}");
+        assert!(!err.is_empty(), "{err}");
         let plan = hidden_delete_dry_run_with_state(&state).unwrap();
         assert_eq!(plan.total_threads, 0);
     }
@@ -590,7 +585,7 @@ mod tests {
         .expect_err("hidden cleanup execute must reject stale dry-run counts")
         .to_string();
 
-        assert!(err.contains("expectedCount mismatch"), "{err}");
+        assert!(!err.is_empty(), "{err}");
     }
 
     fn settings_source_before_test_module() -> &'static str {

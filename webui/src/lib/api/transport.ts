@@ -1,11 +1,18 @@
 export {
-  RuntimeUnavailableError
+  RuntimeUnavailableError,
+  runtimeContext
 } from "../runtime";
+import type { RuntimeContext } from "../runtime";
 import {
   createRuntimeThreadEventSource,
+  runtimeContext,
   runtimeRpc,
   uploadRuntimeFiles
 } from "../runtime";
+
+export function currentRuntimeContext(): RuntimeContext {
+  return runtimeContext();
+}
 
 export function callCommand<T = unknown>(
   command: string,

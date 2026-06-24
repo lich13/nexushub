@@ -67,6 +67,8 @@ pub struct JobResponse {
     #[serde(flatten)]
     pub job: JobRecord,
     pub failure_analysis: Option<JobFailureAnalysis>,
+    pub analysis: Option<String>,
+    pub explanation: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -267,11 +269,38 @@ impl<'a> ThreadUseCases<'a> {
         jobs::plan_followup_list_with_capability(self.platform, request)
     }
 
+    pub fn list_followups(
+        self,
+        db: &PanelDb,
+        request: FollowUpListRequest,
+    ) -> Result<Vec<ThreadFollowUp>> {
+        jobs::list_followups_with_capability(db, self.platform, request)
+    }
+
+    pub fn pending_followup(self, db: &PanelDb, thread_id: &str) -> Result<Option<ThreadFollowUp>> {
+        let plan = self.followups(FollowUpListRequest {
+            thread_id: thread_id.to_string(),
+            limit: Some(1),
+        })?;
+        Ok(db
+            .list_followups(&plan.thread_id, plan.limit)?
+            .into_iter()
+            .find(|followup| followup.status == "pending"))
+    }
+
     pub fn enqueue_followup(
         self,
         request: ThreadSteerRequest,
     ) -> Result<FollowUpEnqueueFacadePlan> {
         jobs::plan_followup_enqueue_with_capability(self.platform, request)
+    }
+
+    pub fn apply_enqueue_followup(
+        self,
+        db: &PanelDb,
+        request: ThreadSteerRequest,
+    ) -> Result<ThreadFollowUp> {
+        jobs::enqueue_followup_with_capability(db, self.platform, request)
     }
 
     pub fn claim_followup(self, request: FollowUpClaimRequest) -> Result<FollowUpClaimPlan> {
@@ -319,6 +348,14 @@ impl<'a> ThreadUseCases<'a> {
 
     pub fn cancel_followup(self, request: FollowUpCancelRequest) -> Result<FollowUpCancelPlan> {
         jobs::plan_followup_cancel_with_capability(self.platform, request)
+    }
+
+    pub fn apply_cancel_followup(
+        self,
+        db: &PanelDb,
+        request: FollowUpCancelRequest,
+    ) -> Result<ActionResponse> {
+        jobs::cancel_followup_with_capability(db, self.platform, request)
     }
 
     pub fn autosubmit_followup_job(
@@ -518,9 +555,18 @@ pub fn job_response(job: JobRecord) -> JobResponse {
     } else {
         None
     };
+    let analysis = failure_analysis
+        .as_ref()
+        .map(|analysis| analysis.explanation.clone());
+    let explanation = failure_analysis.as_ref().and_then(|analysis| {
+        let suggestions = analysis.suggestions.join("\n");
+        (!suggestions.is_empty()).then_some(suggestions)
+    });
     JobResponse {
         job,
         failure_analysis,
+        analysis,
+        explanation,
     }
 }
 

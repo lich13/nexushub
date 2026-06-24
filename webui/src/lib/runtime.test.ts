@@ -40,13 +40,14 @@ describe("NexusHub runtime transport", () => {
     expect(JSON.parse(options.body)).toEqual({ q: "needle" });
   });
 
-  test("runtime only exposes transport primitives", async () => {
+  test("runtime only exposes transport primitives plus runtime context", async () => {
     const runtime = await loadRuntime();
 
     expect(Object.keys(runtime).sort()).toEqual([
       "RuntimeUnavailableError",
       "buildRuntimeApiPath",
       "createRuntimeThreadEventSource",
+      "runtimeContext",
       "runtimeRpc",
       "uploadRuntimeFiles"
     ]);
@@ -61,9 +62,11 @@ describe("NexusHub runtime transport", () => {
     ).sort();
 
     expect(exportedNames).toEqual([
+      "RuntimeContext",
       "RuntimeUnavailableError",
       "buildRuntimeApiPath",
       "createRuntimeThreadEventSource",
+      "runtimeContext",
       "runtimeRpc",
       "uploadRuntimeFiles",
     ]);

@@ -185,34 +185,17 @@ async fn get_probe_logs_db_status(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let config = state.config();
-    let mut value = serde_json::to_value(
-        ProbeRuntime::new(config.clone(), PlatformPaths::current()).logs_db_status(),
-    )
-    .map_err(anyhow::Error::from)?;
-    if let Some(object) = value.as_object_mut() {
-        if let Some((raw, updated_at)) = state
-            .db
-            .get_setting_with_updated_at("probe_logs_db_last_maintain")?
-        {
-            let last_run =
-                timestamp_to_rfc3339(updated_at).unwrap_or_else(|| updated_at.to_string());
-            let next_run_ts = updated_at
-                + i64::from(config.probe.logs_db.maintenance_interval_hours.max(1)) * 3_600;
-            let next_run =
-                timestamp_to_rfc3339(next_run_ts).unwrap_or_else(|| next_run_ts.to_string());
-            let last_result = probe_logs_db_last_result(&raw);
-            let last_run_value = serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw));
-            object.insert("last_run".to_string(), json!(last_run));
-            object.insert("last_run_at".to_string(), json!(last_run));
-            object.insert("last_maintain_at".to_string(), json!(last_run));
-            object.insert("next_run".to_string(), json!(next_run));
-            object.insert("next_run_at".to_string(), json!(next_run));
-            object.insert("next_maintain_at".to_string(), json!(next_run));
-            object.insert("last_result".to_string(), json!(last_result));
-            object.insert("recent_result".to_string(), json!(last_result));
-            object.insert("last_maintain".to_string(), last_run_value);
-        }
-    }
+    let status = ProbeRuntime::new(config.clone(), PlatformPaths::current()).logs_db_status();
+    let last_maintain = state
+        .db
+        .get_setting_with_updated_at("probe_logs_db_last_maintain")?
+        .map(
+            |(raw, updated_at_unix)| probe_service::ProbeLogsDbLastMaintain {
+                raw,
+                updated_at_unix,
+            },
+        );
+    let value = probe_service::probe_logs_db_status_view(status, &config, last_maintain)?;
     ok(value)
 }
 
@@ -221,21 +204,35 @@ async fn start_probe_action(
     headers: HeaderMap,
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
-    start_probe_action_with_compact(state, headers, action, false).await
+    start_probe_action_with_compact(state, headers, action, None).await
 }
 
 async fn start_probe_action_with_compact(
     state: AppState,
     headers: HeaderMap,
     action: probe_service::ProbeAction,
-    compact: bool,
+    compact: Option<bool>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let config_path = probe_config_path();
-    let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;
-    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, compact)
+    let maintenance = matches!(
+        action,
+        probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
+    )
+    .then_some(probe_service::ProbeLogsDbMaintenanceRequest {
+        dry_run: matches!(action, probe_service::ProbeAction::LogsDbDryRun),
+        compact: compact.unwrap_or(false),
+    });
+    let plan = linux_adapter::linux_probe_action_plan(
+        &state,
+        &platform,
+        action,
+        &config_path,
+        maintenance,
+    )?;
+    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan)
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }
@@ -254,19 +251,34 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
     if force_refresh {
         let value = probe_status_fresh_value(state.clone()).await;
         store_probe_status_snapshot(&state, value.clone());
-        return with_probe_snapshot_metadata(value, 0, false, "fresh");
+        return probe_service::probe_status_snapshot_view(
+            value,
+            0,
+            false,
+            probe_service::ProbeSnapshotStatus::Fresh,
+        );
     }
 
     if let Some(snapshot) = current_probe_status_snapshot(&state) {
         spawn_probe_status_refresh(state);
         let now = chrono::Utc::now().timestamp();
         let age = now.saturating_sub(snapshot.refreshed_at_unix).max(0);
-        return with_probe_snapshot_metadata(snapshot.value, age, true, "cached");
+        return probe_service::probe_status_snapshot_view(
+            snapshot.value,
+            age,
+            true,
+            probe_service::ProbeSnapshotStatus::Cached,
+        );
     }
 
     let value = probe_status_base_value(state.clone()).await;
     spawn_probe_status_refresh(state);
-    with_probe_snapshot_metadata(value, 0, true, "initial")
+    probe_service::probe_status_snapshot_view(
+        value,
+        0,
+        true,
+        probe_service::ProbeSnapshotStatus::Initial,
+    )
 }
 
 async fn probe_status_fresh_value(state: AppState) -> Value {
@@ -325,23 +337,6 @@ pub(crate) fn spawn_probe_status_refresh(state: AppState) {
         let value = probe_status_fresh_value(state.clone()).await;
         store_probe_status_snapshot(&state, value);
     });
-}
-
-fn with_probe_snapshot_metadata(
-    mut value: Value,
-    snapshot_age_seconds: i64,
-    is_refreshing: bool,
-    snapshot_status: &str,
-) -> Value {
-    if let Value::Object(ref mut object) = value {
-        object.insert(
-            "snapshot_age_seconds".to_string(),
-            json!(snapshot_age_seconds),
-        );
-        object.insert("is_refreshing".to_string(), json!(is_refreshing));
-        object.insert("snapshot_status".to_string(), json!(snapshot_status));
-    }
-    value
 }
 
 fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
@@ -2383,46 +2378,9 @@ fn thread_archived(thread: &Value) -> bool {
             .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn timestamp_to_rfc3339(value: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(value, 0).map(|dt| dt.to_rfc3339())
-}
-
-fn probe_logs_db_last_result(raw: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return raw.to_string();
-    };
-    let dry_run = value
-        .get("dry_run")
-        .and_then(Value::as_bool)
-        .map(|value| if value { "dry-run" } else { "execute" })
-        .unwrap_or("maintain");
-    let events = value.get("events").and_then(Value::as_u64).unwrap_or(0);
-    let dedupe = value.get("dedupe").and_then(Value::as_u64).unwrap_or(0);
-    if let Some(skip_reason) = value.get("skip_reason").and_then(Value::as_str) {
-        if !skip_reason.is_empty() {
-            return format!("{dry_run}: {skip_reason}");
-        }
-    }
-    if let Some(error) = value.get("error").and_then(Value::as_str) {
-        if !error.is_empty() {
-            return format!("{dry_run}: {error}");
-        }
-    }
-    if value.get("target").and_then(Value::as_str) == Some("codex_logs_2") {
-        if dry_run == "dry-run" {
-            let would_delete = value
-                .get("would_delete_rows")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            return format!("dry-run: would_delete_rows={would_delete}");
-        }
-        let deleted = value
-            .get("deleted_rows")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        return format!("execute: deleted_rows={deleted}");
-    }
-    format!("{dry_run}: events={events}, dedupe={dedupe}")
 }
 
 #[cfg(test)]

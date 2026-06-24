@@ -16,6 +16,7 @@ import {
   normalizeModels,
   normalizeOptionalResult,
   normalizePermissionProfiles,
+  currentDemoFixtureKey,
   USE_DEMO
 } from "./shared";
 import {
@@ -32,7 +33,7 @@ import {
 
 export async function getSystemStatus(): Promise<SystemStatus> {
   if (USE_DEMO) {
-    return demoSystemStatus();
+    return demoSystemStatus(currentDemoFixtureKey());
   }
   return callCommand<SystemStatus>("system.status");
 }
@@ -67,7 +68,7 @@ export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOver
 
 export async function getPlatformOverview(): Promise<PlatformOverview> {
   if (USE_DEMO) {
-    return demoPlatformOverview();
+    return demoPlatformOverview(currentDemoFixtureKey());
   }
   return callCommand<PlatformOverview>("system.platform");
 }
@@ -113,7 +114,7 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
   if (USE_DEMO) {
     return {
       available: true,
-      data: demoCodexConfig()
+      data: demoCodexConfig(currentDemoFixtureKey())
     };
   }
   try {

@@ -153,34 +153,40 @@ fn tauri_update_sources_never_plan_update_prune() {
 }
 
 #[test]
-fn tauri_cleanup_execute_commands_keep_confirmation_boundary() {
-    let settings_source = include_str!("../src/services/settings.rs");
+fn tauri_cleanup_execute_services_are_native_effect_executors() {
+    let settings_source = include_str!("../src/services/settings.rs")
+        .split("\n#[cfg(test)]\nmod tests")
+        .next()
+        .expect("settings service source must include production section");
 
-    for handler in [
+    for executor in [
         "archive_delete_execute_with_state",
         "hidden_delete_execute_with_state",
+        ".cleanup()",
+        ".execute_confirmed(",
         "cleanup_service::validate_cleanup_expected_count",
-    ] {
-        assert!(
-            settings_source.contains(handler),
-            "settings service must keep cleanup confirmation boundary: {handler}"
-        );
-    }
-    assert!(
-        settings_source.matches("cleanup_service::plan_cleanup_execute_operation").count() >= 2,
-        "cleanup execute must plan confirmed archive and hidden deletes through shared core operation"
-    );
-    assert!(
-        !settings_source.contains("fn ensure_cleanup_expected_count"),
-        "cleanup execute must not duplicate the shared expected-count validator"
-    );
-    for command in [
         "cleanup_service::execute_archived_with_capability",
         "cleanup_service::execute_hidden_with_capability",
     ] {
         assert!(
-            settings_source.contains(command),
-            "cleanup execute must go through capability/confirmation-aware core helper: {command}"
+            settings_source.contains(executor),
+            "settings service must keep only the cleanup executor landing point: {executor}"
+        );
+    }
+
+    for forbidden in [
+        "cleanup_service::plan_cleanup_execute_operation",
+        "ARCHIVE_DELETE_CONFIRMATION_MESSAGE",
+        "HIDDEN_DELETE_CONFIRMATION_MESSAGE",
+        "CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE",
+        "archive deletion must be confirmed",
+        "hidden thread deletion must be confirmed",
+        "expectedCount mismatch",
+        "fn ensure_cleanup_expected_count",
+    ] {
+        assert!(
+            !settings_source.contains(forbidden),
+            "settings service must not embed cleanup business semantic token: {forbidden}"
         );
     }
 }

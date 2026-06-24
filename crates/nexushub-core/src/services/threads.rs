@@ -1,12 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
-    db::JobRecord,
+    db::{JobRecord, ThreadFollowUp},
     platform::PlatformPaths,
+    services::jobs::FollowUpAutoSubmitExecutionPlan,
     services::system::{require_capability, Capability},
 };
 
@@ -86,7 +90,7 @@ pub struct ThreadDetailReadPlan {
     pub include_active_job: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadBlocksPage {
     pub thread_id: String,
@@ -94,6 +98,31 @@ pub struct ThreadBlocksPage {
     pub total_blocks: usize,
     pub has_more_blocks: bool,
     pub before_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ThreadReadModelInputs {
+    pub threads: Vec<ThreadSummary>,
+    pub running_jobs: Vec<JobRecord>,
+    pub hidden_thread_ids: HashSet<String>,
+    pub archived_thread_ids: HashSet<String>,
+    pub pending_followups: Vec<ThreadFollowUp>,
+    pub default_workspace: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListReadModelView {
+    pub overview: ThreadsOverview,
+    pub threads: Vec<ThreadSummary>,
+    pub autosubmit_effects: Vec<FollowUpAutoSubmitExecutionPlan>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDetailReadModelView {
+    pub detail: ThreadDetail,
+    pub autosubmit_effects: Vec<FollowUpAutoSubmitExecutionPlan>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,6 +161,54 @@ pub fn build_threads_overview(
         query,
         fetch_limit,
     }
+}
+
+pub fn thread_list_read_model(
+    platform: &PlatformPaths,
+    inputs: ThreadReadModelInputs,
+    query: ThreadsQuery,
+) -> anyhow::Result<ThreadListReadModelView> {
+    require_capability(platform, Capability::Threads)?;
+    let overview = build_threads_overview(
+        inputs.threads,
+        inputs.running_jobs,
+        query,
+        &inputs.hidden_thread_ids,
+        &inputs.archived_thread_ids,
+    );
+    let autosubmit_effects = plan_autosubmit_effects_for_threads(
+        platform,
+        &overview.threads,
+        &inputs.pending_followups,
+        inputs.default_workspace,
+    )?;
+    Ok(ThreadListReadModelView {
+        threads: overview.threads.clone(),
+        overview,
+        autosubmit_effects,
+    })
+}
+
+pub fn thread_detail_read_model(
+    platform: &PlatformPaths,
+    detail: ThreadDetail,
+    active_job: Option<JobRecord>,
+    pending_followup: Option<ThreadFollowUp>,
+    default_workspace: PathBuf,
+) -> anyhow::Result<ThreadDetailReadModelView> {
+    require_capability(platform, Capability::Threads)?;
+    let detail = apply_thread_detail_runtime_state(detail, active_job.as_ref());
+    let pending_followups = pending_followup.into_iter().collect::<Vec<_>>();
+    let autosubmit_effects = plan_autosubmit_effects_for_threads(
+        platform,
+        std::slice::from_ref(&detail.summary),
+        &pending_followups,
+        default_workspace,
+    )?;
+    Ok(ThreadDetailReadModelView {
+        detail,
+        autosubmit_effects,
+    })
 }
 
 pub fn plan_threads_list_request(
@@ -412,6 +489,36 @@ fn apply_running_job_to_thread_list(
         return;
     }
     threads.push(thread_summary_from_running_job(job));
+}
+
+fn plan_autosubmit_effects_for_threads(
+    platform: &PlatformPaths,
+    threads: &[ThreadSummary],
+    pending_followups: &[ThreadFollowUp],
+    default_workspace: PathBuf,
+) -> anyhow::Result<Vec<FollowUpAutoSubmitExecutionPlan>> {
+    let mut by_thread: HashMap<&str, &ThreadFollowUp> = HashMap::new();
+    for followup in pending_followups {
+        if followup.status == "pending" {
+            by_thread.entry(&followup.thread_id).or_insert(followup);
+        }
+    }
+    let mut effects = Vec::new();
+    for thread in threads {
+        let Some(followup) = by_thread.get(thread.id.as_str()) else {
+            continue;
+        };
+        let plan = crate::services::jobs::plan_followup_autosubmit_execution(
+            platform,
+            thread.status.clone(),
+            followup,
+            default_workspace.clone(),
+        )?;
+        if plan.autosubmit.should_claim_pending || plan.job.is_some() {
+            effects.push(plan);
+        }
+    }
+    Ok(effects)
 }
 
 fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {

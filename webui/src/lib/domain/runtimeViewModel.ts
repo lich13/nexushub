@@ -16,6 +16,7 @@ import type {
   UpdateStatus
 } from "../../types";
 import { runtimeCapabilitiesForRuntime, type RuntimeCapabilityMatrix } from "./capabilities";
+import { hostCapabilityPolicy, redactHostCopy } from "./hostCapabilityPolicy";
 
 export type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
 
@@ -773,27 +774,13 @@ function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-const linuxFailureLabels: Record<string, string> = {
-  systemd_failure: "systemd 失败",
-  nginx_failure: "Nginx 失败",
-  permission_denied_sudo: "权限或 sudo 失败"
-};
-
-const genericFailureLabels: Record<string, string> = {
-  systemd_failure: "服务失败",
-  nginx_failure: "更新失败",
-  permission_denied_sudo: "权限失败"
-};
-
 export function failureCategoryLabel(category: string, input?: RuntimeCapabilityInput): string {
   const capabilities = capabilitiesForInput(input);
-  if (!capabilities.updateServiceLabels && genericFailureLabels[category]) {
-    return genericFailureLabels[category];
-  }
+  const policy = hostCapabilityPolicy(capabilities);
+  if (policy.failureLabels[category]) return policy.failureLabels[category];
   const labels: Record<string, string> = {
     release_missing: "Release 缺失",
     download_sha256_mismatch: "下载或校验失败",
-    ...linuxFailureLabels,
     read_only_file_system: "文件系统只读/安装目录不可写",
     codex_auth_failure: "Codex 认证失败",
     sqlite_integrity_failure: "SQLite 完整性失败",
@@ -811,7 +798,8 @@ export function jobFailureAnalysisView(
 ): { label: string; explanation: string; suggestions: string[] } {
   const capabilities = capabilitiesForInput(input);
   const label = failureCategoryLabel(analysis.category, capabilities);
-  if (capabilities.updateServiceLabels) {
+  const policy = hostCapabilityPolicy(capabilities);
+  if (!policy.copyRedactionEnabled) {
     return {
       label,
       explanation: analysis.explanation,
@@ -827,26 +815,12 @@ export function jobFailureAnalysisView(
 }
 
 function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
-  const sanitized = value
-    .replace(/https?:\/\/[^\s)"']+/gi, "本机入口")
-    .replace(/\b661313\.xyz\b/gi, "本机入口")
-    .replace(/\b43\.155\.235\.227\b/g, "本机")
-    .replace(/\bturnstile\b/gi, "验证")
-    .replace(/公网入口/g, "本机入口")
-    .replace(/\bsystemd\b/gi, "服务")
-    .replace(/\bnginx\b/gi, "服务")
-    .replace(/管理员密码/g, "权限")
-    .replace(/Linux prune/gi, "清理")
-    .replace(/Linux update/gi, "更新")
-    .replace(/\bLinux\b/g, "当前宿主")
-    .replace(/\bsudo\b/gi, "权限")
-    .trim();
-  return sanitized || fallback;
+  return redactHostCopy(value, fallback);
 }
 
 export function jobOutputView(value: string, input?: RuntimeCapabilityInput): string {
   const output = value.trim() || "no output";
-  return capabilitiesForInput(input).updateServiceLabels
+  return !hostCapabilityPolicy(capabilitiesForInput(input)).copyRedactionEnabled
     ? output
     : sanitizeDesktopFailureCopy(output, "任务输出不可用");
 }

@@ -40,20 +40,8 @@ import {
   type DemoFixtureKey
 } from "../domain/demoCore";
 
-type DemoRuntimeGlobal = typeof globalThis & {
-  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
-  __TAURI_INTERNALS__?: unknown;
-};
-
-export function currentDemoFixtureKey(): DemoFixtureKey {
-  const target = globalThis as DemoRuntimeGlobal;
-  return target.__NEXUSHUB_DESKTOP_RUNTIME__ || target.__TAURI_INTERNALS__
-    ? "macos-tauri"
-    : "linux-web";
-}
-
-export function demoSessionUser(username = "admin"): SessionUser {
-  return currentDemoFixtureKey() === "macos-tauri"
+export function demoSessionUser(username = "admin", fixture: DemoFixtureKey = "linux-web"): SessionUser {
+  return fixture === "macos-tauri"
     ? {
       id: "desktop",
       username: "desktop",
@@ -78,19 +66,19 @@ export function demoPublicSettings(): PublicSettings {
   };
 }
 
-export function demoPlatformOverview(fixture: DemoFixtureKey = currentDemoFixtureKey()): PlatformOverview {
+export function demoPlatformOverview(fixture: DemoFixtureKey = "linux-web"): PlatformOverview {
   return buildDemoPlatformOverview(fixture);
 }
 
-export function demoSystemStatus(fixture: DemoFixtureKey = currentDemoFixtureKey()): SystemStatus {
+export function demoSystemStatus(fixture: DemoFixtureKey = "linux-web"): SystemStatus {
   return buildDemoSystemStatus(fixture);
 }
 
-export function demoSecurity(fixture: DemoFixtureKey = currentDemoFixtureKey()): SecuritySettings {
+export function demoSecurity(fixture: DemoFixtureKey = "linux-web"): SecuritySettings {
   return buildDemoSecurity(fixture);
 }
 
-export function demoUpdateStatus(fixture: DemoFixtureKey = currentDemoFixtureKey()): UpdateStatus {
+export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-web"): UpdateStatus {
   if (fixture === "macos-tauri") {
     return {
       current_version: "0.1.100",
@@ -131,7 +119,7 @@ export function demoSystemVersion(): SystemVersion {
   };
 }
 
-export function demoCodexConfig(fixture: DemoFixtureKey = currentDemoFixtureKey()): CodexConfig {
+export function demoCodexConfig(fixture: DemoFixtureKey = "linux-web"): CodexConfig {
   return {
     model: "gpt-5.5",
     service_tier: null,
@@ -290,9 +278,9 @@ export function demoPermissionProfiles(): OptionalResult<PermissionProfile[]> {
   };
 }
 
-export function demoProbeStatus(): ProbeStatus {
-  const platform = demoPlatformOverview();
-  const system = demoSystemStatus();
+export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeStatus {
+  const platform = demoPlatformOverview(fixture);
+  const system = demoSystemStatus(fixture);
   return {
     label: "Probe",
     enabled: true,
@@ -331,8 +319,7 @@ export function demoProbeStatus(): ProbeStatus {
   };
 }
 
-export function demoProbeSettings(): ProbeSettings {
-  const fixture = currentDemoFixtureKey();
+export function demoProbeSettings(fixture: DemoFixtureKey = "linux-web"): ProbeSettings {
   const platform = demoPlatformOverview(fixture);
   const system = demoSystemStatus(fixture);
   const runtimeProbeSettings = fixture === "macos-tauri"
@@ -389,21 +376,24 @@ export function demoProbeSettings(): ProbeSettings {
   };
 }
 
-export function demoSavedProbeSettings(settings: Partial<ProbeSettings>): ProbeSettings {
-  return { ...demoProbeSettings(), ...settings } as ProbeSettings;
+export function demoSavedProbeSettings(settings: Partial<ProbeSettings>, fixture: DemoFixtureKey = "linux-web"): ProbeSettings {
+  return { ...demoProbeSettings(fixture), ...settings } as ProbeSettings;
 }
 
-export function demoProbeLogsDbStatus(): OptionalResult<ProbeLogsDbStatus> {
+export function demoProbeLogsDbStatus(fixture: DemoFixtureKey = "linux-web"): OptionalResult<ProbeLogsDbStatus> {
+  const settings = demoProbeSettings(fixture);
+  const logsDb = settings.logs_db;
+  const codex = settings.codex;
   return {
     available: true,
     data: {
       status: "maintenance_ready",
       logs_db_status: "maintenance_ready",
       target: "codex_logs_2",
-      path: "/root/.codex/logs_2.sqlite",
-      configured_codex_home: "/root/.codex",
-      resolved_codex_home: "/root/.codex",
-      codex_home_source: "config",
+      path: logsDb.path,
+      configured_codex_home: codex.configured_codex_home,
+      resolved_codex_home: codex.resolved_codex_home,
+      codex_home_source: codex.codex_home_source,
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
       total_rows: 128,

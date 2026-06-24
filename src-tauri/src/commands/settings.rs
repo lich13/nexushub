@@ -13,7 +13,11 @@ use crate::{
     },
 };
 use anyhow::Result;
-use nexushub_core::services::{probe as probe_service, settings::ProbeSettingsSaveRequest};
+use nexushub_core::services::{
+    goals::{GoalGetRequest, GoalUpdateRequest},
+    probe as probe_service,
+    settings::ProbeSettingsSaveRequest,
+};
 
 #[tauri::command(rename = "probe.settings.get")]
 pub fn getProbeSettings(
@@ -131,56 +135,39 @@ pub fn uploadFiles(
 #[tauri::command(rename = "threads.goal.get")]
 pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
+    request: GoalGetRequest,
 ) -> Result<goal_service::DesktopGoalView, String> {
-    goal_service::get_goal_with_state(&state, threadId.or(thread_id)).map_err(|err| err.to_string())
+    goal_service::get_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.save")]
 pub fn saveCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-    objective: Option<String>,
-    tokenBudget: Option<u64>,
-    token_budget: Option<u64>,
+    request: GoalUpdateRequest,
 ) -> Result<goal_service::DesktopGoalView, String> {
-    goal_service::save_goal_from_parts_with_state(
-        &state,
-        threadId.or(thread_id),
-        objective,
-        tokenBudget.or(token_budget),
-    )
-    .map_err(|err| err.to_string())
+    goal_service::save_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.clear")]
 pub fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
+    request: GoalGetRequest,
 ) -> Result<goal_service::DesktopGoalView, String> {
-    goal_service::clear_goal_from_parts_with_state(&state, threadId.or(thread_id))
-        .map_err(|err| err.to_string())
+    goal_service::clear_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.pause")]
 pub fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
+    request: GoalGetRequest,
 ) -> Result<goal_service::DesktopGoalView, String> {
-    goal_service::pause_goal_from_parts_with_state(&state, threadId.or(thread_id))
-        .map_err(|err| err.to_string())
+    goal_service::pause_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.resume")]
 pub fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
+    request: GoalGetRequest,
 ) -> Result<goal_service::DesktopGoalView, String> {
-    goal_service::resume_goal_from_parts_with_state(&state, threadId.or(thread_id))
-        .map_err(|err| err.to_string())
+    goal_service::resume_goal_with_state(&state, request).map_err(|err| err.to_string())
 }

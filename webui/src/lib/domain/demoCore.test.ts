@@ -47,6 +47,26 @@ const macosVisibleCapabilityKeys = [
 ];
 
 describe("demo fixture builder", () => {
+  test("demo fixtures use neutral values and never leak production host details", () => {
+    const serialized = JSON.stringify(fixtureKeys.map((fixture) => buildDemoFixture(fixture)));
+
+    expect(serialized).not.toMatch(/43\.155\.235\.227|661313\.xyz|\/opt\/nexushub/i);
+    expect(buildDemoPlatformOverview("linux-web")).toMatchObject({
+      data_dir: "/srv/nexushub-demo",
+      config_file: "/srv/nexushub-demo/config.toml",
+      webui_dir: "/srv/nexushub-demo/webui",
+      log_dir: "/srv/nexushub-demo/logs"
+    });
+    expect(buildDemoSystemStatus("linux-web")).toMatchObject({
+      host_label: "demo-linux-web",
+      public_endpoint: "https://demo.nexushub.local/nexushub/",
+      panel_db: "/srv/nexushub-demo/panel.sqlite"
+    });
+    expect(buildDemoSecurity("linux-web")).toMatchObject({
+      turnstile_expected_hostname: "demo.nexushub.local"
+    });
+  });
+
   test("builds complete runtime capabilities from one explicit field table", () => {
     expect(demoCoreSource).toContain("const capabilityFields");
     expect(demoCoreSource).toContain("satisfies Record<keyof SystemCapabilities,");
@@ -135,10 +155,11 @@ describe("demo fixture builder", () => {
       service_name: "nexushub"
     });
     expect(buildDemoSecurity("linux-web")).toMatchObject({
-      turnstile_expected_hostname: "661313.xyz",
+      turnstile_expected_hostname: "demo.nexushub.local",
       turnstile_expected_action: "login"
     });
-    expect(serializedFixture).toMatch(/systemd|\/opt\/nexushub|43\.155\.235\.227|661313\.xyz|linux_update_job|prune_backups/);
+    expect(serializedFixture).toMatch(/systemd|demo-linux-web|demo\.nexushub\.local|linux_update_job|prune_backups/);
+    expect(serializedFixture).not.toMatch(/\/opt\/nexushub|43\.155\.235\.227|661313\.xyz/i);
     expect(fixture.system.capabilities).toMatchObject({
       web_auth: true,
       csrf: true,

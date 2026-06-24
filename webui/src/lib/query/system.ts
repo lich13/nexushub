@@ -7,6 +7,7 @@ import {
   runtimeCapabilitiesFromSystemStatus,
   type RuntimeCapabilityMatrix
 } from "../domain/capabilities";
+import { currentRuntimeContext } from "../api/transport";
 import type { SystemStatus } from "../../types";
 import { preservePreviousQueryData } from "./shared";
 
@@ -15,7 +16,7 @@ export const systemQueryKeys = {
 };
 
 export function bootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
-  return runtimeCapabilities();
+  return runtimeCapabilities(currentRuntimeContext());
 }
 
 export function useBootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {

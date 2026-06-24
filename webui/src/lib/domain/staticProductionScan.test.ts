@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 
 const productionBusinessSources = import.meta.glob([
   "../../App.tsx",
+  "../../components/**/*.tsx",
+  "../../hooks/**/*.ts",
   "../api/**/*.ts",
   "./**/*.ts",
   "../query/**/*.ts",
@@ -51,6 +53,18 @@ const forbiddenCommandPattern = new RegExp(
   String.raw`\b(?:callCommand|startProbeCommand|runTypedUpdateCommand|runtimeRpc|webJsonRpc|invokeDesktop)(?:<[^>]+>)?\(\s*["'](?:${forbiddenCommandNames.join("|")})["']`
 );
 
+const productionLeakPattern = /43\.155\.235\.227|661313\.xyz|\/opt\/nexushub/i;
+
+const productionComponentSources = import.meta.glob([
+  "../../App.tsx",
+  "../../components/**/*.tsx",
+  "../../hooks/**/*.ts"
+], {
+  eager: true,
+  query: "?raw",
+  import: "default"
+}) as Record<string, string>;
+
 describe("production business source scan", () => {
   test("does not reintroduce legacy runtime bridge helpers or command names", () => {
     expect(Object.keys(productionBusinessSources).length).toBeGreaterThan(3);
@@ -61,6 +75,42 @@ describe("production business source scan", () => {
       }
       expect(source, `${path} must not use legacy non-dot runtime command names`).not.toMatch(forbiddenCommandPattern);
       expect(source, `${path} must not declare route maps in business layers`).not.toMatch(/\bconst\s+ROUTES\b/);
+    }
+  });
+
+  test("demo and production fixtures do not leak real production endpoints or paths", () => {
+    for (const [path, source] of Object.entries(productionBusinessSources)) {
+      expect(source, `${path} must not leak production host/path details`).not.toMatch(productionLeakPattern);
+    }
+  });
+
+  test("components stay behind runtime/api/query/domain boundaries", () => {
+    expect(Object.keys(productionComponentSources).length).toBeGreaterThan(1);
+
+    for (const [path, source] of Object.entries(productionComponentSources)) {
+      expect(source, `${path} must not directly call runtime transport`).not.toMatch(/\b(runtimeRpc|uploadRuntimeFiles|createRuntimeThreadEventSource|buildRuntimeApiPath)\b/);
+      expect(source, `${path} must not directly own query cache`).not.toMatch(/\b(useQueryClient|setQueryData|invalidateQueries|getQueryCache|getQueryData|removeQueries|cancelQueries)\b/);
+      expect(source, `${path} must not directly import transport/API`).not.toMatch(/from\s+["'][^"']*(?:lib\/api|api\/transport|lib\/runtime)["']/);
+    }
+  });
+
+  test("App is only the shell/composition layer for auth, composer, and conversation orchestration", () => {
+    const source = productionComponentSources["../../App.tsx"];
+
+    expect(source).toContain("WebAuthGate");
+    expect(source).toContain("useConversationController");
+    expect(source).toContain("SlashCommandTextarea");
+    expect(source).toContain("useComposerAttachments");
+    expect(source).not.toMatch(/\bfunction\s+(LoginScreen|ensureTurnstileScript|SlashCommandTextarea|useComposerAttachments)\b/);
+    expect(source).not.toContain("useThreadRealtimeSubscription(");
+    expect(source).not.toContain("useThreadCacheActions(");
+    expect(source).not.toContain("useThreadMessageStoreController(");
+  });
+
+  test("runtime globals are read only by runtime transport/context modules", () => {
+    for (const [path, source] of Object.entries(productionBusinessSources)) {
+      if (path.endsWith("../runtime.ts")) continue;
+      expect(source, `${path} must not read runtime globals directly`).not.toMatch(/__TAURI_INTERNALS__|__NEXUSHUB_DESKTOP_RUNTIME__/);
     }
   });
 });

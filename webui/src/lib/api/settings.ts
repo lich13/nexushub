@@ -2,12 +2,12 @@ import type {
   SecuritySettings
 } from "../../types";
 import { callCommand } from "./transport";
-import { USE_DEMO } from "./shared";
+import { currentDemoFixtureKey, USE_DEMO } from "./shared";
 import { demoSecurity } from "./demo";
 
 export async function getSecurity(): Promise<SecuritySettings> {
   if (USE_DEMO) {
-    return demoSecurity();
+    return demoSecurity(currentDemoFixtureKey());
   }
   return callCommand<SecuritySettings>("security.get");
 }

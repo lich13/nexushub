@@ -11,6 +11,8 @@ pub struct DesktopJobResponse {
     #[serde(flatten)]
     pub job: JobRecord,
     pub failure_analysis: Option<JobFailureAnalysis>,
+    pub analysis: Option<String>,
+    pub explanation: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +58,8 @@ impl From<nexushub_core::services::use_cases::JobResponse> for DesktopJobRespons
         Self {
             job: value.job,
             failure_analysis: value.failure_analysis,
+            analysis: value.analysis,
+            explanation: value.explanation,
         }
     }
 }

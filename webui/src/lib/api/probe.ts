@@ -7,7 +7,7 @@ import type {
   ProbeStatus
 } from "../../types";
 import { callCommand } from "./transport";
-import { jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
+import { currentDemoFixtureKey, jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
 import {
   demoJobId,
   demoProbeEvents,
@@ -21,7 +21,7 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
   if (USE_DEMO) {
     return {
       available: true,
-      data: demoProbeStatus()
+      data: demoProbeStatus(currentDemoFixtureKey())
     };
   }
   return normalizeOptionalResult<ProbeStatus>(await callCommand<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
@@ -31,7 +31,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
   if (USE_DEMO) {
     return {
       available: true,
-      data: demoProbeSettings()
+      data: demoProbeSettings(currentDemoFixtureKey())
     };
   }
   const payload = await callCommand<ProbeSettings | OptionalResult<ProbeSettings>>("probe.settings.get");
@@ -56,7 +56,7 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 }
 
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
-  if (USE_DEMO) return demoSavedProbeSettings(settings);
+  if (USE_DEMO) return demoSavedProbeSettings(settings, currentDemoFixtureKey());
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
   const payload = await callCommand<ProbeSettings>("probe.settings.save", {
     settings: normalizedSettings,
@@ -66,7 +66,7 @@ export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfTo
 }
 
 export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDbStatus>> {
-  if (USE_DEMO) return demoProbeLogsDbStatus();
+  if (USE_DEMO) return demoProbeLogsDbStatus(currentDemoFixtureKey());
   const payload = await callCommand<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("probe.logsDb.status");
   const result = normalizeOptionalResult<ProbeLogsDbStatus>(payload);
   return result.available

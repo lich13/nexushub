@@ -4,14 +4,13 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use nexushub_core::services::jobs::{
-    cancel_followup_response as core_cancel_followup_response,
     codex_action_submitted as core_codex_action_submitted, followup_view as core_followup_view,
     followup_views as core_followup_views,
     thread_state_action_response as core_thread_state_action_response,
     thread_stop_response as core_thread_stop_response,
 };
 use nexushub_core::{
-    codex::{self, CodexPaths, ThreadDetail, ThreadStatus, ThreadSummary},
+    codex::{self, CodexPaths, ThreadDetail, ThreadSummary},
     config::{patch_probe_config_toml, Config},
     db::JobRecord,
     jobs::CodexActionResult,
@@ -68,21 +67,11 @@ pub fn start_probe_action_plan(
     state: &AppState,
     auth: &AuthContext,
     plan: probe_service::ProbeActionPlan,
-    compact: bool,
 ) -> Result<String> {
     let action = plan.action;
     let spec = plan
         .job
         .ok_or_else(|| anyhow!("Probe job is unavailable"))?;
-    let mut command = spec.command.clone();
-    if compact
-        && matches!(
-            action,
-            probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
-        )
-    {
-        command = format!("{command} {}", shell_quote("--compact"));
-    }
 
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -95,7 +84,7 @@ pub fn start_probe_action_plan(
     let group = spec.exclusive_group.as_deref().unwrap_or(&spec.kind);
     state
         .jobs
-        .start_exclusive_shell_job(&spec.kind, &spec.title, command, group)
+        .start_exclusive_shell_job(&spec.kind, &spec.title, spec.command, group)
 }
 
 pub fn start_thread_command_execution_plan(
@@ -372,21 +361,30 @@ pub fn list_threads_read_model(
     } else {
         Vec::new()
     };
-    let mut threads = thread_service::build_threads_overview(
-        codex::list_threads(
-            &paths,
-            None,
-            plan.list.query.q.as_deref(),
-            plan.list.fetch_limit,
-        )?,
-        running_jobs,
+    let raw_threads = codex::list_threads(
+        &paths,
+        None,
+        plan.list.query.q.as_deref(),
+        plan.list.fetch_limit,
+    )?;
+    let pending_followups = raw_threads
+        .iter()
+        .flat_map(|thread| pending_followup_for_thread(state, &thread.id).transpose())
+        .collect::<Result<Vec<_>>>()?;
+    let view = thread_service::thread_list_read_model(
+        &platform,
+        thread_service::ThreadReadModelInputs {
+            threads: raw_threads,
+            running_jobs,
+            hidden_thread_ids,
+            archived_thread_ids,
+            pending_followups,
+            default_workspace: state.config().codex.workspace.clone(),
+        },
         plan.list.query,
-        &hidden_thread_ids,
-        &archived_thread_ids,
-    )
-    .threads;
-    autosubmit_ready_followups(state, &mut threads);
-    Ok(threads)
+    )?;
+    execute_autosubmit_effects(state, view.autosubmit_effects)?;
+    Ok(view.threads)
 }
 
 pub fn probe_threads_read_model(
@@ -419,13 +417,25 @@ pub fn load_thread_detail_read_model(
 ) -> Result<Option<ThreadDetail>> {
     let paths = state.codex_paths();
     let mut detail = load_base_thread_detail_cached(state, &paths, thread_id)?;
-    if let Some(mut detail) = detail.take() {
-        let active_job = state.db.running_job_for_thread(&detail.summary.id)?;
-        detail = thread_service::apply_thread_detail_runtime_state(detail, active_job.as_ref());
-        autosubmit_pending_followup(state, &mut detail);
-        return Ok(Some(detail));
+    if let Some(detail) = detail.take() {
+        let detail_thread_id = detail.summary.id.clone();
+        let active_job = active_job_for_thread(state, &detail_thread_id)?;
+        let pending_followup = pending_followup_for_thread(state, &detail_thread_id)?;
+        let view = thread_service::thread_detail_read_model(
+            &PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux),
+            detail,
+            active_job,
+            pending_followup,
+            state.config().codex.workspace.clone(),
+        )?;
+        execute_autosubmit_effects(state, view.autosubmit_effects)?;
+        return Ok(Some(view.detail));
     }
     Ok(None)
+}
+
+fn active_job_for_thread(state: &AppState, thread_id: &str) -> Result<Option<JobRecord>> {
+    state.db.running_job_for_thread(thread_id)
 }
 
 pub fn window_thread_detail_read_model(
@@ -452,114 +462,73 @@ pub fn thread_blocks_read_model(
     )))
 }
 
-pub fn autosubmit_ready_followups(state: &AppState, threads: &mut [ThreadSummary]) {
-    for summary in threads {
-        if !matches!(summary.status, ThreadStatus::Recent) {
-            continue;
-        }
-        let mut detail = ThreadDetail {
-            summary: summary.clone(),
-            messages: Vec::new(),
-            blocks: Vec::new(),
-            raw_event_count: 0,
-            total_blocks: 0,
-            has_more_blocks: false,
-            before_cursor: None,
-        };
-        autosubmit_pending_followup(state, &mut detail);
-        if detail.summary.active_job_id.is_some() {
-            *summary = detail.summary;
-        }
-    }
+fn pending_followup_for_thread(
+    state: &AppState,
+    thread_id: &str,
+) -> Result<Option<nexushub_core::db::ThreadFollowUp>> {
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    NexusHubUseCases::new(&platform)
+        .threads()
+        .pending_followup(&state.db, thread_id)
 }
 
-pub fn autosubmit_pending_followup(state: &AppState, detail: &mut ThreadDetail) {
-    if !matches!(detail.summary.status, ThreadStatus::Recent) {
-        return;
-    }
-    let thread_id = detail.summary.id.clone();
+fn execute_autosubmit_effects(
+    state: &AppState,
+    effects: Vec<job_service::FollowUpAutoSubmitExecutionPlan>,
+) -> Result<()> {
     let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
     let use_cases = NexusHubUseCases::new(&platform).threads();
-    let Ok(Some(followup)) = use_cases.claim_next_followup(
-        &state.db,
-        job_service::FollowUpClaimRequest {
-            thread_id: thread_id.clone(),
-        },
-    ) else {
-        return;
-    };
-    let plan: job_service::FollowUpAutoSubmitExecutionPlan = match use_cases
-        .autosubmit_followup_job(
-            detail.summary.status.clone(),
-            &followup,
-            state.config().codex.workspace.clone(),
-        ) {
-        Ok(plan) => plan,
-        Err(err) => {
-            let message = err.to_string();
-            let _ = use_cases.apply_followup_error(
-                &state.db,
-                job_service::FollowUpErrorRequest {
-                    followup_id: followup.id.clone(),
-                    error: message.clone(),
-                },
-            );
-            tracing::warn!("failed to build follow-up codex job spec: {message}");
-            return;
-        }
-    };
-    let Some(job_plan) = plan.job.clone() else {
-        return;
-    };
-    match start_thread_command_execution_plan_inner(state, None, job_plan) {
-        Ok(result) => {
-            let Some(job_id) = result.job_id else {
-                return;
-            };
-            let submit = match plan.submitted_result(&job_id) {
-                Ok(submit) => submit,
-                Err(err) => {
-                    let _ = use_cases.apply_followup_error(
-                        &state.db,
-                        job_service::FollowUpErrorRequest {
-                            followup_id: followup.id.clone(),
-                            error: err.to_string(),
-                        },
-                    );
-                    return;
-                }
-            };
-            let _ = use_cases.apply_followup_submitted(
-                &state.db,
-                job_service::FollowUpSubmitResultRequest {
-                    followup_id: submit.followup_id,
-                    result: submit.result,
-                },
-            );
-            if let Ok(active_job) = state.db.running_job_for_thread(&thread_id) {
-                let current = detail.clone();
-                *detail =
-                    thread_service::apply_thread_detail_runtime_state(current, active_job.as_ref());
+    for plan in effects {
+        let Some(claim) = plan.claim.as_ref() else {
+            continue;
+        };
+        let Some(followup) = use_cases.claim_next_followup(
+            &state.db,
+            job_service::FollowUpClaimRequest {
+                thread_id: claim.thread_id.clone(),
+            },
+        )?
+        else {
+            continue;
+        };
+        let Some(job_plan) = plan.job.clone() else {
+            continue;
+        };
+        match start_thread_command_execution_plan_inner(state, None, job_plan) {
+            Ok(result) => {
+                let Some(job_id) = result.job_id else {
+                    continue;
+                };
+                let submit = plan.submitted_result(&job_id)?;
+                let _ = use_cases.apply_followup_submitted(
+                    &state.db,
+                    job_service::FollowUpSubmitResultRequest {
+                        followup_id: submit.followup_id,
+                        result: submit.result,
+                    },
+                );
+            }
+            Err(err) => {
+                let error = plan.error_result(&err.to_string()).unwrap_or_else(|_| {
+                    job_service::FollowUpErrorPlan {
+                        required_capability: plan.required_capability,
+                        command: nexushub_core::services::commands::THREADS_FOLLOWUPS_ERROR
+                            .to_string(),
+                        followup_id: followup.id,
+                        error: err.to_string(),
+                    }
+                });
+                let _ = use_cases.apply_followup_error(
+                    &state.db,
+                    job_service::FollowUpErrorRequest {
+                        followup_id: error.followup_id,
+                        error: error.error,
+                    },
+                );
             }
         }
-        Err(err) => {
-            let error = plan.error_result(&err.to_string()).unwrap_or_else(|_| {
-                job_service::FollowUpErrorPlan {
-                    required_capability: plan.required_capability,
-                    command: nexushub_core::services::commands::THREADS_FOLLOWUPS_ERROR.to_string(),
-                    followup_id: followup.id.clone(),
-                    error: err.to_string(),
-                }
-            });
-            let _ = use_cases.apply_followup_error(
-                &state.db,
-                job_service::FollowUpErrorRequest {
-                    followup_id: error.followup_id,
-                    error: error.error,
-                },
-            );
-        }
     }
+    Ok(())
 }
 
 pub fn derive_active_job_id(state: &AppState, thread_id: &str) -> Option<String> {
@@ -654,30 +623,7 @@ fn job_response_value(job: JobRecord) -> Result<Value> {
     ))
     .jobs()
     .response(job);
-    let mut value = serde_json::to_value(response)?;
-    let Some(analysis) = value
-        .get("failure_analysis")
-        .cloned()
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(value);
-    };
-    if let Some(explanation) = analysis.get("explanation").and_then(Value::as_str) {
-        value["analysis"] = Value::String(explanation.to_string());
-    }
-    let suggestions = analysis
-        .get("suggestions")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-    value["explanation"] = Value::String(suggestions);
-    Ok(value)
+    Ok(serde_json::to_value(response)?)
 }
 
 fn load_base_thread_detail_cached(
@@ -773,23 +719,31 @@ pub fn cancel_followup_plan(
     state: &AppState,
     plan: job_service::FollowUpCancelPlan,
 ) -> Result<job_service::ActionResponse> {
-    let cancelled = state
-        .db
-        .cancel_followup(&plan.thread_id, &plan.followup_id)?;
-    Ok(core_cancel_followup_response(
-        nexushub_core::services::commands::THREADS_FOLLOWUPS_CANCEL,
-        plan.thread_id,
-        plan.followup_id,
-        cancelled,
-    ))
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    NexusHubUseCases::new(&platform)
+        .threads()
+        .apply_cancel_followup(
+            &state.db,
+            job_service::FollowUpCancelRequest {
+                thread_id: plan.thread_id,
+                followup_id: plan.followup_id,
+            },
+        )
 }
 
 pub fn list_followups_plan(
     state: &AppState,
     plan: job_service::FollowUpListPlan,
 ) -> Result<Vec<job_service::FollowUpView>> {
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
     Ok(core_followup_views(
-        state.db.list_followups(&plan.thread_id, plan.limit)?,
+        NexusHubUseCases::new(&platform).threads().list_followups(
+            &state.db,
+            job_service::FollowUpListRequest {
+                thread_id: plan.thread_id,
+                limit: Some(plan.limit),
+            },
+        )?,
     ))
 }
 
@@ -864,12 +818,17 @@ pub fn linux_probe_action_plan(
     platform: &PlatformPaths,
     action: probe_service::ProbeAction,
     config_path: &Path,
+    maintenance: Option<probe_service::ProbeLogsDbMaintenanceRequest>,
 ) -> Result<probe_service::ProbeActionPlan> {
     let device_key_configured = state
         .db
         .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
     let config = state.config();
+    if let Some(request) = maintenance {
+        return probe_service::ProbeUseCases::new(&config, platform)
+            .logs_db_maintenance_with_config_path(request, config_path);
+    }
     probe_service::ProbeUseCases::new(&config, platform).action_with_device_key_and_config_path(
         action,
         device_key_configured,
@@ -884,8 +843,4 @@ pub fn linux_update_action_plan(
 ) -> Result<update_service::UpdateActionPlan> {
     let config = state.config();
     update_service::UpdateUseCases::new(&config, platform).action_plan(action)
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }

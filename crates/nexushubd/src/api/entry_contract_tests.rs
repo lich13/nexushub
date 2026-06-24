@@ -224,8 +224,8 @@ fn linux_adapter_executes_core_plans_without_defining_business_semantics() {
             "state.jobs.cancel_job(",
             ".list_jobs(",
             ".job(",
-            ".list_followups(",
-            ".cancel_followup(",
+            "NexusHubUseCases::new(&platform).threads()",
+            ".apply_cancel_followup(",
             ".get_thread_goal(",
             ".apply(&state.db, command)",
             "codex::set_thread_archived(",
@@ -239,6 +239,119 @@ fn linux_adapter_executes_core_plans_without_defining_business_semantics() {
             "upload_service::execute_upload_retention_plan(",
         ],
         "linux_adapter should expose only the fixed Linux DB/job/Codex/upload side-effect landings",
+    );
+    assert_absent(
+        production,
+        &["state.db.list_followups(", "state.db.cancel_followup("],
+        "linux_adapter should execute follow-up effects through core use-case facade",
+    );
+}
+
+#[test]
+fn linux_adapter_api_and_probe_daemon_do_not_reintroduce_read_model_or_probe_business_decisions() {
+    let adapter = src("linux_adapter.rs");
+    let adapter_production = production_section(&adapter);
+    let api = src("api.rs");
+    let api_production = production_section(&api);
+    let daemon = src("main.rs");
+    let daemon_production = production_section(&daemon);
+    let core_probe = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nexushub-core/src/services/probe.rs"),
+    )
+    .unwrap_or_default();
+
+    assert_present(
+        adapter_production,
+        &[
+            "thread_service::thread_list_read_model",
+            "thread_service::thread_detail_read_model",
+            "execute_autosubmit_effects",
+        ],
+        "linux_adapter should pass local reads into core read-model/effect plans",
+    );
+    assert_absent(
+        adapter_production,
+        &[
+            "fn autosubmit_ready_followups",
+            "fn autosubmit_pending_followup",
+            "if !matches!(detail.summary.status, ThreadStatus::Recent)",
+            "if !matches!(summary.status, ThreadStatus::Recent)",
+            "state.db.claim_next_pending_followup(",
+            "state.db.mark_followup_submitted(",
+            "state.db.mark_followup_error(",
+            "running_job_for_thread(&detail.summary.id)",
+            "build_threads_overview(",
+            "apply_thread_detail_runtime_state(",
+        ],
+        "linux_adapter must not define follow-up state transitions or thread read-model merge semantics",
+    );
+
+    assert_present(
+        api_production,
+        &[
+            "probe_service::probe_logs_db_status_view",
+            "probe_service::probe_status_snapshot_view",
+        ],
+        "api.rs should use core Probe views for logs-db and snapshot metadata",
+    );
+    assert_absent(
+        api_production,
+        &[
+            "fn probe_logs_db_last_result",
+            "\"last_run\".to_string()",
+            "\"next_run\".to_string()",
+            "\"snapshot_age_seconds\".to_string()",
+            "\"snapshot_status\".to_string()",
+            "\"is_refreshing\".to_string()",
+        ],
+        "api.rs must not own Probe logs-db view or snapshot metadata semantics",
+    );
+
+    assert_present(
+        daemon_production,
+        &[
+            "probe_service::probe_event_record_plan",
+            "probe_service::probe_bark_delivery_decision",
+            "probe_service::probe_bark_status_label",
+            "probe_service::probe_logs_db_scheduler_plan",
+            "probe_service::probe_logs_db_stored_result",
+            "probe_service::probe_passive_thread_notification_plan",
+        ],
+        "daemon main should ask core for Probe event/notification decisions",
+    );
+    assert_present(
+        &core_probe,
+        &[
+            "pub fn probe_event_record_plan",
+            "pub fn probe_bark_delivery_decision",
+            "pub fn probe_bark_status_label",
+            "pub fn probe_logs_db_scheduler_plan",
+            "pub fn probe_logs_db_stored_result",
+            "normalize_probe_event_dedupe_key(&mut event)",
+            "probe_passive_unresolved_action_marker_key(&event)",
+        ],
+        "core Probe service should own event dedupe and passive marker planning",
+    );
+    assert_absent(
+        daemon_production,
+        &[
+            "fn normalize_probe_event_dedupe_key(",
+            "fn probe_thread_notification_body(",
+            "fn probe_thread_passive_bark_fresh(",
+            "fn format_proposed_plan_reply_needed(",
+            "fn passive_unresolved_action_marker_key(",
+            "fn normalize_proposed_plan_dedupe_key(",
+            "fn normalize_request_user_input_dedupe_key(",
+            "fn probe_event_bark_switch_enabled(",
+            "fn probe_bark_status_label(",
+            "fn probe_logs_db_compaction_due(",
+            "fn add_probe_events_maintenance_fields(",
+            "\"logs_db_disabled\".to_string()",
+            "\"not_due\".to_string()",
+            "event.payload[\"reason_label\"] = json!(\"等待用户确认\")",
+            "event.payload[\"reason_label\"] = json!(\"异常/可恢复\")",
+        ],
+        "daemon main.rs must not define Probe notification decision semantics",
     );
 }
 

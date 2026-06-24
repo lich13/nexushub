@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import appSource from "../../App.tsx?raw";
+import authGateSource from "../../components/auth/WebAuthGate.tsx?raw";
 import {
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy
@@ -39,11 +40,12 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
 };
 
 function extractFunctionSource(name: string): string {
-  const start = appSource.indexOf(`function ${name}`);
+  const source = name === "LoginScreen" ? authGateSource : appSource;
+  const start = source.indexOf(`function ${name}`);
   expect(start).toBeGreaterThanOrEqual(0);
 
-  const next = appSource.indexOf("\nfunction ", start + 1);
-  return appSource.slice(start, next === -1 ? appSource.length : next);
+  const next = source.indexOf("\nfunction ", start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
 }
 
 describe("runtime capability rendering", () => {
@@ -75,7 +77,9 @@ describe("runtime capability rendering", () => {
 
     expect(linuxWebCapabilities).toMatchObject({ runtimeKind: "web", webAuth: true, securitySettings: true });
     expect(appShellSource).toContain('capabilities.securitySettings && view === "security"');
-    expect(appShellSource).toContain('!session && capabilities.webAuth');
+    expect(appShellSource).toContain("<WebAuthGate");
+    expect(appShellSource).toContain("webAuth={capabilities.webAuth}");
+    expect(authGateSource).toContain("!session && webAuth");
     expect(visibleCopy).toMatch(/登录|Turnstile|登录设置|修改密码|systemd|Nginx|Public endpoint|Precheck|Update|Prune/);
     expect(securityWorkspaceSource).toMatch(/Turnstile|登录设置|修改密码|Secret Key|Session TTL/);
     expect(loginScreenSource).toMatch(/Turnstile|登录|password|turnstileToken/);

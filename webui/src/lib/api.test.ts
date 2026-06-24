@@ -783,7 +783,7 @@ describe("archive delete API compatibility", () => {
       thread_archive_actions: true
     });
     expect(linuxPlatform).toMatchObject({ kind: "linux", service_kind: "systemd" });
-    expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "661313.xyz");
+    expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "demo.nexushub.local");
     expect(macPlatform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
     expect(macSecurity).toEqual({});
     expect(JSON.stringify([macPlatform, { ...macSystem, capabilities: undefined }, macSecurity])).not.toMatch(
@@ -801,7 +801,7 @@ describe("archive delete API compatibility", () => {
     expect(linuxFixture).toMatchObject({
       platform: { kind: "linux", service_kind: "systemd" },
       system: { capabilities: { web_auth: true, linux_update_job: true, prune_backups: true } },
-      security: { turnstile_expected_hostname: "661313.xyz" }
+      security: { turnstile_expected_hostname: "demo.nexushub.local" }
     });
     expect(JSON.stringify({ ...macFixture, system: { ...macFixture.system, capabilities: undefined } })).not.toMatch(
       /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|43\.155\.235\.227|661313\.xyz|linux_systemd_job|prune_backups/i
@@ -1182,6 +1182,21 @@ describe("archive delete API compatibility", () => {
       webAuth: false,
       securitySettings: false,
       publicEndpointStatus: false,
+      updatePrune: false,
+      threadCleanup: true,
+      probeLogMaintenance: true,
+      threadArchiveActions: true,
+      updateServiceLabels: false,
+      forkAction: false,
+      approvalActions: false
+    });
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, desktopBootstrap)).toMatchObject({
+      runtimeKind: "desktop",
+      webAuth: false,
+      logout: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
       updatePrune: false,
       threadCleanup: true,
       probeLogMaintenance: true,
@@ -1856,7 +1871,7 @@ describe("archive delete API compatibility", () => {
       demoSystemStatus("macos-tauri"),
       demoUpdateStatus("macos-tauri"),
       demoCodexConfig("macos-tauri"),
-      demoProbeSettings()
+      demoProbeSettings("macos-tauri")
     ];
     const serialized = JSON.stringify(macosFixtures);
 

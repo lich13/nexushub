@@ -32,7 +32,36 @@ import {
   Undo2,
   X
 } from "lucide-react";
-import { ChangeEvent, Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WebAuthGate } from "./components/auth/WebAuthGate";
+import {
+  ComposerAttachmentList,
+  SlashCommandTextarea,
+  activeComposerMenuKind,
+  applyPluginMentionSelection,
+  applySlashCommandSelection,
+  composerActionLabel,
+  composerActionMode,
+  composerActionTitle,
+  composerFileInputAcceptValue,
+  composerMenuKeyAction,
+  composerSubmitDraftValue,
+  composerUploadIds,
+  exactSlashCommandFromDraft,
+  formatFileSize,
+  pluginMentionSuggestions,
+  readyComposerUploads,
+  renderPluginMentionMenuHtml,
+  renderSlashCommandMenuHtml,
+  slashCommandForComposerSubmit,
+  slashCommandKeyAction,
+  slashCommandSuggestions,
+  uploadKindLabel,
+  uploadStatusText,
+  useComposerAttachments,
+  type ComposerUpload
+} from "./components/composer/ComposerControls";
+import { threadDetailFromSlot, useConversationController, useConversationRealtimeController } from "./hooks/useConversationController";
 import {
   buildProbeSettingsDraft,
   buildProbeSettingsPayload,
@@ -44,7 +73,7 @@ import {
   type ProbeSectionId,
   type ProbeSettingsDraft
 } from "./lib/probeUi";
-import { desktopRuntimeSessionUser, logoutRuntime, useLoginMutation, usePublicSettingsQuery } from "./lib/query/auth";
+import { desktopRuntimeSessionUser, logoutRuntime } from "./lib/query/auth";
 import { useClaudeQueries } from "./lib/query/claude";
 import { useCodexConfigQuery, useCodexModelQuery, useCodexPermissionProfilesQuery } from "./lib/query/codex";
 import { useOpsActions, useOpsQueries } from "./lib/query/ops";
@@ -63,7 +92,6 @@ import {
   canStartHiddenThreadDelete,
   canStartUpdateInstall,
   canShowForkAction,
-  capabilitiesForInput,
   cleanHostValue,
   codexHomeStatusValue,
   failureCategoryLabel,
@@ -107,7 +135,6 @@ import {
 import {
   actionMessage,
   applyPermissionPreset,
-  applyThreadTitleOverride,
   applyThreadTitleOverrideToDetail,
   applyThreadTitleOverrides,
   buildPayload,
@@ -137,7 +164,6 @@ import {
   shouldShowLogoutForRuntime,
   shouldUseSavedSessionForRuntime,
   sourceCountsText,
-  threadDetailRefetchInterval,
   threadListItemPreviewText,
   threadListItemStatusText,
   threadListItemText,
@@ -153,28 +179,16 @@ import {
 import {
   slashCommandExecutionPlan,
   slashCommands,
-  slashCommandsForRuntime,
-  type SlashCommand
+  slashCommandsForRuntime
 } from "./lib/domain/slashCommands";
 import {
-  threadDetailFromSlot,
-  useArchivedSelectedThreadCleanup,
-  useThreadCacheActions,
   useCreateThreadMutation,
   useFollowUpsQuery,
-  useHydrateThreadMessageStore,
   usePluginsQuery,
-  useSelectedThreadState,
   useThreadConversationActions,
   useThreadBlockPageMutation,
-  useThreadDetailHydration,
-  useThreadDetailQuery,
   useThreadGoalActions,
   useThreadGoalQuery,
-  useThreadMessageStoreController,
-  useThreadRealtimeSubscription,
-  useThreadsQuery,
-  useUploadActions,
   type ThreadMessageSlot,
   type ThreadMessageStoreController
 } from "./lib/query/threads";
@@ -214,7 +228,7 @@ import type {
 } from "./types";
 
 export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
-export { mergeThreadSummaryIntoListCache } from "./lib/query/threads";
+export { mergeMessageBlocks, mergeThreadSummaryIntoListCache, upsertMessageBlock } from "./lib/query/threads";
 export {
   approvalActionMode,
   canStartHiddenThreadDelete,
@@ -292,6 +306,30 @@ export {
 } from "./lib/domain/codexViewModel";
 export { slashCommandAction, slashCommandExecutionPlan, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
 export { preservePreviousQueryData } from "./lib/query/shared";
+export {
+  activeComposerMenuKind,
+  applyPluginMentionSelection,
+  applySlashCommandSelection,
+  composerActionLabel,
+  composerActionMode,
+  composerActionTitle,
+  composerFileInputAcceptValue,
+  composerMenuKeyAction,
+  composerSubmitDraftValue,
+  composerUploadIds,
+  exactSlashCommandFromDraft,
+  formatFileSize,
+  pluginMentionSuggestions,
+  readyComposerUploads,
+  renderPluginMentionMenuHtml,
+  renderSlashCommandMenuHtml,
+  nextSlashCommandSelection,
+  slashCommandForComposerSubmit,
+  slashCommandKeyAction,
+  slashCommandSuggestions,
+  uploadKindLabel,
+  uploadStatusText
+} from "./components/composer/ComposerControls";
 
 type MessageScrollSnapshot = {
   scrollTop: number;
@@ -306,11 +344,6 @@ type MessageBlockState = {
   beforeCursor: string | null;
   visibleUpdateRevision: number;
   bottomFollowRevision: number;
-};
-
-type ComposerUpload = UploadRecord & {
-  local_status?: "uploading" | "ready" | "error";
-  local_error?: string | null;
 };
 
 export const statusTabs = [
@@ -347,33 +380,6 @@ const permissionPresets: Array<{ id: PermissionPresetId; label: string; descript
   { id: "custom", label: "自定义 (config.toml)", description: "使用 config.toml 中定义的权限", icon: <SlidersHorizontal size={17} /> }
 ];
 
-type PluginMentionCandidate = {
-  id: string;
-  label: string;
-  description: string;
-  unavailableReason?: string | null;
-  plugin?: PluginInfo;
-};
-
-type TurnstileWidgetId = string;
-
-declare global {
-  interface Window {
-    turnstile?: {
-      render: (container: HTMLElement, options: {
-        sitekey: string;
-        action?: string;
-        theme?: "dark" | "light" | "auto";
-        callback?: (token: string) => void;
-        "expired-callback"?: () => void;
-        "error-callback"?: () => void;
-      }) => TurnstileWidgetId;
-      reset: (widgetId?: TurnstileWidgetId) => void;
-      remove?: (widgetId: TurnstileWidgetId) => void;
-    };
-  }
-}
-
 export default function App() {
   const bootstrapCapabilities = useBootstrapRuntimeCapabilities();
   const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(bootstrapCapabilities));
@@ -391,46 +397,47 @@ export default function App() {
     });
   };
 
-  if (!session && capabilities.webAuth) {
-    return <LoginScreen onLogin={(user) => {
-      saveSession(user);
-      setSession(user);
-    }} />;
-  }
-  if (!session) return null;
-
   return (
-    <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
-      {navCollapsed ? (
-        <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
-      ) : (
-        <SideNav view={view} setView={setView} capabilities={capabilities} onCollapse={toggleNavCollapsed} onLogout={async () => {
-          if (capabilities.logout) {
-            await logoutRuntime(session.csrf_token);
-            clearSession();
-            setSession(null);
-          }
-        }} />
-      )}
-      <main className="main-workspace">
-        <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} capabilities={capabilities} />
-        <WorkspaceErrorBoundary resetKey={view}>
-          {view === "codex" && (
-            <ChatWorkspace
-              csrfToken={session.csrf_token}
-              mobileThreadsOpen={mobileThreadsOpen}
-              setMobileThreadsOpen={setMobileThreadsOpen}
-              setView={setView}
-              capabilities={capabilities}
-            />
-          )}
-          {view === "claude" && <ClaudeWorkspace />}
-          {view === "probe" && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
-          {view === "ops" && <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
-          {capabilities.securitySettings && view === "security" && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
-        </WorkspaceErrorBoundary>
-      </main>
-    </div>
+    <WebAuthGate
+      session={session}
+      webAuth={capabilities.webAuth}
+      onLogin={(user) => {
+        saveSession(user);
+        setSession(user);
+      }}
+    >
+      <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+        {navCollapsed ? (
+          <button className="nav-restore" onClick={toggleNavCollapsed} title="展开导航"><PanelLeftOpen size={18} /></button>
+        ) : (
+          <SideNav view={view} setView={setView} capabilities={capabilities} onCollapse={toggleNavCollapsed} onLogout={async () => {
+            if (capabilities.logout && session) {
+              await logoutRuntime(session.csrf_token);
+              clearSession();
+              setSession(null);
+            }
+          }} />
+        )}
+        <main className="main-workspace">
+          <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} capabilities={capabilities} />
+          <WorkspaceErrorBoundary resetKey={view}>
+            {view === "codex" && session && (
+              <ChatWorkspace
+                csrfToken={session.csrf_token}
+                mobileThreadsOpen={mobileThreadsOpen}
+                setMobileThreadsOpen={setMobileThreadsOpen}
+                setView={setView}
+                capabilities={capabilities}
+              />
+            )}
+            {view === "claude" && <ClaudeWorkspace />}
+            {view === "probe" && session && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
+            {view === "ops" && session && <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
+            {capabilities.securitySettings && view === "security" && session && <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} />}
+          </WorkspaceErrorBoundary>
+        </main>
+      </div>
+    </WebAuthGate>
   );
 }
 
@@ -465,148 +472,6 @@ class WorkspaceErrorBoundary extends Component<
     }
     return this.props.children;
   }
-}
-
-function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [turnstileToken, setTurnstileToken] = useState("");
-  const [turnstileStatus, setTurnstileStatus] = useState<"idle" | "loading" | "ready" | "verified" | "error">("idle");
-  const widgetRef = useRef<TurnstileWidgetId | null>(null);
-  const turnstileRef = useRef<HTMLDivElement | null>(null);
-  const publicSettings = usePublicSettingsQuery();
-  const turnstileEnabled = Boolean(publicSettings.data?.turnstile_enabled && publicSettings.data.turnstile_site_key);
-  const turnstileRequired = Boolean(publicSettings.data?.turnstile_required);
-  const turnstileAction = publicSettings.data?.turnstile_action || "login";
-
-  useEffect(() => {
-    if (!turnstileEnabled || !publicSettings.data?.turnstile_site_key || !turnstileRef.current) {
-      setTurnstileStatus("idle");
-      setTurnstileToken("");
-      return;
-    }
-
-    let cancelled = false;
-    setTurnstileToken("");
-    setTurnstileStatus("loading");
-    ensureTurnstileScript()
-      .then(() => {
-        if (cancelled || !turnstileRef.current || !window.turnstile) return;
-        if (widgetRef.current && window.turnstile.remove) {
-          window.turnstile.remove(widgetRef.current);
-          widgetRef.current = null;
-        }
-        turnstileRef.current.innerHTML = "";
-        widgetRef.current = window.turnstile.render(turnstileRef.current, {
-          sitekey: publicSettings.data.turnstile_site_key,
-          action: turnstileAction,
-          theme: "dark",
-          callback: (token) => {
-            setTurnstileToken(token);
-            setTurnstileStatus("verified");
-          },
-          "expired-callback": () => {
-            setTurnstileToken("");
-            setTurnstileStatus("ready");
-          },
-          "error-callback": () => {
-            setTurnstileToken("");
-            setTurnstileStatus("error");
-          }
-        });
-        setTurnstileStatus("ready");
-      })
-      .catch(() => {
-        if (!cancelled) setTurnstileStatus("error");
-      });
-
-    return () => {
-      cancelled = true;
-      if (widgetRef.current && window.turnstile?.remove) {
-        window.turnstile.remove(widgetRef.current);
-        widgetRef.current = null;
-      }
-    };
-  }, [turnstileAction, turnstileEnabled, publicSettings.data?.turnstile_site_key]);
-
-  const resetTurnstile = () => {
-    if (widgetRef.current && window.turnstile) {
-      window.turnstile.reset(widgetRef.current);
-      setTurnstileToken("");
-      setTurnstileStatus("ready");
-    }
-  };
-
-  const mutation = useLoginMutation(onLogin);
-
-  return (
-    <div className="login-shell">
-      <form className="login-panel" onSubmit={(event) => {
-        event.preventDefault();
-        setError(null);
-        if (turnstileEnabled && !turnstileToken.trim()) {
-          setError("请先完成 Turnstile 验证");
-          return;
-        }
-        mutation.mutate(
-          { username, password, turnstileToken },
-          {
-            onError: (err) => {
-              setError(err.message);
-              resetTurnstile();
-            }
-          }
-        );
-      }}>
-        <div className="brand-mark"><Cloud size={24} /></div>
-        <h1>NexusHub</h1>
-        <p>{codexLocalCopy.loginSubtitle}</p>
-        <label>
-          <span>管理员</span>
-          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
-        </label>
-        <label>
-          <span>密码</span>
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" />
-        </label>
-        {turnstileEnabled && (
-          <div className="turnstile-box">
-            <div ref={turnstileRef} />
-            <span>
-              {turnstileRequired ? "Turnstile 强制验证" : "Turnstile 登录验证"}
-              {turnstileStatus === "verified" ? "：已完成" : turnstileStatus === "loading" ? "：加载中" : turnstileStatus === "error" ? "：加载失败" : ""}
-            </span>
-          </div>
-        )}
-        {error && <div className="inline-error">{error}</div>}
-        <button className="primary-button" disabled={mutation.isPending}>
-          <Lock size={18} />
-          登录
-        </button>
-      </form>
-    </div>
-  );
-}
-
-function ensureTurnstileScript(): Promise<void> {
-  if (window.turnstile) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const existing = document.getElementById("cloudflare-turnstile-script") as HTMLScriptElement | null;
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Turnstile script failed")), { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.id = "cloudflare-turnstile-script";
-    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Turnstile script failed"));
-    document.head.appendChild(script);
-  });
 }
 
 function SideNav({ view, setView, capabilities, onCollapse, onLogout }: {
@@ -681,52 +546,24 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   setView: (view: View) => void;
   capabilities: RuntimeCapabilityMatrix;
 }) {
-  const threadCache = useThreadCacheActions();
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
-  const messageStore = useThreadMessageStoreController();
-  const threads = useThreadsQuery({
-    status,
-    q,
-    select: applyThreadTitleOverrides
-  });
-  const selection = useSelectedThreadState(threads.data ?? []);
-  const { selectedId, selectThread: setSelectedId, visibleThreads, resolvedSelected, selectedThreadSummary, nextThreadAfterRemoval } = selection;
-  const detail = useThreadDetailQuery({
-    threadId: resolvedSelected,
-    selectedThreadSummary,
-    select: applyThreadTitleOverrideToDetail,
-    refetchInterval: threadDetailRefetchInterval
-  });
-  const { rawSelectedDetail, selectedDetail } = useThreadDetailHydration({
-    threadId: resolvedSelected,
-    detail: detail.data
-  });
-  useArchivedSelectedThreadCleanup({
-    threadId: resolvedSelected,
-    selectedId,
-    rawSelectedDetail,
-    visibleThreads,
-    messageStore,
+  const {
     threadCache,
-    onSelect: setSelectedId
-  });
-
-  useEffect(() => {
-    if (!resolvedSelected || !selectedThreadSummary) return;
-    threadCache.mergeThreadDetailSummary(resolvedSelected, selectedThreadSummary);
-  }, [threadCache, resolvedSelected, selectedThreadSummary]);
-  useHydrateThreadMessageStore({
-    threadId: resolvedSelected,
+    messageStore,
+    threads,
+    visibleThreads,
+    resolvedSelected,
     selectedThreadSummary,
     selectedDetail,
-    messageStore
+    detailLoading,
+    nextThreadAfterRemoval,
+    selectThread
+  } = useConversationController({
+    status,
+    q,
+    setMobileThreadsOpen
   });
-
-  const selectThread = (id: SelectedThread) => {
-    setSelectedId(id);
-    setMobileThreadsOpen(false);
-  };
 
   const list = (
     <ThreadList
@@ -769,7 +606,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
           />
         ) : (
           <EmptyConversation
-            loading={Boolean(resolvedSelected && detail.isLoading)}
+            loading={Boolean(resolvedSelected && detailLoading)}
             csrfToken={csrfToken}
             onCreated={(id) => selectThread(id)}
             onPanelSelect={setView}
@@ -864,10 +701,6 @@ export function shouldAutoFollowMessageStream(snapshot: MessageScrollSnapshot, t
   return snapshot.scrollHeight - snapshot.scrollTop - snapshot.clientHeight <= threshold;
 }
 
-export function composerSubmitDraftValue(stateValue: string, domValue?: string | null): string {
-  return typeof domValue === "string" ? domValue : stateValue;
-}
-
 function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
   const blocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   return {
@@ -880,129 +713,12 @@ function initialMessageBlockState(detail: ThreadDetail): MessageBlockState {
   };
 }
 
-function mergeIncomingMessageBlockState(current: MessageBlockState, detail: ThreadDetail): MessageBlockState {
-  const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
-  const nextBlocks = mergeMessageBlocks(current.blocks, incomingBlocks);
-  return {
-    blocks: nextBlocks,
-    totalBlocks: detail.total_blocks ?? Math.max(current.totalBlocks, nextBlocks.length),
-    hasMoreBlocks: Boolean(detail.has_more_blocks ?? current.hasMoreBlocks),
-    beforeCursor: detail.before_cursor ?? current.beforeCursor,
-    visibleUpdateRevision: nextBlocks === current.blocks ? current.visibleUpdateRevision : current.visibleUpdateRevision + 1,
-    bottomFollowRevision: nextBlocks === current.blocks ? current.bottomFollowRevision : current.bottomFollowRevision + 1
-  };
-}
-
-export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
-  const existingIndex = current.findIndex((block) => block.id === next.id);
-  if (existingIndex === -1) return [...current, next];
-
-  const existing = current[existingIndex];
-  if (existing === next || messageBlocksEqual(existing, next)) return current;
-
-  const updated = [...current];
-  updated[existingIndex] = next;
-  return updated;
-}
-
-export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
-  if (!incoming.length) return current;
-  let changed = false;
-  let next = current;
-  const ordered = mode === "prepend" ? [...incoming].reverse() : incoming;
-  for (const block of ordered) {
-    if (mode === "prepend" && !next.some((item) => item.id === block.id)) {
-      next = [block, ...next];
-      changed = true;
-      continue;
-    }
-    const updated = upsertMessageBlock(next, block);
-    if (updated !== next) {
-      next = updated;
-      changed = true;
-    }
-  }
-  return changed ? next : current;
-}
-
-function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
-  try {
-    return JSON.stringify(left) === JSON.stringify(right);
-  } catch {
-    return false;
-  }
-}
-
-export type ComposerActionMode = "send" | "stop" | "followup" | "disabled";
-
 export function isRunningToolBlock(block: MessageBlock): boolean {
   if (!isToolBlock(block)) return false;
   const status = block.status?.trim();
   return Boolean(status && ["pending", "running", "in_progress", "inProgress", "active"].includes(status));
 }
 
-export function composerActionMode(running: boolean, draft: string, canStop: boolean, attachmentCount = 0): ComposerActionMode {
-  const hasContent = draft.trim().length > 0 || attachmentCount > 0;
-  if (running && hasContent) return "followup";
-  if (running) return canStop ? "stop" : "disabled";
-  return hasContent ? "send" : "disabled";
-}
-
-export function composerActionLabel(mode: ComposerActionMode): string {
-  if (mode === "stop") return "停止";
-  if (mode === "followup") return "跟进";
-  if (mode === "send") return "发送";
-  return "发送";
-}
-
-export function composerActionTitle(mode: ComposerActionMode): string {
-  if (mode === "stop") return "停止当前运行中的 turn";
-  if (mode === "followup") return "跟进当前 turn；不可用时自动加入跟进队列";
-  if (mode === "send") return "发送新 turn";
-  return "输入消息后发送";
-}
-
-export function readyComposerUploads(uploads: ComposerUpload[]): ComposerUpload[] {
-  return uploads.filter((upload) => upload.status === "ready" && upload.local_status !== "error");
-}
-
-export function composerUploadIds(uploads: ComposerUpload[]): string[] {
-  return readyComposerUploads(uploads).map((upload) => upload.id).filter(Boolean);
-}
-
-export function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KiB", "MiB", "GiB"];
-  let value = bytes / 1024;
-  for (const unit of units) {
-    if (value < 1024 || unit === units[units.length - 1]) {
-      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
-    }
-    value /= 1024;
-  }
-  return `${bytes} B`;
-}
-
-export function uploadKindLabel(kind?: string | null): string {
-  if (kind === "markdown") return "Markdown";
-  if (kind === "spreadsheet") return "表格";
-  if (kind === "document") return "文档";
-  if (kind === "pdf") return "PDF";
-  if (kind === "image") return "图片";
-  if (kind === "file") return "文件";
-  return "文本";
-}
-
-export function uploadStatusText(upload: Pick<ComposerUpload, "status" | "local_status" | "error_preview" | "local_error">): string {
-  if (upload.local_status === "uploading" || upload.status === "uploading") return "上传中";
-  if (upload.local_status === "error" || upload.status === "error") return upload.local_error || upload.error_preview || "上传失败";
-  return "已就绪";
-}
-
-export function composerFileInputAcceptValue(): string | undefined {
-  return undefined;
-}
 
 export type InternalReferenceSegment = {
   type: "text" | "internal_reference";
@@ -1042,249 +758,6 @@ function internalReferenceKind(value: string): InternalReferenceSegment["kind"] 
   if (lower.startsWith("thread")) return "thread";
   if (lower.startsWith("turn")) return "turn";
   return "job";
-}
-
-type SlashQuery = {
-  start: number;
-  end: number;
-  value: string;
-};
-
-type TriggerQuery = SlashQuery & {
-  trigger: "/" | "@";
-};
-
-function isInsideSimpleCodeContext(before: string): boolean {
-  const backticks = (before.match(/`/g) ?? []).length;
-  if (backticks % 2 === 1) return true;
-  const singleQuotes = (before.match(/'/g) ?? []).length;
-  const doubleQuotes = (before.match(/"/g) ?? []).length;
-  return singleQuotes % 2 === 1 || doubleQuotes % 2 === 1;
-}
-
-function activeTriggerQuery(draft: string, cursor: number, trigger: "/" | "@"): TriggerQuery | null {
-  const safeCursor = Math.max(0, Math.min(cursor, draft.length));
-  const before = draft.slice(0, safeCursor);
-  const start = before.lastIndexOf(trigger);
-  if (start < 0) return null;
-  if (start > 0 && !/\s/.test(before[start - 1])) return null;
-  const value = before.slice(start);
-  if (!value.startsWith(trigger) || value.includes("\n")) return null;
-  if (trigger === "@" && isInsideSimpleCodeContext(before)) return null;
-  return { start, end: safeCursor, value, trigger };
-}
-
-function activeSlashQuery(draft: string, cursor: number): SlashQuery | null {
-  return activeTriggerQuery(draft, cursor, "/");
-}
-
-function activePluginMentionQuery(draft: string, cursor: number): SlashQuery | null {
-  return activeTriggerQuery(draft, cursor, "@");
-}
-
-function nearestActiveComposerQuery(draft: string, cursor: number): TriggerQuery | null {
-  const slash = activeTriggerQuery(draft, cursor, "/");
-  const plugin = activeTriggerQuery(draft, cursor, "@");
-  if (slash && plugin) return slash.start > plugin.start ? slash : plugin;
-  return slash ?? plugin;
-}
-
-export function slashCommandSuggestions(draft: string, cursor: number, hasThread = true, desktop?: RuntimeCapabilityInput): SlashCommand[] {
-  const query = activeSlashQuery(draft, cursor)?.value.toLowerCase();
-  if (!query) return [];
-  return slashCommandsForRuntime(desktop)
-    .filter((item) => item.command.toLowerCase().startsWith(query));
-}
-
-export function applySlashCommandSelection(draft: string, cursor: number, command: string): { value: string; cursor: number } {
-  const query = activeSlashQuery(draft, cursor);
-  const insertion = `${command} `;
-  if (!query) {
-    const value = `${draft.slice(0, cursor)}${insertion}${draft.slice(cursor)}`;
-    return { value, cursor: cursor + insertion.length };
-  }
-  const value = `${draft.slice(0, query.start)}${insertion}${draft.slice(query.end)}`;
-  return { value, cursor: query.start + insertion.length };
-}
-
-export function pluginMentionSuggestions(
-  draft: string,
-  cursor: number,
-  plugins: PluginInfo[] | null | undefined = [],
-  unavailable = false
-): PluginMentionCandidate[] {
-  const query = activePluginMentionQuery(draft, cursor);
-  if (!query) return [];
-  const needle = query.value.slice(1).trim().toLowerCase();
-  const rows = plugins ?? [];
-  if (unavailable || rows.length === 0) {
-    return [{
-      id: "__plugins_unavailable__",
-      label: "插件列表不可用",
-      description: "当前无法读取插件列表",
-      unavailableReason: "请稍后刷新，或在插件/Provider 页面查看可用能力。"
-    }];
-  }
-  return rows
-    .filter((plugin) => {
-      if (!needle) return true;
-      return plugin.id.toLowerCase().includes(needle) || plugin.label.toLowerCase().includes(needle);
-    })
-    .map((plugin) => ({
-      id: plugin.id,
-      label: plugin.label,
-      description: plugin.description || plugin.kind || "插件能力",
-      unavailableReason: plugin.unavailable_reason || (plugin.status === "planned" ? "当前能力尚未启用" : null),
-      plugin
-    }));
-}
-
-export function applyPluginMentionSelection(
-  draft: string,
-  cursor: number,
-  plugin: Pick<PluginInfo, "id" | "label" | "invocation_template">
-): { value: string; cursor: number } {
-  const query = activePluginMentionQuery(draft, cursor);
-  const label = (plugin.invocation_template || plugin.label || plugin.id).trim();
-  const insertion = label.startsWith("@") ? `${label} ` : `@${label} `;
-  if (!query) {
-    const value = `${draft.slice(0, cursor)}${insertion}${draft.slice(cursor)}`;
-    return { value, cursor: cursor + insertion.length };
-  }
-  const value = `${draft.slice(0, query.start)}${insertion}${draft.slice(query.end)}`;
-  return { value, cursor: query.start + insertion.length };
-}
-
-export function exactSlashCommandFromDraft(draft: string, desktop?: RuntimeCapabilityInput): string | null {
-  const command = draft.trim().replace(/\s+/g, " ");
-  return slashCommandsForRuntime(desktop).some((item) => item.command === command) ? command : null;
-}
-
-export function slashCommandForComposerSubmit(draft: string, desktop?: RuntimeCapabilityInput): string | null {
-  return exactSlashCommandFromDraft(draft, desktop);
-}
-
-export function activeComposerMenuKind(draft: string, cursor: number, plugins?: PluginInfo[] | null): "slash" | "plugin" | null {
-  void plugins;
-  const query = nearestActiveComposerQuery(draft, cursor);
-  if (query?.trigger === "/") return "slash";
-  if (query?.trigger === "@") return "plugin";
-  return null;
-}
-
-export function nextSlashCommandSelection(current: number, total: number, key: string): number {
-  if (key === "ArrowDown") return moveActionSelection(current, total, 1);
-  if (key === "ArrowUp") return moveActionSelection(current, total, -1);
-  return current;
-}
-
-export function composerMenuKeyAction({
-  key,
-  shiftKey = false,
-  composing = false,
-  menuSelectionArmed = false,
-  selected,
-  suggestions
-}: {
-  key: string;
-  shiftKey?: boolean;
-  composing?: boolean;
-  menuSelectionArmed?: boolean;
-  selected: number;
-  suggestions: Array<{ command?: string; id?: string }>;
-}): { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" } {
-  if (composing) return { action: "none" };
-  if (key === "ArrowDown" || key === "ArrowUp") {
-    return { action: "move", selected: nextSlashCommandSelection(selected, suggestions.length, key) };
-  }
-  if (key === "Escape") return { action: "dismiss" };
-  if (key === "Tab" && suggestions.length > 0) {
-    return { action: "insert", index: Math.min(Math.max(selected, 0), suggestions.length - 1) };
-  }
-  if (key === "Enter" && !shiftKey && menuSelectionArmed && suggestions.length > 0) {
-    return { action: "insert", index: Math.min(Math.max(selected, 0), suggestions.length - 1) };
-  }
-  return { action: "none" };
-}
-
-export function slashCommandKeyAction({
-  key,
-  shiftKey = false,
-  selected,
-  suggestions
-}: {
-  key: string;
-  shiftKey?: boolean;
-  selected: number;
-  suggestions: Array<{ command: string }>;
-}): { action: "move"; selected: number } | { action: "insert"; command: string } | { action: "dismiss" } | { action: "none" } {
-  if (key === "ArrowDown" || key === "ArrowUp") {
-    return { action: "move", selected: nextSlashCommandSelection(selected, suggestions.length, key) };
-  }
-  if (key === "Escape") return { action: "dismiss" };
-  if (key === "Enter" && !shiftKey && suggestions.length > 0) {
-    return { action: "insert", command: suggestions[selected]?.command ?? suggestions[0].command };
-  }
-  return { action: "none" };
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-export function renderSlashCommandMenuHtml(
-  draft: string,
-  cursor: number,
-  hasThread = true,
-  selected = 0,
-  desktop?: RuntimeCapabilityInput,
-): string {
-  const suggestions = slashCommandSuggestions(draft, cursor, hasThread, desktop);
-  if (suggestions.length === 0) return "";
-  const options = suggestions.map((item, index) => {
-    const className = index === selected ? "slash-option selected" : "slash-option";
-    const threadBadge = item.requiresThread && !hasThread ? '<em class="slash-thread-note">需要已有线程</em>' : "";
-    return [
-      `<button type="button" class="${className}" role="option" aria-selected="${index === selected}">`,
-      `<strong>${escapeHtml(item.command)}</strong>`,
-      '<span class="slash-option-copy">',
-      `<span>${escapeHtml(item.description)}</span>`,
-      `<small>用法 ${escapeHtml(item.usageHint)}</small>`,
-      threadBadge,
-      "</span>",
-      "</button>"
-    ].join("");
-  }).join("");
-  return `<div class="slash-menu" role="listbox" aria-label="Slash 命令">${options}</div>`;
-}
-
-export function renderPluginMentionMenuHtml(
-  draft: string,
-  cursor: number,
-  plugins: PluginInfo[] | null | undefined = [],
-  unavailable = false,
-  selected = 0
-): string {
-  const suggestions = pluginMentionSuggestions(draft, cursor, plugins, unavailable);
-  if (suggestions.length === 0) return "";
-  const options = suggestions.map((item, index) => {
-    const className = index === selected ? "slash-option selected" : "slash-option";
-    const reason = item.unavailableReason ? `<em>${escapeHtml(item.unavailableReason)}</em>` : "";
-    return [
-      `<button type="button" class="${className}" role="option" aria-selected="${index === selected}">`,
-      `<strong>@${escapeHtml(item.label)}</strong>`,
-      '<span class="slash-option-copy">',
-      `<span>${escapeHtml(item.description)}</span>`,
-      reason,
-      "</span>",
-      "</button>"
-    ].join("");
-  }).join("");
-  return `<div class="slash-menu" role="listbox" aria-label="@ 插件">${options}</div>`;
 }
 
 export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan = false, hasPendingQuestion = false): { pressed: boolean; label: string; statusText: string } {
@@ -1344,316 +817,6 @@ export function threadCopyId(threadId?: string | null): string | null {
 
 export function threadRolloutPath(rolloutPath?: string | null): string | null {
   return rolloutPath?.trim() || null;
-}
-
-function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [uploads, setUploads] = useState<ComposerUpload[]>([]);
-  const [uploadInProgress, setUploadInProgress] = useState(false);
-  const [removingUploadId, setRemovingUploadId] = useState<string | null>(null);
-  const uploadActions = useUploadActions({ csrfToken });
-  const readyUploads = useMemo(() => readyComposerUploads(uploads), [uploads]);
-
-  const openPicker = () => {
-    if (!uploadInProgress) inputRef.current?.click();
-  };
-
-  const onFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    if (files.length === 0) return;
-
-    const pending = files.map((file, index): ComposerUpload => ({
-      id: `uploading-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
-      name: file.name || `file-${index + 1}`,
-      mime: file.type || "application/octet-stream",
-      size: file.size,
-      sha256: "",
-      kind: "text",
-      status: "uploading",
-      local_status: "uploading"
-    }));
-    const pendingIds = new Set(pending.map((item) => item.id));
-    setUploads((current) => [...current, ...pending]);
-    setUploadInProgress(true);
-    setFeedback?.("正在上传附件...");
-
-    try {
-      const outcome = await uploadActions.upload(files);
-      setUploads((current) => [
-        ...current.filter((item) => !pendingIds.has(item.id)),
-        ...outcome.files.map((file) => ({ ...file, local_status: "ready" as const }))
-      ]);
-      setFeedback?.(`已上传 ${outcome.files.length} 个附件`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setUploads((current) => current.map((item) => pendingIds.has(item.id)
-        ? {
-          ...item,
-          status: "error",
-          local_status: "error",
-          local_error: message,
-          error_preview: message
-        }
-        : item));
-      setFeedback?.(message);
-    } finally {
-      setUploadInProgress(false);
-    }
-  };
-
-  const removeUpload = async (upload: ComposerUpload) => {
-    setUploads((current) => current.filter((item) => item.id !== upload.id));
-    if (upload.status !== "ready") return;
-    setRemovingUploadId(upload.id);
-    try {
-      await uploadActions.delete(upload.id);
-    } catch (error) {
-      setFeedback?.(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRemovingUploadId(null);
-    }
-  };
-
-  const clearUploads = () => setUploads([]);
-
-  return {
-    inputRef,
-    uploads,
-    readyUploads,
-    uploadInProgress,
-    removingUploadId,
-    openPicker,
-    onFileInputChange,
-    removeUpload,
-    clearUploads
-  };
-}
-
-function ComposerAttachmentList({
-  uploads,
-  removingUploadId,
-  onRemove
-}: {
-  uploads: ComposerUpload[];
-  removingUploadId?: string | null;
-  onRemove: (upload: ComposerUpload) => void;
-}) {
-  if (uploads.length === 0) return null;
-  return (
-    <div className="attachment-list" aria-label="已选择附件">
-      {uploads.map((upload) => {
-        const errored = upload.local_status === "error" || upload.status === "error";
-        const uploading = upload.local_status === "uploading" || upload.status === "uploading";
-        return (
-          <div key={upload.id} className={errored ? "attachment-chip error" : uploading ? "attachment-chip uploading" : "attachment-chip"}>
-            <div className="attachment-copy">
-              <strong title={upload.name}>{upload.name}</strong>
-              <small>{uploadKindLabel(upload.kind)} · {formatFileSize(upload.size)} · {uploadStatusText(upload)}</small>
-            </div>
-            <button
-              type="button"
-              className="icon-button compact attachment-remove"
-              onClick={() => onRemove(upload)}
-              disabled={removingUploadId === upload.id}
-              title="移除附件"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function SlashCommandTextarea({
-  inputRef,
-  value,
-  onChange,
-  placeholder,
-  hasThread,
-  plugins,
-  pluginsUnavailable = false,
-  capabilities = capabilitiesForInput(),
-  onSlashCommand,
-  onSubmitShortcut,
-  disabled = false
-}: {
-  inputRef?: (node: HTMLTextAreaElement | null) => void;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  hasThread: boolean;
-  plugins?: PluginInfo[] | null;
-  pluginsUnavailable?: boolean;
-  capabilities?: RuntimeCapabilityMatrix;
-  onSlashCommand?: (command: string) => void;
-  onSubmitShortcut?: (value?: string | null) => void;
-  disabled?: boolean;
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [cursor, setCursor] = useState(0);
-  const [selected, setSelected] = useState(0);
-  const [menuSelectionArmed, setMenuSelectionArmed] = useState(false);
-  const [dismissedSignature, setDismissedSignature] = useState<string | null>(null);
-  const signature = `${value}:${cursor}`;
-  const menuKind = activeComposerMenuKind(value, cursor, plugins);
-  const slashSuggestions = menuKind === "slash" ? slashCommandSuggestions(value, cursor, hasThread, capabilities) : [];
-  const pluginSuggestions = menuKind === "plugin" ? pluginMentionSuggestions(value, cursor, plugins, pluginsUnavailable) : [];
-  const suggestions = dismissedSignature === signature ? [] : menuKind === "plugin" ? pluginSuggestions : slashSuggestions;
-  const open = suggestions.length > 0;
-  const ariaLabel = menuKind === "plugin" ? "@ 插件" : "Slash 命令";
-  const updateCursor = (target: HTMLTextAreaElement) => setCursor(target.selectionStart ?? target.value.length);
-  const insertCommand = (command: string) => {
-    const next = applySlashCommandSelection(value, cursor, command);
-    onChange(next.value);
-    setCursor(next.cursor);
-    setSelected(0);
-    setMenuSelectionArmed(false);
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(next.cursor, next.cursor);
-    });
-  };
-  const insertPlugin = (candidate: PluginMentionCandidate) => {
-    if (candidate.id === "__plugins_unavailable__") return;
-    const plugin = candidate.plugin ?? { id: candidate.id, label: candidate.label, status: "ready", kind: "builtin" };
-    const next = applyPluginMentionSelection(value, cursor, plugin);
-    onChange(next.value);
-    setCursor(next.cursor);
-    setSelected(0);
-    setMenuSelectionArmed(false);
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(next.cursor, next.cursor);
-    });
-  };
-  const maybeRunExactSlashCommand = (currentValue = value) => {
-    if (!onSlashCommand) return false;
-    const command = exactSlashCommandFromDraft(currentValue, capabilities);
-    if (!command) return false;
-    onSlashCommand(command);
-    return true;
-  };
-  const selectedSlashMatchesExactDraft = (command: string, currentValue = value) => exactSlashCommandFromDraft(currentValue, capabilities) === command;
-
-  useEffect(() => {
-    if (selected >= suggestions.length) {
-      setSelected(0);
-      setMenuSelectionArmed(false);
-    }
-  }, [selected, suggestions.length]);
-
-  return (
-    <div className="slash-composer">
-      {open && (
-        <div className="slash-menu" role="listbox" aria-label={ariaLabel}>
-          {suggestions.map((item, index) => (
-            <button
-              key={menuKind === "plugin" ? (item as PluginMentionCandidate).id : (item as SlashCommand).command}
-              type="button"
-              className={index === selected ? "slash-option selected" : "slash-option"}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                if (menuKind === "plugin") {
-                  insertPlugin(item as PluginMentionCandidate);
-                } else {
-                  insertCommand((item as SlashCommand).command);
-                }
-              }}
-              role="option"
-              aria-selected={index === selected}
-            >
-              <strong>{menuKind === "plugin" ? `@${(item as PluginMentionCandidate).label}` : (item as SlashCommand).command}</strong>
-              <span className="slash-option-copy">
-                <span>{item.description}</span>
-                {menuKind === "plugin" ? null : <small>用法 {(item as SlashCommand).usageHint}</small>}
-                {menuKind === "plugin" && (item as PluginMentionCandidate).unavailableReason ? <em>{(item as PluginMentionCandidate).unavailableReason}</em> : null}
-                {menuKind !== "plugin" && (item as SlashCommand).requiresThread && !hasThread ? <em>需要已有线程</em> : null}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-      <textarea
-        ref={(node) => {
-          textareaRef.current = node;
-          inputRef?.(node);
-        }}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setDismissedSignature(null);
-          setMenuSelectionArmed(false);
-          updateCursor(event.target);
-        }}
-        onClick={(event) => {
-          setDismissedSignature(null);
-          setMenuSelectionArmed(false);
-          updateCursor(event.currentTarget);
-        }}
-        onKeyUp={(event) => {
-          if (event.key !== "Escape") setDismissedSignature(null);
-          updateCursor(event.currentTarget);
-        }}
-        onKeyDown={(event) => {
-          if (!open) {
-            if (event.nativeEvent.isComposing) return;
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              if (!maybeRunExactSlashCommand(event.currentTarget.value)) {
-                onSubmitShortcut?.(event.currentTarget.value);
-              }
-            }
-            return;
-          }
-          const action = composerMenuKeyAction({
-            key: event.key,
-            shiftKey: event.shiftKey,
-            composing: event.nativeEvent.isComposing,
-            menuSelectionArmed,
-            selected,
-            suggestions
-          });
-          if (action.action === "move") {
-            event.preventDefault();
-            setSelected(action.selected);
-            setMenuSelectionArmed(true);
-          } else if (action.action === "dismiss") {
-            event.preventDefault();
-            setSelected(0);
-            setMenuSelectionArmed(false);
-            setDismissedSignature(signature);
-          } else if (action.action === "insert") {
-            event.preventDefault();
-            const item = suggestions[action.index];
-            if (!item) return;
-            if (menuKind === "plugin") {
-              insertPlugin(item as PluginMentionCandidate);
-            } else {
-              const command = (item as SlashCommand).command;
-              if (selectedSlashMatchesExactDraft(command, event.currentTarget.value) && maybeRunExactSlashCommand(event.currentTarget.value)) {
-                return;
-              }
-              insertCommand(command);
-            }
-          } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            if (!maybeRunExactSlashCommand(event.currentTarget.value)) {
-              onSubmitShortcut?.(event.currentTarget.value);
-            }
-          }
-        }}
-        placeholder={placeholder}
-      />
-    </div>
-  );
 }
 
 type CurrentActionKind = "plan" | "question";
@@ -1771,13 +934,22 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   nextThreadAfterArchive: string | null;
   capabilities: RuntimeCapabilityMatrix;
 }) {
-  const threadCache = useThreadCacheActions();
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const shouldFollowMessagesRef = useRef(true);
-  const previousThreadIdRef = useRef(threadId);
-  const [explicitBottomFollowRevision, setExplicitBottomFollowRevision] = useState(0);
+  const {
+    explicitBottomFollowRevision,
+    previousThreadIdRef,
+    updateMessageFollowState,
+    followNextMessageUpdate
+  } = useConversationRealtimeController({
+    threadId,
+    messageStore,
+    messageStreamRef,
+    shouldFollowMessagesRef,
+    shouldAutoFollowMessageStream
+  });
   const [draft, setDraft] = useState("");
   const runOptions = useCodexRunOptions();
   const pluginsQuery = usePluginsQuery();
@@ -1785,15 +957,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const [renameValue, setRenameValue] = useState(detail.summary.title);
   const [renameDirty, setRenameDirty] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
-  const updateMessageFollowState = useCallback(() => {
-    shouldFollowMessagesRef.current = messageStreamRef.current
-      ? shouldAutoFollowMessageStream(messageStreamRef.current)
-      : true;
-  }, []);
-  const followNextMessageUpdate = useCallback(() => {
-    shouldFollowMessagesRef.current = true;
-    setExplicitBottomFollowRevision((revision) => revision + 1);
-  }, []);
   const attachComposerTextarea = useCallback((node: HTMLTextAreaElement | null) => {
     composerTextareaRef.current = node;
   }, []);
@@ -1843,14 +1006,6 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     }
     previousThreadIdRef.current = threadId;
   }, [detail.summary.title, messageStore, renameDirty, threadId]);
-
-  useThreadRealtimeSubscription({
-    threadId,
-    messageStore,
-    threadCache,
-    applyThreadTitleOverride,
-    onBeforeActiveBlocks: updateMessageFollowState
-  });
 
   const pending = useMemo(() => currentPendingElicitation(summary.pending_elicitation, summary.active_turn_id) ?? pendingFromBlocks(blocks, summary.status, summary.active_turn_id), [summary.pending_elicitation, summary.status, summary.active_turn_id, blocks]);
   const planBlock = useMemo(() => latestActionBlock(blocks, summary.status, summary.active_turn_id, isPlanBlock), [blocks, summary.status, summary.active_turn_id]);

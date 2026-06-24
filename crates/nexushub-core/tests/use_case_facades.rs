@@ -461,6 +461,14 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
     });
     assert_eq!(failed.job.id, "job-a");
     assert!(failed.failure_analysis.is_some());
+    assert!(failed
+        .analysis
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(failed
+        .explanation
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
 
     let listed = use_cases.jobs().list_response(vec![
         JobRecord {
@@ -495,6 +503,8 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
     assert!(listed[0].failure_analysis.is_some());
     assert_eq!(listed[1].job.id, "job-b");
     assert!(listed[1].failure_analysis.is_none());
+    assert!(listed[1].analysis.is_none());
+    assert!(listed[1].explanation.is_none());
 
     let detail_response = use_cases
         .jobs()

@@ -3,7 +3,7 @@ import type {
   SessionUser
 } from "../../types";
 import { callCommand } from "./transport";
-import { USE_DEMO } from "./shared";
+import { currentDemoFixtureKey, USE_DEMO } from "./shared";
 import { demoPublicSettings, demoSessionUser } from "./demo";
 
 function desktopSessionUser(): SessionUser {
@@ -28,7 +28,7 @@ export async function getPublicSettings(): Promise<PublicSettings> {
 
 export async function login(username: string, password: string, turnstileToken?: string | null): Promise<SessionUser> {
   if (USE_DEMO) {
-    return demoSessionUser(username);
+    return demoSessionUser(username, currentDemoFixtureKey());
   }
   return callCommand<SessionUser>("auth.login", { username, password, turnstile_token: turnstileToken ?? null });
 }
@@ -40,7 +40,7 @@ export async function logout(csrfToken?: string | null): Promise<void> {
 
 export async function me(): Promise<SessionUser> {
   if (USE_DEMO) {
-    return demoSessionUser();
+    return demoSessionUser("admin", currentDemoFixtureKey());
   }
   return callCommand<SessionUser>("auth.me");
 }

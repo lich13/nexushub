@@ -1,5 +1,9 @@
 import type { SystemCapabilities, SystemStatus } from "../../types";
 
+export type RuntimeContext = {
+  kind: "web" | "desktop";
+};
+
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "web" | "desktop";
   webAuth: boolean;
@@ -16,7 +20,7 @@ export type RuntimeCapabilityMatrix = {
   approvalActions: boolean;
 };
 
-const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
+export const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "web",
   webAuth: true,
   logout: true,
@@ -32,7 +36,7 @@ const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   approvalActions: false
 };
 
-const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
+export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
   webAuth: false,
   logout: false,
@@ -48,22 +52,23 @@ const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   approvalActions: false
 };
 
-type RuntimeCapabilityGlobal = typeof globalThis & {
-  __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
-  __TAURI_INTERNALS__?: unknown;
-};
-
-function bootstrapRuntimeKind(): RuntimeCapabilityMatrix["runtimeKind"] {
-  const target = globalThis as RuntimeCapabilityGlobal;
-  return target.__NEXUSHUB_DESKTOP_RUNTIME__ || target.__TAURI_INTERNALS__
-    ? "desktop"
-    : "web";
-}
-
 function runtimeCapabilitiesFromCore(
   core: SystemCapabilities,
   runtimeKind: RuntimeCapabilityMatrix["runtimeKind"],
 ): RuntimeCapabilityMatrix {
+  if (runtimeKind === "desktop") {
+    return {
+      ...desktopBootstrapCapabilities,
+      threadCleanup: core.thread_cleanup === true,
+      probeLogMaintenance: core.probe_log_maintenance === true,
+      threadArchiveActions: core.thread_archive_actions === true,
+      updateServiceLabels: false,
+      updatePrune: false,
+      forkAction: false,
+      approvalActions: false
+    };
+  }
+
   return {
     runtimeKind,
     webAuth: core.web_auth,
@@ -81,8 +86,8 @@ function runtimeCapabilitiesFromCore(
   };
 }
 
-export function runtimeCapabilities(): RuntimeCapabilityMatrix {
-  return runtimeCapabilitiesForRuntime(bootstrapRuntimeKind());
+export function runtimeCapabilities(context: RuntimeContext = { kind: "web" }): RuntimeCapabilityMatrix {
+  return runtimeCapabilitiesForRuntime(context.kind);
 }
 
 export function runtimeCapabilitiesForRuntime(

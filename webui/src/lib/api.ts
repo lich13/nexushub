@@ -1,3 +1,8 @@
+import { configureDemoFixtureKey } from "./api/shared";
+import { runtimeContext } from "./runtime";
+
+configureDemoFixtureKey(runtimeContext().kind === "desktop" ? "macos-tauri" : "linux-web");
+
 export {
   runtimeCapabilities,
   runtimeCapabilitiesForRuntime,

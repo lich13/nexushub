@@ -1,6 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
+import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
+import composerControlsSource from "./components/composer/ComposerControls.tsx?raw";
+import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
@@ -193,7 +196,11 @@ function extractProbeWorkspaceSource(): string {
 }
 
 function extractFunctionSource(name: string): string {
-  const source = appSource;
+  const source = name === "SlashCommandTextarea"
+    ? composerControlsSource
+    : name === "WebAuthGate" || name === "LoginScreen"
+      ? authGateSource
+      : appSource;
   const start = source.indexOf(`function ${name}`);
 
   expect(start).toBeGreaterThanOrEqual(0);
@@ -397,7 +404,8 @@ describe("conversation helpers", () => {
 
     expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
     expect(typeof threadQuery.useThreadRealtimeSubscription).toBe("function");
-    expect(appSource).toContain("useThreadRealtimeSubscription");
+    expect(appSource).toContain("useConversationController");
+    expect(conversationControllerSource).toContain("useThreadRealtimeSubscription");
     expect(appSource).not.toContain("subscribeThreadEvents");
     expect(appSource).not.toMatch(/export function (opsWorkspacePanelTitles|opsWorkspaceVisibleCopy|desktopRuntimeVisibleCopy|canShowForkAction|approvalActionMode|preservePreviousQueryData|slashCommandsForRuntime|failureCategoryLabel|jobFailureAnalysisView|jobOutputView)\b/);
     expect(appSource).not.toMatch(/const (linuxFailureLabels|genericFailureLabels|desktopUnsupportedSlashCommands|controlledSlashActions|unavailableSlashCommands)\b/);

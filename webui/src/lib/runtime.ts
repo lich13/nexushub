@@ -38,15 +38,23 @@ type RuntimeGlobal = typeof globalThis & {
   ) => Promise<unknown> | unknown;
 };
 
-function getRuntimeKind(): RuntimeKind {
+export type RuntimeContext = {
+  kind: RuntimeKind;
+};
+
+export function runtimeContext(): RuntimeContext {
   const target = globalThis as RuntimeGlobal;
   if (target.__NEXUSHUB_DESKTOP_RUNTIME__) {
-    return "desktop";
+    return { kind: "desktop" };
   }
   if (target.__TAURI_INTERNALS__) {
-    return "desktop";
+    return { kind: "desktop" };
   }
-  return "web";
+  return { kind: "web" };
+}
+
+function getRuntimeKind(): RuntimeKind {
+  return runtimeContext().kind;
 }
 
 function apiBase(): string {
