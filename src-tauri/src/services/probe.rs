@@ -1,1 +1,28 @@
-dXNlIGNyYXRlOjpvdmVydmlldzo6RGVza3RvcFN0YXRlOwp1c2UgYW55aG93OjpSZXN1bHQ7CnVzZSBuZXh1c2h1Yl9jb3JlOjp7CiAgICBwcm9iZTo6e1Byb2JlUnVudGltZSwgUHJvYmVTdGF0dXN9LAogICAgc2VydmljZXM6Ontwcm9iZSBhcyBwcm9iZV9zZXJ2aWNlLCB1c2VfY2FzZXM6Ok5leHVzSHViVXNlQ2FzZXN9LAp9OwoKcHViIGFzeW5jIGZuIGRlc2t0b3BfcHJvYmVfc3RhdHVzX3dpdGhfc3RhdGUoc3RhdGU6ICZEZXNrdG9wU3RhdGUpIC0+IFJlc3VsdDxQcm9iZVN0YXR1cz4gewogICAgbGV0IGNvbmZpZyA9IHN0YXRlLmNvbmZpZygpOwogICAgbGV0IGxpbWl0ID0gY29uZmlnLnByb2JlLnJlY2VudF9saW1pdC5jbGFtcCgxLCAyMDApOwogICAgbGV0IGZhY2FkZV9zdGF0dXMgPSBOZXh1c0h1YlVzZUNhc2VzOjp3aXRoX2NvbmZpZygmY29uZmlnLCBzdGF0ZS5wbGF0Zm9ybSgpKQogICAgICAgIC5wcm9iZSgpPwogICAgICAgIC5zdGF0dXMoKT8KICAgICAgICAuc3RhdHVzOwogICAgbGV0IHN0YXR1cyA9IFByb2JlUnVudGltZTo6bmV3KGNvbmZpZywgc3RhdGUucGxhdGZvcm0oKS5jbG9uZSgpKQogICAgICAgIC5zdGF0dXMoKQogICAgICAgIC5hd2FpdD87CiAgICBsZXQgcmVjZW50X2V2ZW50X2NvdW50ID0gc3RhdGUKICAgICAgICAuZGIKICAgICAgICAubGlzdF9wcm9iZV9ldmVudHMobGltaXQgYXMgdTMyKQogICAgICAgIC5vaygpCiAgICAgICAgLm1hcCh8ZXZlbnRzfCBldmVudHMubGVuKCkpOwogICAgT2socHJvYmVfc2VydmljZTo6cHJvYmVfc3RhdHVzX3dpdGhfcnVudGltZV9yZWFkX21vZGVsKAogICAgICAgIHN0YXR1cywKICAgICAgICBmYWNhZGVfc3RhdHVzLAogICAgICAgIHJlY2VudF9ldmVudF9jb3VudCwKICAgICkpCn0K
+use crate::overview::DesktopState;
+use anyhow::Result;
+use nexushub_core::{
+    probe::{ProbeRuntime, ProbeStatus},
+    services::{probe as probe_service, use_cases::NexusHubUseCases},
+};
+
+pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
+    let config = state.config();
+    let limit = config.probe.recent_limit.clamp(1, 200);
+    let facade_status = NexusHubUseCases::with_config(&config, state.platform())
+        .probe()?
+        .status()?
+        .status;
+    let status = ProbeRuntime::new(config, state.platform().clone())
+        .status()
+        .await?;
+    let recent_event_count = state
+        .db
+        .list_probe_events(limit as u32)
+        .ok()
+        .map(|events| events.len());
+    Ok(probe_service::probe_status_with_runtime_read_model(
+        status,
+        facade_status,
+        recent_event_count,
+    ))
+}
