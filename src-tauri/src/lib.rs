@@ -14,6 +14,9 @@ pub use services::updates::desktop_update_status_with_state;
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
 const NEXUSHUBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
 const WEBUI_RESOURCE_NAME: &str = "webui";
+const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
+window.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+"#;
 
 fn sync_nexushubd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
     let source = resource_dir.join(NEXUSHUBD_RESOURCE_NAME);
@@ -149,6 +152,7 @@ fn ensure_executable(_path: &Path) -> std::io::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .append_invoke_initialization_script(DESKTOP_RUNTIME_MARKER_SCRIPT)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -1300,5 +1304,19 @@ log_dir = "{}"
                 "macOS desktop invoke handler must not register Linux Web host command surface: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn tauri_shell_injects_desktop_runtime_marker_before_webui_bootstrap() {
+        let source = production_lib_source();
+
+        assert!(
+            source.contains("__NEXUSHUB_DESKTOP_RUNTIME__"),
+            "Tauri must inject a desktop runtime marker before the WebUI bootstraps so macOS does not render the Web login gate"
+        );
+        assert!(
+            source.contains(".append_invoke_initialization_script("),
+            "Tauri must register the marker through an initialization script that runs before the bundled WebUI"
+        );
     }
 }
