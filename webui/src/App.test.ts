@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
+import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
@@ -412,6 +413,22 @@ describe("conversation helpers", () => {
     expect(codexViewModelSource).not.toContain("../runtime");
   });
 
+  test("App delegates Probe and Ops display derivations to domain modules", () => {
+    expect(appSource).not.toMatch(/export function (probeStatusThreads|probeThreadsByStatus|probeRunningCountValue|probeSettingsAfterBarkSave|probeEventSummary|shouldAutoScrollProbeFeed|codexHomeStatusValue|logsDbPathStatusValue|probeDiscoveryWarningsText|probeSnapshotStatusText|probeAvailabilityView|hiddenThreadDeleteStats|archivePlanAfterExecute)\b/);
+    expect(appSource).not.toMatch(/function (isProbeJob|probeJobActionLabel|probeStateLabel|probeLogsDbTone|isProbeSettings|logBytesDraftToMb|mbDraftToLogBytes|probeLogDbNumber|probeLogDbString|probeLogDbSize|probeLogDbValue|cleanHostValue|hostnameFromPublicEndpoint|secondsToDays|normalizeTurnstileAction|cleanupStageLabel|hiddenRolloutDeleteResultText)\b/);
+
+    const probeSource = extractProbeWorkspaceSource();
+    const opsSource = extractFunctionSource("OpsWorkspace");
+    expect(probeSource).toContain("const probeView = probeWorkspaceView(");
+    expect(probeSource).not.toContain("probeAvailabilityView({");
+    expect(probeSource).not.toContain("const probeThreads =");
+    expect(probeSource).not.toContain("const serviceText =");
+    expect(opsSource).toContain("const opsView = opsWorkspaceView(");
+    expect(opsSource).not.toContain("const publicEndpoint =");
+    expect(opsSource).not.toContain("const hiddenStats = hiddenThreadDeleteStats(");
+    expect(opsSource).not.toContain("cleanupStageLabel({");
+  });
+
   test("thread query realtime helper owns subscription side effects", async () => {
     const threadQuery = await loadThreadQuery();
     expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
@@ -463,6 +480,29 @@ describe("conversation helpers", () => {
     expect(threadCache.invalidateThread).toHaveBeenCalledWith("thread-a", "all");
     expect(threadCache.invalidateThreads).toHaveBeenCalledWith("all");
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  test("Conversation passes semantic callbacks while thread query facade owns mutation cache lifecycle", async () => {
+    const threadQuery = await loadThreadQuery();
+    const conversationSource = extractFunctionSource("Conversation");
+
+    expect(typeof threadQuery.useThreadConversationActions).toBe("function");
+    expect(conversationSource).toContain("useThreadConversationActions");
+    expect(conversationSource).not.toContain("onSendSuccess");
+    expect(conversationSource).not.toContain("onSteerSuccess");
+    expect(conversationSource).not.toContain("onArchiveMutate");
+    expect(conversationSource).not.toContain("onArchiveError");
+    expect(conversationSource).not.toContain("onArchiveSettled");
+    expect(conversationSource).not.toContain("onRenameMutate");
+    expect(conversationSource).not.toContain("onRenameSuccess");
+    expect(conversationSource).not.toContain("onRenameError");
+    expect(conversationSource).not.toContain("onRenameSettled");
+    expect(conversationSource).not.toContain("invalidateJobs");
+    expect(conversationSource).not.toContain("invalidateFollowUps");
+    expect(conversationSource).not.toContain("applyOptimisticThread");
+    expect(threadQuerySource).toContain("onSendSuccess");
+    expect(threadQuerySource).toContain("onArchiveMutate");
+    expect(threadQuerySource).toContain("onRenameError");
   });
 
   test("components consume query/state layer instead of direct domain API functions", () => {
@@ -806,6 +846,58 @@ describe("conversation helpers", () => {
       command: "/unknown",
       message: expect.stringContaining("未知")
     });
+  });
+
+  test("slash command execution planning is delegated out of Conversation switch logic", async () => {
+    const app = await loadApp();
+    const conversationSource = extractFunctionSource("Conversation");
+
+    expect(typeof app.slashCommandExecutionPlan).toBe("function");
+    expect(app.slashCommandExecutionPlan?.({
+      command: "/fork",
+      hasThread: true,
+      capabilities: macosDesktopCapabilities,
+      inspectorActions: { showFork: false, showArchive: true, approvalMode: "unsupported" },
+      supportsFast: false,
+      serviceTier: "",
+      latestAssistantCopy: "ready"
+    })).toEqual({
+      kind: "feedback",
+      draft: "",
+      message: "macOS App 当前不支持 Fork 操作"
+    });
+    expect(app.slashCommandExecutionPlan?.({
+      command: "/fast",
+      hasThread: true,
+      capabilities: macosDesktopCapabilities,
+      inspectorActions: { showFork: false, showArchive: true, approvalMode: "unsupported" },
+      supportsFast: false,
+      serviceTier: "",
+      latestAssistantCopy: "ready"
+    })).toEqual({
+      kind: "feedback",
+      draft: "",
+      message: "当前模型不支持 Fast service tier"
+    });
+    expect(app.slashCommandExecutionPlan?.({
+      command: "/copy",
+      hasThread: true,
+      capabilities: linuxWebCapabilities,
+      inspectorActions: { showFork: true, showArchive: true, approvalMode: "interactive" },
+      supportsFast: true,
+      serviceTier: "",
+      latestAssistantCopy: null
+    })).toEqual({
+      kind: "feedback",
+      draft: "",
+      message: "没有可复制的最新回复"
+    });
+    expect(conversationSource).toContain("slashCommandExecutionPlan");
+    expect(conversationSource).not.toContain("slashCommandAction(");
+    expect(conversationSource).not.toMatch(/switch\s*\(\s*action\.kind\s*\)/);
+    expect(conversationSource).not.toContain("当前模型不支持 Fast service tier");
+    expect(conversationSource).not.toContain("macOS App 当前不支持 Fork 操作");
+    expect(conversationSource).not.toContain("没有可复制的最新回复");
   });
 
   test("plan mode button is a persistent thread send state", async () => {
@@ -1476,8 +1568,9 @@ describe("conversation helpers", () => {
   test("probe workspace tolerates partial desktop settings DTOs without white-screen assumptions", () => {
     const probeSource = extractProbeWorkspaceSource();
 
-    expect(probeSource).toContain("currentSettings?.notifications?.device_key_configured");
-    expect(probeSource).toContain("currentSettings?.probe?.enabled");
+    expect(probeSource).toContain("probeWorkspaceView(");
+    expect(runtimeViewModelSource).toContain("input.currentSettings?.notifications?.device_key_configured");
+    expect(runtimeViewModelSource).toContain("input.currentSettings?.probe?.enabled");
     expect(probeSource).toContain("currentSettings?.codex?.host_label");
     expect(appSource).toContain("settings?.codex?.discovery_warnings");
   });

@@ -39,16 +39,11 @@ use nexushub_core::{
         uploads as upload_service,
         use_cases::NexusHubUseCases,
     },
-    uploads::{self, prepare_uploads, PreparedAttachment},
+    uploads::{self, PreparedAttachment},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, time::Duration};
 use uuid::Uuid;
 
 mod payload;
@@ -383,19 +378,8 @@ async fn upload_files(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let resolved = state.resolved_codex_paths();
-    let root = uploads::upload_root(&resolved.home);
-    let protected_upload_ids = state.db.active_followup_upload_ids().unwrap_or_else(|err| {
-        tracing::warn!("active follow-up upload lookup failed: {err}");
-        HashSet::new()
-    });
-    if let Err(err) = uploads::cleanup_stale_uploads_except(
-        &root,
-        Duration::from_secs(uploads::UPLOAD_TTL_SECONDS),
-        &protected_upload_ids,
-    ) {
-        tracing::warn!("stale upload cleanup failed: {err}");
-    }
+    linux_adapter::cleanup_stale_uploads_plan(&state)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let result: Result<uploads::UploadOutcome, ApiError> = async {
         let mut items = Vec::new();
         while let Some(field) = multipart.next_field().await.map_err(|err| {
@@ -425,19 +409,8 @@ async fn upload_files(
             .uploads()
             .store(items)
             .map_err(|err| upload_service_error(err.to_string()))?;
-        let plan = facade.plan;
-        let total_files = plan.total_files;
-        let total_bytes = plan.total_bytes;
-        let outcome = upload_service::store_upload_plan(&root, plan)
+        let outcome = linux_adapter::store_upload_plan(&state, &auth, facade.plan)
             .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-        state.db.record_audit(
-            Some(&auth.admin_id),
-            "uploads.create",
-            Some("upload"),
-            None,
-            None,
-            json!({"files": total_files, "bytes": total_bytes}),
-        )?;
         Ok(outcome)
     }
     .await;
@@ -468,20 +441,8 @@ async fn delete_upload_file(
         .uploads()
         .delete(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let resolved = state.resolved_codex_paths();
-    let root = uploads::upload_root(&resolved.home);
-    let deleted = uploads::delete_upload(&root, &plan.id)
+    let deleted = linux_adapter::delete_upload_plan(&state, &auth, plan)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    if deleted {
-        state.db.record_audit(
-            Some(&auth.admin_id),
-            "uploads.delete",
-            Some("upload"),
-            Some(&plan.id),
-            None,
-            json!({}),
-        )?;
-    }
     ok(json!({"ok": true, "deleted": deleted}))
 }
 
@@ -708,9 +669,7 @@ async fn list_threads(
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let mut threads = linux_adapter::list_threads_read_model(&state, query)?;
-    linux_adapter::autosubmit_ready_followups(&state, &mut threads);
-    ok(threads)
+    ok(linux_adapter::list_threads_read_model(&state, query)?)
 }
 
 async fn thread_detail(
@@ -730,13 +689,10 @@ async fn thread_detail(
             before: query.before.clone(),
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    match linux_adapter::load_thread_detail_read_model(&state, &plan.detail.thread_id)
+    match linux_adapter::window_thread_detail_read_model(&state, &plan.detail)
         .map_err(api_error_for_thread_detail_load)?
     {
-        Some(mut detail) => {
-            linux_adapter::autosubmit_pending_followup(&state, &mut detail);
-            ok(linux_adapter::window_thread_detail(detail, &plan.detail))
-        }
+        Some(detail) => ok(detail),
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
     }
 }
@@ -758,13 +714,10 @@ async fn thread_blocks(
         .threads()
         .blocks(&id, query.limit, query.before.clone())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    match linux_adapter::load_thread_detail_read_model(&state, &plan.thread_id)
+    match linux_adapter::thread_blocks_read_model(&state, &plan)
         .map_err(api_error_for_thread_detail_load)?
     {
-        Some(mut detail) => {
-            linux_adapter::autosubmit_pending_followup(&state, &mut detail);
-            ok(linux_adapter::thread_blocks_page(detail, &plan))
-        }
+        Some(page) => ok(page),
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
     }
 }
@@ -780,40 +733,28 @@ async fn create_thread(
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .threads()
-        .create(payload)
+        .create_job(payload, state.config().codex.workspace.clone())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let action = plan
-        .command
-        .action
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "thread create plan missing action"))?;
-    let spec = job_service::build_codex_job_spec(&action, state.config().codex.workspace.clone())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let cwd = spec.cwd.display().to_string();
-    let job_id = linux_adapter::start_codex_job_spec(
-        &state,
-        &auth,
-        spec,
-        None,
-        linux_adapter::CodexJobAuditPlan {
-            action: "thread.create.job_started",
-            resource_kind: "job",
-            resource_id: None,
-            metadata: json!({"cwd": cwd}),
-        },
-    )?;
-    ok(job_service::codex_action_submitted(None, Some(job_id)))
+    ok(linux_adapter::start_thread_command_execution_plan(
+        &state, &auth, plan,
+    )?)
 }
 
 fn prepare_request_attachments(
     state: &AppState,
     attachment_ids: &[String],
 ) -> Result<Vec<PreparedAttachment>, ApiError> {
-    upload_service::validate_attachment_id_count(attachment_ids)
-        .map_err(|err| api_error(StatusCode::PAYLOAD_TOO_LARGE, &err.to_string()))?;
-    let resolved = state.resolved_codex_paths();
-    let root = uploads::upload_root(&resolved.home);
-    prepare_uploads(&root, attachment_ids)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+    linux_adapter::prepare_request_attachments(state, attachment_ids).map_err(|err| {
+        let status = if err
+            .to_string()
+            .contains(upload_service::ATTACHMENT_ID_LIMIT_MESSAGE)
+        {
+            StatusCode::PAYLOAD_TOO_LARGE
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        api_error(status, &err.to_string())
+    })
 }
 
 async fn send_message(
@@ -829,30 +770,17 @@ async fn send_message(
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .threads()
-        .send(job_service::ThreadSendRequest {
-            thread_id: Some(id.clone()),
-            message: payload,
-        })
+        .send_job(
+            job_service::ThreadSendRequest {
+                thread_id: Some(id.clone()),
+                message: payload,
+            },
+            state.config().codex.workspace.clone(),
+        )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let action = plan
-        .command
-        .action
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "thread send plan missing action"))?;
-    let spec = job_service::build_codex_job_spec(&action, state.config().codex.workspace.clone())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let job_id = linux_adapter::start_codex_job_spec(
-        &state,
-        &auth,
-        spec,
-        Some(&id),
-        linux_adapter::CodexJobAuditPlan {
-            action: "thread.message.job_started",
-            resource_kind: "thread",
-            resource_id: Some(&id),
-            metadata: json!({}),
-        },
-    )?;
-    ok(job_service::codex_action_submitted(Some(id), Some(job_id)))
+    ok(linux_adapter::start_thread_command_execution_plan(
+        &state, &auth, plan,
+    )?)
 }
 
 async fn steer_thread(
@@ -872,19 +800,15 @@ async fn steer_thread(
             message: payload,
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let followup = job_service::enqueue_planned_followup(&state.db, plan.followup)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
+    let followup = linux_adapter::enqueue_followup_plan(
+        &state,
+        &auth,
+        plan,
         "thread.followup.enqueued_after_steer_fallback",
-        Some("thread"),
-        Some(&followup.thread_id),
-        None,
-        json!({"followup_id": followup.id}),
-    )?;
-    ok(job_service::codex_action_submitted(
-        Some(followup.thread_id),
-        None,
+    )
+    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::codex_followup_queued_response(
+        followup.thread_id,
     ))
 }
 
@@ -903,7 +827,7 @@ async fn list_followups(
                 limit: Some(20),
             })?;
     let items = linux_adapter::list_followups_plan(&state, plan)?;
-    ok(json!({ "items": job_service::followup_views(items) }))
+    ok(json!({ "items": items }))
 }
 
 async fn enqueue_followup(
@@ -923,17 +847,10 @@ async fn enqueue_followup(
             message: payload,
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let followup = job_service::enqueue_planned_followup(&state.db, plan.followup)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.followup.enqueued",
-        Some("thread"),
-        Some(&id),
-        None,
-        json!({"followup_id": followup.id}),
-    )?;
-    ok(job_service::followup_view(followup))
+    ok(
+        linux_adapter::enqueue_followup_plan(&state, &auth, plan, "thread.followup.enqueued")
+            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
+    )
 }
 
 async fn cancel_followup(
@@ -952,14 +869,6 @@ async fn cancel_followup(
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let response = linux_adapter::cancel_followup_plan(&state, plan)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "thread.followup.cancelled",
-        Some("thread"),
-        Some(&id),
-        None,
-        json!({"followup_id": followup_id, "cancelled": response.data.as_ref().and_then(|data| data.get("cancelled")).and_then(Value::as_bool).unwrap_or(false)}),
-    )?;
     ok(response)
 }
 
@@ -987,19 +896,14 @@ async fn stop_thread(
             job_id: payload.as_ref().and_then(|value| value.job_id.clone()),
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let active_job_id = plan
-        .requires_active_job_lookup
-        .then(|| linux_adapter::derive_active_job_id(&state, &plan.thread_id))
-        .flatten();
-    let stop = match job_service::resolve_thread_stop_job(&plan, active_job_id) {
+    let stop = match linux_adapter::resolve_thread_stop_plan(&state, &plan) {
         Ok(stop) => stop,
         Err(err) => {
-            state.db.record_audit(
-                Some(&auth.admin_id),
+            linux_adapter::record_thread_audit(
+                &state,
+                &auth,
                 "thread.stop.requested",
-                Some("thread"),
-                Some(&plan.thread_id),
-                None,
+                &plan.thread_id,
                 json!({"turn_id": plan.turn_id}),
             )?;
             return Err(api_error(StatusCode::BAD_REQUEST, &err.to_string()));
@@ -1077,12 +981,11 @@ async fn fork_thread(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
+    linux_adapter::record_thread_audit(
+        &state,
+        &auth,
         "thread.fork.unsupported",
-        Some("thread"),
-        Some(&id),
-        None,
+        &id,
         json!({"available": false}),
     )?;
     Err(api_error(
@@ -1112,13 +1015,17 @@ async fn plan_accept(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let result = start_codex_resume_job(&state, &id, job_service::plan_accept_resume_message())?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
+    let result = start_codex_resume_job(
+        &state,
+        &auth,
+        &id,
+        job_service::plan_accept_resume_message(),
+    )?;
+    linux_adapter::record_thread_audit(
+        &state,
+        &auth,
         "thread.plan.accept",
-        Some("thread"),
-        Some(&id),
-        None,
+        &id,
         json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "job_fallback": true}),
     )?;
     ok(result)
@@ -1141,15 +1048,15 @@ async fn plan_revise(
     }
     let result = start_codex_resume_job(
         &state,
+        &auth,
         &id,
         job_service::plan_revise_resume_message(instructions),
     )?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
+    linux_adapter::record_thread_audit(
+        &state,
+        &auth,
         "thread.plan.revise",
-        Some("thread"),
-        Some(&id),
-        None,
+        &id,
         json!({"turn_id": payload.turn_id, "item_id": payload.item_id, "job_fallback": true}),
     )?;
     ok(result)
@@ -1171,12 +1078,11 @@ async fn answer_approval(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
+    linux_adapter::record_thread_audit(
+        &state,
+        &auth,
         "thread.approval.unsupported",
-        Some("thread"),
-        Some(&id),
-        None,
+        &id,
         json!({
             "turn_id": payload.turn_id,
             "item_id": payload.item_id,
@@ -1210,26 +1116,18 @@ async fn answer_elicitation(
             "answers cannot be empty",
         ));
     }
-    let result = start_codex_resume_job(&state, &id, message)?;
+    let result = start_codex_resume_job(&state, &auth, &id, message)?;
     ok(result)
 }
 
 fn start_codex_resume_job(
     state: &AppState,
+    auth: &crate::auth::AuthContext,
     thread_id: &str,
     message: String,
 ) -> Result<nexushub_core::jobs::CodexActionResult, ApiError> {
-    let spec = job_service::build_codex_job_spec(
-        &job_service::JobActionRequest::resume(thread_id, message),
-        state.config().codex.workspace.clone(),
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let job_id = linux_adapter::start_codex_resume_spec(state, spec, thread_id)
-        .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
-    Ok(job_service::codex_action_submitted(
-        Some(thread_id.to_string()),
-        Some(job_id),
-    ))
+    linux_adapter::start_codex_resume_action(state, auth, thread_id, message)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
 }
 
 async fn thread_events(
@@ -1244,9 +1142,8 @@ async fn thread_events(
         let mut seeded_blocks = false;
         loop {
             match linux_adapter::load_thread_detail_read_model(&event_state, &id) {
-                Ok(Some(mut detail)) => {
-                    linux_adapter::autosubmit_pending_followup(&event_state, &mut detail);
-                    detail = codex::window_thread_detail(detail, Some(THREAD_EVENT_BLOCK_WINDOW), None);
+                Ok(Some(detail)) => {
+                    let detail = codex::window_thread_detail(detail, Some(THREAD_EVENT_BLOCK_WINDOW), None);
                     if !seeded_blocks {
                         seed_thread_event_blocks(&mut sent_blocks, &detail.blocks);
                         seeded_blocks = true;
@@ -1408,13 +1305,14 @@ async fn codex_goal_get(
     Query(query): Query<GoalQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(goal_service::goal_get_response_with_capability(
-        &state.db,
-        &http_update_platform(),
-        goal_service::GoalGetRequest {
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .goals()
+        .get(goal_service::GoalGetRequest {
             thread_id: query.thread_id,
-        },
-    )?)
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::goal_get_plan(&state, plan)?)
 }
 
 async fn codex_goal_set(
@@ -1424,10 +1322,13 @@ async fn codex_goal_set(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    ok(
-        goal_service::save_goal_with_capability(&state.db, &http_update_platform(), payload)
-            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
-    )
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .goals()
+        .save(payload)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn codex_goal_clear(
@@ -1437,12 +1338,13 @@ async fn codex_goal_clear(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    ok(goal_service::clear_goal_with_capability(
-        &state.db,
-        &http_update_platform(),
-        payload.thread_id.as_deref(),
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .goals()
+        .clear(payload.thread_id.as_deref())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn codex_goal_pause(
@@ -1452,12 +1354,11 @@ async fn codex_goal_pause(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    ok(goal_service::pause_goal_with_capability(
-        &state.db,
-        &http_update_platform(),
-        payload.thread_id.as_deref().unwrap_or_default(),
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
+    let thread_id = payload.thread_id.as_deref().unwrap_or_default();
+    let plan = linux_adapter::goal_pause_plan(&state, thread_id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn codex_goal_resume(
@@ -1467,12 +1368,11 @@ async fn codex_goal_resume(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    ok(goal_service::resume_goal_with_capability(
-        &state.db,
-        &http_update_platform(),
-        payload.thread_id.as_deref().unwrap_or_default(),
-    )
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
+    let thread_id = payload.thread_id.as_deref().unwrap_or_default();
+    let plan = linux_adapter::goal_resume_plan(&state, thread_id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn start_update_action(
@@ -2638,7 +2538,6 @@ mod tests {
         probe_config_path, router, seed_thread_event_blocks, thread_event_block_key, thread_title,
         turnstile_login_action, update_service, TurnstileLoginAction, UpdateAction,
     };
-    use crate::linux_adapter;
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -3261,20 +3160,20 @@ mod tests {
 
         for required in [
             "NexusHubUseCases::new",
-            "linux_adapter::start_codex_job_spec",
-            "linux_adapter::start_codex_resume_spec",
+            "linux_adapter::start_thread_command_execution_plan",
+            "linux_adapter::start_codex_resume_action",
+            "linux_adapter::resolve_thread_stop_plan",
+            "linux_adapter::enqueue_followup_plan",
             "linux_adapter::cancel_thread_stop_plan",
             "linux_adapter::apply_thread_state_action_plan",
             "linux_adapter::cancel_followup_plan",
             "linux_adapter::execute_cleanup_plan",
             "linux_adapter::list_jobs_plan",
             "linux_adapter::job_detail_plan",
-            "goal_service::goal_get_response_with_capability",
-            "goal_service::save_goal_with_capability",
-            "goal_service::clear_goal_with_capability",
-            "goal_service::pause_goal_with_capability",
-            "goal_service::resume_goal_with_capability",
-            "job_service::resolve_thread_stop_job",
+            "linux_adapter::goal_get_plan",
+            "linux_adapter::apply_goal_command_plan",
+            "linux_adapter::goal_pause_plan",
+            "linux_adapter::goal_resume_plan",
         ] {
             assert!(
                 source.contains(required),
@@ -3286,7 +3185,7 @@ mod tests {
             "cleanup_service::execute_archived_with_capability",
             "cleanup_service::dry_run_hidden_with_capability",
             "cleanup_service::execute_hidden_with_capability",
-            "ensure_cleanup_expected_count",
+            "cleanup_service::validate_cleanup_expected_count",
         ] {
             assert!(
                 adapter_source.contains(required_adapter_landing),
@@ -4563,7 +4462,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let page = linux_adapter::thread_blocks_page(detail, &plan);
+        let page = thread_service::thread_blocks_page_for_plan(detail, &plan);
         let value = serde_json::to_value(&page).unwrap();
 
         assert_eq!(page.thread_id, "thread-a");
@@ -4620,7 +4519,7 @@ mod tests {
             Some("b:4".to_string()),
         )
         .unwrap();
-        let page = linux_adapter::thread_blocks_page(detail, &plan);
+        let page = thread_service::thread_blocks_page_for_plan(detail, &plan);
 
         assert_eq!(page.total_blocks, 6);
         assert!(page.has_more_blocks);

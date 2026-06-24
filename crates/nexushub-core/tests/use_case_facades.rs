@@ -538,18 +538,11 @@ fn upload_and_cleanup_use_cases_expose_execute_ready_plans_without_host_types() 
     assert!(!dry_run.execute);
     assert!(!dry_run.requires_prior_dry_run);
 
-    let execute = use_cases.cleanup().execute(CleanupTarget::Hidden).unwrap();
-    assert_eq!(execute.target, CleanupTarget::Hidden);
-    assert_eq!(execute.operation, CleanupOperationKind::Execute);
-    assert!(execute.execute);
-    assert!(execute.requires_confirmation);
-    assert!(execute.requires_prior_dry_run);
-    assert_eq!(execute.confirmation.expected_count, None);
-    assert!(!execute.confirmation.confirmed);
-    assert_eq!(
-        execute.confirmation.payload,
-        json!({"confirmed": false, "expectedCount": null})
-    );
+    let unconfirmed_execute = use_cases
+        .cleanup()
+        .execute(CleanupTarget::Hidden)
+        .expect_err("cleanup execute plans must require an explicit confirmation payload");
+    assert!(unconfirmed_execute.to_string().contains("confirmed"));
 
     let confirmed = use_cases
         .cleanup()

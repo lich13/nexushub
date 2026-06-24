@@ -4,10 +4,11 @@ use crate::{
     overview::DesktopState,
     services::{
         actions::DesktopActionResponse,
+        goals::{self as goal_service},
         settings::{
             self as settings_service, DesktopCleanupExecuteRequest, DesktopDeleteUploadRequest,
-            DesktopDeleteUploadResponse, DesktopGoal, DesktopProbeEventsRequest,
-            DesktopProbeEventsResponse, DesktopProbeSettings, DesktopUploadFile,
+            DesktopDeleteUploadResponse, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
+            DesktopProbeSettings, DesktopUploadFile,
         },
     },
 };
@@ -132,9 +133,8 @@ pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
-) -> Result<DesktopGoal, String> {
-    settings_service::get_goal_with_state(&state, threadId.or(thread_id))
-        .map_err(|err| err.to_string())
+) -> Result<goal_service::DesktopGoalView, String> {
+    goal_service::get_goal_with_state(&state, threadId.or(thread_id)).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.save")]
@@ -145,8 +145,8 @@ pub fn saveCodexGoal(
     objective: Option<String>,
     tokenBudget: Option<u64>,
     token_budget: Option<u64>,
-) -> Result<DesktopGoal, String> {
-    settings_service::save_goal_from_parts_with_state(
+) -> Result<goal_service::DesktopGoalView, String> {
+    goal_service::save_goal_from_parts_with_state(
         &state,
         threadId.or(thread_id),
         objective,
@@ -160,8 +160,8 @@ pub fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
-) -> Result<DesktopGoal, String> {
-    settings_service::clear_goal_from_parts_with_state(&state, threadId.or(thread_id))
+) -> Result<goal_service::DesktopGoalView, String> {
+    goal_service::clear_goal_from_parts_with_state(&state, threadId.or(thread_id))
         .map_err(|err| err.to_string())
 }
 
@@ -170,8 +170,8 @@ pub fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
-) -> Result<DesktopGoal, String> {
-    settings_service::pause_goal_from_parts_with_state(&state, threadId.or(thread_id))
+) -> Result<goal_service::DesktopGoalView, String> {
+    goal_service::pause_goal_from_parts_with_state(&state, threadId.or(thread_id))
         .map_err(|err| err.to_string())
 }
 
@@ -180,7 +180,7 @@ pub fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
-) -> Result<DesktopGoal, String> {
-    settings_service::resume_goal_from_parts_with_state(&state, threadId.or(thread_id))
+) -> Result<goal_service::DesktopGoalView, String> {
+    goal_service::resume_goal_from_parts_with_state(&state, threadId.or(thread_id))
         .map_err(|err| err.to_string())
 }

@@ -20,7 +20,6 @@ export {
   getCodexConfig
 } from "./api/system";
 export {
-  getSentinelStatus,
   getProbeStatus,
   getProbeSettings,
   saveProbeSettings,

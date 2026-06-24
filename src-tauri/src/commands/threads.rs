@@ -5,10 +5,11 @@ use crate::{
     services::{
         actions::DesktopActionResponse,
         threads::{
-            self as thread_service, DesktopCancelFollowupRequest, DesktopElicitationAnswerRequest,
-            DesktopFollowupRequest, DesktopPlanAcceptRequest, DesktopPlanReviseRequest,
-            DesktopRenameThreadRequest, DesktopSendMessageRequest, DesktopStopRequest,
-            DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
+            self as thread_service, DesktopApprovalAnswerRequest, DesktopCancelFollowupRequest,
+            DesktopElicitationAnswerRequest, DesktopFollowupRequest, DesktopPlanAcceptRequest,
+            DesktopPlanReviseRequest, DesktopRenameThreadRequest, DesktopSendMessageRequest,
+            DesktopStopRequest, DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest,
+            ThreadListRequest,
         },
     },
 };
@@ -282,11 +283,13 @@ pub fn revisePlan(
 }
 
 #[tauri::command(rename = "threads.approval.answer")]
-pub fn answerApproval(threadId: String) -> DesktopActionResponse {
-    let mut response = thread_service::unavailable_action(
-        "answerApproval",
-        "approval actions are unavailable in the local Codex read model",
-    );
-    response.thread_id = Some(threadId);
-    response
+pub fn answerApproval(
+    threadId: String,
+    payload: serde_json::Value,
+) -> Result<DesktopActionResponse, String> {
+    thread_service::answer_approval_with_state(DesktopApprovalAnswerRequest {
+        thread_id: threadId,
+        payload,
+    })
+    .map_err(|err| err.to_string())
 }

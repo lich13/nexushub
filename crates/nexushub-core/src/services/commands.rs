@@ -131,6 +131,73 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
 
 pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_UPLOAD_FILES, TRANSPORT_THREAD_EVENTS];
 
+pub const DECLARED_COMMANDS: &[&str] = &[
+    AUTH_PUBLIC_SETTINGS,
+    AUTH_LOGIN,
+    AUTH_LOGOUT,
+    AUTH_ME,
+    SECURITY_GET,
+    SECURITY_SAVE,
+    SECURITY_CHANGE_PASSWORD,
+    SYSTEM_STATUS,
+    SYSTEM_VERSION,
+    SYSTEM_PLATFORM,
+    SYSTEM_PROVIDERS,
+    SYSTEM_PLUGINS,
+    SYSTEM_MODELS,
+    SYSTEM_PERMISSION_PROFILES,
+    SYSTEM_CODEX_CONFIG,
+    SYSTEM_CLAUDE_CODE_OVERVIEW,
+    THREADS_LIST,
+    THREADS_DETAIL,
+    THREADS_BLOCKS,
+    THREADS_CREATE,
+    THREADS_SEND,
+    THREADS_STEER,
+    THREADS_STOP,
+    THREADS_ARCHIVE,
+    THREADS_RESTORE,
+    THREADS_RENAME,
+    THREADS_FORK,
+    THREADS_FOLLOWUPS_LIST,
+    THREADS_FOLLOWUPS_ENQUEUE,
+    THREADS_FOLLOWUPS_CLAIM,
+    THREADS_FOLLOWUPS_SUBMIT,
+    THREADS_FOLLOWUPS_ERROR,
+    THREADS_FOLLOWUPS_CANCEL,
+    THREADS_PLAN_ACCEPT,
+    THREADS_PLAN_REVISE,
+    THREADS_ELICITATION_ANSWER,
+    THREADS_APPROVAL_ANSWER,
+    THREADS_GOAL_GET,
+    THREADS_GOAL_SAVE,
+    THREADS_GOAL_CLEAR,
+    THREADS_GOAL_PAUSE,
+    THREADS_GOAL_RESUME,
+    JOBS_LIST,
+    JOBS_DETAIL,
+    PROBE_STATUS,
+    PROBE_SETTINGS_GET,
+    PROBE_SETTINGS_SAVE,
+    PROBE_LOGS_DB_STATUS,
+    PROBE_EVENTS,
+    PROBE_BARK_TEST,
+    PROBE_INSTALL_HOOKS,
+    PROBE_LOGS_DB_DRY_RUN,
+    PROBE_LOGS_DB_EXECUTE,
+    UPDATES_STATUS,
+    UPDATES_CHECK,
+    UPDATES_INSTALL,
+    UPDATES_PRUNE,
+    CLEANUP_ARCHIVE_DRY_RUN,
+    CLEANUP_ARCHIVE_EXECUTE,
+    CLEANUP_HIDDEN_DRY_RUN,
+    CLEANUP_HIDDEN_EXECUTE,
+    UPLOADS_DELETE,
+    TRANSPORT_UPLOAD_FILES,
+    TRANSPORT_THREAD_EVENTS,
+];
+
 pub const RETIRED_COMMANDS: &[&str] = &[
     "getPublicSettings",
     "login",
@@ -199,8 +266,32 @@ pub const RETIRED_COMMANDS: &[&str] = &[
     "getDesktopClaudeCodeOverview",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Rpc,
+    Transport,
+    Retired,
+    Unknown,
+}
+
+pub fn classify_command(command: &str) -> CommandKind {
+    if ALLOWED_RPC_COMMANDS.contains(&command) {
+        CommandKind::Rpc
+    } else if ALLOWED_TRANSPORT_COMMANDS.contains(&command) {
+        CommandKind::Transport
+    } else if RETIRED_COMMANDS.contains(&command) {
+        CommandKind::Retired
+    } else {
+        CommandKind::Unknown
+    }
+}
+
 pub fn is_allowed_rpc_command(command: &str) -> bool {
     ALLOWED_RPC_COMMANDS.contains(&command)
+}
+
+pub fn is_allowed_transport_command(command: &str) -> bool {
+    ALLOWED_TRANSPORT_COMMANDS.contains(&command)
 }
 
 pub fn is_retired_command(command: &str) -> bool {
@@ -209,7 +300,10 @@ pub fn is_retired_command(command: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALLOWED_RPC_COMMANDS, ALLOWED_TRANSPORT_COMMANDS, RETIRED_COMMANDS};
+    use super::{
+        classify_command, CommandKind, ALLOWED_RPC_COMMANDS, ALLOWED_TRANSPORT_COMMANDS,
+        DECLARED_COMMANDS, RETIRED_COMMANDS,
+    };
     use std::collections::HashSet;
 
     #[test]
@@ -237,12 +331,63 @@ mod tests {
     }
 
     #[test]
-    fn retired_commands_are_not_allowed_rpc_commands() {
-        for retired in RETIRED_COMMANDS {
+    fn command_allowlists_transport_allowlist_and_retired_denylist_are_disjoint() {
+        for command in ALLOWED_RPC_COMMANDS {
             assert!(
-                !ALLOWED_RPC_COMMANDS.contains(retired),
-                "retired command must not remain in allowed RPC set: {retired}"
+                !ALLOWED_TRANSPORT_COMMANDS.contains(command),
+                "business RPC command must not also be a transport command: {command}"
+            );
+            assert!(
+                !RETIRED_COMMANDS.contains(command),
+                "business RPC command must not also be retired: {command}"
+            );
+            assert_eq!(classify_command(command), CommandKind::Rpc);
+        }
+
+        for command in ALLOWED_TRANSPORT_COMMANDS {
+            assert!(
+                !ALLOWED_RPC_COMMANDS.contains(command),
+                "transport command must not also be an RPC command: {command}"
+            );
+            assert!(
+                !RETIRED_COMMANDS.contains(command),
+                "transport command must not also be retired: {command}"
+            );
+            assert_eq!(classify_command(command), CommandKind::Transport);
+        }
+
+        for command in RETIRED_COMMANDS {
+            assert!(
+                !ALLOWED_RPC_COMMANDS.contains(command),
+                "retired command must not remain in allowed RPC set: {command}"
+            );
+            assert!(
+                !ALLOWED_TRANSPORT_COMMANDS.contains(command),
+                "retired command must not remain in transport set: {command}"
+            );
+            assert_eq!(classify_command(command), CommandKind::Retired);
+        }
+    }
+
+    #[test]
+    fn declared_command_constants_are_fully_classified() {
+        let mut seen = HashSet::new();
+        for command in DECLARED_COMMANDS {
+            assert!(
+                seen.insert(*command),
+                "declared command constant must be unique: {command}"
+            );
+            assert_ne!(
+                classify_command(command),
+                CommandKind::Unknown,
+                "declared command constant must be covered by an allowlist: {command}"
             );
         }
+
+        assert_eq!(
+            classify_command("not.a.realCommand"),
+            CommandKind::Unknown,
+            "unknown commands must stay denied by default"
+        );
     }
 }

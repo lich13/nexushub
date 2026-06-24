@@ -127,6 +127,15 @@ pub(crate) struct DesktopElicitationAnswerRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopApprovalAnswerRequest {
+    #[serde(alias = "threadId", alias = "thread_id")]
+    pub thread_id: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopFollowupRequest {
     pub thread_id: String,
     pub limit: Option<u32>,
@@ -139,17 +148,6 @@ pub(crate) struct DesktopCancelFollowupRequest {
     pub thread_id: String,
     #[serde(alias = "followUpId", alias = "followupId", alias = "followup_id")]
     pub followup_id: String,
-}
-
-pub(crate) fn home_thread_summaries(state: &DesktopState) -> Result<Vec<ThreadSummary>> {
-    thread_summaries_with_query(
-        state,
-        ThreadsQuery {
-            status: None,
-            q: None,
-            limit: Some(40),
-        },
-    )
 }
 
 pub(crate) fn thread_summaries_with_query(
@@ -389,6 +387,18 @@ pub(crate) fn revise_plan_with_state(
         &request.thread_id,
         job_service::plan_revise_resume_message(instructions),
     )
+}
+
+pub(crate) fn answer_approval_with_state(
+    request: DesktopApprovalAnswerRequest,
+) -> Result<DesktopActionResponse> {
+    let _ = request.payload;
+    let mut response = unavailable_action(
+        nexushub_core::services::commands::THREADS_APPROVAL_ANSWER,
+        "approval actions are unavailable in the local Codex read model",
+    );
+    response.thread_id = Some(request.thread_id);
+    Ok(response)
 }
 
 pub(crate) fn answer_elicitation_with_state(

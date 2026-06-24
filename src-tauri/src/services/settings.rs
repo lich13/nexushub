@@ -8,7 +8,7 @@ use nexushub_core::{
             self as cleanup_service, ArchiveDeletePlan, ArchiveDeleteResult,
             HiddenThreadDeletePlan, HiddenThreadDeleteResult,
         },
-        goals as goal_service, jobs as job_service, probe as probe_service,
+        jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
         uploads as upload_service,
     },
@@ -20,58 +20,6 @@ use serde_json::{json, Value};
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
 
 pub(crate) type DesktopCleanupExecuteRequest = cleanup_service::CleanupExecuteRequest;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopGoalRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub objective: Option<String>,
-    #[serde(alias = "tokenBudget", alias = "token_budget")]
-    pub token_budget: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopGoal {
-    pub available: bool,
-    pub enabled: bool,
-    pub thread_id: Option<String>,
-    pub objective: Option<String>,
-    pub token_budget: Option<u64>,
-    pub status: String,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<String>,
-}
-
-pub(crate) fn desktop_goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
-    DesktopGoal {
-        available: view.available,
-        enabled: view.enabled,
-        thread_id: view.thread_id,
-        objective: view.objective,
-        token_budget: view.token_budget,
-        status: view.status,
-        completed_at: view.completed_at,
-        blocked_reason: view.blocked_reason,
-    }
-}
-
-pub(crate) fn unavailable_desktop_goal(
-    thread_id: Option<String>,
-    message: impl Into<String>,
-) -> DesktopGoal {
-    DesktopGoal {
-        available: false,
-        enabled: false,
-        thread_id,
-        objective: None,
-        token_budget: None,
-        status: "unavailable".to_string(),
-        completed_at: None,
-        blocked_reason: Some(message.into()),
-    }
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,101 +92,6 @@ pub(crate) fn store_uploads_with_state(
             .collect(),
     )?;
     upload_service::store_upload_plan(&root, facade.plan)
-}
-
-pub(crate) fn save_goal_with_state(
-    state: &DesktopState,
-    request: DesktopGoalRequest,
-) -> Result<DesktopGoal> {
-    let view = goal_service::save_goal_with_capability(
-        &state.db,
-        state.platform(),
-        goal_service::GoalUpdateRequest {
-            thread_id: Some(request.thread_id),
-            objective: request.objective,
-            token_budget: request.token_budget,
-            status: None,
-            enabled: None,
-        },
-    )?;
-    Ok(desktop_goal_from_view(view))
-}
-
-pub(crate) fn save_goal_from_parts_with_state(
-    state: &DesktopState,
-    thread_id: Option<String>,
-    objective: Option<String>,
-    token_budget: Option<u64>,
-) -> Result<DesktopGoal> {
-    save_goal_with_state(
-        state,
-        DesktopGoalRequest {
-            thread_id: required_thread_id(thread_id)?,
-            objective,
-            token_budget,
-        },
-    )
-}
-
-pub(crate) fn clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    let view =
-        goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
-    Ok(desktop_goal_from_view(view))
-}
-
-pub(crate) fn clear_goal_from_parts_with_state(
-    state: &DesktopState,
-    thread_id: Option<String>,
-) -> Result<DesktopGoal> {
-    let thread_id = required_thread_id(thread_id)?;
-    clear_goal_with_state(state, &thread_id)
-}
-
-pub(crate) fn pause_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    let view = goal_service::pause_goal_with_capability(&state.db, state.platform(), thread_id)?;
-    Ok(desktop_goal_from_view(view))
-}
-
-pub(crate) fn pause_goal_from_parts_with_state(
-    state: &DesktopState,
-    thread_id: Option<String>,
-) -> Result<DesktopGoal> {
-    let thread_id = required_thread_id(thread_id)?;
-    pause_goal_with_state(state, &thread_id)
-}
-
-pub(crate) fn resume_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
-    let view = goal_service::resume_goal_with_capability(&state.db, state.platform(), thread_id)?;
-    Ok(desktop_goal_from_view(view))
-}
-
-pub(crate) fn resume_goal_from_parts_with_state(
-    state: &DesktopState,
-    thread_id: Option<String>,
-) -> Result<DesktopGoal> {
-    let thread_id = required_thread_id(thread_id)?;
-    resume_goal_with_state(state, &thread_id)
-}
-
-fn required_thread_id(thread_id: Option<String>) -> Result<String> {
-    thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("threadId is required"))
-}
-
-pub(crate) fn get_goal_with_state(
-    state: &DesktopState,
-    thread_id: Option<String>,
-) -> Result<DesktopGoal> {
-    let view = goal_service::goal_get_response_with_capability(
-        &state.db,
-        state.platform(),
-        goal_service::GoalGetRequest { thread_id },
-    )?;
-    Ok(desktop_goal_from_view(view))
 }
 
 pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
@@ -429,7 +282,7 @@ pub(crate) fn archive_delete_execute_with_state(
         request,
     )?;
     let dry_run = cleanup_service::dry_run_archived_with_capability(state.platform(), &paths)?;
-    ensure_cleanup_expected_count(plan.confirmation.expected_count, dry_run.archived_threads)?;
+    cleanup_service::validate_cleanup_expected_count(&plan, dry_run.archived_threads)?;
     cleanup_service::execute_archived_with_capability(state.platform(), &paths)
 }
 
@@ -450,20 +303,8 @@ pub(crate) fn hidden_delete_execute_with_state(
         request,
     )?;
     let dry_run = cleanup_service::dry_run_hidden_with_capability(state.platform(), &paths)?;
-    ensure_cleanup_expected_count(plan.confirmation.expected_count, dry_run.hidden_threads)?;
+    cleanup_service::validate_cleanup_expected_count(&plan, dry_run.hidden_threads)?;
     cleanup_service::execute_hidden_with_capability(state.platform(), &paths)
-}
-
-fn ensure_cleanup_expected_count(expected_count: Option<u64>, actual_count: u64) -> Result<()> {
-    let Some(expected_count) = expected_count else {
-        anyhow::bail!("cleanup expectedCount is required before deletion");
-    };
-    if expected_count != actual_count {
-        anyhow::bail!(
-            "cleanup expectedCount mismatch: expected={expected_count} actual={actual_count}"
-        );
-    }
-    Ok(())
 }
 
 pub(crate) fn probe_events_with_state(

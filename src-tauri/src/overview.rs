@@ -1,11 +1,6 @@
-use crate::services::{
-    settings::{self as settings_service, DesktopGoal},
-    threads::home_thread_summaries,
-};
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-    archive::{ArchiveDeletePlan, HiddenThreadDeletePlan},
-    codex::{resolve_codex_paths, CodexPaths, ThreadSummary},
+    codex::{resolve_codex_paths, CodexPaths},
     config::Config,
     crypto::SecretBox,
     db::PanelDb,
@@ -16,8 +11,6 @@ use nexushub_core::{
         LocalPluginInfo,
     },
     platform::{PlatformKind, PlatformPaths},
-    probe::{ProbeLogsDbStatus, ProbeRuntime, ProbeStatus},
-    system::{system_status_with_paths, SystemStatus},
 };
 use serde::Serialize;
 use std::{
@@ -56,17 +49,10 @@ pub struct DesktopOverview {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopHome {
     pub overview: DesktopOverview,
-    pub system: Option<SystemStatus>,
-    pub probe: Option<ProbeStatus>,
-    pub logs_db: Option<ProbeLogsDbStatus>,
-    pub threads: Vec<ThreadSummary>,
     pub plugins: Vec<LocalPluginInfo>,
     pub models: Vec<CodexModelInfo>,
     pub permission_profiles: Vec<CodexPermissionProfile>,
     pub codex_config: LocalCodexConfig,
-    pub archive_plan: Option<ArchiveDeletePlan>,
-    pub hidden_plan: Option<HiddenThreadDeletePlan>,
-    pub goal: DesktopGoal,
     pub warnings: Vec<String>,
 }
 
@@ -186,49 +172,14 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
     let mut warnings = overview_warning(&overview);
     let resolved = resolve_codex_paths(&config.codex.home);
     warnings.extend(resolved.discovery_warnings.clone());
-    let runtime = ProbeRuntime::new(config.clone(), state.platform().clone());
-
-    let system = system_status_with_paths(&config, state.platform())
-        .await
-        .ok();
-    let probe = runtime.status().await.ok();
-    let logs_db = Some(runtime.logs_db_status());
-    let threads = home_thread_summaries(state).unwrap_or_else(|err| {
-        warnings.push(format!("线程读取失败: {err}"));
-        Vec::new()
-    });
-    let archive_plan = None;
-    let hidden_plan = None;
-    let goal = first_thread_goal(state, threads.first());
 
     Ok(DesktopHome {
         overview,
-        system,
-        probe,
-        logs_db,
-        threads,
         plugins: local_plugin_catalog(),
         models: default_codex_models(),
         permission_profiles: default_permission_profiles(),
         codex_config: local_codex_config(&config, None),
-        archive_plan,
-        hidden_plan,
-        goal,
         warnings,
-    })
-}
-
-pub(crate) fn first_thread_goal(
-    state: &DesktopState,
-    first_thread: Option<&ThreadSummary>,
-) -> DesktopGoal {
-    let Some(thread) = first_thread else {
-        return settings_service::desktop_goal_from_view(
-            nexushub_core::services::goals::goal_empty("missing_thread"),
-        );
-    };
-    settings_service::get_goal_with_state(state, Some(thread.id.clone())).unwrap_or_else(|err| {
-        settings_service::unavailable_desktop_goal(Some(thread.id.clone()), err.to_string())
     })
 }
 
@@ -511,14 +462,19 @@ mod tests {
             .contains("fork uses Codex app-server state"));
     }
 
-    #[tokio::test]
-    async fn desktop_home_defers_cleanup_dry_run_plans() {
-        let (_temp, state) = test_desktop_state();
+    #[test]
+    fn desktop_home_does_not_carry_cleanup_or_goal_business_fields() {
+        let source = include_str!("overview.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("overview source must include production section");
 
-        let home = build_desktop_home_with_state(&state).await.unwrap();
-
-        assert!(home.archive_plan.is_none());
-        assert!(home.hidden_plan.is_none());
+        for forbidden in ["archive_plan", "hidden_plan", "goal:"] {
+            assert!(
+                !source.contains(forbidden),
+                "DesktopHome must stay a thin desktop summary and not carry {forbidden}"
+            );
+        }
     }
 
     #[test]

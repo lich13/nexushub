@@ -2,10 +2,7 @@ use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::config::Config;
 use nexushub_core::platform::PlatformPaths;
-use nexushub_core::services::{
-    commands,
-    updates::{self, UpdateAction, UpdateState, UpdateStatus},
-};
+use nexushub_core::services::updates::{self, UpdateAction, UpdateState, UpdateStatus};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -53,29 +50,15 @@ pub(crate) async fn check_update_status(
     let job =
         native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Check)
             .map_err(|err| err.to_string())?;
-    let job_id = update_job_id(job.id_action);
-    state
-        .db
-        .create_job(&job_id, &job.spec.kind, &job.spec.title)
-        .map_err(|err| err.to_string())?;
-    state
-        .db
-        .append_job_output(&job_id, &job.spec.initial_output)
-        .map_err(|err| err.to_string())?;
+    let execution = NativeUpdateJobExecution::start(&state, &job).map_err(|err| err.to_string())?;
 
-    match check_update(&app, &state, &job_id).await {
+    match check_update(&app, &state, execution.job_id()).await {
         Ok(status) => {
-            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
+            execution.finish_success(&state);
+            let job_id = execution.job_id().to_string();
             Ok(DesktopUpdateCheckResponse { job_id, status })
         }
-        Err(err) => {
-            let message = err.to_string();
-            let _ = state
-                .db
-                .append_job_output(&job_id, &format!("error: {message}\n"));
-            let _ = state.db.finish_job(&job_id, "failed", None, Some(&message));
-            Err(message)
-        }
+        Err(err) => Err(execution.finish_error(&state, err)),
     }
 }
 
@@ -86,36 +69,26 @@ pub(crate) async fn install_update_and_restart(
     let job =
         native_update_job_plan_for_action(&state.config(), state.platform(), UpdateAction::Install)
             .map_err(|err| err.to_string())?;
-    let job_id = update_job_id(job.id_action);
-    state
-        .db
-        .create_job(&job_id, &job.spec.kind, &job.spec.title)
-        .map_err(|err| err.to_string())?;
-    state
-        .db
-        .append_job_output(&job_id, &job.spec.initial_output)
-        .map_err(|err| err.to_string())?;
+    let execution = NativeUpdateJobExecution::start(&state, &job).map_err(|err| err.to_string())?;
 
-    match install_update(&app, &state, &job_id).await {
+    match install_update(&app, &state, execution.job_id()).await {
         Ok(installed) => {
-            let _ = state.db.finish_job(&job_id, "succeeded", Some(0), None);
+            execution.finish_success(&state);
             if installed {
                 app.restart();
             }
+            let job_id = execution.job_id().to_string();
             Ok(DesktopUpdateInstallResponse { job_id, installed })
         }
-        Err(err) => {
-            let message = err.to_string();
-            let _ = state
-                .db
-                .append_job_output(&job_id, &format!("error: {message}\n"));
-            let _ = state.db.finish_job(&job_id, "failed", None, Some(&message));
-            Err(message)
-        }
+        Err(err) => Err(execution.finish_error(&state, err)),
     }
 }
 
-fn update_job_id(action: &str) -> String {
+fn update_job_id(spec: &updates::MacosUpdaterJobSpec) -> String {
+    let action = spec
+        .kind
+        .strip_prefix("nexushub_update_")
+        .unwrap_or(spec.kind.as_str());
     format!(
         "desktop-update-{action}-{}-{}",
         chrono::Utc::now().timestamp_millis(),
@@ -125,8 +98,44 @@ fn update_job_id(action: &str) -> String {
 
 #[derive(Debug)]
 struct NativeUpdateJobPlan {
-    id_action: &'static str,
     spec: updates::MacosUpdaterJobSpec,
+}
+
+#[derive(Debug)]
+struct NativeUpdateJobExecution {
+    job_id: String,
+}
+
+impl NativeUpdateJobExecution {
+    fn start(state: &DesktopState, plan: &NativeUpdateJobPlan) -> Result<Self> {
+        let id = update_job_id(&plan.spec);
+        state
+            .db
+            .create_job(&id, &plan.spec.kind, &plan.spec.title)?;
+        state.db.append_job_output(&id, &plan.spec.initial_output)?;
+        Ok(Self { job_id: id })
+    }
+
+    fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
+    fn finish_success(&self, state: &DesktopState) {
+        let _ = state
+            .db
+            .finish_job(&self.job_id, "succeeded", Some(0), None);
+    }
+
+    fn finish_error(&self, state: &DesktopState, err: anyhow::Error) -> String {
+        let message = err.to_string();
+        let _ = state
+            .db
+            .append_job_output(&self.job_id, &format!("error: {message}\n"));
+        let _ = state
+            .db
+            .finish_job(&self.job_id, "failed", None, Some(&message));
+        message
+    }
 }
 
 fn native_update_job_plan_for_action(
@@ -135,24 +144,13 @@ fn native_update_job_plan_for_action(
     action: UpdateAction,
 ) -> Result<NativeUpdateJobPlan> {
     let plan = updates::plan_update_action(config, platform, action)?;
-    let native = plan
+    let _native = plan
         .native
         .ok_or_else(|| anyhow::anyhow!("update action did not produce a native updater spec"))?;
     let spec = plan
         .macos_job
         .ok_or_else(|| anyhow::anyhow!("update action did not produce a macOS updater job spec"))?;
-    Ok(NativeUpdateJobPlan {
-        id_action: native_update_id_action(&native.command)?,
-        spec,
-    })
-}
-
-fn native_update_id_action(command: &str) -> Result<&'static str> {
-    match command {
-        commands::UPDATES_CHECK => Ok("check"),
-        commands::UPDATES_INSTALL => Ok("install"),
-        command => anyhow::bail!("unsupported native update command: {command}"),
-    }
+    Ok(NativeUpdateJobPlan { spec })
 }
 
 async fn check_update(app: &AppHandle, state: &DesktopState, job_id: &str) -> Result<UpdateStatus> {
@@ -244,13 +242,13 @@ mod tests {
 
         let check =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Check).unwrap();
-        assert_eq!(check.id_action, "check");
         assert_eq!(check.spec.kind, "nexushub_update_check");
+        assert!(update_job_id(&check.spec).starts_with("desktop-update-check-"));
 
         let install =
             native_update_job_plan_for_action(&config, &platform, UpdateAction::Install).unwrap();
-        assert_eq!(install.id_action, "install");
         assert_eq!(install.spec.kind, "nexushub_update_install");
+        assert!(update_job_id(&install.spec).starts_with("desktop-update-install-"));
 
         let prune_action = {
             use UpdateAction as Action;
@@ -319,6 +317,34 @@ mod tests {
             !command_source.contains("macos_updater_job_spec(action)"),
             "Tauri commands must consume the core update action plan macos_job instead of rebuilding job metadata"
         );
+    }
+
+    #[test]
+    fn native_update_job_state_is_owned_by_a_thin_executor() {
+        let command_source = include_str!("updates.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("updates production source");
+
+        assert!(
+            command_source.contains("struct NativeUpdateJobExecution")
+                && command_source.contains("NativeUpdateJobExecution::start")
+                && command_source.contains(".finish_success(")
+                && command_source.contains(".finish_error("),
+            "Tauri updates should keep native updater job lifecycle conversion inside a thin executor"
+        );
+        for forbidden in [
+            "fn native_update_id_action",
+            "id_action",
+            "let job_id = update_job_id(",
+            "create_job(&job_id",
+            "finish_job(&job_id",
+        ] {
+            assert!(
+                !command_source.contains(forbidden),
+                "Tauri updates must not scatter native updater job action/status conversion: {forbidden}"
+            );
+        }
     }
 
     fn job_record(status: &str, output: &str) -> JobRecord {

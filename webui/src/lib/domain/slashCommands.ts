@@ -13,6 +13,37 @@ export type SlashCommandAction =
 
 type ControlledSlashActionKind = "archive_thread" | "copy_latest" | "fork_thread" | "open_debug_config" | "open_new_thread" | "open_plugins" | "open_resume" | "open_status" | "open_thread_settings" | "stop_thread" | "toggle_fast" | "toggle_plan_mode";
 
+export type SlashCommandInspectorState = {
+  showFork: boolean;
+  showArchive: boolean;
+  approvalMode: "interactive" | "unsupported";
+};
+
+export type SlashCommandExecutionPlan =
+  | { kind: "toggle_plan_mode"; draft: ""; message: string }
+  | { kind: "open_plugins"; draft: ""; message: string }
+  | { kind: "open_status"; draft: ""; message: string }
+  | { kind: "open_new_thread"; draft: ""; message?: string }
+  | { kind: "open_resume"; draft: ""; message: string }
+  | { kind: "open_thread_settings"; draft: ""; message: string }
+  | { kind: "archive_thread"; draft: "" }
+  | { kind: "fork_thread"; draft: "" }
+  | { kind: "stop_thread"; draft: "" }
+  | { kind: "copy_latest"; draft: ""; text: string; message: string }
+  | { kind: "toggle_fast"; draft: ""; serviceTier: string; message: string }
+  | { kind: "insert_template"; draft: string; message: string }
+  | { kind: "feedback"; draft: ""; message: string };
+
+export type SlashCommandExecutionPlanInput = {
+  command: string;
+  hasThread?: boolean;
+  capabilities?: RuntimeCapabilityInput;
+  inspectorActions: SlashCommandInspectorState;
+  supportsFast: boolean;
+  serviceTier: string;
+  latestAssistantCopy?: string | null;
+};
+
 export const slashCommands: SlashCommand[] = [
   { command: "/permissions", description: "调整权限与审批模式", usageHint: "/permissions" },
   { command: "/ide", description: "加入 IDE 上下文", usageHint: "/ide" },
@@ -130,4 +161,66 @@ export function slashCommandAction(command: string, hasThread = true, input?: Ru
     command: normalized,
     message: unavailableSlashCommands[normalized] ?? "Web 端暂不支持该 TUI 命令；请使用现有面板或本机 Codex TUI。"
   };
+}
+
+export function slashCommandExecutionPlan(input: SlashCommandExecutionPlanInput): SlashCommandExecutionPlan {
+  const normalized = input.command.trim().replace(/\s+/g, " ");
+  const action = slashCommandAction(normalized, input.hasThread ?? true, input.capabilities);
+  if (action.kind === "unknown") {
+    if (normalized === "/fork" && !input.inspectorActions.showFork) {
+      return { kind: "feedback", draft: "", message: "macOS App 当前不支持 Fork 操作" };
+    }
+    if (normalized === "/archive" && !input.inspectorActions.showArchive) {
+      return { kind: "feedback", draft: "", message: "当前运行时不支持归档操作" };
+    }
+  }
+  switch (action.kind) {
+    case "toggle_plan_mode":
+      return { kind: "toggle_plan_mode", draft: "", message: action.message ?? "Plan Mode 已切换" };
+    case "open_plugins":
+      return { kind: "open_plugins", draft: "", message: action.message ?? "已打开插件/Provider 面板" };
+    case "open_status":
+      return { kind: "open_status", draft: "", message: action.message ?? "已打开线程状态" };
+    case "open_new_thread":
+      return { kind: "open_new_thread", draft: "" };
+    case "open_resume":
+      return { kind: "open_resume", draft: "", message: "请在线程列表选择要恢复的会话" };
+    case "open_thread_settings":
+      return { kind: "open_thread_settings", draft: "", message: "线程设置已在右侧面板显示" };
+    case "archive_thread":
+      return input.inspectorActions.showArchive
+        ? { kind: "archive_thread", draft: "" }
+        : { kind: "feedback", draft: "", message: "当前运行时不支持归档操作" };
+    case "fork_thread":
+      return input.inspectorActions.showFork
+        ? { kind: "fork_thread", draft: "" }
+        : { kind: "feedback", draft: "", message: "macOS App 当前不支持 Fork 操作" };
+    case "stop_thread":
+      return { kind: "stop_thread", draft: "" };
+    case "copy_latest":
+      return input.latestAssistantCopy
+        ? { kind: "copy_latest", draft: "", text: input.latestAssistantCopy, message: "已复制最新回复" }
+        : { kind: "feedback", draft: "", message: "没有可复制的最新回复" };
+    case "toggle_fast":
+      if (!input.supportsFast) {
+        return { kind: "feedback", draft: "", message: "当前模型不支持 Fast service tier" };
+      }
+      {
+        const next = input.serviceTier === "priority" ? "" : "priority";
+        return {
+          kind: "toggle_fast",
+          draft: "",
+          serviceTier: next,
+          message: next === "priority" ? "Fast 已开启" : "Fast 已关闭"
+        };
+      }
+    case "insert_template":
+      return { kind: "insert_template", draft: `${action.command} `, message: action.message };
+    case "focus_control":
+    case "requires_thread":
+    case "unavailable":
+    case "unknown":
+    default:
+      return { kind: "feedback", draft: "", message: action.message ?? "已执行" };
+  }
 }

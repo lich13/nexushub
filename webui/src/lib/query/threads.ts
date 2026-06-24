@@ -44,8 +44,11 @@ import type {
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import {
+  actionMessage,
   archivedSelectedThreadCleanupView,
+  clearLocalThreadTitleOverride,
   selectedThreadDetailView,
+  setLocalThreadTitleOverride,
   threadSelectionView,
   type SelectedThread
 } from "../domain/codexViewModel";
@@ -736,6 +739,153 @@ export function useThreadActionMutations(input: {
       onError: input.onActionError
     })
   };
+}
+
+export function useThreadConversationActions(input: {
+  csrfToken?: string | null;
+  capabilities: RuntimeCapabilityMatrix;
+  messageStore: ThreadMessageStoreController;
+  buildPayload: (message: string, config: any, uploads: Pick<{ id: string }, "id">[]) => ThreadSendPayload;
+  activeThreadId: string;
+  fallbackRenameTitle: string;
+  nextThreadAfterArchive: SelectedThread;
+  onActiveMessageAccepted: () => void;
+  onArchiveSelectionChange: (threadId: SelectedThread) => void;
+  onRenameDraftCommitted: (title: string) => void;
+  onRenameDraftRestored: (title: string) => void;
+  onForkedThread: (threadId: string) => void;
+}) {
+  const threadCache = useThreadCacheActions();
+  const {
+    messageStore,
+    activeThreadId
+  } = input;
+
+  return useThreadActionMutations({
+    csrfToken: input.csrfToken,
+    capabilities: input.capabilities,
+    buildPayload: input.buildPayload,
+    onSendSuccess: ({ threadId: resultThreadId, result }) => {
+      messageStore.setLastResult(resultThreadId, result);
+      if (result.job_id || result.turn_id) {
+        messageStore.patchSummary(resultThreadId, (current) => ({
+          ...current,
+          status: "Running",
+          active_turn_id: result.turn_id ?? current.active_turn_id,
+          active_job_id: result.job_id ?? current.active_job_id
+        }));
+      }
+      if (messageStore.isActive(resultThreadId)) {
+        input.onActiveMessageAccepted();
+      }
+      messageStore.setFeedback(resultThreadId, actionMessage(result));
+      threadCache.invalidateJobs();
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(resultThreadId);
+    },
+    onStopSuccess: ({ threadId: stoppedThreadId }) => {
+      messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(stoppedThreadId);
+    },
+    onSteerSuccess: ({ threadId: resultThreadId, result }) => {
+      messageStore.setLastResult(resultThreadId, result);
+      if (messageStore.isActive(resultThreadId)) {
+        input.onActiveMessageAccepted();
+      }
+      messageStore.setFeedback(resultThreadId, actionMessage(result));
+      threadCache.invalidateFollowUps(resultThreadId);
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(resultThreadId);
+    },
+    onFollowUpCancelSuccess: ({ threadId: cancelledThreadId }) => {
+      messageStore.setFeedback(cancelledThreadId, "跟进已取消");
+      threadCache.invalidateFollowUps(cancelledThreadId);
+    },
+    onArchiveMutate: async (variables) => {
+      await threadCache.cancelThreadsAndThread(variables.threadId);
+      const wasArchived = variables.status === "Archived";
+      const snapshot = wasArchived
+        ? threadCache.applyOptimisticThreadRestore(variables.threadId)
+        : threadCache.applyOptimisticThreadArchive(messageStore, variables.threadId);
+      if (!wasArchived) {
+        input.onArchiveSelectionChange(input.nextThreadAfterArchive);
+      }
+      return { snapshot, wasArchived };
+    },
+    onArchiveSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
+      messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
+    },
+    onArchiveError: (err, variables, context) => {
+      const archiveContext = context as { snapshot?: ThreadCacheSnapshot; wasArchived?: boolean } | undefined;
+      if (archiveContext?.wasArchived) {
+        threadCache.rollbackOptimisticThreadRestore(archiveContext.snapshot);
+      } else {
+        threadCache.rollbackOptimisticThreadArchive(archiveContext?.snapshot);
+        if (variables?.threadId) {
+          input.onArchiveSelectionChange(variables.threadId);
+        }
+      }
+      messageStore.setFeedback(variables?.threadId ?? activeThreadId, err.message);
+    },
+    onArchiveSettled: (variables) => {
+      threadCache.invalidateThreads();
+      if (variables?.threadId) {
+        threadCache.invalidateThread(variables.threadId);
+      }
+    },
+    onRenameMutate: async (variables) => {
+      const title = variables.title.trim();
+      await threadCache.cancelThreadsAndThread(variables.threadId);
+      const snapshot = threadCache.applyOptimisticThreadTitle(variables.threadId, title);
+      if (title) {
+        setLocalThreadTitleOverride(variables.threadId, title);
+        input.onRenameDraftCommitted(title);
+        messageStore.patchSummary(variables.threadId, { title });
+      }
+      return { snapshot };
+    },
+    onRenameSuccess: ({ threadId: renamedThreadId, title }) => {
+      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
+      if (title) {
+        setLocalThreadTitleOverride(renamedThreadId, title);
+        threadCache.applyOptimisticThreadTitle(renamedThreadId, title);
+      }
+    },
+    onRenameError: (err, variables, context) => {
+      const renameContext = context as { snapshot?: ThreadCacheSnapshot } | undefined;
+      if (variables?.threadId) {
+        clearLocalThreadTitleOverride(variables.threadId);
+      }
+      threadCache.rollbackOptimisticThreadTitle(renameContext?.snapshot);
+      const failedThreadId = variables?.threadId ?? activeThreadId;
+      const restoredTitle = threadCache.cachedThreadSummary(failedThreadId)?.title ?? input.fallbackRenameTitle;
+      if (variables?.threadId === activeThreadId && restoredTitle) {
+        input.onRenameDraftRestored(restoredTitle);
+        messageStore.patchSummary(variables.threadId, { title: restoredTitle });
+      }
+      messageStore.setFeedback(failedThreadId, err.message);
+    },
+    onRenameSettled: (variables) => {
+      threadCache.invalidateThreads();
+      if (variables?.threadId) {
+        threadCache.invalidateThread(variables.threadId);
+      }
+    },
+    onForkSuccess: ({ threadId: forkedThreadId, result }) => {
+      messageStore.setLastResult(forkedThreadId, result);
+      messageStore.setFeedback(forkedThreadId, actionMessage(result));
+      if (result.thread_id) input.onForkedThread(result.thread_id);
+      threadCache.invalidateThreads();
+    },
+    onBridgeActionSuccess: ({ threadId: actionThreadId, result }) => {
+      messageStore.setLastResult(actionThreadId, result);
+      messageStore.setFeedback(actionThreadId, actionMessage(result));
+      threadCache.invalidateThreads();
+      threadCache.invalidateThread(actionThreadId);
+    },
+    onActionError: (err, variables) => messageStore.setFeedback(variables?.threadId ?? activeThreadId, err.message)
+  });
 }
 
 export function useThreadGoalQuery(threadId: string) {

@@ -4,8 +4,7 @@ import type {
   ProbeJobAction,
   ProbeLogsDbStatus,
   ProbeSettings,
-  ProbeStatus,
-  SentinelStatus
+  ProbeStatus
 } from "../../types";
 import { callCommand } from "./transport";
 import { jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
@@ -17,10 +16,6 @@ import {
   demoProbeStatus,
   demoSavedProbeSettings
 } from "./demo";
-
-export async function getSentinelStatus(): Promise<OptionalResult<SentinelStatus>> {
-  return getProbeStatus();
-}
 
 export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
   if (USE_DEMO) {

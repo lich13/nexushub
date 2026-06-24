@@ -1672,13 +1672,75 @@ describe("archive delete API compatibility", () => {
 
   test("production API commands are unified dot commands with upload and events as transport exceptions", () => {
     const commands = [
-      ...domainApiSource.matchAll(/callCommand(?:<[^>]+>)?\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/callCommand(?:<[^()]*>)?\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
     ].map((match) => match[1]);
+    const allowedCommands = [
+      "auth.login",
+      "auth.logout",
+      "auth.me",
+      "auth.publicSettings",
+      "cleanup.archiveDryRun",
+      "cleanup.archiveExecute",
+      "cleanup.hiddenDryRun",
+      "cleanup.hiddenExecute",
+      "jobs.detail",
+      "jobs.list",
+      "probe.barkTest",
+      "probe.events",
+      "probe.installHooks",
+      "probe.logsDb.status",
+      "probe.logsDbDryRun",
+      "probe.logsDbExecute",
+      "probe.settings.get",
+      "probe.settings.save",
+      "probe.status",
+      "security.changePassword",
+      "security.get",
+      "security.save",
+      "system.claudeCodeOverview",
+      "system.codexConfig",
+      "system.models",
+      "system.permissionProfiles",
+      "system.platform",
+      "system.plugins",
+      "system.providers",
+      "system.status",
+      "system.version",
+      "threads.approval.answer",
+      "threads.blocks",
+      "threads.create",
+      "threads.detail",
+      "threads.elicitation.answer",
+      "threads.followups.cancel",
+      "threads.followups.enqueue",
+      "threads.followups.list",
+      "threads.fork",
+      "threads.goal.clear",
+      "threads.goal.get",
+      "threads.goal.pause",
+      "threads.goal.resume",
+      "threads.goal.save",
+      "threads.list",
+      "threads.plan.accept",
+      "threads.plan.revise",
+      "threads.rename",
+      "threads.send",
+      "threads.steer",
+      "threads.stop",
+      "threads.archive",
+      "threads.restore",
+      "uploads.delete",
+      "updates.check",
+      "updates.install",
+      "updates.prune",
+      "updates.status"
+    ].sort();
 
     expect(commands.length).toBeGreaterThan(30);
     expect(commands.every((command) => command.includes("."))).toBe(true);
+    expect([...new Set(commands)].sort()).toEqual(allowedCommands);
     expect(domainApiSource).not.toMatch(/callCommand(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
     expect(runtimeSource).toContain('webFormRpc<T>("uploadFiles"');
     expect(runtimeSource).toContain("createRuntimeThreadEventSource");
@@ -1849,7 +1911,9 @@ describe("archive delete API compatibility", () => {
       "desktopCommand",
       "webCommand",
       "runtimeDispatch",
-      "runtimeValue"
+      "runtimeValue",
+      "getSentinelStatus",
+      "SentinelStatus"
     ];
     for (const token of retiredCompatibilityTokens) {
       expectNoSourceMatches(productionSources, token, `retired compatibility token ${token}`);
@@ -2862,6 +2926,7 @@ describe("archive delete API compatibility", () => {
 
   test("question and hidden cleanup helpers expose readiness and disabled state", async () => {
     const app = await import("../App");
+    const { hiddenThreadDeleteStats } = await import("./domain/runtimeViewModel");
     const questions = [
       { id: "q1", question: "选择方案", options: [{ label: "A" }, { label: "B" }] },
       { id: "q2", question: "选择范围", options: [{ label: "小" }, { label: "大" }] }
@@ -2888,7 +2953,7 @@ describe("archive delete API compatibility", () => {
       buttons: ["A", "B", "小", "大"],
       supplementalInput: true
     });
-    expect(app.hiddenThreadDeleteStats(hiddenPlan)).toEqual({
+    expect(hiddenThreadDeleteStats(hiddenPlan)).toEqual({
       hidden: 2,
       visible: 7,
       sourceCounts: "exec:1 subagent:1",

@@ -624,8 +624,12 @@ log_dir = "{}"
             "Tauri cleanup execute must pass through the shared core confirmation plan"
         );
         assert!(
-            source.contains("ensure_cleanup_expected_count"),
-            "Tauri cleanup execute must reject stale dry-run counts before deletion"
+            source.contains("cleanup_service::validate_cleanup_expected_count"),
+            "Tauri cleanup execute must reject stale dry-run counts via the shared core validator before deletion"
+        );
+        assert!(
+            !source.contains("fn ensure_cleanup_expected_count"),
+            "Tauri cleanup execute must not duplicate the shared cleanup expected-count rule"
         );
     }
 
@@ -659,6 +663,16 @@ log_dir = "{}"
             "pub struct DesktopDeleteUploadRequest",
             "pub struct DesktopFollowupRequest",
             "pub struct DesktopCancelFollowupRequest",
+            "DesktopGoal",
+            "ProbeRuntime",
+            "ProbeStatus",
+            "ProbeLogsDbStatus",
+            "SystemStatus",
+            "ArchiveDeletePlan",
+            "HiddenThreadDeletePlan",
+            "first_thread_goal",
+            "ThreadSummary",
+            "home_thread_summaries",
         ] {
             assert!(
                 !overview_source.contains(forbidden),
@@ -778,15 +792,100 @@ log_dir = "{}"
         assert!(
             settings_commands_source.contains("settings_service::probe_settings_with_state")
                 && settings_commands_source
-                    .contains("settings_service::save_goal_from_parts_with_state")
+                    .contains("goal_service::save_goal_from_parts_with_state")
                 && !settings_commands_source.contains("state.db.")
                 && !settings_commands_source.contains("plan_probe_settings_save"),
-            "Tauri settings commands must stay thin and delegate to services/settings.rs"
+            "Tauri settings commands must stay thin and delegate to native services"
         );
         assert!(
             !settings_source.contains("if let Some(device_key) = plan.bark_device_key"),
             "Tauri settings adapter must not special-case Probe secret writes outside the core plan"
         );
+    }
+
+    #[test]
+    fn tauri_settings_service_does_not_define_goal_state_semantics() {
+        let settings_source = include_str!("services/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings service source must include production section");
+        let goals_source = include_str!("services/goals.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("goals service source must include production section");
+
+        for forbidden in [
+            "pub(crate) struct DesktopGoal",
+            "pub(crate) struct DesktopGoalRequest",
+            "fn desktop_goal_from_view",
+            "fn unavailable_desktop_goal",
+            "status: \"unavailable\"",
+            "goal_service::GoalUpdateRequest",
+        ] {
+            assert!(
+                !settings_source.contains(forbidden),
+                "Tauri settings service must not define Goal business state semantics: {forbidden}"
+            );
+            assert!(
+                !goals_source.contains(forbidden),
+                "Tauri goals service must not define Goal business state semantics: {forbidden}"
+            );
+        }
+        assert!(
+            goals_source.contains("type DesktopGoalView = goal_service::GoalView"),
+            "Tauri goals service should expose the shared core Goal DTO instead of mapping a desktop DTO"
+        );
+    }
+
+    #[test]
+    fn tauri_probe_status_uses_core_probe_use_case_facade() {
+        let probe_source = include_str!("services/probe.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(include_str!("services/probe.rs"));
+
+        assert!(
+            probe_source.contains("NexusHubUseCases::with_config")
+                && probe_source.contains(".probe()?")
+                && probe_source.contains(".status()?"),
+            "Tauri probe status must derive read-model buckets through the shared core Probe use-case facade"
+        );
+        for required in [
+            "status.running_threads = facade_status.running_threads",
+            "status.reply_needed_threads = facade_status.reply_needed_threads",
+            "status.recoverable_threads = facade_status.recoverable_threads",
+        ] {
+            assert!(
+                probe_source.contains(required),
+                "Tauri probe status must replace thread bucket read-model fields from the core facade: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_system_commands_delegate_to_native_service_layer() {
+        let system_commands_source = include_str!("commands/system.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("system command source must include production section");
+
+        assert!(
+            system_commands_source.contains("services::system"),
+            "commands/system.rs must delegate native work to services/system.rs"
+        );
+        for forbidden in [
+            "nexushub_core::system::system_status_with_paths",
+            "nexushub_core::local::local_plugin_catalog",
+            "nexushub_core::local::default_codex_models",
+            "nexushub_core::local::default_permission_profiles",
+            "nexushub_core::local::local_codex_config",
+            "nexushub_core::claude_code::claude_overview",
+        ] {
+            assert!(
+                !system_commands_source.contains(forbidden),
+                "commands/system.rs must stay thin and not execute native system logic: {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -799,6 +898,10 @@ log_dir = "{}"
             .split("\n#[cfg(test)]\nmod tests")
             .next()
             .expect("settings service source must include production section");
+        let goals_source = include_str!("services/goals.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("goals service source must include production section");
         let thread_commands_source = include_str!("commands/threads.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
@@ -809,11 +912,6 @@ log_dir = "{}"
             .unwrap_or(include_str!("services/threads.rs"));
 
         for required in [
-            "goal_service::goal_get_response_with_capability",
-            "goal_service::save_goal_with_capability",
-            "goal_service::clear_goal_with_capability",
-            "goal_service::pause_goal_with_capability",
-            "goal_service::resume_goal_with_capability",
             "upload_service::plan_store_uploads_with_capability",
             "upload_service::plan_delete_upload_with_capability",
             "cleanup_service::dry_run_archived_with_capability",
@@ -822,7 +920,19 @@ log_dir = "{}"
         ] {
             assert!(
                 settings_source.contains(required),
-                "Tauri settings commands must call the shared core facade/plan: {required}"
+                "Tauri settings service must call the shared core facade/plan: {required}"
+            );
+        }
+        for required in [
+            "goal_service::goal_get_response_with_capability",
+            "goal_service::save_goal_with_capability",
+            "goal_service::clear_goal_with_capability",
+            "goal_service::pause_goal_with_capability",
+            "goal_service::resume_goal_with_capability",
+        ] {
+            assert!(
+                goals_source.contains(required),
+                "Tauri goals service must call the shared core facade/plan: {required}"
             );
         }
         for required in [
@@ -844,9 +954,13 @@ log_dir = "{}"
         }
 
         assert!(
-            settings_commands_source.contains("settings_service::save_goal_from_parts_with_state")
-                && !settings_commands_source.contains("goal_service::"),
-            "Tauri settings commands must delegate migrated goal transactions to services/settings.rs"
+            settings_commands_source.contains("goal_service::save_goal_from_parts_with_state")
+                && !settings_commands_source.contains("goal_get_response_with_capability")
+                && !settings_commands_source.contains("save_goal_with_capability")
+                && !settings_commands_source.contains("clear_goal_with_capability")
+                && !settings_commands_source.contains("pause_goal_with_capability")
+                && !settings_commands_source.contains("resume_goal_with_capability"),
+            "Tauri settings commands must delegate migrated goal transactions to services/goals.rs"
         );
         assert!(
             thread_commands_source.contains("thread_service::enqueue_followup_with_state")
@@ -886,6 +1000,32 @@ log_dir = "{}"
             assert!(
                 !threads_source.contains(forbidden),
                 "Tauri thread commands must not reimplement migrated follow-up transactions: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_thread_approval_unavailable_semantics_stay_out_of_commands() {
+        let thread_commands_source = include_str!("commands/threads.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(include_str!("commands/threads.rs"));
+
+        assert!(
+            thread_commands_source.contains("thread_service::answer_approval_with_state")
+                && !thread_commands_source.contains("action_unavailable")
+                && !thread_commands_source.contains("approval actions are unavailable"),
+            "commands/threads.rs must keep approval answer as typed args + service + map_err only"
+        );
+        for forbidden in [
+            "THREADS_APPROVAL_ANSWER",
+            "action_unavailable",
+            "approval actions are unavailable",
+            "ok: false",
+        ] {
+            assert!(
+                !thread_commands_source.contains(forbidden),
+                "commands/threads.rs must not build approval business responses: {forbidden}"
             );
         }
     }
@@ -982,6 +1122,7 @@ log_dir = "{}"
                 "finish_job(",
                 "running_job_for_thread",
                 "ok_or_else",
+                "approval actions are unavailable",
             ] {
                 assert!(
                     !source.contains(forbidden),

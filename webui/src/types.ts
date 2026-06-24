@@ -607,8 +607,6 @@ export type ProbeLogsDbStatus = {
   [key: string]: unknown;
 };
 
-export type SentinelStatus = ProbeStatus;
-
 export type CodexModel = {
   id: string;
   label?: string | null;

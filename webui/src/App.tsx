@@ -58,20 +58,49 @@ import {
 } from "./lib/query/system";
 import {
   OPS_PANEL_TITLES,
+  archivePlanAfterExecute,
   approvalActionMode,
   canStartHiddenThreadDelete,
   canStartUpdateInstall,
   canShowForkAction,
   capabilitiesForInput,
+  cleanHostValue,
+  codexHomeStatusValue,
   failureCategoryLabel,
   formatGoalTimestamp,
   goalControlState,
   goalStatusLabel,
   goalStatusTone,
+  hiddenRolloutDeleteResultText,
+  hostnameFromPublicEndpoint,
+  isProbeSettings,
   jobFailureAnalysisView,
   jobOutputView,
+  logBytesDraftToMb,
+  logsDbPathStatusValue,
+  mbDraftToLogBytes,
+  normalizeTurnstileAction,
+  opsWorkspaceView,
   opsUpdateActionView,
+  pathText,
+  probeAvailabilityView,
+  probeDiscoveryWarningsText,
+  probeEventSummary,
+  probeJobActionLabel,
+  probeLogDbNumber,
+  probeLogDbSize,
+  probeLogDbString,
+  probeLogsDbTone,
+  probeRunningCountValue,
+  probeSettingsAfterBarkSave,
+  probeSnapshotStatusText,
+  probeStateLabel,
+  probeStatusThreads,
+  probeThreadsByStatus,
+  probeWorkspaceView,
   resolvedSelectedThreadId,
+  secondsToDays,
+  shouldAutoScrollProbeFeed,
   threadInspectorActionState,
   type RuntimeCapabilityInput
 } from "./lib/domain/runtimeViewModel";
@@ -104,9 +133,6 @@ import {
   renderConversationHeaderHtml,
   runConfigAfterSuccessfulSend,
   runConfigWithSupportedServiceTier,
-  secondsPerDay,
-  setLocalThreadTitleOverride,
-  clearLocalThreadTitleOverride,
   shouldHydrateThreadDetail,
   shouldShowLogoutForRuntime,
   shouldUseSavedSessionForRuntime,
@@ -125,13 +151,12 @@ import {
   type View
 } from "./lib/domain/codexViewModel";
 import {
-  slashCommandAction,
+  slashCommandExecutionPlan,
   slashCommands,
   slashCommandsForRuntime,
   type SlashCommand
 } from "./lib/domain/slashCommands";
 import {
-  type ThreadCacheSnapshot,
   threadDetailFromSlot,
   useArchivedSelectedThreadCleanup,
   useThreadCacheActions,
@@ -140,7 +165,7 @@ import {
   useHydrateThreadMessageStore,
   usePluginsQuery,
   useSelectedThreadState,
-  useThreadActionMutations,
+  useThreadConversationActions,
   useThreadBlockPageMutation,
   useThreadDetailHydration,
   useThreadDetailQuery,
@@ -195,16 +220,38 @@ export {
   canStartHiddenThreadDelete,
   canStartUpdateInstall,
   canShowForkAction,
+  codexHomeStatusValue,
   desktopRuntimeVisibleCopy,
   failureCategoryLabel,
   formatGoalTimestamp,
   goalControlState,
   goalStatusLabel,
   goalStatusTone,
+  logsDbPathStatusValue,
+  archivePlanAfterExecute,
+  hiddenRolloutDeleteResultText,
+  opsWorkspaceView,
   jobFailureAnalysisView,
   jobOutputView,
+  pathText,
+  probeAvailabilityView,
+  probeDiscoveryWarningsText,
+  probeEventSummary,
+  probeJobActionLabel,
+  probeLogDbNumber,
+  probeLogDbSize,
+  probeLogDbString,
+  probeLogsDbTone,
+  probeRunningCountValue,
+  probeSettingsAfterBarkSave,
+  probeSnapshotStatusText,
+  probeStateLabel,
+  probeStatusThreads,
+  probeThreadsByStatus,
+  probeWorkspaceView,
   opsUpdateActionView,
   resolvedSelectedThreadId,
+  shouldAutoScrollProbeFeed,
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy,
   threadInspectorActionState
@@ -243,7 +290,7 @@ export {
   threadMatchesListFilter,
   threadSettingsMetricLabels
 } from "./lib/domain/codexViewModel";
-export { slashCommandAction, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
+export { slashCommandAction, slashCommandExecutionPlan, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
 export { preservePreviousQueryData } from "./lib/query/shared";
 
 type MessageScrollSnapshot = {
@@ -725,6 +772,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
             loading={Boolean(resolvedSelected && detail.isLoading)}
             csrfToken={csrfToken}
             onCreated={(id) => selectThread(id)}
+            onPanelSelect={setView}
             capabilities={capabilities}
           />
         )}
@@ -1298,68 +1346,6 @@ export function threadRolloutPath(rolloutPath?: string | null): string | null {
   return rolloutPath?.trim() || null;
 }
 
-export function probeStatusThreads(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): ThreadSummary[] {
-  return [
-    ...(status?.running_threads ?? []),
-    ...(status?.reply_needed_threads ?? []),
-    ...(status?.recoverable_threads ?? [])
-  ];
-}
-
-export function probeThreadsByStatus(status?: Pick<ProbeStatus, "running_threads" | "reply_needed_threads" | "recoverable_threads"> | null): {
-  running: ThreadSummary[];
-  replyNeeded: ThreadSummary[];
-  recoverable: ThreadSummary[];
-} {
-  return {
-    running: status?.running_threads ?? [],
-    replyNeeded: status?.reply_needed_threads ?? [],
-    recoverable: status?.recoverable_threads ?? []
-  };
-}
-
-export function probeRunningCountValue(status?: Pick<ProbeStatus, "running_count" | "running_threads"> | null): string {
-  const backendCount = typeof status?.running_count === "number" ? Math.max(0, status.running_count) : 0;
-  const threadCount = status?.running_threads?.length ?? 0;
-  return String(backendCount > 0 ? backendCount : threadCount);
-}
-
-export function probeSettingsAfterBarkSave<T extends { notifications: { device_key_configured?: boolean } }>(
-  saved: T,
-  submittedDeviceKey?: string | null,
-): T {
-  if (!submittedDeviceKey?.trim()) return saved;
-  return {
-    ...saved,
-    notifications: {
-      ...saved.notifications,
-      device_key_configured: true
-    }
-  };
-}
-
-function isProbeJob(job: JobRecord): boolean {
-  return job.kind.startsWith("probe_")
-    || job.kind.startsWith("probe-")
-    || job.title.includes("探针")
-    || job.title.includes("Probe");
-}
-
-function probeJobActionLabel(action: ProbeJobAction | undefined): string {
-  switch (action) {
-    case "bark-test":
-      return "Bark 测试";
-    case "hooks-install":
-      return "Hook 安装";
-    case "logs-db-dry-run":
-      return "日志库 dry-run";
-    case "logs-db-execute":
-      return "日志库维护";
-    default:
-      return "Probe job";
-  }
-}
-
 function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [uploads, setUploads] = useState<ComposerUpload[]>([]);
@@ -1758,42 +1744,6 @@ export function renderCurrentActionCardSnapshot(input: {
   };
 }
 
-export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, status?: Pick<SystemStatus, "hidden_thread_count" | "state_db_integrity">): { hidden: number; visible: number; sourceCounts: string; integrity: string } {
-  const hidden = plan?.hidden_threads ?? status?.hidden_thread_count ?? 0;
-  return {
-    hidden,
-    visible: plan?.visible_threads ?? 0,
-    sourceCounts: sourceCountsText(plan?.hidden_source_counts),
-    integrity: plan?.integrity ?? status?.state_db_integrity ?? "未知"
-  };
-}
-
-export function archivePlanAfterExecute(current: ArchiveDeletePlan | null, result: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">): ArchiveDeletePlan | null {
-  if (!current) return current;
-  return {
-    ...current,
-    total_threads: result.after_total_threads,
-    active_threads: result.after_active_threads,
-    archived_threads: result.after_archived_threads,
-    archived_ids: [],
-    integrity: result.after_integrity
-  };
-}
-
-function cleanupStageLabel(input: { hasPlan: boolean; dryRunPending: boolean; armed: boolean; executePending: boolean; executableCount: number }): { label: string; tone?: "success" | "warning" | "danger" } {
-  if (input.executePending) return { label: "执行中", tone: "warning" };
-  if (input.armed) return { label: "等待确认", tone: "danger" };
-  if (input.dryRunPending) return { label: "扫描中", tone: "warning" };
-  if (!input.hasPlan) return { label: "待 dry-run" };
-  if (input.executableCount > 0) return { label: "可清理", tone: "warning" };
-  return { label: "无可清理", tone: "success" };
-}
-
-function hiddenRolloutDeleteResultText(result?: Pick<HiddenThreadDeleteResult, "deleted_rollout_files"> | null): string {
-  if (!result) return "等待执行";
-  return String(result.deleted_rollout_files ?? 0);
-}
-
 function currentActionKindFromBlocks(
   blocks: MessageBlock[],
   plan: MessageBlock | null | undefined,
@@ -1961,135 +1911,29 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
     }
   });
 
-  const threadActions = useThreadActionMutations({
+  const threadActions = useThreadConversationActions({
     csrfToken,
     capabilities,
+    messageStore,
     buildPayload,
-    onSendSuccess: ({ threadId: resultThreadId, result }) => {
-      messageStore.setLastResult(resultThreadId, result);
-      if (result.job_id || result.turn_id) {
-        messageStore.patchSummary(resultThreadId, (current) => ({
-          ...current,
-          status: "Running",
-          active_turn_id: result.turn_id ?? current.active_turn_id,
-          active_job_id: result.job_id ?? current.active_job_id
-        }));
-      }
-      if (messageStore.isActive(resultThreadId)) {
-        setDraft("");
-        attachments.clearUploads();
-        setRunConfig((current) => runConfigAfterSuccessfulSend(current));
-      }
-      messageStore.setFeedback(resultThreadId, actionMessage(result));
-      threadCache.invalidateJobs();
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(resultThreadId);
+    activeThreadId: summary.id,
+    fallbackRenameTitle: detail.summary.title,
+    nextThreadAfterArchive,
+    onActiveMessageAccepted: () => {
+      setDraft("");
+      attachments.clearUploads();
+      setRunConfig((current) => runConfigAfterSuccessfulSend(current));
     },
-    onStopSuccess: ({ threadId: stoppedThreadId }) => {
-      messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(stoppedThreadId);
+    onArchiveSelectionChange: onSelect,
+    onRenameDraftCommitted: (title) => {
+      setRenameValue(title);
+      setRenameDirty(false);
     },
-    onSteerSuccess: ({ threadId: resultThreadId, result }) => {
-      messageStore.setLastResult(resultThreadId, result);
-      if (messageStore.isActive(resultThreadId)) {
-        setDraft("");
-        attachments.clearUploads();
-        setRunConfig((current) => runConfigAfterSuccessfulSend(current));
-      }
-      messageStore.setFeedback(resultThreadId, actionMessage(result));
-      threadCache.invalidateFollowUps(resultThreadId);
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(resultThreadId);
+    onRenameDraftRestored: (title) => {
+      setRenameValue(title);
+      setRenameDirty(false);
     },
-    onFollowUpCancelSuccess: ({ threadId: cancelledThreadId }) => {
-      messageStore.setFeedback(cancelledThreadId, "跟进已取消");
-      threadCache.invalidateFollowUps(cancelledThreadId);
-    },
-    onArchiveMutate: async (variables) => {
-      await threadCache.cancelThreadsAndThread(variables.threadId);
-      const wasArchived = variables.status === "Archived";
-      const snapshot = wasArchived
-        ? threadCache.applyOptimisticThreadRestore(variables.threadId)
-        : threadCache.applyOptimisticThreadArchive(messageStore, variables.threadId);
-      if (!wasArchived) {
-        onSelect(nextThreadAfterArchive);
-      }
-      return { snapshot, wasArchived };
-    },
-    onArchiveSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
-      messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
-    },
-    onArchiveError: (err, variables, context) => {
-      const archiveContext = context as { snapshot?: ThreadCacheSnapshot; wasArchived?: boolean } | undefined;
-      if (archiveContext?.wasArchived) {
-        threadCache.rollbackOptimisticThreadRestore(archiveContext.snapshot);
-      } else {
-        threadCache.rollbackOptimisticThreadArchive(archiveContext?.snapshot);
-        if (variables?.threadId) {
-          onSelect(variables.threadId);
-        }
-      }
-      messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
-    },
-    onArchiveSettled: (variables) => {
-      threadCache.invalidateThreads();
-      if (variables?.threadId) {
-        threadCache.invalidateThread(variables.threadId);
-      }
-    },
-    onRenameMutate: async (variables) => {
-      const title = variables.title.trim();
-      await threadCache.cancelThreadsAndThread(variables.threadId);
-      const snapshot = threadCache.applyOptimisticThreadTitle(variables.threadId, title);
-      if (title) {
-        setLocalThreadTitleOverride(variables.threadId, title);
-        setRenameValue(title);
-        setRenameDirty(false);
-        messageStore.patchSummary(variables.threadId, { title });
-      }
-      return { snapshot };
-    },
-    onRenameSuccess: ({ threadId: renamedThreadId, title }) => {
-      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
-      if (title) {
-        setLocalThreadTitleOverride(renamedThreadId, title);
-        threadCache.applyOptimisticThreadTitle(renamedThreadId, title);
-      }
-    },
-    onRenameError: (err, variables, context) => {
-      const renameContext = context as { snapshot?: ThreadCacheSnapshot } | undefined;
-      if (variables?.threadId) {
-        clearLocalThreadTitleOverride(variables.threadId);
-      }
-      threadCache.rollbackOptimisticThreadTitle(renameContext?.snapshot);
-      const restoredTitle = threadCache.cachedThreadSummary(variables?.threadId ?? summary.id)?.title ?? detail.summary.title;
-      if (variables?.threadId === summary.id && restoredTitle) {
-        setRenameValue(restoredTitle);
-        setRenameDirty(false);
-        messageStore.patchSummary(variables.threadId, { title: restoredTitle });
-      }
-      messageStore.setFeedback(variables?.threadId ?? summary.id, err.message);
-    },
-    onRenameSettled: (variables) => {
-      threadCache.invalidateThreads();
-      if (variables?.threadId) {
-        threadCache.invalidateThread(variables.threadId);
-      }
-    },
-    onForkSuccess: ({ threadId: forkedThreadId, result }) => {
-      messageStore.setLastResult(forkedThreadId, result);
-      messageStore.setFeedback(forkedThreadId, actionMessage(result));
-      if (result.thread_id) onSelect(result.thread_id);
-      threadCache.invalidateThreads();
-    },
-    onBridgeActionSuccess: ({ threadId: actionThreadId, result }) => {
-      messageStore.setLastResult(actionThreadId, result);
-      messageStore.setFeedback(actionThreadId, actionMessage(result));
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(actionThreadId);
-    },
-    onActionError: (err, variables) => messageStore.setFeedback(variables?.threadId ?? summary.id, err.message)
+    onForkedThread: onSelect
   });
 
   const sendMutation = threadActions.send;
@@ -2104,57 +1948,50 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const planReviseMutation = threadActions.planRevise;
   const approvalMutation = threadActions.approval;
   const executeSlashCommand = useCallback((command: string) => {
-    const action = slashCommandAction(command, Boolean(threadId), capabilities);
-    switch (action.kind) {
+    const plan = slashCommandExecutionPlan({
+      command,
+      hasThread: Boolean(threadId),
+      capabilities,
+      inspectorActions,
+      supportsFast: modelSupportsServiceTier(runOptions.models, runConfig.model, "priority"),
+      serviceTier: runConfig.serviceTier,
+      latestAssistantCopy: latestAssistantCopyText(blocks)
+    });
+    setDraft(plan.draft);
+    switch (plan.kind) {
       case "toggle_plan_mode":
-        setDraft("");
         setRunConfig((current) => ({
           ...current,
           collaborationMode: current.collaborationMode === "plan" ? "" : "plan"
         }));
-        messageStore.setFeedback(threadId, action.message ?? "Plan Mode 已切换");
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "open_plugins":
-        setDraft("");
         onPanelSelect("claude");
-        messageStore.setFeedback(threadId, action.message ?? "已打开插件/Provider 面板");
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "open_status":
-        setDraft("");
         onPanelSelect("codex");
-        messageStore.setFeedback(threadId, action.message ?? "已打开线程状态");
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "open_new_thread":
-        setDraft("");
         onSelect("__new");
+        if (plan.message) messageStore.setFeedback(threadId, plan.message);
         break;
       case "open_resume":
-        setDraft("");
         onPanelSelect("codex");
-        messageStore.setFeedback(threadId, "请在线程列表选择要恢复的会话");
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "open_thread_settings":
-        setDraft("");
-        messageStore.setFeedback(threadId, "线程设置已在右侧面板显示");
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "archive_thread":
-        setDraft("");
-        if (!inspectorActions.showArchive) {
-          messageStore.setFeedback(threadId, "当前运行时不支持归档操作");
-          break;
-        }
         archiveMutation.mutate({ threadId: summary.id, status: summary.status });
         break;
       case "fork_thread":
-        setDraft("");
-        if (!inspectorActions.showFork) {
-          messageStore.setFeedback(threadId, "macOS App 当前不支持 Fork 操作");
-          break;
-        }
         forkMutation.mutate({ threadId: summary.id });
         break;
       case "stop_thread":
-        setDraft("");
         stopMutation.mutate({
           threadId: summary.id,
           turnId: lastResult?.turn_id ?? summary.active_turn_id,
@@ -2162,43 +1999,22 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         });
         break;
       case "copy_latest":
-        setDraft("");
-        {
-          const text = latestAssistantCopyText(blocks);
-          if (text) {
-            navigator.clipboard?.writeText(text);
-            messageStore.setFeedback(threadId, "已复制最新回复");
-          } else {
-            messageStore.setFeedback(threadId, "没有可复制的最新回复");
-          }
-        }
+        navigator.clipboard?.writeText(plan.text);
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "toggle_fast":
-        setDraft("");
-        if (!modelSupportsServiceTier(runOptions.models, runConfig.model, "priority")) {
-          messageStore.setFeedback(threadId, "当前模型不支持 Fast service tier");
-          break;
-        }
-        {
-          const next = runConfig.serviceTier === "priority" ? "" : "priority";
-          setRunConfig({ ...runConfig, serviceTier: next });
-          messageStore.setFeedback(threadId, next === "priority" ? "Fast 已开启" : "Fast 已关闭");
-        }
+        setRunConfig({ ...runConfig, serviceTier: plan.serviceTier });
+        messageStore.setFeedback(threadId, plan.message);
         break;
       case "insert_template":
-        setDraft(`${action.command} `);
-        messageStore.setFeedback(threadId, action.message);
+        messageStore.setFeedback(threadId, plan.message);
         break;
-      case "focus_control":
-      case "requires_thread":
-      case "unavailable":
-      case "unknown":
+      case "feedback":
       default:
-        setDraft("");
-        messageStore.setFeedback(threadId, action.message ?? "已执行");
+        messageStore.setFeedback(threadId, plan.message);
         break;
     }
-  }, [archiveMutation, blocks, csrfToken, forkMutation, inspectorActions.showArchive, inspectorActions.showFork, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
+  }, [archiveMutation, blocks, capabilities, forkMutation, inspectorActions, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
@@ -2756,10 +2572,11 @@ export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" |
   return `${compact.slice(0, 120)}...`;
 }
 
-function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
+function EmptyConversation({ loading, csrfToken, onCreated, onPanelSelect, capabilities }: {
   loading: boolean;
   csrfToken?: string | null;
   onCreated: (id: string) => void;
+  onPanelSelect: (view: View) => void;
   capabilities: RuntimeCapabilityMatrix;
 }) {
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2793,21 +2610,44 @@ function EmptyConversation({ loading, csrfToken, onCreated, capabilities }: {
     onError: (err: Error) => setFeedback(err.message)
   });
   const executeSlashCommand = (command: string) => {
-    const action = slashCommandAction(command, false, capabilities);
-    setDraft("");
-    if (action.kind === "toggle_plan_mode") {
+    const plan = slashCommandExecutionPlan({
+      command,
+      hasThread: false,
+      capabilities,
+      inspectorActions: threadInspectorActionState(capabilities),
+      supportsFast: modelSupportsServiceTier(runOptions.models, runConfig.model, "priority"),
+      serviceTier: runConfig.serviceTier,
+      latestAssistantCopy: null
+    });
+    setDraft(plan.draft);
+    if (plan.kind === "toggle_plan_mode") {
       setRunConfig((current) => ({
         ...current,
         collaborationMode: current.collaborationMode === "plan" ? "" : "plan"
       }));
-      setFeedback("Plan Mode 已切换");
+      setFeedback(plan.message);
       return;
     }
-    if (action.kind === "open_new_thread") {
-      setFeedback("已经在新线程输入框");
+    if (plan.kind === "open_new_thread") {
+      setFeedback(plan.message ?? "已经在新线程输入框");
       return;
     }
-    setFeedback(action.message ?? "该命令需要已有线程");
+    if (plan.kind === "open_plugins") {
+      onPanelSelect("claude");
+      setFeedback(plan.message);
+      return;
+    }
+    if (plan.kind === "open_status" || plan.kind === "open_resume") {
+      onPanelSelect("codex");
+      setFeedback(plan.message);
+      return;
+    }
+    if (plan.kind === "toggle_fast") {
+      setRunConfig({ ...runConfig, serviceTier: plan.serviceTier });
+      setFeedback(plan.message);
+      return;
+    }
+    setFeedback("message" in plan ? plan.message : "该命令需要已有线程");
   };
   const submitComposer = (domValue?: string | null) => {
     const currentDraft = composerSubmitDraftValue(draft, domValue ?? composerTextareaRef.current?.value);
@@ -3377,24 +3217,18 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
   const settingsErrors = draft ? probeSettingsValidation(draft) : [];
   const logsDb = logsDbStatus.data?.data;
   const recentEvents = events.data?.data?.events ?? [];
-  const logsDbStatusText = logsDb?.logs_db_status ?? logsDb?.status ?? data?.logs_db_status;
-  const logsDbTone = probeLogsDbTone(logsDbStatusText);
-  const barkConfigured = Boolean(currentSettings?.notifications?.device_key_configured || draft?.notifications.device_key_configured);
-  const probeThreads = probeThreadsByStatus(data);
-  const probeEnabled = data?.enabled ?? currentSettings?.probe?.enabled ?? false;
-  const serviceText = data ? `${data.service_kind}:${data.service_name}` : "未知";
-  const availability = probeAvailabilityView({
+  const probeView = probeWorkspaceView({
+    data,
     available,
-    probeEnabled,
+    currentSettings,
+    logsDb,
+    recentEventCount: recentEvents.length,
+    jobs: jobs.data,
     loading: status.isLoading,
     fetching: status.isFetching,
-    hasData: Boolean(data),
-    error: status.isError
+    error: status.isError,
+    draftDeviceKeyConfigured: draft?.notifications.device_key_configured
   });
-  const statusTone = availability.tone;
-  const snapshotText = probeSnapshotStatusText(data, status.isFetching);
-  const snapshotTone = data?.is_refreshing || status.isFetching ? "warning" : "success";
-  const probeJobs = (jobs.data ?? []).filter(isProbeJob).slice(0, 6);
   const probeActions = useProbeActions({
     csrfToken,
     capabilities,
@@ -3437,31 +3271,31 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
   const overviewSection = (
     <>
       <section className="probe-core-metrics" aria-label="探针核心指标">
-        <Metric label="Codex APP" value={availability.metric} tone={statusTone} />
+        <Metric label="Codex APP" value={probeView.availability.metric} tone={probeView.statusTone} />
         <Metric label="运行中" value={probeRunningCountValue(data)} tone={Number(probeRunningCountValue(data)) > 0 ? "success" : undefined} />
         <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
         <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
-        <Metric label="Bark" value={barkConfigured ? "已配置" : "未配置"} tone={barkConfigured ? "success" : "warning"} />
+        <Metric label="Bark" value={probeView.barkConfigured ? "已配置" : "未配置"} tone={probeView.barkConfigured ? "success" : "warning"} />
         <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
-        <Metric label="日志库" value={probeStateLabel(logsDbStatusText)} tone={logsDbTone} />
+        <Metric label="日志库" value={probeStateLabel(probeView.logsDbStatusText)} tone={probeView.logsDbTone} />
         {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
-        <Metric label="刷新" value={snapshotText} tone={snapshotTone} />
+        <Metric label="刷新" value={probeView.snapshotText} tone={probeView.snapshotTone} />
       </section>
       <section className="probe-control-grid" aria-label="探针线程状态">
-        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
-        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />
-        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />
+        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
+        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />
+        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />
       </section>
     </>
   );
   const activeSectionContent = (() => {
     switch (activeSection) {
       case "reply-needed":
-        return <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeThreads.replyNeeded} emptyText="当前没有待回复线程" />;
+        return <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />;
       case "recoverable":
-        return <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeThreads.recoverable} emptyText="当前没有可恢复异常" />;
+        return <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />;
       case "running":
-        return <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeThreads.running} emptyText="当前没有运行线程" />;
+        return <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />;
       case "hook":
         return (
           <Panel title="Hook" icon={<GitFork size={18} />}>
@@ -3480,7 +3314,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
               <ProbeBarkCard
                 draft={draft}
                 setDraft={setDraft}
-                configuredDeviceKey={barkConfigured}
+                configuredDeviceKey={probeView.barkConfigured}
                 saveStatus={saveStatus}
                 saving={saveMutation.isPending}
                 testing={pendingProbeAction === "bark-test"}
@@ -3527,7 +3361,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
                   status={data}
                   settings={currentSettings}
                   logsDb={logsDb}
-                  configuredDeviceKey={barkConfigured}
+                  configuredDeviceKey={probeView.barkConfigured}
                   capabilities={capabilities}
                   onSave={() => saveMutation.mutate(undefined)}
                 />
@@ -3536,7 +3370,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
               )}
             </Panel>
             <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
-              <JobList jobs={probeJobs} capabilities={capabilities} />
+              <JobList jobs={probeView.probeJobs} capabilities={capabilities} />
             </Panel>
           </>
         );
@@ -3555,16 +3389,16 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
         </div>
         <div className="button-row">
           <button className="secondary-button" onClick={probeActions.refresh}><RefreshCw size={17} />刷新</button>
-          <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
+          <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!probeView.barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
         </div>
       </div>
 
-      <section className={`probe-status-banner tone-${statusTone}`}>
+      <section className={`probe-status-banner tone-${probeView.statusTone}`}>
         <div>
-          <strong>{availability.headline}</strong>
-          <span>{serviceText} · {data?.host_label ?? currentSettings?.codex?.host_label ?? "未知主机"}</span>
+          <strong>{probeView.availability.headline}</strong>
+          <span>{probeView.serviceText} · {data?.host_label ?? currentSettings?.codex?.host_label ?? "未知主机"}</span>
         </div>
-        <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(logsDbStatusText)}</span>
+        <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(probeView.logsDbStatusText)}</span>
       </section>
 
       <div className="segmented" aria-label="Probe sections">
@@ -3582,7 +3416,7 @@ function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null
 
       {activeSectionContent}
 
-      {availability.tone === "danger" && (
+      {probeView.availability.tone === "danger" && (
         <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
           <div className="muted-row">探针端点不可用</div>
         </Panel>
@@ -3625,42 +3459,33 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
   const executeDelete = opsActions.archiveExecute;
   const hiddenDryRun = opsActions.hiddenDryRun;
   const executeHiddenDelete = opsActions.hiddenExecute;
-  const publicEndpoint = cleanHostValue(status.data?.public_endpoint);
-  const hostname = cleanHostValue(status.data?.hostname) ?? "读取中";
-  const hiddenStats = hiddenThreadDeleteStats(hiddenPlan, status.data);
-  const archivedCleanupStage = cleanupStageLabel({
-    hasPlan: Boolean(plan),
-    dryRunPending: dryRun.isPending,
-    armed: deleteArmed,
-    executePending: executeDelete.isPending,
-    executableCount: plan?.archived_threads ?? 0
+  const opsView = opsWorkspaceView({
+    status: status.data,
+    update: update.data,
+    hiddenPlan,
+    archivePlan: plan,
+    archiveDryRunPending: dryRun.isPending,
+    archiveDeleteArmed: deleteArmed,
+    archiveExecutePending: executeDelete.isPending,
+    hiddenDryRunPending: hiddenDryRun.isPending,
+    hiddenDeleteArmed,
+    hiddenExecutePending: executeHiddenDelete.isPending,
+    capabilities
   });
-  const hiddenCleanupStage = cleanupStageLabel({
-    hasPlan: Boolean(hiddenPlan),
-    dryRunPending: hiddenDryRun.isPending,
-    armed: hiddenDeleteArmed,
-    executePending: executeHiddenDelete.isPending,
-    executableCount: hiddenStats.hidden
-  });
-  const updateActions = opsUpdateActionView(update.data, capabilities);
 
   return (
     <div className="ops-grid">
       <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
         <div className="ops-status-overview">
-          <Metric label="Hostname" value={hostname} />
-          {capabilities.publicEndpointStatus && <Metric label="Public endpoint" value={publicEndpoint ?? "未配置"} tone={publicEndpoint ? "success" : "warning"} />}
-          {capabilities.codexStatePaths && <Metric label="state DB" value={status.data?.state_db_integrity ?? "unknown"} tone={status.data?.state_db_integrity === "ok" ? "success" : "warning"} />}
-          {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status.data)} wide />}
-          {capabilities.codexStatePaths && <Metric label="State DB" value={status.data?.state_db ?? "unknown"} wide />}
-          <Metric label="Hidden threads" value={String(status.data?.hidden_thread_count ?? 0)} tone={(status.data?.hidden_thread_count ?? 0) > 0 ? "warning" : undefined} />
-          <Metric label="Sources" value={sourceCountsText(status.data?.thread_source_counts)} />
+          {opsView.systemMetrics.map((metric) => (
+            <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} wide={metric.wide} />
+          ))}
         </div>
       </Panel>
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
-          {updateActions.map((action) => {
+          {opsView.updateActions.map((action) => {
             const className = action.tone === "primary" ? "primary-button" : action.tone === "danger" ? "danger-button soft" : "secondary-button";
             const icon = action.action === "check" ? <CheckCircle2 size={17} /> : action.action === "install" ? <Play size={17} /> : <Trash2 size={17} />;
             return (
@@ -3674,7 +3499,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
-          <span className={`status-chip ${archivedCleanupStage.tone ? `tone-${archivedCleanupStage.tone}` : "tone-muted"}`}>{archivedCleanupStage.label}</span>
+          <span className={`status-chip ${opsView.archivedCleanupStage.tone ? `tone-${opsView.archivedCleanupStage.tone}` : "tone-muted"}`}>{opsView.archivedCleanupStage.label}</span>
         </div>
         <div className="archive-plan">
           <Metric label="active" value={plan ? String(plan.active_threads) : "dry-run 未执行"} />
@@ -3698,13 +3523,13 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 non-archived subagent/internal</span>
-          <span className={`status-chip ${hiddenCleanupStage.tone ? `tone-${hiddenCleanupStage.tone}` : "tone-muted"}`}>{hiddenCleanupStage.label}</span>
+          <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
         </div>
         <div className="archive-plan">
-          <Metric label="visible" value={hiddenPlan ? String(hiddenStats.visible) : "dry-run 未执行"} />
-          <Metric label="hidden" value={String(hiddenStats.hidden)} tone={hiddenStats.hidden > 0 ? "warning" : undefined} />
-          <Metric label="sources" value={hiddenStats.sourceCounts} />
-          <Metric label="integrity" value={hiddenStats.integrity} tone={hiddenStats.integrity === "ok" ? "success" : "danger"} />
+          <Metric label="visible" value={hiddenPlan ? String(opsView.hiddenStats.visible) : "dry-run 未执行"} />
+          <Metric label="hidden" value={String(opsView.hiddenStats.hidden)} tone={opsView.hiddenStats.hidden > 0 ? "warning" : undefined} />
+          <Metric label="sources" value={opsView.hiddenStats.sourceCounts} />
+          <Metric label="integrity" value={opsView.hiddenStats.integrity} tone={opsView.hiddenStats.integrity === "ok" ? "success" : "danger"} />
           <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
         </div>
         <div className="button-row ops-action-row cleanup-actions">
@@ -3713,7 +3538,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
             <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
           ) : (
             <>
-              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: hiddenStats.hidden })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
+              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: opsView.hiddenStats.hidden })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
               <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)} disabled={executeHiddenDelete.isPending}>取消</button>
             </>
           )}
@@ -3760,7 +3585,7 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
   const mutation = securityActions.save;
   const passwordMutation = securityActions.password;
   const merged = { ...security.data, ...draft } as SecuritySettings & { turnstile_secret_key?: string };
-  const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * secondsPerDay);
+  const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * 86400);
   const defaultExpectedHostname = hostnameFromPublicEndpoint(systemStatus.data?.public_endpoint);
   const expectedHostname = cleanHostValue(merged.turnstile_expected_hostname) ?? defaultExpectedHostname;
   const expectedAction = normalizeTurnstileAction(merged.turnstile_expected_action);
@@ -3791,7 +3616,7 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
       <Panel title="登录设置" icon={<KeyRound size={18} />}>
         <Metric label="管理员" value={username} />
         <Metric label="Session TTL" value={`${ttlDays} 天`} />
-        <label className="field-label">Session TTL days<input type="number" min={1} value={ttlDays} onChange={(event) => setDraft({ ...draft, session_ttl_seconds: Math.max(1, Number(event.target.value) || defaultSessionTtlDays) * secondsPerDay })} /></label>
+        <label className="field-label">Session TTL days<input type="number" min={1} value={ttlDays} onChange={(event) => setDraft({ ...draft, session_ttl_seconds: Math.max(1, Number(event.target.value) || defaultSessionTtlDays) * 86400 })} /></label>
         <button className="secondary-button" onClick={() => mutation.mutate()}><CheckCircle2 size={17} />保存会话设置</button>
       </Panel>
       <Panel title="修改密码" icon={<Lock size={18} />} className="wide-panel">
@@ -4072,23 +3897,6 @@ function ProbeEventRow({ event }: { event: ProbeEvent }) {
 
 export { probeEventCard };
 
-export function probeEventSummary(event: ProbeEvent): string {
-  const thread = event.thread_id ? `线程 ${event.thread_id}` : "无线程";
-  const fields = [
-    event.payload?.session_id ? "session" : "",
-    event.payload?.transcript_path ? "transcript" : "",
-    event.payload?.last_assistant_message ? "assistant" : ""
-  ].filter(Boolean);
-  return [thread, fields.length ? fields.join(" · ") : "payload 已脱敏"].join(" · ");
-}
-
-export function shouldAutoScrollProbeFeed(
-  current: MessageScrollSnapshot,
-  _previous?: MessageScrollSnapshot | null
-): boolean {
-  return current.scrollHeight - current.scrollTop - current.clientHeight <= 32;
-}
-
 function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {
   return providers?.find((provider) => provider.id === id);
 }
@@ -4096,52 +3904,6 @@ function providerById(providers: AgentProviderInfo[] | undefined, id: string): A
 function capabilityText(provider?: Pick<AgentProviderInfo, "capabilities"> | null): string {
   const capabilities = provider?.capabilities ?? [];
   return capabilities.length ? capabilities.join(", ") : "none";
-}
-
-type CodexHomePathFields = {
-  home?: string | null;
-  codex_home?: string | null;
-  configured_codex_home?: string | null;
-  resolved_codex_home?: string | null;
-  codex_home_source?: string | null;
-};
-
-export function codexHomeStatusValue(status?: CodexHomePathFields | null): string {
-  return pathWithSource(
-    firstStringValue(status, ["resolved_codex_home", "codex_home", "home", "configured_codex_home"]),
-    firstStringValue(status, ["codex_home_source"])
-  );
-}
-
-export function logsDbPathStatusValue(logsDb?: ProbeLogsDbStatus | ProbeSettings["logs_db"] | null): string {
-  return pathWithSource(
-    firstStringValue(logsDb, ["resolved_logs_db_path", "resolved_path", "path", "logs_db_path"]),
-    firstStringValue(logsDb, ["logs_db_source", "source"])
-  );
-}
-
-export function probeDiscoveryWarningsText(warnings?: string[] | null): string {
-  return warnings?.length ? warnings.join(", ") : "无";
-}
-
-function pathText(value?: string | null): string {
-  return value && value.trim() ? value : "未知";
-}
-
-function pathWithSource(value?: string | null, source?: string | null): string {
-  const path = pathText(value);
-  const cleanedSource = source?.trim();
-  return path !== "未知" && cleanedSource ? `${path} · ${cleanedSource}` : path;
-}
-
-function firstStringValue(source: unknown, keys: string[]): string | null {
-  if (!source || typeof source !== "object") return null;
-  const record = source as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
 }
 
 function totalClaudeSessions(overview?: ClaudeOverview): number {
@@ -4157,74 +3919,6 @@ function claudeSettingsSummary(settings: unknown, mcpSummary?: ClaudeOverview["m
     mcp: typeof serverCount === "number" ? `${serverCount} servers` : mcp && typeof mcp === "object" ? `${Object.keys(mcp as Record<string, unknown>).length} servers` : "not detected",
     permissions: permissions && typeof permissions === "object" ? "configured" : "unknown"
   };
-}
-
-function probeFlavorLabel(flavor?: string | null): string {
-  if (flavor === "builtin") return "内置";
-  if (flavor === "server") return "服务";
-  return flavor ?? "未知";
-}
-
-function probeStateLabel(value?: string | null): string {
-  if (!value) return "未知";
-  const labels: Record<string, string> = {
-    managed: "已管理",
-    disabled: "已停用",
-    configured: "已配置",
-    not_configured: "未配置",
-    maintenance_ready: "可维护",
-    ready: "就绪",
-    ok: "正常",
-    builtin: "内置"
-  };
-  return labels[value] ?? value;
-}
-
-function probeLogsDbTone(value?: string | null): "success" | "warning" | "danger" {
-  if (value === "ok" || value === "maintenance_ready") return "success";
-  if (value === "disabled") return "warning";
-  return value ? "danger" : "warning";
-}
-
-function isProbeSettings(value: unknown): value is ProbeSettings {
-  return Boolean(value && typeof value === "object" && "codex" in value && "probe" in value && "notifications" in value && "logs_db" in value);
-}
-
-function logBytesDraftToMb(value: ProbeSettingsDraft["observability"]["log_max_bytes"]): number | "" {
-  if (value === "") return "";
-  return Math.max(1, Math.round(value / (1024 * 1024)));
-}
-
-function mbDraftToLogBytes(value: string): number | "" {
-  const parsed = probeNumberInputDraftValue(value);
-  return parsed === "" ? "" : parsed * 1024 * 1024;
-}
-
-function probeLogDbNumber(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): string {
-  const value = probeLogDbValue(logsDb, keys);
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "未知";
-}
-
-function probeLogDbString(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): string {
-  const value = probeLogDbValue(logsDb, keys);
-  if (typeof value === "string" && value.trim()) return value;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  return "未知";
-}
-
-function probeLogDbSize(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): string {
-  const value = probeLogDbValue(logsDb, keys);
-  return typeof value === "number" && Number.isFinite(value) ? formatFileSize(value) : "未知";
-}
-
-function probeLogDbValue(logsDb: ProbeLogsDbStatus | undefined, keys: string[]): unknown {
-  if (!logsDb) return undefined;
-  for (const key of keys) {
-    const value = logsDb[key];
-    if (value !== undefined && value !== null && value !== "") return value;
-  }
-  return undefined;
 }
 
 function recentClaudeSessions(overview?: ClaudeOverview): Array<{
@@ -4703,75 +4397,6 @@ export function messageBlockText(block: MessageBlock): string {
 function firstDisplayLine(value?: string | null): string | null {
   const line = value?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
   return line || null;
-}
-
-export function probeSnapshotStatusText(status?: Pick<ProbeStatus, "snapshot_age_seconds" | "is_refreshing" | "snapshot_status"> | null, fetching = false): string {
-  const age = typeof status?.snapshot_age_seconds === "number" ? Math.max(0, Math.round(status.snapshot_age_seconds)) : null;
-  const prefix = status?.is_refreshing || fetching ? "后台刷新" : "已同步";
-  if (age === null) return prefix;
-  if (age < 60) return `${prefix} ${age}s`;
-  const minutes = Math.floor(age / 60);
-  return `${prefix} ${minutes}m`;
-}
-
-export function probeAvailabilityView(input: {
-  available?: boolean;
-  probeEnabled?: boolean;
-  loading?: boolean;
-  fetching?: boolean;
-  hasData?: boolean;
-  error?: boolean;
-}): { headline: string; metric: string; tone: "success" | "warning" | "danger" } {
-  if (!input.hasData && input.error) {
-    return {
-      headline: "Probe 快照读取失败",
-      metric: "读取失败",
-      tone: "danger"
-    };
-  }
-  if (!input.hasData && (input.loading || input.fetching)) {
-    return {
-      headline: "正在读取 Probe 快照",
-      metric: "读取中",
-      tone: "warning"
-    };
-  }
-  if (input.available) {
-    return input.probeEnabled
-      ? { headline: "Probe 正在接管云机观测", metric: "运行中", tone: "success" }
-      : { headline: "Probe 已停用", metric: "停用", tone: "warning" };
-  }
-  return {
-    headline: "Probe 端点不可用",
-    metric: "不可用",
-    tone: "danger"
-  };
-}
-
-function cleanHostValue(value?: string | null): string | null {
-  const cleaned = value?.trim();
-  const legacyAlias = ["tencent", "wanka"].join("-");
-  if (!cleaned || cleaned === legacyAlias) return null;
-  return cleaned;
-}
-
-function hostnameFromPublicEndpoint(value?: string | null): string | null {
-  const endpoint = cleanHostValue(value);
-  if (!endpoint) return null;
-  try {
-    return new URL(endpoint).hostname || null;
-  } catch {
-    return endpoint.replace(/^\/+/, "").split("/")[0]?.split(":")[0] || null;
-  }
-}
-
-function secondsToDays(seconds: number): number {
-  return Math.max(1, Math.round(seconds / secondsPerDay));
-}
-
-function normalizeTurnstileAction(value?: string | null): string {
-  const action = value?.trim();
-  return action || "login";
 }
 
 function blockKindLabel(kind: string): string {

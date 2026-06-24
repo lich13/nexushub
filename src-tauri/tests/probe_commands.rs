@@ -159,11 +159,11 @@ fn tauri_cleanup_execute_commands_keep_confirmation_boundary() {
     for handler in [
         "archive_delete_execute_with_state",
         "hidden_delete_execute_with_state",
-        "ensure_cleanup_expected_count",
+        "cleanup_service::validate_cleanup_expected_count",
     ] {
         assert!(
             settings_source.contains(handler),
-            "settings service must keep cleanup confirmation helper: {handler}"
+            "settings service must keep cleanup confirmation boundary: {handler}"
         );
     }
     assert!(
@@ -171,8 +171,8 @@ fn tauri_cleanup_execute_commands_keep_confirmation_boundary() {
         "cleanup execute must plan confirmed archive and hidden deletes through shared core operation"
     );
     assert!(
-        settings_source.contains("plan.confirmation.expected_count"),
-        "cleanup execute must verify the expected dry-run count before deleting"
+        !settings_source.contains("fn ensure_cleanup_expected_count"),
+        "cleanup execute must not duplicate the shared expected-count validator"
     );
     for command in [
         "cleanup_service::execute_archived_with_capability",

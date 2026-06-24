@@ -14,6 +14,11 @@ pub use crate::archive::{
     ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult,
 };
 
+pub const ARCHIVE_DELETE_CONFIRMATION_MESSAGE: &str = "archive deletion must be confirmed";
+pub const HIDDEN_DELETE_CONFIRMATION_MESSAGE: &str = "hidden thread deletion must be confirmed";
+pub const CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE: &str =
+    "cleanup expectedCount is required before deletion";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CleanupAction {
     #[serde(rename = "archiveDeleteDryRun", alias = "archive-delete-dry-run")]
@@ -89,6 +94,8 @@ pub struct CleanupOperationPlan {
     pub execute: bool,
     pub requires_confirmation: bool,
     pub requires_prior_dry_run: bool,
+    pub requires_expected_count: bool,
+    pub confirmation_message: Option<String>,
     pub confirmation: CleanupConfirmationPlan,
 }
 
@@ -131,9 +138,6 @@ pub fn plan_cleanup_execute_operation(
     target: CleanupTarget,
     request: CleanupExecuteRequest,
 ) -> Result<CleanupOperationPlan> {
-    if !request.confirmed {
-        anyhow::bail!("cleanup execute must be confirmed");
-    }
     plan_cleanup_operation_with_confirmation(
         platform,
         target,
@@ -148,6 +152,10 @@ pub fn plan_cleanup_operation_with_confirmation(
     operation: CleanupOperationKind,
     confirmation: CleanupExecuteRequest,
 ) -> Result<CleanupOperationPlan> {
+    if matches!(operation, CleanupOperationKind::Execute) {
+        validate_cleanup_execute_confirmation(target, &confirmation)?;
+    }
+
     let action = match (target, operation) {
         (CleanupTarget::Archived, CleanupOperationKind::DryRun) => {
             CleanupAction::ArchiveDeleteDryRun
@@ -170,6 +178,10 @@ pub fn plan_cleanup_operation_with_confirmation(
         execute: action_plan.execute,
         requires_confirmation: action_plan.requires_confirmation,
         requires_prior_dry_run: action_plan.execute,
+        requires_expected_count: action_plan.execute,
+        confirmation_message: action_plan
+            .execute
+            .then(|| cleanup_confirmation_message(target).to_string()),
         confirmation: cleanup_confirmation_plan(confirmation),
     })
 }
@@ -183,6 +195,44 @@ pub fn cleanup_confirmation_plan(request: CleanupExecuteRequest) -> CleanupConfi
             "expectedCount": request.expected_count,
         }),
     }
+}
+
+pub fn cleanup_confirmation_message(target: CleanupTarget) -> &'static str {
+    match target {
+        CleanupTarget::Archived => ARCHIVE_DELETE_CONFIRMATION_MESSAGE,
+        CleanupTarget::Hidden => HIDDEN_DELETE_CONFIRMATION_MESSAGE,
+    }
+}
+
+fn validate_cleanup_execute_confirmation(
+    target: CleanupTarget,
+    request: &CleanupExecuteRequest,
+) -> Result<()> {
+    if !request.confirmed {
+        anyhow::bail!(cleanup_confirmation_message(target));
+    }
+    if request.expected_count.is_none() {
+        anyhow::bail!(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE);
+    }
+    Ok(())
+}
+
+pub fn validate_cleanup_expected_count(
+    plan: &CleanupOperationPlan,
+    actual_count: u64,
+) -> Result<()> {
+    if !plan.requires_expected_count {
+        return Ok(());
+    }
+    let Some(expected_count) = plan.confirmation.expected_count else {
+        anyhow::bail!(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE);
+    };
+    if expected_count != actual_count {
+        anyhow::bail!(
+            "cleanup expectedCount mismatch: expected={expected_count} actual={actual_count}"
+        );
+    }
+    Ok(())
 }
 
 pub fn dry_run_archived_with_capability(
@@ -222,7 +272,12 @@ mod tests {
     use crate::{
         platform::{PlatformKind, PlatformPaths},
         services::{
-            cleanup::{plan_cleanup_operation, CleanupAction, CleanupOperationKind, CleanupTarget},
+            cleanup::{
+                cleanup_confirmation_message, plan_cleanup_execute_operation,
+                plan_cleanup_operation, validate_cleanup_expected_count, CleanupAction,
+                CleanupExecuteRequest, CleanupOperationKind, CleanupTarget,
+                CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE, HIDDEN_DELETE_CONFIRMATION_MESSAGE,
+            },
             commands,
             system::Capability,
         },
@@ -247,16 +302,67 @@ mod tests {
         assert!(!dry_run.execute);
         assert!(!dry_run.requires_confirmation);
         assert!(!dry_run.requires_prior_dry_run);
+        assert!(!dry_run.requires_expected_count);
+        assert_eq!(dry_run.confirmation_message, None);
 
-        let execute =
+        let unconfirmed_execute =
             plan_cleanup_operation(&macos, CleanupTarget::Hidden, CleanupOperationKind::Execute)
-                .unwrap();
+                .expect_err("execute cleanup operation must require explicit confirmation");
+        assert!(
+            unconfirmed_execute
+                .to_string()
+                .contains(HIDDEN_DELETE_CONFIRMATION_MESSAGE),
+            "{unconfirmed_execute}"
+        );
+
+        let execute = plan_cleanup_execute_operation(
+            &macos,
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(2),
+            },
+        )
+        .unwrap();
         assert_eq!(execute.target, CleanupTarget::Hidden);
         assert_eq!(execute.action, CleanupAction::HiddenDeleteExecute);
         assert_eq!(execute.command, commands::CLEANUP_HIDDEN_EXECUTE);
         assert!(execute.execute);
         assert!(execute.requires_confirmation);
         assert!(execute.requires_prior_dry_run);
+        assert!(execute.requires_expected_count);
+        assert_eq!(
+            execute.confirmation_message.as_deref(),
+            Some(HIDDEN_DELETE_CONFIRMATION_MESSAGE)
+        );
+        assert!(execute.confirmation.confirmed);
+        assert_eq!(execute.confirmation.expected_count, Some(2));
+        validate_cleanup_expected_count(&dry_run, 999).unwrap();
+        validate_cleanup_expected_count(&execute, 2).unwrap();
+
+        let mismatch = validate_cleanup_expected_count(&execute, 3)
+            .expect_err("cleanup execute must reject stale dry-run counts");
+        assert!(mismatch.to_string().contains("expected=2 actual=3"));
+
+        let missing_count = plan_cleanup_execute_operation(
+            &macos,
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: None,
+            },
+        )
+        .expect_err("execute cleanup operation must carry the dry-run count");
+        assert!(
+            missing_count
+                .to_string()
+                .contains(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE),
+            "{missing_count}"
+        );
+        assert_eq!(
+            cleanup_confirmation_message(CleanupTarget::Hidden),
+            HIDDEN_DELETE_CONFIRMATION_MESSAGE
+        );
 
         assert!(plan_cleanup_operation(
             &windows,
