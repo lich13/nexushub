@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
+import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
@@ -104,6 +105,10 @@ type AppExports = typeof import("./App") & {
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
   canStartUpdateInstall?: (status?: UpdateStatus | null) => boolean;
+  opsUpdateActionView?: (
+    status?: UpdateStatus | null,
+    capabilities?: RuntimeCapabilityMatrix
+  ) => Array<{ action: "check" | "install" | "prune"; label: string; disabled: boolean }>;
   threadInspectorActionState?: (capabilities?: RuntimeCapabilityMatrix) => {
     showFork: boolean;
     showArchive: boolean;
@@ -300,6 +305,9 @@ describe("conversation helpers", () => {
     expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities).join("\n")).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune/i);
     expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
     expect(app.opsWorkspaceVisibleCopy?.(webCapabilities)).toEqual(expect.arrayContaining(["Public endpoint", "state DB", "Codex Home", "State DB", "Precheck", "Update", "Prune", "systemd 失败", "Nginx 失败"]));
+    expect(app.opsUpdateActionView?.(null, desktopCapabilities).map((action) => action.label)).toEqual(["Check", "Install"]);
+    expect(app.opsUpdateActionView?.({ update_available: true } as UpdateStatus, webCapabilities).map((action) => action.label)).toEqual(["Precheck", "Update", "Prune"]);
+    expect(app.opsUpdateActionView?.({ update_available: false } as UpdateStatus, desktopCapabilities).find((action) => action.action === "install")?.disabled).toBe(true);
   });
 
   test("desktop runtime hides unsupported fork and approval actions", async () => {
@@ -346,17 +354,17 @@ describe("conversation helpers", () => {
 
     const view = app.jobFailureAnalysisView?.({
       category: "nginx_failure",
-      explanation: "Nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune",
-      suggestions: ["检查 Nginx", "systemd restart", "输入管理员密码", "Linux prune"]
+      explanation: "Nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune，Turnstile 公网入口 https://661313.xyz/nexushub/ 43.155.235.227",
+      suggestions: ["检查 Nginx", "systemd restart", "输入管理员密码", "Linux prune", "Turnstile 661313.xyz"]
     }, desktopCapabilities);
     const rendered = [view?.label, view?.explanation, ...(view?.suggestions ?? [])].join("\n");
 
-    expect(rendered).not.toMatch(/systemd|Nginx|管理员密码|Linux prune/i);
+    expect(rendered).not.toMatch(/systemd|Nginx|管理员密码|Linux prune|Turnstile|公网入口|661313\.xyz|43\.155\.235\.227/i);
     expect(rendered).toContain("更新失败");
     expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
+      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo; Turnstile 公网入口 https://661313.xyz/nexushub/ 43.155.235.227",
       desktopCapabilities
-    )).not.toMatch(/systemd|nginx|管理员密码|Linux prune|sudo/i);
+    )).not.toMatch(/systemd|nginx|管理员密码|Linux prune|sudo|Turnstile|公网入口|661313\.xyz|43\.155\.235\.227/i);
     expect(app.jobOutputView?.(
       "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
       webCapabilities
@@ -392,6 +400,16 @@ describe("conversation helpers", () => {
     expect(appSource).not.toContain("subscribeThreadEvents");
     expect(appSource).not.toMatch(/export function (opsWorkspacePanelTitles|opsWorkspaceVisibleCopy|desktopRuntimeVisibleCopy|canShowForkAction|approvalActionMode|preservePreviousQueryData|slashCommandsForRuntime|failureCategoryLabel|jobFailureAnalysisView|jobOutputView)\b/);
     expect(appSource).not.toMatch(/const (linuxFailureLabels|genericFailureLabels|desktopUnsupportedSlashCommands|controlledSlashActions|unavailableSlashCommands)\b/);
+  });
+
+  test("App delegates Codex view-model helpers to domain modules", () => {
+    expect(appSource).not.toMatch(/function (makeRunConfig|permissionPresetFromConfig|threadStatusLabel|sourceCountsText|normalizeServiceTier)\b/);
+    expect(appSource).not.toMatch(/export function (defaultRunConfig|applyPermissionPreset|threadListItemText|filterVisibleThreadSummaries|buildPayload|runConfigWithSupportedServiceTier|conversationTitleText|lastEventKindText)\b/);
+    expect(appSource).not.toMatch(/const (codexLocalCopy|defaultCwd)\b/);
+    expect(appSource).toContain('from "./lib/domain/codexViewModel"');
+    expect(codexViewModelSource).not.toContain("../query/");
+    expect(codexViewModelSource).not.toContain("../session");
+    expect(codexViewModelSource).not.toContain("../runtime");
   });
 
   test("thread query realtime helper owns subscription side effects", async () => {

@@ -7,9 +7,8 @@ mod services;
 use std::path::Path;
 use tauri::Manager;
 
-pub use commands::{
-    probe::desktop_probe_status_with_state, updates::desktop_update_status_with_state,
-};
+pub use commands::probe::desktop_probe_status_with_state;
+pub use services::updates::desktop_update_status_with_state;
 pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
 
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
@@ -621,11 +620,11 @@ log_dir = "{}"
 
     #[test]
     fn tauri_thread_commands_use_core_thread_query_and_detail_plans() {
-        let threads_source = include_str!("commands/threads.rs")
+        let thread_commands_source = include_str!("commands/threads.rs")
             .split("\n#[cfg(test)]")
             .next()
             .unwrap_or(include_str!("commands/threads.rs"));
-        let thread_service_source = include_str!("services/threads.rs")
+        let threads_source = include_str!("services/threads.rs")
             .split("\n#[cfg(test)]")
             .next()
             .unwrap_or(include_str!("services/threads.rs"));
@@ -660,18 +659,29 @@ log_dir = "{}"
         }
 
         assert!(
-            thread_service_source.contains("thread_service::plan_threads_list_request")
-                && thread_service_source.contains("thread_service::build_threads_overview"),
+            thread_commands_source.contains("thread_service::threads_with_state")
+                && thread_commands_source.contains("thread_service::send_message_with_state")
+                && !thread_commands_source.contains("state.db.")
+                && !thread_commands_source.contains("state.jobs."),
+            "Tauri thread commands must stay thin and delegate to services/threads.rs"
+        );
+        assert!(
+            threads_source.contains("thread_service::plan_threads_list_request")
+                && threads_source.contains("thread_service::build_threads_overview"),
             "desktop thread service must consume shared core thread list plans"
         );
     }
 
     #[test]
     fn tauri_settings_commands_use_core_settings_view_and_secret_write_plans() {
-        let settings_source = include_str!("commands/settings.rs")
+        let settings_commands_source = include_str!("commands/settings.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
-            .expect("settings source must include production section");
+            .expect("settings command source must include production section");
+        let settings_source = include_str!("services/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings service source must include production section");
 
         for required in [
             "settings_service::probe_settings_view_with_capability",
@@ -684,6 +694,13 @@ log_dir = "{}"
         }
 
         assert!(
+            settings_commands_source.contains("settings_service::probe_settings_with_state")
+                && settings_commands_source.contains("settings_service::save_goal_with_state")
+                && !settings_commands_source.contains("state.db.")
+                && !settings_commands_source.contains("plan_probe_settings_save"),
+            "Tauri settings commands must stay thin and delegate to services/settings.rs"
+        );
+        assert!(
             !settings_source.contains("if let Some(device_key) = plan.bark_device_key"),
             "Tauri settings adapter must not special-case Probe secret writes outside the core plan"
         );
@@ -691,14 +708,22 @@ log_dir = "{}"
 
     #[test]
     fn tauri_commands_do_not_reimplement_migrated_goal_or_followup_transactions() {
-        let settings_source = include_str!("commands/settings.rs")
+        let settings_commands_source = include_str!("commands/settings.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
-            .expect("settings source must include production section");
-        let threads_source = include_str!("commands/threads.rs")
+            .expect("settings command source must include production section");
+        let settings_source = include_str!("services/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings service source must include production section");
+        let thread_commands_source = include_str!("commands/threads.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or(include_str!("commands/threads.rs"));
+        let threads_source = include_str!("services/threads.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(include_str!("services/threads.rs"));
 
         for required in [
             "goal_service::goal_get_response_with_capability",
@@ -735,6 +760,17 @@ log_dir = "{}"
                 "Tauri thread commands must call the shared core facade/plan: {required}"
             );
         }
+
+        assert!(
+            settings_commands_source.contains("settings_service::save_goal_with_state")
+                && !settings_commands_source.contains("goal_service::"),
+            "Tauri settings commands must delegate migrated goal transactions to services/settings.rs"
+        );
+        assert!(
+            thread_commands_source.contains("thread_service::enqueue_followup_with_state")
+                && !thread_commands_source.contains("job_service::"),
+            "Tauri thread commands must delegate migrated follow-up transactions to services/threads.rs"
+        );
 
         for forbidden in [
             "open_panel_db(config)",
@@ -838,6 +874,36 @@ log_dir = "{}"
                 !overview_source.contains(forbidden),
                 "overview.rs must not depend on command adapters: {forbidden}"
             );
+        }
+    }
+
+    #[test]
+    fn tauri_command_modules_remain_thin_typed_adapters() {
+        for (module, source) in [
+            ("threads", include_str!("commands/threads.rs")),
+            ("settings", include_str!("commands/settings.rs")),
+            ("updates", include_str!("commands/updates.rs")),
+            ("jobs", include_str!("commands/jobs.rs")),
+        ] {
+            for forbidden in [
+                "state.db.",
+                "state.jobs.",
+                "set_thread_archived",
+                "set_thread_title",
+                "thread_detail(",
+                "patch_probe_config_toml",
+                "std::fs::write",
+                "updater_builder",
+                "create_job(",
+                "append_job_output(",
+                "finish_job(",
+                "running_job_for_thread",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "commands/{module}.rs must stay a thin typed adapter and not contain {forbidden}"
+                );
+            }
         }
     }
 

@@ -2,13 +2,13 @@ type RuntimeKind = "web" | "desktop";
 
 type RpcArgs = Record<string, unknown> | undefined;
 
-export type RuntimeUploadFile = {
+type RuntimeUploadFile = {
   name: string;
   mime: string;
   bytes: number[];
 };
 
-export type RuntimeThreadEventSource = {
+type RuntimeThreadEventSource = {
   unavailable?: boolean;
   addEventListener(
     type: string,

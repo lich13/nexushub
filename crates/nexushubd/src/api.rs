@@ -4,18 +4,6 @@ use crate::{
         session_cookie, verify_password, SESSION_COOKIE,
     },
     linux_adapter,
-    rpc_payload::{
-        rpc_nested_payload as parse_rpc_nested_payload,
-        rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
-        rpc_payload as parse_rpc_payload, rpc_payload_or_empty as parse_rpc_payload_or_empty,
-        rpc_query_strings, rpc_required_string as parse_rpc_required_string, rpc_string,
-        rpc_wrapped_payload as parse_rpc_wrapped_payload,
-    },
-    rpc_surface::{
-        is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
-        LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE, RPC_THREAD_EVENTS_ROUTE,
-        RPC_UPLOAD_FILES_ROUTE,
-    },
     state::{
         AppState, CachedProbeStatus, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature,
     },
@@ -24,14 +12,13 @@ use crate::{
 use anyhow::Result as AnyhowResult;
 use axum::{
     extract::connect_info::ConnectInfo,
-    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{any, get, post},
-    Json, Router,
+    Json,
 };
 use nexushub_core::{
     claude_code::{self, ClaudePaths},
@@ -43,8 +30,7 @@ use nexushub_core::{
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        cleanup as cleanup_service, commands as rpc_commands, goals as goal_service,
-        jobs as job_service,
+        cleanup as cleanup_service, goals as goal_service, jobs as job_service,
         probe::{self as probe_service, probe_threads_for_status_with_paths},
         security as security_service, settings as settings_service,
         threads::{
@@ -57,7 +43,7 @@ use nexushub_core::{
         use_cases::NexusHubUseCases,
     },
     update,
-    uploads::{self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES},
+    uploads::{self, prepare_uploads, PreparedAttachment},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -69,6 +55,17 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 use uuid::Uuid;
+
+mod payload;
+mod routes;
+mod rpc_dispatch;
+
+#[cfg(test)]
+mod entry_contract_tests;
+#[cfg(test)]
+mod legacy_routes_tests;
+
+pub(crate) use routes::router;
 
 type ApiResponse = Result<Response, ApiError>;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
@@ -85,461 +82,6 @@ impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
     }
-}
-
-pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(healthz))
-        .route(RPC_THREAD_EVENTS_ROUTE, get(thread_events))
-        .route(
-            RPC_UPLOAD_FILES_ROUTE,
-            post(upload_files).layer(DefaultBodyLimit::max(MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024)),
-        )
-        .route(RPC_COMMAND_ROUTE, post(rpc_dispatch))
-        .route(LEGACY_API_FALLBACK_ROUTE, any(api_not_found))
-        .with_state(state)
-}
-
-async fn healthz() -> ApiResponse {
-    ok(json!({"ok": true}))
-}
-
-async fn api_not_found() -> ApiResponse {
-    Err(api_error(StatusCode::NOT_FOUND, "not found"))
-}
-
-async fn rpc_dispatch(
-    State(state): State<AppState>,
-    Path(command): Path<String>,
-    connect: Option<ConnectInfo<SocketAddr>>,
-    headers: HeaderMap,
-    Json(args): Json<Value>,
-) -> ApiResponse {
-    if is_transport_rpc_command(&command) {
-        return Err(api_error(
-            StatusCode::NOT_FOUND,
-            &format!("transport endpoint is not a business rpc command: {command}"),
-        ));
-    }
-    if is_retired_rpc_command(&command) {
-        return Err(api_error(
-            StatusCode::NOT_FOUND,
-            &format!("retired rpc command: {command}"),
-        ));
-    }
-    if !is_business_rpc_command(&command) {
-        return Err(api_error(
-            StatusCode::NOT_FOUND,
-            &format!("unknown rpc command: {command}"),
-        ));
-    }
-
-    match command.as_str() {
-        rpc_commands::AUTH_PUBLIC_SETTINGS => public_settings(State(state)).await,
-        rpc_commands::AUTH_LOGIN => {
-            login(
-                State(state),
-                connect,
-                headers,
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::AUTH_LOGOUT => logout(State(state), headers).await,
-        rpc_commands::AUTH_ME => me(State(state), headers).await,
-        rpc_commands::SECURITY_GET => get_security(State(state), headers).await,
-        rpc_commands::SECURITY_SAVE => {
-            patch_security(
-                State(state),
-                headers,
-                Json(rpc_nested_payload(&args, "settings")?),
-            )
-            .await
-        }
-        rpc_commands::SECURITY_CHANGE_PASSWORD => {
-            change_password(State(state), headers, Json(rpc_payload(&args)?)).await
-        }
-        rpc_commands::SYSTEM_PROVIDERS => list_providers(State(state), headers).await,
-        rpc_commands::SYSTEM_CLAUDE_CODE_OVERVIEW => {
-            claude_code_overview(State(state), headers).await
-        }
-        rpc_commands::SYSTEM_PLATFORM => platform_overview(State(state), headers).await,
-        rpc_commands::SYSTEM_PLUGINS => list_plugins(State(state), headers).await,
-        rpc_commands::PROBE_STATUS => {
-            get_probe_status(
-                State(state),
-                Query(ProbeStatusQuery {
-                    refresh: args.get("refresh").and_then(Value::as_bool),
-                }),
-                headers,
-            )
-            .await
-        }
-        rpc_commands::PROBE_SETTINGS_GET => get_probe_settings(State(state), headers).await,
-        rpc_commands::PROBE_SETTINGS_SAVE => {
-            patch_probe_settings(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(
-                    &args,
-                    &["settings", "payload", "request"],
-                )?),
-            )
-            .await
-        }
-        rpc_commands::PROBE_LOGS_DB_STATUS => get_probe_logs_db_status(State(state), headers).await,
-        rpc_commands::PROBE_EVENTS => {
-            get_probe_events(
-                State(state),
-                Query(ProbeEventsQuery {
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|value| value as u32),
-                }),
-                headers,
-            )
-            .await
-        }
-        rpc_commands::PROBE_BARK_TEST => {
-            start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
-        }
-        rpc_commands::PROBE_INSTALL_HOOKS => {
-            start_probe_action(state, headers, probe_service::ProbeAction::InstallHooks).await
-        }
-        rpc_commands::PROBE_LOGS_DB_DRY_RUN => {
-            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbDryRun).await
-        }
-        rpc_commands::PROBE_LOGS_DB_EXECUTE => {
-            start_probe_action(state, headers, probe_service::ProbeAction::LogsDbExecute).await
-        }
-        rpc_commands::CLEANUP_ARCHIVE_DRY_RUN => {
-            archive_delete_dry_run(State(state), headers).await
-        }
-        rpc_commands::CLEANUP_ARCHIVE_EXECUTE => {
-            archive_delete_execute(
-                State(state),
-                headers,
-                Json(ArchiveExecuteRequest { confirmed: true }),
-            )
-            .await
-        }
-        rpc_commands::CLEANUP_HIDDEN_DRY_RUN => {
-            hidden_threads_delete_dry_run(State(state), headers).await
-        }
-        rpc_commands::CLEANUP_HIDDEN_EXECUTE => {
-            hidden_threads_delete_execute(
-                State(state),
-                headers,
-                Json(ArchiveExecuteRequest { confirmed: true }),
-            )
-            .await
-        }
-        rpc_commands::UPDATES_STATUS => system_update_status(State(state), headers).await,
-        rpc_commands::UPDATES_CHECK => {
-            start_update_action(state, headers, UpdateAction::Check, None).await
-        }
-        rpc_commands::UPDATES_INSTALL => {
-            start_update_action(
-                state,
-                headers,
-                UpdateAction::Install,
-                Some("nexushub.update.install_started"),
-            )
-            .await
-        }
-        rpc_commands::UPDATES_PRUNE => {
-            start_update_action(
-                state,
-                headers,
-                UpdateAction::Prune,
-                Some("nexushub.update.prune_started"),
-            )
-            .await
-        }
-        rpc_commands::THREADS_LIST => {
-            list_threads(State(state), headers, Query(rpc_payload(&args)?)).await
-        }
-        rpc_commands::THREADS_DETAIL => {
-            thread_detail(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "id")?),
-                Query(rpc_nested_payload_or_empty(&args, "options")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_BLOCKS => {
-            thread_blocks(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "id")?),
-                Query(rpc_nested_payload_or_empty(&args, "options")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_CREATE => {
-            create_thread(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_SEND => {
-            send_message(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_STEER => {
-            steer_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_LIST => {
-            list_followups(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_ENQUEUE => {
-            enqueue_followup(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_CANCEL => {
-            cancel_followup(
-                State(state),
-                headers,
-                Path((
-                    rpc_required_string(&args, "threadId")?,
-                    rpc_required_string(&args, "followUpId")?,
-                )),
-            )
-            .await
-        }
-        rpc_commands::THREADS_STOP => {
-            stop_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Some(Json(rpc_nested_payload_or_empty(&args, "payload")?)),
-            )
-            .await
-        }
-        rpc_commands::THREADS_ARCHIVE => {
-            archive_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_RESTORE => {
-            restore_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_RENAME => {
-            rename_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_payload(&args)?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FORK => {
-            fork_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_PLAN_ACCEPT => {
-            plan_accept(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_PLAN_REVISE => {
-            plan_revise(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_ELICITATION_ANSWER => {
-            answer_elicitation(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_payload(&args)?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_APPROVAL_ANSWER => {
-            answer_approval(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::UPLOADS_DELETE => {
-            delete_upload_file(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "id")?),
-            )
-            .await
-        }
-        rpc_commands::SYSTEM_STATUS => system_status(State(state), headers).await,
-        rpc_commands::SYSTEM_VERSION => system_version(State(state), headers).await,
-        rpc_commands::SYSTEM_MODELS => codex_models(State(state), headers).await,
-        rpc_commands::SYSTEM_PERMISSION_PROFILES => {
-            codex_permission_profiles(State(state), headers, Query(rpc_payload_or_empty(&args)?))
-                .await
-        }
-        rpc_commands::SYSTEM_CODEX_CONFIG => {
-            codex_config(State(state), headers, Query(rpc_payload_or_empty(&args)?)).await
-        }
-        rpc_commands::THREADS_GOAL_GET => {
-            codex_goal_get(
-                State(state),
-                headers,
-                Query(GoalQuery {
-                    thread_id: rpc_string(&args, "threadId"),
-                }),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_SAVE => {
-            codex_goal_set(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_CLEAR => {
-            codex_goal_clear(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_PAUSE => {
-            codex_goal_pause(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_RESUME => {
-            codex_goal_resume(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::JOBS_LIST => {
-            list_jobs(
-                State(state),
-                headers,
-                Query(rpc_query_strings(&args, &["limit"])),
-            )
-            .await
-        }
-        rpc_commands::JOBS_DETAIL => {
-            job_detail(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "id")?),
-            )
-            .await
-        }
-        _ => Err(api_error(
-            StatusCode::NOT_FOUND,
-            &format!("rpc command allowlist drifted without handler mapping: {command}"),
-        )),
-    }
-}
-
-fn rpc_payload<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_payload(value))
-}
-
-fn rpc_payload_or_empty<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_payload_or_empty(value))
-}
-
-fn rpc_nested_payload<T: serde::de::DeserializeOwned>(
-    value: &Value,
-    key: &str,
-) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_nested_payload(value, key))
-}
-
-fn rpc_wrapped_payload<T: serde::de::DeserializeOwned>(
-    value: &Value,
-    keys: &[&str],
-) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_wrapped_payload(value, keys))
-}
-
-#[cfg(test)]
-fn rpc_wrapped_payload_or_empty<T: serde::de::DeserializeOwned>(
-    value: &Value,
-    keys: &[&str],
-) -> Result<T, ApiError> {
-    api_rpc_payload(crate::rpc_payload::rpc_wrapped_payload_or_empty(
-        value, keys,
-    ))
-}
-
-fn rpc_nested_payload_or_empty<T: serde::de::DeserializeOwned>(
-    value: &Value,
-    key: &str,
-) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_nested_payload_or_empty(value, key))
-}
-
-fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
-    api_rpc_payload(parse_rpc_required_string(value, key))
-}
-
-fn api_rpc_payload<T>(
-    result: Result<T, crate::rpc_payload::RpcPayloadError>,
-) -> Result<T, ApiError> {
-    result.map_err(|err| api_error(StatusCode::BAD_REQUEST, err.message()))
 }
 
 async fn public_settings(State(state): State<AppState>) -> ApiResponse {
@@ -3382,13 +2924,9 @@ mod tests {
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
         app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
         archived_filter, block_changed, load_probe_threads, merge_thread_summaries,
-        normalize_goal_response, probe_config_path, router, rpc_required_string,
-        rpc_wrapped_payload, rpc_wrapped_payload_or_empty, seed_thread_event_blocks,
+        normalize_goal_response, probe_config_path, router, seed_thread_event_blocks,
         thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
-        update_service, LoginRequest, TurnstileLoginAction, UpdateAction,
-    };
-    use crate::rpc_surface::{
-        is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
+        update_service, TurnstileLoginAction, UpdateAction,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -3400,9 +2938,8 @@ mod tests {
         db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
         platform::{PlatformKind, PlatformPaths},
         services::{
-            goals as goal_service, jobs as job_service, jobs::ThreadMessageRequest,
-            probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS, settings as settings_service,
-            threads as thread_service,
+            jobs as job_service, jobs::ThreadMessageRequest,
+            probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS, threads as thread_service,
         },
         uploads::{PreparedAttachment, UploadKind},
     };
@@ -3610,13 +3147,6 @@ mod tests {
         (state, session_token, csrf_token, home)
     }
 
-    fn must<T>(result: Result<T, super::ApiError>) -> T {
-        match result {
-            Ok(value) => value,
-            Err(_) => panic!("expected rpc compatibility conversion to succeed"),
-        }
-    }
-
     async fn request_rpc_json(
         app: axum::Router,
         command: &str,
@@ -3659,26 +3189,6 @@ mod tests {
             builder = builder.header("x-csrf-token", csrf_token);
         }
         app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
-            .await
-            .unwrap()
-            .status()
-    }
-
-    async fn request_path_status(
-        app: axum::Router,
-        method: &str,
-        uri: &str,
-        session_token: Option<&str>,
-        csrf_token: Option<&str>,
-    ) -> StatusCode {
-        let mut builder = Request::builder().method(method).uri(uri);
-        if let Some(session_token) = session_token {
-            builder = builder.header("cookie", format!("nexushub_session={session_token}"));
-        }
-        if let Some(csrf_token) = csrf_token {
-            builder = builder.header("x-csrf-token", csrf_token);
-        }
-        app.oneshot(builder.body(Body::empty()).unwrap())
             .await
             .unwrap()
             .status()
@@ -3904,51 +3414,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retired_update_string_action_rpc_returns_404() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/rpc/runUpdateAction")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"payload":{"action":"check"}}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn retired_rpc_commands_are_rejected_even_when_authenticated() {
-        let retired_commands = [
-            "startProbeJob",
-            "runUpdateAction",
-            "getDesktopOverview",
-            "getDesktopPlatformStatus",
-        ];
-
-        for command in retired_commands {
-            let (state, session_token, csrf_token) = authenticated_test_state();
-            let status = request_rpc_status(
-                router(state),
-                command,
-                "{}",
-                Some(&session_token),
-                Some(&csrf_token),
-            )
-            .await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{command}");
-        }
-    }
-
-    #[tokio::test]
     async fn rpc_probe_typed_commands_start_matching_jobs() {
         for (command, kind) in [
             ("probe.barkTest", "probe_bark_test"),
@@ -4001,59 +3466,6 @@ mod tests {
             let job = rpc_state.db.job(job_id).unwrap().unwrap();
             assert_eq!(job.kind, kind, "{command}");
         }
-    }
-
-    #[test]
-    fn rpc_dispatch_hard_deletes_string_action_compat_commands() {
-        let source = include_str!("api.rs")
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("api source must include production section");
-        for typed in [
-            "rpc_commands::PROBE_BARK_TEST",
-            "rpc_commands::PROBE_INSTALL_HOOKS",
-            "rpc_commands::PROBE_LOGS_DB_DRY_RUN",
-            "rpc_commands::PROBE_LOGS_DB_EXECUTE",
-            "rpc_commands::UPDATES_CHECK",
-            "rpc_commands::UPDATES_INSTALL",
-            "rpc_commands::UPDATES_PRUNE",
-        ] {
-            assert!(
-                source.contains(typed),
-                "RPC dispatcher must expose typed command {typed}"
-            );
-        }
-        for compat in [
-            "\"startProbeJob\"",
-            "\"runUpdateAction\"",
-            "\"startProbeBarkTest\"",
-            "\"startProbeHooksInstall\"",
-            "\"startProbeLogsDbDryRun\"",
-            "\"startProbeLogsDbExecute\"",
-            "\"checkUpdate\"",
-            "\"installUpdateAndRestart\"",
-        ] {
-            assert!(
-                !source.contains(compat),
-                "{compat} must not remain in the production RPC dispatcher"
-            );
-        }
-        assert!(
-            source.contains("is_retired_rpc_command"),
-            "RPC dispatcher should consult retired command guard rails"
-        );
-        assert!(
-            source.contains("is_business_rpc_command"),
-            "RPC dispatcher should consult shared business RPC allowlist"
-        );
-        assert!(
-            !source.contains("/api/rpc/uploadFiles"),
-            "api.rs should reuse shared transport route constants"
-        );
-        assert!(
-            !source.contains("/api/rpc/threadEvents/:id"),
-            "api.rs should reuse shared transport route constants"
-        );
     }
 
     #[test]
@@ -4168,55 +3580,15 @@ mod tests {
             );
         }
 
-        for forbidden_keyword in ["desktop_", "getDesktop", "startProbeJob", "runUpdateAction"] {
+        for forbidden_keyword in [
+            &format!("{}_", "desktop"),
+            &format!("get{}", "Desktop"),
+            &format!("start{}Job", "Probe"),
+            &format!("run{}Action", "Update"),
+        ] {
             assert!(
                 !source.contains(forbidden_keyword),
                 "api.rs must not reintroduce retired desktop/probe/update command surface: {forbidden_keyword}"
-            );
-        }
-    }
-
-    #[test]
-    fn rpc_surface_uses_shared_command_sets_and_transport_exceptions() {
-        for command in nexushub_core::services::commands::ALLOWED_RPC_COMMANDS {
-            assert!(
-                is_business_rpc_command(command),
-                "allowed business RPC command must pass shared surface guard: {command}"
-            );
-            assert!(
-                !is_transport_rpc_command(command),
-                "business RPC command must not be treated as transport exception: {command}"
-            );
-            assert!(
-                !is_retired_rpc_command(command),
-                "allowed business RPC command must not be retired: {command}"
-            );
-        }
-
-        for command in ["uploadFiles", "threadEvents"] {
-            assert!(
-                is_transport_rpc_command(command),
-                "transport exception must remain explicit: {command}"
-            );
-            assert!(
-                !is_business_rpc_command(command),
-                "transport exception must stay out of business allowlist: {command}"
-            );
-        }
-
-        for command in [
-            "startProbeJob",
-            "runUpdateAction",
-            "getDesktopOverview",
-            "getDesktopHome",
-        ] {
-            assert!(
-                is_retired_rpc_command(command),
-                "retired compatibility command must stay marked retired: {command}"
-            );
-            assert!(
-                !is_business_rpc_command(command),
-                "retired compatibility command must not re-enter business allowlist: {command}"
             );
         }
     }
@@ -4237,28 +3609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_update_rest_routes_return_404_and_rpc_actions_start_jobs() {
-        for uri in [
-            "/api/system/update/precheck",
-            "/api/system/update/install",
-            "/api/system/update/prune",
-        ] {
-            let (state, session_token, csrf_token) = authenticated_test_state();
-            let response = router(state)
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-        }
-
+    async fn rpc_update_typed_actions_start_jobs() {
         for (command, kind) in [
             ("updates.check", "nexushub_update_check"),
             ("updates.install", "nexushub_update_install"),
@@ -4317,134 +3668,6 @@ mod tests {
         assert_eq!(payload["thread_id"], "thread-a");
         assert_eq!(payload["message"], "continue");
         assert_eq!(payload["options"]["service_tier"], "priority");
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_camel_case_login_token() {
-        let payload: LoginRequest = must(rpc_wrapped_payload(
-            &json!({
-                "username": "admin",
-                "password": "secret",
-                "turnstileToken": "token-a"
-            }),
-            &[],
-        ));
-
-        assert_eq!(payload.username, "admin");
-        assert_eq!(payload.turnstile_token.as_deref(), Some("token-a"));
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_nested_and_top_level_thread_payloads() {
-        let nested: ThreadMessageRequest = must(rpc_wrapped_payload(
-            &json!({
-                "payload": {
-                    "message": "start",
-                    "serviceTier": "priority",
-                    "reasoningEffort": "xhigh",
-                    "permissionProfile": "danger-full-access",
-                    "approvalPolicy": "never",
-                    "sandboxMode": "danger-full-access",
-                    "networkAccess": true,
-                    "collaborationMode": "async"
-                },
-                "csrfToken": "ignored"
-            }),
-            &["payload"],
-        ));
-        assert_eq!(nested.message, "start");
-        assert_eq!(nested.service_tier.as_deref(), Some("priority"));
-        assert_eq!(nested.reasoning_effort.as_deref(), Some("xhigh"));
-        assert_eq!(
-            nested.permission_profile.as_deref(),
-            Some("danger-full-access")
-        );
-        assert_eq!(nested.approval_policy.as_deref(), Some("never"));
-        assert_eq!(nested.sandbox_mode.as_deref(), Some("danger-full-access"));
-        assert_eq!(nested.network_access, Some(true));
-        assert_eq!(nested.collaboration_mode.as_deref(), Some("async"));
-
-        let top_level: ThreadMessageRequest = must(rpc_wrapped_payload(
-            &json!({
-                "message": "continue",
-                "preparedAttachments": [],
-                "serviceTier": "default"
-            }),
-            &["payload"],
-        ));
-        assert_eq!(top_level.message, "continue");
-        assert_eq!(top_level.service_tier.as_deref(), Some("default"));
-        assert!(top_level.prepared_attachments.is_empty());
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_goal_request_wrapper_and_aliases() {
-        let payload: goal_service::GoalUpdateRequest = must(rpc_wrapped_payload(
-            &json!({
-                "request": {
-                    "threadId": "thread-a",
-                    "objective": "ship",
-                    "tokenBudget": 4096
-                }
-            }),
-            &["request", "payload"],
-        ));
-
-        assert_eq!(payload.thread_id.as_deref(), Some("thread-a"));
-        assert_eq!(payload.objective.as_deref(), Some("ship"));
-        assert_eq!(payload.token_budget, Some(4096));
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_probe_settings_wrapper() {
-        let payload: settings_service::ProbeSettingsSaveRequest = must(rpc_wrapped_payload(
-            &json!({
-            "settings": {
-                "probe": {
-                    "pollSeconds": 20,
-                    "recentLimit": 50
-                    },
-                    "notifications": {
-                        "serverUrl": "https://example.invalid",
-                        "deviceKey": "bark",
-                        "notifyReplyNeeded": true
-                    }
-                }
-            }),
-            &["settings", "payload"],
-        ));
-
-        assert_eq!(payload.probe.unwrap().poll_seconds, Some(20));
-        let notifications = payload.notifications.unwrap();
-        assert_eq!(
-            notifications.server_url.as_deref(),
-            Some("https://example.invalid")
-        );
-        assert_eq!(notifications.device_key.as_deref(), Some("bark"));
-        assert_eq!(notifications.notify_reply_needed, Some(true));
-    }
-
-    #[test]
-    fn rpc_payload_compat_extracts_thread_id_from_payload_or_top_level() {
-        assert_eq!(
-            must(rpc_required_string(
-                &json!({"payload": {"threadId": "nested-thread"}}),
-                "threadId"
-            )),
-            "nested-thread"
-        );
-        assert_eq!(
-            must(rpc_required_string(
-                &json!({"thread_id": "snake-thread"}),
-                "threadId"
-            )),
-            "snake-thread"
-        );
-        let empty: serde_json::Value = must(rpc_wrapped_payload_or_empty(
-            &serde_json::Value::Null,
-            &["payload"],
-        ));
-        assert_eq!(empty, json!({}));
     }
 
     #[tokio::test]
@@ -4840,80 +4063,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn legacy_panel_update_routes_return_404() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state);
-
-        for uri in [
-            "/api/system/panel/update/precheck",
-            "/api/system/panel/update/start",
-            "/api/system/panel/update/prune",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-        }
-    }
-
-    #[tokio::test]
-    async fn old_rest_domain_paths_return_404_while_transport_endpoints_remain_reserved() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state);
-
-        for (method, uri) in [
-            ("GET", "/api/threads"),
-            ("GET", "/api/threads/thread-a"),
-            ("POST", "/api/threads/thread-a/messages"),
-            ("GET", "/api/jobs"),
-            ("GET", "/api/system/status"),
-            ("POST", "/api/system/update/install"),
-            ("GET", "/api/uploads"),
-            ("POST", "/api/probe/service/restart"),
-        ] {
-            let status = request_path_status(
-                app.clone(),
-                method,
-                uri,
-                Some(&session_token),
-                Some(&csrf_token),
-            )
-            .await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
-        }
-
-        let upload_status = request_path_status(
-            app.clone(),
-            "POST",
-            "/api/rpc/uploadFiles",
-            Some(&session_token),
-            Some(&csrf_token),
-        )
-        .await;
-        assert_ne!(upload_status, StatusCode::NOT_FOUND);
-
-        let events_status = request_path_status(
-            app,
-            "GET",
-            "/api/rpc/threadEvents/thread-a",
-            Some(&session_token),
-            None,
-        )
-        .await;
-        assert_ne!(events_status, StatusCode::NOT_FOUND);
-    }
-
     #[test]
     fn linux_update_adapter_builds_shell_job_specs_outside_core_service() {
         let mut config = Config::for_platform_kind(PlatformKind::Linux);
@@ -5030,19 +4179,6 @@ mod tests {
         assert_eq!(status["codex_home_source"], "configured");
         assert_eq!(status["logs_db_source"], "configured");
         assert!(status["discovery_warnings"].as_array().unwrap().is_empty());
-
-        let alias = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/sentinel/status")
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(alias.status(), StatusCode::NOT_FOUND);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -5263,27 +4399,6 @@ mod tests {
         let (state, session_token, csrf_token) = authenticated_test_state();
         let app = router(state.clone());
 
-        for uri in [
-            "/api/probe/diagnostics",
-            "/api/probe/running",
-            "/api/probe/reply-needed",
-            "/api/probe/recoverable",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("GET")
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-        }
-
         for (command, kind, title, forbidden_arg) in [
             (
                 "probe.installHooks",
@@ -5339,41 +4454,6 @@ mod tests {
         assert_eq!(execute_job.kind, "probe_logs_db_maintain");
         assert_eq!(execute_job.title, "Codex logs DB 维护");
         assert!(!execute_job.output.contains("--dry-run"));
-
-        for (method, uri) in [
-            ("POST", "/api/probe/logs-db/plan"),
-            ("POST", "/api/probe/logs-db/execute"),
-            ("POST", "/api/probe/legacy-cleanup/dry-run"),
-            ("POST", "/api/probe/legacy-cleanup/execute"),
-            ("GET", "/api/probe/dashboard"),
-            ("GET", "/api/probe/thread-probe/thread-a"),
-            ("POST", "/api/probe/lifecycle/repair"),
-            ("POST", "/api/probe/service/restart"),
-            ("POST", "/api/probe/legacy/import"),
-            ("GET", "/api/sentinel/status"),
-            ("GET", "/api/sentinel/dashboard"),
-            ("GET", "/api/sentinel/running"),
-            ("GET", "/api/sentinel/reply-needed"),
-            ("GET", "/api/sentinel/recoverable"),
-            ("GET", "/api/sentinel/thread-probe/thread-a"),
-            ("GET", "/api/sentinel/hook-status"),
-            ("GET", "/api/sentinel/logs-db/status"),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .header("x-csrf-token", csrf_token.as_str())
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
-        }
     }
 
     #[tokio::test]
@@ -5690,60 +4770,6 @@ mod tests {
                     .as_str()
                     .is_some_and(|value| value.contains("只读"))
         }));
-    }
-
-    #[tokio::test]
-    async fn obsolete_codex_and_claude_code_job_routes_return_404() {
-        let (state, session_token, csrf_token) = authenticated_test_state();
-        let app = router(state);
-
-        let obsolete_uris = [
-            "/api/system/codex/update/precheck",
-            "/api/system/codex/update/start",
-            "/api/system/codex/update/prune",
-            "/api/system/update/start",
-            "/api/providers/claude-code/jobs/version-check",
-            "/api/providers/claude-code/jobs/update/precheck",
-            "/api/providers/claude-code/jobs/update/start",
-            "/api/providers/claude-code/jobs/smoke",
-            "/api/providers/claude-code/jobs/cache-status",
-        ];
-
-        for method in ["POST", "GET"] {
-            for uri in obsolete_uris {
-                let response = app
-                    .clone()
-                    .oneshot(
-                        Request::builder()
-                            .method(method)
-                            .uri(uri)
-                            .header("cookie", format!("nexushub_session={session_token}"))
-                            .header("x-csrf-token", csrf_token.as_str())
-                            .body(Body::empty())
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
-            }
-        }
-
-        for method in ["POST", "GET"] {
-            let uri = "/api/no-such-route";
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(uri)
-                        .header("cookie", format!("nexushub_session={session_token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
-        }
     }
 
     #[test]

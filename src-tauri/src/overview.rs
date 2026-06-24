@@ -1,4 +1,7 @@
-use crate::services::threads::home_thread_summaries;
+use crate::services::{
+    settings::{self as settings_service, DesktopGoal},
+    threads::home_thread_summaries,
+};
 use anyhow::{anyhow, Result};
 use nexushub_core::{
     archive::{ArchiveDeletePlan, HiddenThreadDeletePlan},
@@ -14,7 +17,6 @@ use nexushub_core::{
     },
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeLogsDbStatus, ProbeRuntime, ProbeStatus},
-    services::goals as goal_service,
     system::{system_status_with_paths, SystemStatus},
 };
 use serde::Serialize;
@@ -66,19 +68,6 @@ pub struct DesktopHome {
     pub hidden_plan: Option<HiddenThreadDeletePlan>,
     pub goal: DesktopGoal,
     pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopGoal {
-    pub available: bool,
-    pub enabled: bool,
-    pub thread_id: Option<String>,
-    pub objective: Option<String>,
-    pub token_budget: Option<u64>,
-    pub status: String,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -229,51 +218,19 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
     })
 }
 
-pub(crate) fn desktop_goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
-    desktop_goal_with_thread_id(view, None)
-}
-
 pub(crate) fn first_thread_goal(
     state: &DesktopState,
     first_thread: Option<&ThreadSummary>,
 ) -> DesktopGoal {
     let Some(thread) = first_thread else {
-        return desktop_goal_from_view(goal_service::goal_empty("missing_thread"));
+        return settings_service::desktop_goal_from_view(nexushub_core::services::goals::goal_empty(
+            "missing_thread",
+        ));
     };
-    goal_service::goal_get_response_with_capability(
-        &state.db,
-        state.platform(),
-        goal_service::GoalGetRequest {
-            thread_id: Some(thread.id.clone()),
-        },
-    )
-    .map(desktop_goal_from_view)
-    .unwrap_or_else(|err| DesktopGoal {
-        available: false,
-        enabled: false,
-        thread_id: Some(thread.id.clone()),
-        objective: None,
-        token_budget: None,
-        status: "unavailable".to_string(),
-        completed_at: None,
-        blocked_reason: Some(err.to_string()),
-    })
-}
-
-fn desktop_goal_with_thread_id(
-    view: goal_service::GoalView,
-    thread_id: Option<String>,
-) -> DesktopGoal {
-    DesktopGoal {
-        available: view.available,
-        enabled: view.enabled,
-        thread_id: view.thread_id.or(thread_id),
-        objective: view.objective,
-        token_budget: view.token_budget,
-        status: view.status,
-        completed_at: view.completed_at,
-        blocked_reason: view.blocked_reason,
-    }
+    settings_service::get_goal_with_state(state, Some(thread.id.clone()))
+        .unwrap_or_else(|err| {
+            settings_service::unavailable_desktop_goal(Some(thread.id.clone()), err.to_string())
+        })
 }
 
 fn load_desktop_config() -> Config {
@@ -305,7 +262,7 @@ fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{
+    use crate::services::{
         settings::{DesktopDeleteUploadRequest, DesktopUploadFile},
         threads::DesktopSendMessageRequest,
     };
@@ -383,7 +340,7 @@ mod tests {
         )
         .unwrap();
 
-        crate::commands::settings::test_probe_save_settings_with_state(
+        crate::services::settings::test_probe_save_settings_with_state(
             &state,
             settings_service::ProbeSettingsSaveRequest {
                 notifications: Some(settings_service::ProbeNotificationsSavePatch {
@@ -411,7 +368,7 @@ mod tests {
     fn desktop_typed_uploads_store_under_local_codex_home() {
         let (_temp, state) = test_desktop_state();
 
-        let outcome = crate::commands::settings::store_uploads_with_state(
+        let outcome = crate::services::settings::store_uploads_with_state(
             &state,
             vec![DesktopUploadFile {
                 name: "note.md".to_string(),
@@ -425,7 +382,7 @@ mod tests {
         let root = uploads::upload_root(&state.resolved_codex_paths().home);
         assert!(root.join(&id).join("meta.json").is_file());
 
-        let deleted = crate::commands::settings::test_delete_upload_with_state(
+        let deleted = crate::services::settings::test_delete_upload_with_state(
             &state,
             DesktopDeleteUploadRequest { id },
         )
@@ -438,7 +395,7 @@ mod tests {
     fn desktop_typed_uploads_use_shared_batch_validation() {
         let (_temp, state) = test_desktop_state();
 
-        let empty_error = crate::commands::settings::store_uploads_with_state(&state, vec![])
+        let empty_error = crate::services::settings::store_uploads_with_state(&state, vec![])
             .unwrap_err()
             .to_string();
         assert!(empty_error.contains("没有可上传的文件"));
@@ -450,7 +407,7 @@ mod tests {
                 bytes: b"# hello".to_vec(),
             })
             .collect();
-        let too_many_error = crate::commands::settings::store_uploads_with_state(&state, too_many)
+        let too_many_error = crate::services::settings::store_uploads_with_state(&state, too_many)
             .unwrap_err()
             .to_string();
         assert!(too_many_error.contains("一次最多上传 5 个文件"));
@@ -459,7 +416,7 @@ mod tests {
     #[test]
     fn desktop_send_message_uses_shared_job_service_and_attachment_context() {
         let (_temp, state) = test_desktop_state();
-        let outcome = crate::commands::settings::store_uploads_with_state(
+        let outcome = crate::services::settings::store_uploads_with_state(
             &state,
             vec![DesktopUploadFile {
                 name: "plan.md".to_string(),
@@ -471,7 +428,7 @@ mod tests {
         let cwd = state.config().paths.data_dir.join("custom-cwd");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let spec = crate::commands::threads::codex_job_spec_for_request(
+        let spec = crate::services::threads::codex_job_spec_for_request(
             &state,
             DesktopSendMessageRequest {
                 message: "请读取附件".to_string(),

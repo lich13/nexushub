@@ -9,47 +9,59 @@ export type DemoFixture = {
 
 const macApplicationSupport = "~/Library/Application Support/NexusHub";
 
+type CapabilityFieldValues = Record<DemoFixtureKey, boolean>;
+
+const capabilityFields = {
+  threads: { "linux-web": true, "macos-tauri": true },
+  jobs: { "linux-web": true, "macos-tauri": true },
+  probe: { "linux-web": true, "macos-tauri": true },
+  status: { "linux-web": true, "macos-tauri": true },
+  settings: { "linux-web": true, "macos-tauri": true },
+  job_history: { "linux-web": true, "macos-tauri": true },
+  app_updater: { "linux-web": true, "macos-tauri": true },
+  web_auth: { "linux-web": true, "macos-tauri": false },
+  csrf: { "linux-web": true, "macos-tauri": false },
+  security_settings: { "linux-web": true, "macos-tauri": false },
+  turnstile: { "linux-web": true, "macos-tauri": false },
+  systemd: { "linux-web": true, "macos-tauri": false },
+  nginx: { "linux-web": true, "macos-tauri": false },
+  public_endpoint: { "linux-web": true, "macos-tauri": false },
+  admin_password: { "linux-web": true, "macos-tauri": false },
+  linux_update_job: { "linux-web": true, "macos-tauri": false },
+  prune_backups: { "linux-web": true, "macos-tauri": false },
+  thread_cleanup: { "linux-web": true, "macos-tauri": true },
+  probe_log_maintenance: { "linux-web": true, "macos-tauri": true },
+  thread_archive_actions: { "linux-web": true, "macos-tauri": true }
+} satisfies Record<keyof SystemCapabilities, CapabilityFieldValues>;
+
+const macosEnumerableCapabilityKeys: readonly (keyof SystemCapabilities)[] = [
+  "threads",
+  "jobs",
+  "probe",
+  "status",
+  "settings",
+  "job_history",
+  "app_updater",
+  "thread_cleanup",
+  "probe_log_maintenance",
+  "thread_archive_actions"
+] satisfies Array<keyof SystemCapabilities>;
+
 function buildDemoCapabilities(fixture: DemoFixtureKey): SystemCapabilities {
-  const shared = {
-    threads: true,
-    jobs: true,
-    probe: true,
-    status: true,
-    settings: true,
-    job_history: true,
-    app_updater: true,
-    thread_cleanup: true,
-    probe_log_maintenance: true,
-    thread_archive_actions: true
-  };
-  if (fixture === "macos-tauri") {
-    return {
-      ...shared,
-      web_auth: false,
-      csrf: false,
-      security_settings: false,
-      turnstile: false,
-      systemd: false,
-      nginx: false,
-      public_endpoint: false,
-      admin_password: false,
-      linux_update_job: false,
-      prune_backups: false
-    };
+  if (fixture !== "macos-tauri") {
+    return Object.fromEntries(
+      Object.entries(capabilityFields).map(([field, values]) => [field, values[fixture]])
+    ) as SystemCapabilities;
   }
-  return {
-    ...shared,
-    web_auth: true,
-    csrf: true,
-    security_settings: true,
-    turnstile: true,
-    systemd: true,
-    nginx: true,
-    public_endpoint: true,
-    admin_password: true,
-    linux_update_job: true,
-    prune_backups: true
-  };
+  const capabilities: Partial<SystemCapabilities> = {};
+  for (const field of Object.keys(capabilityFields) as Array<keyof SystemCapabilities>) {
+    Object.defineProperty(capabilities, field, {
+      value: capabilityFields[field][fixture],
+      enumerable: macosEnumerableCapabilityKeys.includes(field),
+      configurable: true
+    });
+  }
+  return capabilities as SystemCapabilities;
 }
 
 export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {

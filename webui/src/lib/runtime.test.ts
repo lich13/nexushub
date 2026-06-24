@@ -54,6 +54,21 @@ describe("NexusHub runtime transport", () => {
     expect(runtimeSource).not.toContain("runtimeValue");
   });
 
+  test("runtime source exports only the public transport boundary", () => {
+    const exportedNames = Array.from(
+      runtimeSource.matchAll(/^export\s+(?:async\s+)?(?:class|function|type|interface|const|let|var)\s+(\w+)/gm),
+      (match) => match[1],
+    ).sort();
+
+    expect(exportedNames).toEqual([
+      "RuntimeUnavailableError",
+      "buildRuntimeApiPath",
+      "createRuntimeThreadEventSource",
+      "runtimeRpc",
+      "uploadRuntimeFiles",
+    ]);
+  });
+
   test("keeps API requests at root by default when no API base is configured", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
     const { buildRuntimeApiPath } = await loadRuntime();

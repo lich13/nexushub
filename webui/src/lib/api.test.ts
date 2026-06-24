@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
@@ -43,6 +46,59 @@ const querySource = [
   querySystemSource,
   queryThreadsSource
 ].join("\n");
+
+type ProductionSource = {
+  path: string;
+  source: string;
+};
+
+const srcRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+
+function collectProductionSources(dir: string = srcRoot): ProductionSource[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      return collectProductionSources(absolutePath);
+    }
+    if (!/\.(ts|tsx)$/.test(entry.name) || /\.(test|spec)\.(ts|tsx)$/.test(entry.name)) {
+      return [];
+    }
+    return [{
+      path: relative(srcRoot, absolutePath).replaceAll("\\", "/"),
+      source: readFileSync(absolutePath, "utf8")
+    }];
+  }).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const productionSources = collectProductionSources();
+const runtimeProductionSources = productionSources.filter((file) => file.path === "lib/runtime.ts");
+const apiTransportSources = productionSources.filter((file) => file.path === "lib/api/transport.ts");
+const domainApiProductionSources = productionSources.filter(
+  (file) => file.path.startsWith("lib/api/") && file.path !== "lib/api/transport.ts",
+);
+const queryProductionSources = productionSources.filter((file) => file.path.startsWith("lib/query/"));
+const productionComponentSources = productionSources.filter(
+  (file) => file.path === "App.tsx" || file.path === "main.tsx",
+);
+const nonRuntimeProductionSources = productionSources.filter((file) => file.path !== "lib/runtime.ts");
+const nonQueryProductionSources = productionSources.filter((file) => !file.path.startsWith("lib/query/"));
+const nonTransportApiProductionSources = productionSources.filter(
+  (file) => file.path !== "lib/runtime.ts" && file.path !== "lib/api/transport.ts",
+);
+
+function expectNoSourceMatches(
+  files: ProductionSource[],
+  pattern: string | RegExp,
+  label: string,
+) {
+  for (const file of files) {
+    if (typeof pattern === "string") {
+      expect(file.source, `${file.path} must not contain ${label}`).not.toContain(pattern);
+    } else {
+      expect(file.source, `${file.path} must not match ${label}`).not.toMatch(pattern);
+    }
+  }
+}
 
 async function loadRealApi() {
   vi.stubEnv("VITE_USE_REAL_API", "1");
@@ -670,6 +726,18 @@ describe("archive delete API compatibility", () => {
       "turnstile",
       "web_auth"
     ];
+    const macosVisibleCapabilityKeys = [
+      "app_updater",
+      "job_history",
+      "jobs",
+      "probe",
+      "probe_log_maintenance",
+      "settings",
+      "status",
+      "thread_archive_actions",
+      "thread_cleanup",
+      "threads"
+    ];
 
     const linuxPlatform = buildDemoPlatformOverview("linux-web");
     const linuxSystem = buildDemoSystemStatus("linux-web");
@@ -679,7 +747,7 @@ describe("archive delete API compatibility", () => {
     const macSecurity = buildDemoSecurity("macos-tauri");
 
     expect(Object.keys(linuxSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
-    expect(Object.keys(macSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
+    expect(Object.keys(macSystem.capabilities ?? {}).sort()).toEqual(macosVisibleCapabilityKeys);
     expect(linuxSystem.capabilities).toMatchObject({
       web_auth: true,
       security_settings: true,
@@ -1639,6 +1707,56 @@ describe("archive delete API compatibility", () => {
     expect(runtimeSource).toContain("EventSource");
     expect(querySource).toContain("useQueryClient");
     expect(querySource).toContain("invalidateQueries");
+  });
+
+  test("production source files keep transport, domain API, and query cache boundaries explicit", () => {
+    expect(runtimeProductionSources.map((file) => file.path)).toEqual(["lib/runtime.ts"]);
+    expect(apiTransportSources.map((file) => file.path)).toEqual(["lib/api/transport.ts"]);
+    expect(queryProductionSources.length).toBeGreaterThan(0);
+    expect(domainApiProductionSources.length).toBeGreaterThan(0);
+    expect(productionComponentSources.map((file) => file.path).sort()).toEqual(["App.tsx", "main.tsx"]);
+
+    const runtimeOnlyTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "fetch(",
+      "new EventSource"
+    ];
+    for (const token of runtimeOnlyTokens) {
+      expectNoSourceMatches(nonRuntimeProductionSources, token, `runtime transport token ${token}`);
+    }
+    expectNoSourceMatches(nonRuntimeProductionSources, /\bEventSource\b/, "runtime EventSource type/value");
+
+    const runtimePrimitiveTokens = [
+      "runtimeRpc(",
+      "uploadRuntimeFiles",
+      "createRuntimeThreadEventSource",
+      "buildRuntimeApiPath("
+    ];
+    for (const token of runtimePrimitiveTokens) {
+      expectNoSourceMatches(nonTransportApiProductionSources, token, `runtime primitive ${token}`);
+    }
+    expectNoSourceMatches(nonTransportApiProductionSources, /from\s+["']\.\.\/runtime["']/, "direct runtime import");
+
+    const queryCacheTokens = [
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries"
+    ];
+    for (const token of queryCacheTokens) {
+      expectNoSourceMatches(nonQueryProductionSources, token, `query cache API ${token}`);
+    }
+
+    const retiredCompatibilityTokens = [
+      "desktopCommand",
+      "webCommand",
+      "runtimeDispatch",
+      "runtimeValue"
+    ];
+    for (const token of retiredCompatibilityTokens) {
+      expectNoSourceMatches(productionSources, token, `retired compatibility token ${token}`);
+    }
   });
 
   test("desktop demo and default run config do not leak Linux workspace paths", async () => {

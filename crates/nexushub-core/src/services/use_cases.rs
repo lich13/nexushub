@@ -1,13 +1,18 @@
 use std::path::Path;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     codex::ThreadDetail,
-    db::{PanelDb, ThreadFollowUp, ThreadGoal},
+    config::{Config, SecurityConfig},
+    db::{JobRecord, PanelDb, ThreadFollowUp, ThreadGoal},
     platform::PlatformPaths,
     services::{
-        cleanup::{self, CleanupAction, CleanupActionPlan},
+        cleanup::{
+            self, CleanupAction, CleanupActionPlan, CleanupOperationKind, CleanupOperationPlan,
+            CleanupTarget,
+        },
         goals::{
             self, GoalCommandFacadePlan, GoalGetPlan, GoalGetRequest, GoalUpdateRequest, GoalView,
         },
@@ -20,30 +25,78 @@ use crate::{
             ThreadSendRequest, ThreadStateActionPlan, ThreadSteerRequest, ThreadStopJobPlan,
             ThreadStopPlan, ThreadStopRequest,
         },
-        threads::{
-            self, ThreadBlocksPage, ThreadDetailPlan, ThreadDetailRequest, ThreadListPlan,
-            ThreadsQuery,
+        probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
+        security::{
+            self, PasswordChangeFacadePlan, PasswordChangeRequest, PublicSecurityViewFacadePlan,
+            SecurityPatch, SecurityPatchFacadePlan, SecurityView,
         },
+        settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
+        system::{self, Capability, CapabilityGatePlan, SystemCapabilities},
+        threads::{
+            self, ThreadBlocksPage, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest,
+            ThreadListPlan, ThreadListReadPlan, ThreadsQuery,
+        },
+        updates::{UpdateUseCases, UpdateUseCases as CoreUpdateUseCases},
         uploads::{
             self, UploadBatchItem, UploadDeletePlan, UploadFacadePlan, UploadRetentionPlan,
             UploadRetentionRequest, UploadStorePlan, UploadValidationPlan,
         },
     },
+    update::{analyze_job_failure, JobFailureAnalysis},
     uploads::UploadOutcome,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobListPlan {
+    pub required_capability: Capability,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobDetailPlan {
+    pub required_capability: Capability,
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobResponse {
+    #[serde(flatten)]
+    pub job: JobRecord,
+    pub failure_analysis: Option<JobFailureAnalysis>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NexusHubUseCases<'a> {
+    config: Option<&'a Config>,
     platform: &'a PlatformPaths,
 }
 
 impl<'a> NexusHubUseCases<'a> {
     pub fn new(platform: &'a PlatformPaths) -> Self {
-        Self { platform }
+        Self {
+            config: None,
+            platform,
+        }
+    }
+
+    pub fn with_config(config: &'a Config, platform: &'a PlatformPaths) -> Self {
+        Self {
+            config: Some(config),
+            platform,
+        }
     }
 
     pub fn threads(self) -> ThreadUseCases<'a> {
         ThreadUseCases {
+            platform: self.platform,
+        }
+    }
+
+    pub fn jobs(self) -> JobUseCases<'a> {
+        JobUseCases {
             platform: self.platform,
         }
     }
@@ -65,6 +118,46 @@ impl<'a> NexusHubUseCases<'a> {
             platform: self.platform,
         }
     }
+
+    pub fn settings(self) -> Result<SettingsUseCases<'a>> {
+        Ok(CoreSettingsUseCases::new(
+            self.config_required()?,
+            self.platform,
+        ))
+    }
+
+    pub fn probe(self) -> Result<ProbeUseCases<'a>> {
+        Ok(CoreProbeUseCases::new(
+            self.config_required()?,
+            self.platform,
+        ))
+    }
+
+    pub fn updates(self) -> Result<UpdateUseCases<'a>> {
+        Ok(CoreUpdateUseCases::new(
+            self.config_required()?,
+            self.platform,
+        ))
+    }
+
+    pub fn system(self) -> Result<SystemUseCases<'a>> {
+        Ok(SystemUseCases {
+            config: self.config_required()?,
+            platform: self.platform,
+        })
+    }
+
+    pub fn security(self) -> Result<SecurityUseCases<'a>> {
+        Ok(SecurityUseCases {
+            config: &self.config_required()?.security,
+            platform: self.platform,
+        })
+    }
+
+    fn config_required(self) -> Result<&'a Config> {
+        self.config
+            .ok_or_else(|| anyhow::anyhow!("config is required for this NexusHub use case"))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,8 +170,16 @@ impl<'a> ThreadUseCases<'a> {
         threads::plan_threads_list_request(self.platform, query)
     }
 
+    pub fn list_read(self, query: ThreadsQuery) -> Result<ThreadListReadPlan> {
+        threads::plan_thread_list_read(self.platform, query)
+    }
+
     pub fn detail(self, request: ThreadDetailRequest) -> Result<ThreadDetailPlan> {
         threads::plan_thread_detail_request(self.platform, request)
+    }
+
+    pub fn detail_read(self, request: ThreadDetailRequest) -> Result<ThreadDetailReadPlan> {
+        threads::plan_thread_detail_read(self.platform, request)
     }
 
     pub fn blocks(
@@ -197,6 +298,33 @@ impl<'a> ThreadUseCases<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct JobUseCases<'a> {
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> JobUseCases<'a> {
+    pub fn list(self, limit: Option<u32>) -> Result<JobListPlan> {
+        system::require_capability(self.platform, Capability::JobHistory)?;
+        Ok(JobListPlan {
+            required_capability: Capability::JobHistory,
+            limit: normalize_job_list_limit(limit),
+        })
+    }
+
+    pub fn detail(self, job_id: &str) -> Result<JobDetailPlan> {
+        system::require_capability(self.platform, Capability::JobHistory)?;
+        Ok(JobDetailPlan {
+            required_capability: Capability::JobHistory,
+            job_id: required_job_id(job_id)?,
+        })
+    }
+
+    pub fn response(self, job: JobRecord) -> JobResponse {
+        job_response(job)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct GoalUseCases<'a> {
     platform: &'a PlatformPaths,
 }
@@ -257,6 +385,14 @@ impl<'a> UploadUseCases<'a> {
         uploads::plan_delete_upload_with_capability(self.platform, id)
     }
 
+    pub fn delete_execute(self, id: impl AsRef<str>) -> Result<UploadDeletePlan> {
+        self.delete(id)
+    }
+
+    pub fn execute_delete(self, root: &Path, plan: &UploadDeletePlan) -> Result<bool> {
+        uploads::execute_delete_upload_plan(root, plan)
+    }
+
     pub fn retention(self, request: UploadRetentionRequest) -> Result<UploadRetentionPlan> {
         uploads::plan_upload_retention_with_capability(self.platform, request)
     }
@@ -276,6 +412,22 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::plan_cleanup_action(self.platform, action)
     }
 
+    pub fn operation(
+        self,
+        target: CleanupTarget,
+        operation: CleanupOperationKind,
+    ) -> Result<CleanupOperationPlan> {
+        cleanup::plan_cleanup_operation(self.platform, target, operation)
+    }
+
+    pub fn dry_run(self, target: CleanupTarget) -> Result<CleanupOperationPlan> {
+        self.operation(target, CleanupOperationKind::DryRun)
+    }
+
+    pub fn execute(self, target: CleanupTarget) -> Result<CleanupOperationPlan> {
+        self.operation(target, CleanupOperationKind::Execute)
+    }
+
     pub fn archive_delete_dry_run(self) -> Result<CleanupActionPlan> {
         self.action(CleanupAction::ArchiveDeleteDryRun)
     }
@@ -290,5 +442,101 @@ impl<'a> CleanupUseCases<'a> {
 
     pub fn hidden_delete_execute(self) -> Result<CleanupActionPlan> {
         self.action(CleanupAction::HiddenDeleteExecute)
+    }
+}
+
+pub fn normalize_job_list_limit(limit: Option<u32>) -> u32 {
+    limit.unwrap_or(50).min(200)
+}
+
+pub fn required_job_id(value: &str) -> Result<String> {
+    value
+        .trim()
+        .is_empty()
+        .then(|| anyhow::anyhow!("job_id is required"))
+        .map_or_else(|| Ok(value.trim().to_string()), Err)
+}
+
+pub fn job_response(job: JobRecord) -> JobResponse {
+    let failure_analysis = if job.status == "failed" {
+        analyze_job_failure(&job.kind, &job.output, job.error.as_deref(), job.exit_code)
+    } else {
+        None
+    };
+    JobResponse {
+        job,
+        failure_analysis,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SystemUseCases<'a> {
+    config: &'a Config,
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> SystemUseCases<'a> {
+    pub fn capabilities(self) -> SystemCapabilities {
+        system::system_capabilities(self.config, self.platform)
+    }
+
+    pub fn capability_gate(self, capability: Capability) -> CapabilityGatePlan {
+        system::capability_gate_plan(self.platform, capability)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SecurityUseCases<'a> {
+    config: &'a SecurityConfig,
+    platform: &'a PlatformPaths,
+}
+
+impl<'a> SecurityUseCases<'a> {
+    pub fn view(
+        self,
+        settings: crate::db::SecuritySettings,
+        stored_expected_hostname: Option<String>,
+        stored_expected_action: Option<String>,
+    ) -> Result<SecurityView> {
+        security::security_view_with_capability(
+            self.platform,
+            settings,
+            self.config,
+            stored_expected_hostname,
+            stored_expected_action,
+        )
+    }
+
+    pub fn public_view(
+        self,
+        settings: crate::db::SecuritySettings,
+        stored_turnstile_action: Option<String>,
+        admin_configured: bool,
+        base_url: Option<String>,
+    ) -> Result<PublicSecurityViewFacadePlan> {
+        security::public_security_view_with_capability(
+            self.platform,
+            settings,
+            self.config,
+            stored_turnstile_action,
+            admin_configured,
+            base_url,
+        )
+    }
+
+    pub fn patch(self, patch: SecurityPatch) -> Result<SecurityPatchFacadePlan> {
+        security::plan_security_patch_with_capability(self.platform, patch)
+    }
+
+    pub fn change_password(
+        self,
+        request: PasswordChangeRequest,
+        current_password_matches: bool,
+    ) -> Result<PasswordChangeFacadePlan> {
+        security::plan_password_change_with_capability(
+            self.platform,
+            request,
+            current_password_matches,
+        )
     }
 }

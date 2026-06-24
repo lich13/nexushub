@@ -39,9 +39,7 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
     "Current",
     "Latest",
     "Update",
-    capabilities.updateServiceLabels ? "Precheck" : "Check",
-    capabilities.updateServiceLabels ? "Update" : "Install",
-    ...(capabilities.updatePrune ? ["Prune"] : []),
+    ...opsUpdateActionView(null, capabilities).map((action) => action.label),
     ...(capabilities.threadCleanup ? [
       "Dry-run",
       "清理归档",
@@ -118,6 +116,33 @@ export function canStartUpdateInstall(status: UpdateStatus | null | undefined): 
   return status?.update_available === true;
 }
 
+export function opsUpdateActionView(
+  status: UpdateStatus | null | undefined,
+  input?: RuntimeCapabilityInput
+): Array<{ action: "check" | "install" | "prune"; label: string; tone: "secondary" | "primary" | "danger"; disabled: boolean }> {
+  const capabilities = capabilitiesForInput(input);
+  return [
+    {
+      action: "check",
+      label: capabilities.updateServiceLabels ? "Precheck" : "Check",
+      tone: "secondary",
+      disabled: false
+    },
+    {
+      action: "install",
+      label: capabilities.updateServiceLabels ? "Update" : "Install",
+      tone: "primary",
+      disabled: !canStartUpdateInstall(status)
+    },
+    ...(capabilities.updatePrune ? [{
+      action: "prune" as const,
+      label: "Prune",
+      tone: "danger" as const,
+      disabled: false
+    }] : [])
+  ];
+}
+
 const linuxFailureLabels: Record<string, string> = {
   systemd_failure: "systemd 失败",
   nginx_failure: "Nginx 失败",
@@ -173,6 +198,11 @@ export function jobFailureAnalysisView(
 
 function sanitizeDesktopFailureCopy(value: string, fallback: string): string {
   const sanitized = value
+    .replace(/https?:\/\/[^\s)"']+/gi, "本机入口")
+    .replace(/\b661313\.xyz\b/gi, "本机入口")
+    .replace(/\b43\.155\.235\.227\b/g, "本机")
+    .replace(/\bturnstile\b/gi, "验证")
+    .replace(/公网入口/g, "本机入口")
     .replace(/\bsystemd\b/gi, "服务")
     .replace(/\bnginx\b/gi, "服务")
     .replace(/管理员密码/g, "权限")

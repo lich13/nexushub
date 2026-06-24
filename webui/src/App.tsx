@@ -51,8 +51,6 @@ import { useOpsActions, useOpsQueries } from "./lib/query/ops";
 import { useProbeActions, useProbeQueries } from "./lib/query/probe";
 import { useSecurityActions, useSecurityQuery } from "./lib/query/security";
 import {
-  bootstrapRuntimeCapabilities,
-  runtimeCapabilitiesForRuntime,
   useBootstrapRuntimeCapabilities,
   useRuntimeCapabilities,
   useSystemStatusQuery,
@@ -72,10 +70,60 @@ import {
   goalStatusTone,
   jobFailureAnalysisView,
   jobOutputView,
+  opsUpdateActionView,
   resolvedSelectedThreadId,
   threadInspectorActionState,
   type RuntimeCapabilityInput
 } from "./lib/domain/runtimeViewModel";
+import {
+  actionMessage,
+  applyPermissionPreset,
+  applyThreadTitleOverride,
+  applyThreadTitleOverrideToDetail,
+  applyThreadTitleOverrides,
+  buildPayload,
+  cleanThreadPreviewText,
+  codexLocalCopy,
+  conversationTitleText,
+  defaultRunConfig,
+  defaultSessionTtlDays,
+  extractPlanText,
+  filterVisibleThreadSummaries,
+  isThreadListItemRunning,
+  isThreadRunning,
+  lastEventKindText,
+  makeRunConfig,
+  mergeIncomingThreadSummary,
+  mergeRunConfigFromDefaults,
+  mergeThreadDetailSummaryFromList,
+  modelSupportsServiceTier,
+  navigationLabelsForRuntime as navigationLabelsForRuntimeDomain,
+  nextVisibleThreadIdAfterRemoval,
+  optionalUnavailableMessage,
+  reasoningOptions,
+  renderConversationHeaderHtml,
+  runConfigAfterSuccessfulSend,
+  runConfigWithSupportedServiceTier,
+  secondsPerDay,
+  setLocalThreadTitleOverride,
+  clearLocalThreadTitleOverride,
+  shouldHydrateThreadDetail,
+  shouldShowLogoutForRuntime,
+  shouldUseSavedSessionForRuntime,
+  sourceCountsText,
+  threadDetailRefetchInterval,
+  threadListItemPreviewText,
+  threadListItemStatusText,
+  threadListItemText,
+  threadMatchesListFilter,
+  threadSettingsMetricLabels,
+  threadStatusLabel,
+  visibleNavigationItems,
+  type PermissionPresetId,
+  type RunConfig,
+  type SelectedThread,
+  type View
+} from "./lib/domain/codexViewModel";
 import {
   slashCommandAction,
   slashCommands,
@@ -84,7 +132,6 @@ import {
 } from "./lib/domain/slashCommands";
 import {
   type ThreadCacheSnapshot,
-  type ThreadSendPayload,
   useThreadCacheActions,
   useCreateThreadMutation,
   useFollowUpsQuery,
@@ -107,8 +154,6 @@ import {
   clearThreadSlot,
   createThreadMessageStoreState,
   getThreadSlot,
-  isNoisyThreadTitle,
-  mergeThreadSummaryTitle,
   setActiveThreadSlot,
   setThreadFeedback as setThreadSlotFeedback,
   setThreadHiddenActionKey,
@@ -124,7 +169,6 @@ import type {
   AgentProviderInfo,
   BridgeActionResult,
   ClaudeOverview,
-  CodexConfig,
   CodexGoal,
   CodexGoalSaveInput,
   CodexModel,
@@ -168,34 +212,48 @@ export {
   goalStatusTone,
   jobFailureAnalysisView,
   jobOutputView,
+  opsUpdateActionView,
   resolvedSelectedThreadId,
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy,
   threadInspectorActionState
 } from "./lib/domain/runtimeViewModel";
+export {
+  actionMessage,
+  applyPermissionPreset,
+  applyThreadTitleOverride,
+  buildPayload,
+  cleanThreadPreviewText,
+  conversationTitleText,
+  defaultRunConfig,
+  extractPlanText,
+  filterVisibleThreadSummaries,
+  isThreadListItemRunning,
+  isThreadRunning,
+  lastEventKindText,
+  mergeIncomingThreadSummary,
+  mergeRunConfigFromDefaults,
+  mergeThreadDetailSummaryFromList,
+  modelSupportsServiceTier,
+  nextVisibleThreadIdAfterRemoval,
+  optionalUnavailableMessage,
+  renderConversationHeaderHtml,
+  runConfigAfterSuccessfulSend,
+  runConfigWithSupportedServiceTier,
+  setLocalThreadTitleOverride,
+  clearLocalThreadTitleOverride,
+  shouldHydrateThreadDetail,
+  shouldShowLogoutForRuntime,
+  shouldUseSavedSessionForRuntime,
+  threadDetailRefetchInterval,
+  threadListItemPreviewText,
+  threadListItemStatusText,
+  threadListItemText,
+  threadMatchesListFilter,
+  threadSettingsMetricLabels
+} from "./lib/domain/codexViewModel";
 export { slashCommandAction, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
 export { preservePreviousQueryData } from "./lib/query/shared";
-
-type View = "codex" | "claude" | "probe" | "ops" | "security";
-type SelectedThread = string | "__new" | null;
-
-const codexLocalCopy = {
-  loginSubtitle: "Codex 本地状态控制台",
-  threadListEyebrow: "Codex 本地线程"
-};
-type PermissionPresetId = "ask" | "auto" | "full" | "custom";
-type RunConfig = {
-  model: string;
-  serviceTier: string;
-  reasoning: string;
-  cwd: string;
-  permissionPreset: PermissionPresetId;
-  permissionProfile: string;
-  approvalPolicy: string;
-  sandboxMode: string;
-  networkAccess: boolean | null;
-  collaborationMode: string;
-};
 
 type MessageScrollSnapshot = {
   scrollTop: number;
@@ -217,16 +275,6 @@ type ComposerUpload = UploadRecord & {
   local_error?: string | null;
 };
 
-type ThreadTitleLike = {
-  title?: string | null;
-  [key: string]: unknown;
-};
-
-type ThreadListItemLike = ThreadTitleLike & {
-  status?: ThreadStatus | string | null;
-  latest_message?: string | null;
-};
-
 export const statusTabs = [
   { id: "all", label: "全部" },
   { id: "running", label: "运行中" },
@@ -243,38 +291,23 @@ export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }
 ];
 
 function navigationItemsForCapabilities(capabilities: RuntimeCapabilityMatrix) {
-  return capabilities.securitySettings
-    ? navigationItems
-    : navigationItems.filter((item) => item.id !== "security");
-}
-
-function runtimeNavigationItems(desktop?: RuntimeCapabilityInput) {
-  return navigationItemsForCapabilities(capabilitiesForInput(desktop));
+  return visibleNavigationItems(navigationItems, capabilities);
 }
 
 export function navigationLabelsForRuntime(desktop?: RuntimeCapabilityInput): string[] {
-  return runtimeNavigationItems(desktop).map((item) => item.label);
-}
-
-export function shouldShowLogoutForRuntime(desktop?: RuntimeCapabilityInput): boolean {
-  return capabilitiesForInput(desktop).logout;
+  return navigationLabelsForRuntimeDomain(navigationItems, desktop);
 }
 
 export function initialSessionForRuntime(desktop?: RuntimeCapabilityInput): SessionUser | null {
-  const capabilities = capabilitiesForInput(desktop);
-  return capabilities.webAuth ? loadSession() : desktopRuntimeSessionUser();
+  return shouldUseSavedSessionForRuntime(desktop) ? loadSession() : desktopRuntimeSessionUser();
 }
 
-const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
 const permissionPresets: Array<{ id: PermissionPresetId; label: string; description: string; icon: ReactNode }> = [
   { id: "ask", label: "请求批准", description: "编辑外部文件和使用互联网时始终询问", icon: <Lock size={17} /> },
   { id: "auto", label: "替我审批", description: "仅对检测到的风险操作请求批准", icon: <ShieldCheck size={17} /> },
   { id: "full", label: "完全访问权限", description: "可不受限制地访问互联网和文件", icon: <CheckCircle2 size={17} /> },
   { id: "custom", label: "自定义 (config.toml)", description: "使用 config.toml 中定义的权限", icon: <SlidersHorizontal size={17} /> }
 ];
-const defaultCwd = "";
-const defaultSessionTtlDays = 365;
-const secondsPerDay = 86400;
 
 type PluginMentionCandidate = {
   id: string;
@@ -803,215 +836,6 @@ function useCodexRunOptions() {
   };
 }
 
-function makeRunConfig(config?: CodexConfig, summary?: ThreadSummary): RunConfig {
-  return {
-    model: summary?.model ?? config?.model ?? "gpt-5.5",
-    serviceTier: normalizeServiceTier(config?.service_tier),
-    reasoning: config?.reasoning_effort ?? "xhigh",
-    cwd: summary?.cwd ?? config?.cwd ?? defaultCwd,
-    permissionPreset: permissionPresetFromConfig(config),
-    permissionProfile: config?.permission_profile ?? "",
-    approvalPolicy: config?.approval_policy ?? "never",
-    sandboxMode: config?.sandbox_mode ?? "danger-full-access",
-    networkAccess: config?.network_access ?? true,
-    collaborationMode: ""
-  };
-}
-
-function permissionPresetFromConfig(config?: CodexConfig): PermissionPresetId {
-  if (!config?.approval_policy && !config?.sandbox_mode && !config?.permission_profile) return "custom";
-  if (config?.approval_policy === "on-request" && config?.sandbox_mode === "workspace-write") return "ask";
-  if (config?.approval_policy === "untrusted" && config?.sandbox_mode === "workspace-write") return "auto";
-  if (config?.approval_policy === "never" && config?.sandbox_mode === "danger-full-access") return "full";
-  return "custom";
-}
-
-export function defaultRunConfig(): RunConfig {
-  return makeRunConfig();
-}
-
-export function applyPermissionPreset(config: RunConfig, preset: PermissionPresetId): RunConfig {
-  if (preset === "custom") {
-    return {
-      ...config,
-      permissionPreset: preset,
-      permissionProfile: "",
-      approvalPolicy: "",
-      sandboxMode: "",
-      networkAccess: null
-    };
-  }
-  if (preset === "full") {
-    return {
-      ...config,
-      permissionPreset: preset,
-      permissionProfile: "",
-      approvalPolicy: "never",
-      sandboxMode: "danger-full-access",
-      networkAccess: true
-    };
-  }
-  return {
-    ...config,
-    permissionPreset: preset,
-    permissionProfile: "",
-    approvalPolicy: preset === "auto" ? "untrusted" : "on-request",
-    sandboxMode: "workspace-write",
-    networkAccess: true
-  };
-}
-
-export function threadListItemText(thread: ThreadTitleLike): string {
-  return thread.title?.trim() || "未命名线程";
-}
-
-export function filterVisibleThreadSummaries<T extends Partial<ThreadSummary>>(threads: T[]): T[] {
-  return threads.filter(isVisibleMainThread);
-}
-
-export function isVisibleMainThread(thread: Partial<ThreadSummary>): boolean {
-  if (thread.status === "Archived" || thread.archived_at) return false;
-  if (nonEmptyString(thread.parentThreadId ?? thread.parent_thread_id)) return false;
-  if (nonEmptyString(thread.agentPath ?? thread.agent_path)) return false;
-  if (nonEmptyString(thread.agentNickname ?? thread.agent_nickname)) return false;
-  if (nonEmptyString(thread.agentRole ?? thread.agent_role)) return false;
-  if (fieldContainsSubagent(thread.threadSource ?? thread.thread_source)) return false;
-  if (fieldContainsSubagent(thread.sourceKind ?? thread.source_kind)) return false;
-  if (sourceValueContainsSubagent(thread.source)) return false;
-  return !isInternalExecThread(thread);
-}
-
-export function threadListItemStatusText(thread: ThreadListItemLike): string {
-  return threadStatusLabel(thread.status);
-}
-
-export function threadListItemPreviewText(thread: ThreadListItemLike): string {
-  return cleanThreadPreviewText(thread.latest_message);
-}
-
-export function cleanThreadPreviewText(value?: string | null): string {
-  const source = value?.trim();
-  if (!source) return "";
-  return extractPlanText(source).replace(/\s+/g, " ").trim();
-}
-
-export function conversationTitleText(thread: ThreadTitleLike): string {
-  return thread.title?.trim() || "未命名线程";
-}
-
-export function renderConversationHeaderHtml(summary: ThreadSummary): string {
-  const title = conversationTitleText(summary);
-  return `<div class="conversation-title-copy"><h2 class="conversation-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h2></div>`;
-}
-
-const threadTitleOverrides = new Map<string, { title: string; expiresAt: number }>();
-const threadTitleOverrideTtlMs = 120_000;
-
-export function setLocalThreadTitleOverride(threadId: string, title: string, now = Date.now()): void {
-  const cleanThreadId = threadId.trim();
-  const cleanTitle = title.trim();
-  if (!cleanThreadId || !cleanTitle) return;
-  threadTitleOverrides.set(cleanThreadId, {
-    title: cleanTitle,
-    expiresAt: now + threadTitleOverrideTtlMs
-  });
-}
-
-export function clearLocalThreadTitleOverride(threadId: string): void {
-  threadTitleOverrides.delete(threadId);
-}
-
-export function applyThreadTitleOverride<T extends Partial<ThreadSummary>>(summary: T, now = Date.now()): T {
-  const threadId = summary.id?.trim();
-  if (!threadId) return summary;
-  const override = threadTitleOverrides.get(threadId);
-  if (!override) return summary;
-  if (override.expiresAt <= now) {
-    threadTitleOverrides.delete(threadId);
-    return summary;
-  }
-  return {
-    ...summary,
-    title: override.title
-  };
-}
-
-function applyThreadTitleOverrides<T extends Partial<ThreadSummary>>(threads: T[]): T[] {
-  return threads.map((thread) => applyThreadTitleOverride(thread));
-}
-
-function applyThreadTitleOverrideToDetail(detail: ThreadDetail): ThreadDetail {
-  const summary = applyThreadTitleOverride(detail.summary);
-  return summary === detail.summary ? detail : { ...detail, summary: summary as ThreadSummary };
-}
-
-function isPlaceholderThreadTitle(title?: string | null): boolean {
-  return isNoisyThreadTitle(title);
-}
-
-export function mergeIncomingThreadSummary<T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>): T & Partial<ThreadSummary> {
-  const effectiveIncoming = applyThreadTitleOverride(incoming);
-  const next = { ...current, ...effectiveIncoming };
-  next.title = mergeThreadSummaryTitle(current.title, effectiveIncoming.title);
-  if (!isUserVisibleLastEventKind(effectiveIncoming.last_event_kind) && isUserVisibleLastEventKind(current.last_event_kind)) {
-    next.last_event_kind = current.last_event_kind;
-  }
-  return next;
-}
-
-export function lastEventKindText(summary: Pick<ThreadSummary, "last_event_kind">): string {
-  const value = summary.last_event_kind?.trim();
-  if (!isUserVisibleLastEventKind(value)) return "未知";
-  return value || "未知";
-}
-
-function isUserVisibleLastEventKind(value?: string | null): boolean {
-  const event = value?.trim();
-  return Boolean(event && !event.startsWith("app-server.") && !event.startsWith("panel."));
-}
-
-export function mergeThreadDetailSummaryFromList(detail: ThreadDetail, incoming: Partial<ThreadSummary>): ThreadDetail {
-  return {
-    ...detail,
-    summary: mergeIncomingThreadSummary(detail.summary, incoming) as ThreadSummary
-  };
-}
-
-export function threadMatchesListFilter(thread: Partial<ThreadSummary>, status = "all", q = ""): boolean {
-  if (!isVisibleMainThread(thread)) return false;
-  if (status !== "all") {
-    if (status === "running" && !isThreadListItemRunning(thread)) return false;
-    if (status === "reply-needed" && thread.status !== "ReplyNeeded") return false;
-    if (status === "recoverable" && thread.status !== "Recoverable") return false;
-    if (!["running", "reply-needed", "recoverable"].includes(status) && thread.status !== status) return false;
-  }
-  const needle = q.trim().toLowerCase();
-  if (!needle) return true;
-  return [
-    thread.id,
-    thread.title,
-    thread.latest_message
-  ].some((value) => String(value ?? "").toLowerCase().includes(needle));
-}
-
-export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], removedThreadId: string): string | null {
-  const visible = filterVisibleThreadSummaries(threads);
-  const removedIndex = visible.findIndex((thread) => thread.id === removedThreadId);
-  const remaining = visible.filter((thread) => thread.id !== removedThreadId);
-  if (!remaining.length) return null;
-  if (removedIndex < 0) return remaining[0].id;
-  return (remaining[removedIndex] ?? remaining[removedIndex - 1] ?? remaining[0]).id;
-}
-
-export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null): detail is ThreadDetail {
-  return Boolean(threadId && detail?.summary.id === threadId && detail.summary.status !== "Archived");
-}
-
-export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
-  if (detail) return isThreadRunning(detail.summary, detail.blocks, null) ? 2000 : 5000;
-  return selectedSummary && isThreadRunning(selectedSummary, [], null) ? 2000 : 5000;
-}
-
 export function shouldAutoFollowMessageStream(snapshot: MessageScrollSnapshot, threshold = 96): boolean {
   return snapshot.scrollHeight - snapshot.scrollTop - snapshot.clientHeight <= threshold;
 }
@@ -1086,18 +910,6 @@ function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
 }
 
 export type ComposerActionMode = "send" | "stop" | "followup" | "disabled";
-
-export function isThreadRunning(summary: Partial<ThreadSummary>, blocks: MessageBlock[] = [], lastResult?: Partial<BridgeActionResult> | null): boolean {
-  void blocks;
-  void lastResult;
-  if (summary.status === "Running") return true;
-  if (summary.status === "Recent" && Boolean(summary.active_job_id)) return true;
-  return false;
-}
-
-export function isThreadListItemRunning(thread: Partial<ThreadSummary>): boolean {
-  return isThreadRunning(thread, [], null);
-}
 
 export function isRunningToolBlock(block: MessageBlock): boolean {
   if (!isToolBlock(block)) return false;
@@ -1465,17 +1277,6 @@ export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: str
   };
 }
 
-export function runConfigAfterSuccessfulSend<T extends { collaborationMode: string }>(config: T): T {
-  return config;
-}
-
-export function mergeRunConfigFromDefaults<T extends { collaborationMode: string }>(current: T, defaults: T): T {
-  return {
-    ...defaults,
-    collaborationMode: current.collaborationMode
-  };
-}
-
 export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
   const latest = [...blocks].reverse().find((block) =>
     block.role === "assistant" && shouldRenderConversationMessage(block)
@@ -1502,10 +1303,6 @@ export function nextRenameDraftValue(input: {
 
 export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string, title: string): ThreadSummary[] {
   return threads.map((thread) => thread.id === threadId ? { ...thread, title } : thread);
-}
-
-export function threadSettingsMetricLabels(): string[] {
-  return [];
 }
 
 export function threadInspectorPanelTitles(): string[] {
@@ -2035,81 +1832,6 @@ function currentActionKindFromBlocks(
   if (questionIndex === -1) return "plan";
   if (planIndex === -1) return "question";
   return questionIndex >= planIndex ? "question" : "plan";
-}
-
-export function modelSupportsServiceTier(models: CodexModel[], modelId: string, tierId: string): boolean {
-  const model = models.find((item) => item.id === modelId);
-  return Boolean(model?.service_tiers?.some((tier) => tier.id === tierId));
-}
-
-function normalizeServiceTier(value?: string | null): string {
-  if (value === "fast") return "priority";
-  return value?.trim() || "";
-}
-
-function nonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function fieldContainsSubagent(value: unknown): boolean {
-  return typeof value === "string" && value.toLowerCase().includes("subagent");
-}
-
-function sourceValueContainsSubagent(value: unknown): boolean {
-  if (typeof value === "string") return value.toLowerCase().includes("subagent");
-  if (Array.isArray(value)) return value.some(sourceValueContainsSubagent);
-  if (typeof value === "object" && value) {
-    return Object.entries(value).some(([key, item]) => key.toLowerCase().includes("subagent") || sourceValueContainsSubagent(item));
-  }
-  return false;
-}
-
-function isInternalExecThread(thread: Partial<ThreadSummary>): boolean {
-  if (normalizeString(thread.source) !== "exec") return false;
-  if (!explicitlyNoUserEvent(thread.hasUserEvent ?? thread.has_user_event)) return false;
-
-  const threadSource = normalizeString(thread.threadSource ?? thread.thread_source);
-  if (threadSource && threadSource !== "user") return false;
-
-  return [
-    thread.title,
-    thread.firstUserMessage ?? thread.first_user_message,
-    thread.preview,
-    thread.latest_message
-  ].some((value) => typeof value === "string" && isInternalThreadPromptText(value));
-}
-
-function explicitlyNoUserEvent(value: unknown): boolean {
-  return value === false || value === 0 || value === "0";
-}
-
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function isInternalThreadPromptText(value: string): boolean {
-  const text = value.trim().toLowerCase();
-  if (!text) return false;
-
-  const readonlyProbe = text.includes("只读验证")
-    || text.includes("只读核查")
-    || text.includes("不要修改文件")
-    || text.includes("不改文件")
-    || text.includes("read-only")
-    || text.includes("readonly");
-  const agentProbe = text.includes("spawn_agent")
-    || text.includes("子代理")
-    || text.includes("subagent")
-    || text.includes("model_reasoning_effort=xhigh");
-  if (readonlyProbe && agentProbe) return true;
-
-  const strongSubagentInstruction = text.includes("你是子代理")
-    || text.includes("你是并行子代理")
-    || text.includes("you are a subagent");
-  const fixedAgentConfig = text.includes("gpt-5.5")
-    || text.includes("xhigh")
-    || text.includes("model_reasoning_effort=xhigh");
-  return strongSubagentInstruction && fixedAgentConfig;
 }
 
 function threadDetailFromSlot(threadId: string, slot: ThreadMessageSlot, fallback?: ThreadSummary | null): ThreadDetail {
@@ -4084,6 +3806,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
     executePending: executeHiddenDelete.isPending,
     executableCount: hiddenStats.hidden
   });
+  const updateActions = opsUpdateActionView(update.data, capabilities);
 
   return (
     <div className="ops-grid">
@@ -4101,9 +3824,15 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
-          <button className="secondary-button" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "check" })}><CheckCircle2 size={17} />{capabilities.updateServiceLabels ? "Precheck" : "Check"}</button>
-          <button className="primary-button" disabled={jobMutation.isPending || !canStartUpdateInstall(update.data)} onClick={() => jobMutation.mutate({ action: "install" })}><Play size={17} />{capabilities.updateServiceLabels ? "Update" : "Install"}</button>
-          {capabilities.updatePrune && <button className="danger-button soft" disabled={jobMutation.isPending} onClick={() => jobMutation.mutate({ action: "prune" })}><Trash2 size={17} />Prune</button>}
+          {updateActions.map((action) => {
+            const className = action.tone === "primary" ? "primary-button" : action.tone === "danger" ? "danger-button soft" : "secondary-button";
+            const icon = action.action === "check" ? <CheckCircle2 size={17} /> : action.action === "install" ? <Play size={17} /> : <Trash2 size={17} />;
+            return (
+              <button key={action.action} className={className} disabled={jobMutation.isPending || action.disabled} onClick={() => jobMutation.mutate({ action: action.action })}>
+                {icon}{action.label}
+              </button>
+            );
+          })}
         </div>
       </Panel>
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
@@ -4733,67 +4462,6 @@ function StatusChip({ status }: { status: ThreadStatus }) {
   return <span className={`status-chip ${status}`}>{threadStatusLabel(status)}</span>;
 }
 
-function threadStatusLabel(status?: ThreadStatus | string | null): string {
-  if (status === "ReplyNeeded") return "待回复";
-  if (status === "Recoverable") return "异常";
-  if (status === "Running") return "运行中";
-  if (status === "Archived") return "归档";
-  return "最近";
-}
-
-export function optionalUnavailableMessage(
-  feature: string,
-  result?: { available: boolean; reason?: string | null; error?: string | null } | null
-): string {
-  const label = feature.trim() || "功能";
-  if (!result || result.available) return `${label} 已就绪`;
-  const detail = result.reason?.trim() || result.error?.trim();
-  return detail ? `${label} 不可用：${detail}` : `${label} 暂不可用`;
-}
-
-export function buildPayload(message: string, config: RunConfig, attachments: Pick<UploadRecord, "id">[] = []): ThreadSendPayload {
-  const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
-  const payload: ThreadSendPayload = {
-    message,
-    model: config.model.trim() || null,
-    service_tier: config.serviceTier.trim() || null,
-    reasoning_effort: config.reasoning.trim() || null,
-    cwd: config.cwd.trim() || null,
-    permission_profile: config.permissionProfile.trim() || null,
-    approval_policy: config.approvalPolicy.trim() || null,
-    sandbox_mode: config.sandboxMode.trim() || null,
-    network_access: config.networkAccess,
-    collaboration_mode: config.collaborationMode.trim() || null
-  };
-  if (attachmentIds.length > 0) {
-    payload.attachments = attachmentIds;
-  }
-  return payload;
-}
-
-export function runConfigWithSupportedServiceTier(config: RunConfig, models: CodexModel[]): RunConfig {
-  if (!config.serviceTier.trim()) return config;
-  if (modelSupportsServiceTier(models, config.model, config.serviceTier.trim())) return config;
-  return { ...config, serviceTier: "" };
-}
-
-function sourceCountsText(counts?: Record<string, number> | null): string {
-  if (!counts || Object.keys(counts).length === 0) return "暂无";
-  return Object.entries(counts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value}`)
-    .join(" ");
-}
-
-function permissionLabel(preset: PermissionPresetId): string {
-  return permissionPresets.find((item) => item.id === preset)?.label ?? "完全访问权限";
-}
-
-export function actionMessage(result: BridgeActionResult): string {
-  void result;
-  return "已提交给 Codex";
-}
-
 function legacyBlocks(detail: ThreadDetail): MessageBlock[] {
   return detail.messages.map((message, index) => ({
     id: `legacy-${index}`,
@@ -5268,12 +4936,6 @@ function secondsToDays(seconds: number): number {
 function normalizeTurnstileAction(value?: string | null): string {
   const action = value?.trim();
   return action || "login";
-}
-
-export function extractPlanText(value: string): string {
-  return value
-    .replace(/<\/?proposed_plan>/g, "")
-    .trim() || value || "Plan 内容等待 Codex 写入。";
 }
 
 function blockKindLabel(kind: string): string {

@@ -1,14 +1,23 @@
 use nexushub_core::{
-    db::ThreadFollowUp,
+    config::Config,
+    db::{JobRecord, SecuritySettings, ThreadFollowUp},
     platform::{PlatformKind, PlatformPaths},
     services::{
+        cleanup::{CleanupOperationKind, CleanupTarget},
         commands,
         jobs::{
             FollowUpClaimRequest, FollowUpErrorRequest, FollowUpSubmitResultRequest,
             ThreadMessageRequest, ThreadRenameRequest, ThreadSendRequest, ThreadSteerRequest,
             ThreadStopRequest,
         },
+        probe::{ProbeAction, ProbeExecutionKind, ProbeLogsDbMaintenanceRequest},
+        security::{PasswordChangeRequest, SecurityPatch},
+        settings::{
+            ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
+            ProbeSettingsSaveRequest,
+        },
         system::Capability,
+        updates::{UpdateAction, UpdateExecutionMethod},
         uploads::{UploadBatchItem, UploadRetentionRequest},
         use_cases::NexusHubUseCases,
     },
@@ -237,12 +246,289 @@ fn upload_use_cases_plan_validation_store_delete_and_retention_policy() {
 }
 
 #[test]
+fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let use_cases = NexusHubUseCases::new(&linux_platform);
+
+    let list = use_cases
+        .threads()
+        .list_read(nexushub_core::services::threads::ThreadsQuery {
+            status: Some(" running ".to_string()),
+            q: Some(" build ".to_string()),
+            limit: Some(25),
+        })
+        .unwrap();
+    assert_eq!(list.list.required_capability, Capability::Threads);
+    assert_eq!(list.list.query.status.as_deref(), Some("running"));
+    assert_eq!(list.list.query.q.as_deref(), Some("build"));
+    assert!(list.include_hidden_thread_ids);
+    assert!(list.include_archived_thread_ids);
+    assert!(list.include_running_jobs);
+
+    let detail = use_cases
+        .threads()
+        .detail_read(nexushub_core::services::threads::ThreadDetailRequest {
+            id: " thread-a ".to_string(),
+            limit: Some(10),
+            full: None,
+            before: None,
+        })
+        .unwrap();
+    assert_eq!(detail.detail.thread_id, "thread-a");
+    assert!(detail.include_active_job);
+
+    let job_list = use_cases.jobs().list(Some(500)).unwrap();
+    assert_eq!(job_list.required_capability, Capability::JobHistory);
+    assert_eq!(job_list.limit, 200);
+
+    let job_detail = use_cases.jobs().detail(" job-a ").unwrap();
+    assert_eq!(job_detail.required_capability, Capability::JobHistory);
+    assert_eq!(job_detail.job_id, "job-a");
+
+    let failed = use_cases.jobs().response(JobRecord {
+        id: "job-a".to_string(),
+        kind: "codex".to_string(),
+        status: "failed".to_string(),
+        title: "Codex".to_string(),
+        thread_id: Some("thread-a".to_string()),
+        turn_id: None,
+        started_at: 1,
+        finished_at: Some(2),
+        exit_code: Some(1),
+        output: "auth failed".to_string(),
+        error: Some("401 Unauthorized".to_string()),
+    });
+    assert_eq!(failed.job.id, "job-a");
+    assert!(failed.failure_analysis.is_some());
+}
+
+#[test]
+fn upload_and_cleanup_use_cases_expose_execute_ready_plans_without_host_types() {
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let use_cases = NexusHubUseCases::new(&linux_platform);
+
+    let delete = use_cases
+        .uploads()
+        .delete_execute(" 018f0a59-f18a-7fa9-98fb-3bd51964d001 ")
+        .unwrap();
+    assert_eq!(delete.required_capability, Capability::Jobs);
+    assert_eq!(delete.id, "018f0a59-f18a-7fa9-98fb-3bd51964d001");
+
+    let dry_run = use_cases
+        .cleanup()
+        .operation(CleanupTarget::Archived, CleanupOperationKind::DryRun)
+        .unwrap();
+    assert_eq!(dry_run.required_capability, Capability::ThreadCleanup);
+    assert_eq!(dry_run.target, CleanupTarget::Archived);
+    assert_eq!(dry_run.operation, CleanupOperationKind::DryRun);
+    assert!(!dry_run.execute);
+    assert!(!dry_run.requires_prior_dry_run);
+
+    let execute = use_cases.cleanup().execute(CleanupTarget::Hidden).unwrap();
+    assert_eq!(execute.target, CleanupTarget::Hidden);
+    assert_eq!(execute.operation, CleanupOperationKind::Execute);
+    assert!(execute.execute);
+    assert!(execute.requires_confirmation);
+    assert!(execute.requires_prior_dry_run);
+}
+
+#[test]
+fn operational_use_cases_expose_probe_settings_updates_system_and_security_plans() {
+    let linux_config = Config::for_platform_kind(PlatformKind::Linux);
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = NexusHubUseCases::with_config(&linux_config, &linux_platform);
+
+    let settings_view = linux
+        .settings()
+        .unwrap()
+        .probe_settings_view(ProbeSecretState::Configured)
+        .unwrap();
+    assert_eq!(settings_view.required_capability, Capability::Settings);
+    assert!(settings_view.settings.notifications.device_key_configured);
+
+    let settings_save = linux
+        .settings()
+        .unwrap()
+        .save_probe_settings(ProbeSettingsSaveRequest {
+            probe: Some(ProbeSettingsSavePatch {
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some(" top-level-bark-key ".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(settings_save.required_capability, Capability::Settings);
+    assert_eq!(
+        settings_save.bark_device_key.as_deref(),
+        Some("top-level-bark-key")
+    );
+    let serialized_save = serde_json::to_string(&settings_save).unwrap();
+    assert!(serialized_save.contains("[configured]"));
+    assert!(!serialized_save.contains("top-level-bark-key"));
+
+    let bark = linux
+        .probe()
+        .unwrap()
+        .action_with_device_key(ProbeAction::BarkTest, true)
+        .unwrap();
+    assert_eq!(bark.required_capability, Capability::Probe);
+    assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
+    assert_eq!(bark.diagnostic_plan.unwrap().kind, "bark-test".to_string());
+
+    let maintenance = linux
+        .probe()
+        .unwrap()
+        .logs_db_maintenance(ProbeLogsDbMaintenanceRequest {
+            dry_run: false,
+            compact: true,
+        })
+        .unwrap();
+    assert_eq!(
+        maintenance.required_capability,
+        Capability::ProbeLogMaintenance
+    );
+    assert!(maintenance.maintenance.unwrap().compact);
+
+    let update_status = linux.updates().unwrap().status(None, None).unwrap();
+    assert_eq!(update_status.required_capability, Capability::AppUpdater);
+    let check = linux.updates().unwrap().check_plan().unwrap();
+    assert_eq!(check.required_capability, Capability::LinuxUpdateJob);
+    assert_eq!(check.action, UpdateAction::Check);
+    assert_eq!(check.method, UpdateExecutionMethod::LinuxSystemdJob);
+    let prune = linux.updates().unwrap().prune_plan().unwrap();
+    assert_eq!(prune.required_capability, Capability::PruneBackups);
+    assert_eq!(prune.action, UpdateAction::Prune);
+
+    let capabilities = linux.system().unwrap().capabilities();
+    assert!(capabilities.probe);
+    assert!(capabilities.prune_backups);
+    let gate = linux
+        .system()
+        .unwrap()
+        .capability_gate(Capability::PruneBackups);
+    assert!(gate.supported);
+    assert_eq!(gate.capability, Capability::PruneBackups);
+
+    let security_settings = SecuritySettings {
+        turnstile_enabled: true,
+        turnstile_required: true,
+        turnstile_site_key: None,
+        turnstile_secret_configured: false,
+        session_ttl_seconds: 900,
+    };
+    let public_security = linux
+        .security()
+        .unwrap()
+        .public_view(security_settings.clone(), None, true, None)
+        .unwrap();
+    assert_eq!(public_security.required_capability, Capability::WebAuth);
+    assert_eq!(public_security.public.turnstile_action, "login");
+    let security_patch = linux
+        .security()
+        .unwrap()
+        .patch(SecurityPatch {
+            turnstile_secret_key: Some(" secret-key ".to_string()),
+            session_ttl_seconds: Some(900),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        security_patch.required_capability,
+        Capability::SecuritySettings
+    );
+    assert_eq!(
+        security_patch.patch.turnstile_secret_key.as_deref(),
+        Some("secret-key")
+    );
+    let password = linux
+        .security()
+        .unwrap()
+        .change_password(
+            PasswordChangeRequest {
+                current_password: "old-password".to_string(),
+                new_password: "new-password-123".to_string(),
+            },
+            true,
+        )
+        .unwrap();
+    assert_eq!(password.required_capability, Capability::AdminPassword);
+}
+
+#[test]
+fn macos_prune_plan_fails_at_capability_gate_without_linux_remediation_advice() {
+    let home = temp_dir("nexushub-top-level-macos");
+    std::fs::create_dir_all(&home).unwrap();
+    let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
+    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
+    let use_cases = NexusHubUseCases::with_config(&config, &platform);
+
+    let err = use_cases
+        .updates()
+        .unwrap()
+        .prune_plan()
+        .expect_err("macOS must not plan Linux backup pruning");
+    let message = err.to_string();
+    assert!(message.contains("prune_backups is unavailable on macos"));
+    for forbidden in [
+        "Linux",
+        "linux server",
+        "systemd",
+        "Nginx",
+        "nginx",
+        "sudo",
+        "systemctl",
+    ] {
+        assert!(
+            !message.contains(forbidden),
+            "macOS prune error must not include Linux host advice: {message}"
+        );
+    }
+
+    let gate = use_cases
+        .system()
+        .unwrap()
+        .capability_gate(Capability::PruneBackups);
+    assert!(!gate.supported);
+    assert_eq!(gate.error.as_deref(), Some(message.as_str()));
+    assert!(!use_cases.system().unwrap().capabilities().prune_backups);
+
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn config_backed_use_cases_report_missing_config_in_core() {
+    let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let use_cases = NexusHubUseCases::new(&platform);
+
+    for result in [
+        use_cases.settings().map(|_| ()),
+        use_cases.probe().map(|_| ()),
+        use_cases.updates().map(|_| ()),
+        use_cases.system().map(|_| ()),
+        use_cases.security().map(|_| ()),
+    ] {
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("config is required"));
+    }
+}
+
+#[test]
 fn new_core_facade_sources_do_not_import_host_runtime_surfaces() {
     for (name, source) in [
         ("use_cases", include_str!("../src/services/use_cases.rs")),
         ("jobs", include_str!("../src/services/jobs.rs")),
         ("uploads", include_str!("../src/services/uploads.rs")),
         ("cleanup", include_str!("../src/services/cleanup.rs")),
+        ("settings", include_str!("../src/services/settings.rs")),
+        ("probe", include_str!("../src/services/probe.rs")),
+        ("updates", include_str!("../src/services/updates.rs")),
+        ("system", include_str!("../src/services/system.rs")),
+        ("security", include_str!("../src/services/security.rs")),
     ] {
         for forbidden in ["axum", "tauri", "nexushubd", "src-tauri", "HeaderMap"] {
             assert!(

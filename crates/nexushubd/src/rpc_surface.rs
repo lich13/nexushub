@@ -52,4 +52,38 @@ mod tests {
             assert!(!is_business_rpc_command(command));
         }
     }
+
+    #[test]
+    fn required_transport_and_retired_exceptions_stay_out_of_business_allowlist() {
+        for command in ["uploadFiles", "threadEvents"] {
+            assert!(
+                is_transport_rpc_command(command),
+                "transport exception must remain explicit: {command}"
+            );
+            assert!(
+                !is_business_rpc_command(command),
+                "transport exception must stay out of business allowlist: {command}"
+            );
+        }
+
+        for command in [
+            "startProbeJob",
+            "runUpdateAction",
+            "getDesktopOverview",
+            "getDesktopHome",
+        ] {
+            assert!(
+                is_retired_rpc_command(command),
+                "retired compatibility command must stay marked retired: {command}"
+            );
+            assert!(
+                !is_business_rpc_command(command),
+                "retired compatibility command must not re-enter business allowlist: {command}"
+            );
+            assert!(
+                !is_transport_rpc_command(command),
+                "retired compatibility command must not become a transport exception: {command}"
+            );
+        }
+    }
 }

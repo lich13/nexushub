@@ -79,6 +79,13 @@ impl<'a> ProbeUseCases<'a> {
             ProbeAction::LogsDbExecute
         })
     }
+
+    pub fn logs_db_maintenance(
+        self,
+        request: ProbeLogsDbMaintenanceRequest,
+    ) -> Result<ProbeActionPlan> {
+        plan_probe_logs_db_maintenance(self.config, self.platform, request)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
