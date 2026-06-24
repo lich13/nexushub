@@ -1,10 +1,9 @@
 #![allow(non_snake_case)]
 
 use super::DesktopActionResponse;
-use crate::overview::DesktopState;
+use crate::overview::{desktop_goal_from_view, DesktopGoal, DesktopState};
 use anyhow::Result;
 use nexushub_core::{
-    codex::ThreadSummary,
     config::{patch_probe_config_toml, Config},
     probe::{redact_probe_event_for_output, ProbeLogsDbMaintenanceResult, ProbeRuntime},
     services::{
@@ -22,19 +21,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopGoal {
-    pub available: bool,
-    pub enabled: bool,
-    pub thread_id: Option<String>,
-    pub objective: Option<String>,
-    pub token_budget: Option<u64>,
-    pub status: String,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<String>,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,7 +208,7 @@ pub fn getCodexGoal(
         },
     )
     .map_err(|err| err.to_string())?;
-    Ok(goal_from_view(view))
+    Ok(desktop_goal_from_view(view))
 }
 
 #[tauri::command(rename = "threads.goal.save")]
@@ -284,33 +270,6 @@ pub fn resumeCodexGoal(
     resume_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
 }
 
-pub(crate) fn first_thread_goal(
-    state: &DesktopState,
-    first_thread: Option<&ThreadSummary>,
-) -> DesktopGoal {
-    let Some(thread) = first_thread else {
-        return goal_from_view(goal_service::goal_empty("missing_thread"));
-    };
-    goal_service::goal_get_response_with_capability(
-        &state.db,
-        state.platform(),
-        goal_service::GoalGetRequest {
-            thread_id: Some(thread.id.clone()),
-        },
-    )
-    .map(goal_from_view)
-    .unwrap_or_else(|err| DesktopGoal {
-        available: false,
-        enabled: false,
-        thread_id: Some(thread.id.clone()),
-        objective: None,
-        token_budget: None,
-        status: "unavailable".to_string(),
-        completed_at: None,
-        blocked_reason: Some(err.to_string()),
-    })
-}
-
 pub(crate) fn store_uploads_with_state(
     state: &DesktopState,
     files: Vec<DesktopUploadFile>,
@@ -342,23 +301,23 @@ fn save_goal_with_state(state: &DesktopState, request: DesktopGoalRequest) -> Re
             enabled: None,
         },
     )?;
-    Ok(goal_from_view(view))
+    Ok(desktop_goal_from_view(view))
 }
 
 fn clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
     let view =
         goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
-    Ok(goal_from_view(view))
+    Ok(desktop_goal_from_view(view))
 }
 
 fn pause_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
     let view = goal_service::pause_goal_with_capability(&state.db, state.platform(), thread_id)?;
-    Ok(goal_from_view(view))
+    Ok(desktop_goal_from_view(view))
 }
 
 fn resume_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
     let view = goal_service::resume_goal_with_capability(&state.db, state.platform(), thread_id)?;
-    Ok(goal_from_view(view))
+    Ok(desktop_goal_from_view(view))
 }
 
 fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
@@ -577,23 +536,6 @@ pub(crate) fn test_delete_upload_with_state(
     request: DesktopDeleteUploadRequest,
 ) -> Result<DesktopDeleteUploadResponse> {
     delete_upload_with_state(state, request)
-}
-
-fn goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
-    goal_with_thread_id(view, None)
-}
-
-fn goal_with_thread_id(view: goal_service::GoalView, thread_id: Option<String>) -> DesktopGoal {
-    DesktopGoal {
-        available: view.available,
-        enabled: view.enabled,
-        thread_id: view.thread_id.or(thread_id),
-        objective: view.objective,
-        token_budget: view.token_budget,
-        status: view.status,
-        completed_at: view.completed_at,
-        blocked_reason: view.blocked_reason,
-    }
 }
 
 fn ok_action(

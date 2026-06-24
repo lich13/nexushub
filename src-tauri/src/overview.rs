@@ -1,4 +1,4 @@
-use crate::commands::settings::DesktopGoal;
+use crate::services::threads::home_thread_summaries;
 use anyhow::{anyhow, Result};
 use nexushub_core::{
     archive::{ArchiveDeletePlan, HiddenThreadDeletePlan},
@@ -14,6 +14,7 @@ use nexushub_core::{
     },
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeLogsDbStatus, ProbeRuntime, ProbeStatus},
+    services::goals as goal_service,
     system::{system_status_with_paths, SystemStatus},
 };
 use serde::Serialize;
@@ -65,6 +66,19 @@ pub struct DesktopHome {
     pub hidden_plan: Option<HiddenThreadDeletePlan>,
     pub goal: DesktopGoal,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopGoal {
+    pub available: bool,
+    pub enabled: bool,
+    pub thread_id: Option<String>,
+    pub objective: Option<String>,
+    pub token_budget: Option<u64>,
+    pub status: String,
+    pub completed_at: Option<i64>,
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -190,13 +204,13 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
         .ok();
     let probe = runtime.status().await.ok();
     let logs_db = Some(runtime.logs_db_status());
-    let threads = crate::commands::threads::threads_for_home(state).unwrap_or_else(|err| {
+    let threads = home_thread_summaries(state).unwrap_or_else(|err| {
         warnings.push(format!("线程读取失败: {err}"));
         Vec::new()
     });
     let archive_plan = None;
     let hidden_plan = None;
-    let goal = crate::commands::settings::first_thread_goal(state, threads.first());
+    let goal = first_thread_goal(state, threads.first());
 
     Ok(DesktopHome {
         overview,
@@ -213,6 +227,53 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
         goal,
         warnings,
     })
+}
+
+pub(crate) fn desktop_goal_from_view(view: goal_service::GoalView) -> DesktopGoal {
+    desktop_goal_with_thread_id(view, None)
+}
+
+pub(crate) fn first_thread_goal(
+    state: &DesktopState,
+    first_thread: Option<&ThreadSummary>,
+) -> DesktopGoal {
+    let Some(thread) = first_thread else {
+        return desktop_goal_from_view(goal_service::goal_empty("missing_thread"));
+    };
+    goal_service::goal_get_response_with_capability(
+        &state.db,
+        state.platform(),
+        goal_service::GoalGetRequest {
+            thread_id: Some(thread.id.clone()),
+        },
+    )
+    .map(desktop_goal_from_view)
+    .unwrap_or_else(|err| DesktopGoal {
+        available: false,
+        enabled: false,
+        thread_id: Some(thread.id.clone()),
+        objective: None,
+        token_budget: None,
+        status: "unavailable".to_string(),
+        completed_at: None,
+        blocked_reason: Some(err.to_string()),
+    })
+}
+
+fn desktop_goal_with_thread_id(
+    view: goal_service::GoalView,
+    thread_id: Option<String>,
+) -> DesktopGoal {
+    DesktopGoal {
+        available: view.available,
+        enabled: view.enabled,
+        thread_id: view.thread_id.or(thread_id),
+        objective: view.objective,
+        token_budget: view.token_budget,
+        status: view.status,
+        completed_at: view.completed_at,
+        blocked_reason: view.blocked_reason,
+    }
 }
 
 fn load_desktop_config() -> Config {

@@ -54,6 +54,26 @@ pub struct CleanupActionPlan {
     pub requires_confirmation: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupOperationKind {
+    DryRun,
+    Execute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupOperationPlan {
+    pub required_capability: Capability,
+    pub action: CleanupAction,
+    pub command: String,
+    pub target: CleanupTarget,
+    pub operation: CleanupOperationKind,
+    pub execute: bool,
+    pub requires_confirmation: bool,
+    pub requires_prior_dry_run: bool,
+}
+
 pub fn plan_cleanup_action(
     platform: &PlatformPaths,
     action: CleanupAction,
@@ -72,6 +92,36 @@ pub fn plan_cleanup_action(
         target,
         execute,
         requires_confirmation: execute,
+    })
+}
+
+pub fn plan_cleanup_operation(
+    platform: &PlatformPaths,
+    target: CleanupTarget,
+    operation: CleanupOperationKind,
+) -> Result<CleanupOperationPlan> {
+    let action = match (target, operation) {
+        (CleanupTarget::Archived, CleanupOperationKind::DryRun) => {
+            CleanupAction::ArchiveDeleteDryRun
+        }
+        (CleanupTarget::Archived, CleanupOperationKind::Execute) => {
+            CleanupAction::ArchiveDeleteExecute
+        }
+        (CleanupTarget::Hidden, CleanupOperationKind::DryRun) => CleanupAction::HiddenDeleteDryRun,
+        (CleanupTarget::Hidden, CleanupOperationKind::Execute) => {
+            CleanupAction::HiddenDeleteExecute
+        }
+    };
+    let action_plan = plan_cleanup_action(platform, action)?;
+    Ok(CleanupOperationPlan {
+        required_capability: action_plan.required_capability,
+        action: action_plan.action,
+        command: action_plan.command,
+        target: action_plan.target,
+        operation,
+        execute: action_plan.execute,
+        requires_confirmation: action_plan.requires_confirmation,
+        requires_prior_dry_run: action_plan.execute,
     })
 }
 
@@ -105,4 +155,54 @@ pub fn execute_hidden_with_capability(
 ) -> Result<HiddenThreadDeleteResult> {
     plan_cleanup_action(platform, CleanupAction::HiddenDeleteExecute)?;
     archive::execute_delete_hidden(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        platform::{PlatformKind, PlatformPaths},
+        services::{
+            cleanup::{plan_cleanup_operation, CleanupAction, CleanupOperationKind, CleanupTarget},
+            commands,
+            system::Capability,
+        },
+    };
+
+    #[test]
+    fn cleanup_operation_plan_keeps_dry_run_and_confirmed_execute_boundaries_shared() {
+        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+
+        let dry_run = plan_cleanup_operation(
+            &linux,
+            CleanupTarget::Archived,
+            CleanupOperationKind::DryRun,
+        )
+        .unwrap();
+        assert_eq!(dry_run.required_capability, Capability::ThreadCleanup);
+        assert_eq!(dry_run.target, CleanupTarget::Archived);
+        assert_eq!(dry_run.action, CleanupAction::ArchiveDeleteDryRun);
+        assert_eq!(dry_run.command, commands::CLEANUP_ARCHIVE_DRY_RUN);
+        assert!(!dry_run.execute);
+        assert!(!dry_run.requires_confirmation);
+        assert!(!dry_run.requires_prior_dry_run);
+
+        let execute =
+            plan_cleanup_operation(&macos, CleanupTarget::Hidden, CleanupOperationKind::Execute)
+                .unwrap();
+        assert_eq!(execute.target, CleanupTarget::Hidden);
+        assert_eq!(execute.action, CleanupAction::HiddenDeleteExecute);
+        assert_eq!(execute.command, commands::CLEANUP_HIDDEN_EXECUTE);
+        assert!(execute.execute);
+        assert!(execute.requires_confirmation);
+        assert!(execute.requires_prior_dry_run);
+
+        assert!(plan_cleanup_operation(
+            &windows,
+            CleanupTarget::Archived,
+            CleanupOperationKind::DryRun
+        )
+        .is_err());
+    }
 }

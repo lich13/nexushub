@@ -2,6 +2,7 @@ mod commands;
 // 业务命令入口按领域放在 commands/*；overview 仅保留桌面状态、首页汇总和启动初始化。
 #[allow(dead_code)]
 mod overview;
+mod services;
 
 use std::path::Path;
 use tauri::Manager;
@@ -624,9 +625,13 @@ log_dir = "{}"
             .split("\n#[cfg(test)]")
             .next()
             .unwrap_or(include_str!("commands/threads.rs"));
+        let thread_service_source = include_str!("services/threads.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .unwrap_or(include_str!("services/threads.rs"));
 
         for required in [
-            "thread_service::plan_threads_list_request",
+            "thread_summaries_with_query(",
             "thread_service::plan_thread_detail_request",
             "thread_service::plan_thread_blocks_request",
             "thread_service::window_thread_detail_for_plan",
@@ -641,6 +646,7 @@ log_dir = "{}"
         }
 
         for forbidden in [
+            "fn thread_list_with_jobs(",
             "window_thread_detail(",
             "detail_block_limit(",
             "block_page_limit(",
@@ -652,6 +658,12 @@ log_dir = "{}"
                 "Tauri thread adapter must not duplicate core thread paging logic: {forbidden}"
             );
         }
+
+        assert!(
+            thread_service_source.contains("thread_service::plan_threads_list_request")
+                && thread_service_source.contains("thread_service::build_threads_overview"),
+            "desktop thread service must consume shared core thread list plans"
+        );
     }
 
     #[test]
@@ -809,6 +821,27 @@ log_dir = "{}"
     }
 
     #[test]
+    fn overview_does_not_depend_on_command_modules() {
+        let overview_source = include_str!("overview.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("overview source must include production section");
+
+        for forbidden in [
+            "use crate::commands::",
+            "crate::commands::",
+            "commands::settings::DesktopGoal",
+            "commands::threads::threads_for_home",
+            "commands::settings::first_thread_goal",
+        ] {
+            assert!(
+                !overview_source.contains(forbidden),
+                "overview.rs must not depend on command adapters: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn tauri_command_guard_does_not_embed_retired_compat_tokens_in_tests() {
         let test_source = include_str!("lib.rs")
             .split("\n#[cfg(test)]")
@@ -851,18 +884,26 @@ log_dir = "{}"
         for parts in [
             &["get", "Security"][..],
             &["save", "Security"][..],
+            &["security", "Status"][..],
             &["change", "Password"][..],
             &["security", "_status"][..],
+            &["auth", "Status"][..],
             &["log", "in"][..],
             &["log", "out"][..],
             &["cs", "rf"][..],
             &["turn", "stile"][..],
             &["admin", "_password"][..],
             &["system", "d"][..],
+            &["System", "d"][..],
             &["ngi", "nx"][..],
+            &["Nginx"][..],
+            &["web", "Auth"][..],
+            &["web", "auth"][..],
             &["system_update", "_prune"][..],
             &["desktop_update", "_prune"][..],
             &["prune", "_backups"][..],
+            &["Probe", "Job"][..],
+            &["run", "UpdateAction"][..],
         ] {
             let forbidden = concat_token(parts);
             assert!(

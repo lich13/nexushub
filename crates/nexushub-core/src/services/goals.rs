@@ -52,9 +52,12 @@ impl GoalCommandKind {
 mod tests {
     use crate::{
         db::ThreadGoal,
+        platform::{PlatformKind, PlatformPaths},
         services::goals::{
-            plan_clear_goal_update, plan_goal_update, plan_pause_goal_update,
-            plan_resume_goal_update, GoalCommandKind, GoalUpdateRequest,
+            goal_empty, normalize_goal_status, plan_clear_goal_update,
+            plan_goal_get_with_capability, plan_goal_save_with_capability, plan_goal_update,
+            plan_pause_goal_update, plan_resume_goal_update, GoalCommandKind, GoalGetRequest,
+            GoalUpdateRequest,
         },
     };
 
@@ -103,6 +106,57 @@ mod tests {
         let resumed = plan_resume_goal_update("thread-a", None).unwrap();
         assert_eq!(resumed.update.thread_id, "thread-a");
         assert_eq!(resumed.update.status, "active");
+    }
+
+    #[test]
+    fn goal_status_semantics_and_capability_gates_are_core_defined() {
+        assert_eq!(
+            normalize_goal_status(Some("completed"), None, None),
+            "complete"
+        );
+        assert_eq!(normalize_goal_status(Some("running"), None, None), "active");
+        assert_eq!(
+            normalize_goal_status(None, Some(false), Some("Keep context")),
+            "paused"
+        );
+        assert_eq!(normalize_goal_status(None, Some(false), None), "cleared");
+        assert!(!goal_empty("missing_thread").available);
+
+        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+
+        let get = plan_goal_get_with_capability(
+            &macos,
+            GoalGetRequest {
+                thread_id: Some(" thread-a ".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(get.thread_id.as_deref(), Some("thread-a"));
+        assert!(!get.missing_thread);
+
+        let save = plan_goal_save_with_capability(
+            &linux,
+            GoalUpdateRequest {
+                thread_id: Some(" thread-a ".to_string()),
+                objective: Some("  Ship  ".to_string()),
+                token_budget: Some(10),
+                status: Some("running".to_string()),
+                enabled: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(save.command.command, GoalCommandKind::Save);
+        assert_eq!(save.command.update.status, "active");
+
+        assert!(plan_goal_get_with_capability(
+            &windows,
+            GoalGetRequest {
+                thread_id: Some("thread-a".to_string())
+            },
+        )
+        .is_err());
     }
 
     fn thread_goal(

@@ -31,6 +31,33 @@ pub enum Capability {
 }
 
 impl Capability {
+    pub const ALL: &'static [Capability] = &[
+        Capability::Threads,
+        Capability::Jobs,
+        Capability::Probe,
+        Capability::Status,
+        Capability::Settings,
+        Capability::JobHistory,
+        Capability::AppUpdater,
+        Capability::ThreadCleanup,
+        Capability::ProbeLogMaintenance,
+        Capability::ThreadArchiveActions,
+        Capability::WebAuth,
+        Capability::Csrf,
+        Capability::SecuritySettings,
+        Capability::Turnstile,
+        Capability::Systemd,
+        Capability::Nginx,
+        Capability::PublicEndpoint,
+        Capability::AdminPassword,
+        Capability::LinuxUpdateJob,
+        Capability::PruneBackups,
+    ];
+
+    pub fn all() -> &'static [Capability] {
+        Self::ALL
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Threads => "threads",
@@ -108,6 +135,33 @@ pub struct SystemCapabilities {
     pub prune_backups: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityGatePlan {
+    pub capability: Capability,
+    pub platform: PlatformKind,
+    pub supported: bool,
+    pub error: Option<String>,
+}
+
+pub fn capability_gate_plan(
+    platform: &PlatformPaths,
+    capability: Capability,
+) -> CapabilityGatePlan {
+    let supported = capability.is_supported_on(platform);
+    CapabilityGatePlan {
+        capability,
+        platform: platform.kind,
+        supported,
+        error: (!supported).then(|| {
+            format!(
+                "{} is unavailable on {}",
+                capability.as_str(),
+                platform_kind_label(platform.kind)
+            )
+        }),
+    }
+}
+
 pub fn require_capability(platform: &PlatformPaths, capability: Capability) -> Result<()> {
     if capability.is_supported_on(platform) {
         return Ok(());
@@ -154,7 +208,7 @@ fn platform_kind_label(kind: PlatformKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{require_capability, system_capabilities, Capability};
+    use super::{capability_gate_plan, require_capability, system_capabilities, Capability};
     use crate::{config::Config, platform::PlatformPaths};
 
     #[test]
@@ -220,5 +274,37 @@ mod tests {
         assert!(!matrix.thread_archive_actions);
         assert!(!matrix.security_settings);
         assert!(require_capability(&platform, Capability::SecuritySettings).is_err());
+    }
+
+    #[test]
+    fn capability_gate_plan_matches_require_capability_without_host_specific_advice() {
+        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
+        let windows = PlatformPaths::for_kind(crate::platform::PlatformKind::Windows);
+
+        for platform in [&linux, &macos, &windows] {
+            for capability in Capability::all() {
+                let plan = capability_gate_plan(platform, *capability);
+                assert_eq!(plan.capability, *capability);
+                assert_eq!(plan.platform, platform.kind);
+                assert_eq!(
+                    plan.supported,
+                    require_capability(platform, *capability).is_ok(),
+                    "{capability:?} on {:?}",
+                    platform.kind
+                );
+                if !plan.supported {
+                    let message = plan
+                        .error
+                        .as_deref()
+                        .expect("unsupported capability should include a neutral error");
+                    assert!(message.contains(capability.as_str()));
+                    assert!(!message.contains("systemctl"));
+                    assert!(!message.contains("Nginx"));
+                    assert!(!message.contains("sudo"));
+                    assert!(!message.contains("/opt/nexushub"));
+                }
+            }
+        }
     }
 }

@@ -115,6 +115,12 @@ pub struct ProbeLogsDbMaintenanceSpec {
     pub compact: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeLogsDbMaintenanceRequest {
+    pub dry_run: bool,
+    pub compact: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbeActionPlan {
     pub required_capability: Capability,
@@ -213,6 +219,34 @@ pub fn plan_probe_action_with_device_key_and_config_path(
         maintenance,
         diagnostic_plan,
     })
+}
+
+pub fn plan_probe_logs_db_maintenance(
+    config: &Config,
+    platform: &PlatformPaths,
+    request: ProbeLogsDbMaintenanceRequest,
+) -> Result<ProbeActionPlan> {
+    let action = if request.dry_run {
+        ProbeAction::LogsDbDryRun
+    } else {
+        ProbeAction::LogsDbExecute
+    };
+    let mut plan = plan_probe_action(config, platform, action)?;
+    let compact = request.compact && !request.dry_run;
+    if let Some(maintenance) = plan.maintenance.as_mut() {
+        maintenance.compact = compact;
+    }
+    if compact {
+        if let Some(job) = plan.job.as_mut() {
+            if !job.args.iter().any(|arg| arg == "--compact") {
+                job.args.push("--compact".to_string());
+            }
+            if !job.command.contains("--compact") {
+                job.command = format!("{} {}", job.command, shell_quote("--compact"));
+            }
+        }
+    }
+    Ok(plan)
 }
 
 pub fn aggregate_probe_status(config: &Config) -> ProbeStatusAggregation {
@@ -466,7 +500,10 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
 
 #[cfg(test)]
 mod tests {
-    use super::probe_status_with_capability;
+    use super::{
+        plan_probe_action, plan_probe_logs_db_maintenance, probe_status_with_capability,
+        ProbeAction, ProbeExecutionKind, ProbeLogsDbMaintenanceRequest,
+    };
     use crate::{
         config::Config,
         platform::{PlatformKind, PlatformPaths},
@@ -493,5 +530,87 @@ mod tests {
             .expect_err("Windows should not expose probe facade");
 
         assert!(err.to_string().contains("probe is unavailable on windows"));
+    }
+
+    #[test]
+    fn probe_action_plans_are_platform_scoped_and_include_execution_contracts() {
+        let linux_config = Config::for_platform_kind(PlatformKind::Linux);
+        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+        let bark = plan_probe_action(&linux_config, &linux, ProbeAction::BarkTest)
+            .expect("Linux should allow fixed Probe jobs");
+
+        assert_eq!(bark.required_capability, Capability::Probe);
+        assert_eq!(bark.execution, ProbeExecutionKind::FixedShellJob);
+        assert_eq!(bark.job.as_ref().unwrap().kind, "probe_bark_test");
+        assert!(bark.maintenance.is_none());
+
+        let mac_config = Config::for_platform_kind(PlatformKind::Macos);
+        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let dry_run = plan_probe_action(&mac_config, &macos, ProbeAction::LogsDbDryRun)
+            .expect("macOS should allow local Probe logs DB dry-runs");
+
+        assert_eq!(dry_run.required_capability, Capability::ProbeLogMaintenance);
+        assert_eq!(dry_run.execution, ProbeExecutionKind::LogsDbMaintenance);
+        assert!(dry_run.maintenance.unwrap().dry_run);
+        assert!(dry_run
+            .job
+            .unwrap()
+            .args
+            .iter()
+            .any(|arg| arg == "--dry-run"));
+
+        let windows_config = Config::for_platform_kind(PlatformKind::Windows);
+        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+        let bark_err = plan_probe_action(&windows_config, &windows, ProbeAction::BarkTest)
+            .expect_err("Windows should not allow Probe actions");
+        assert!(bark_err
+            .to_string()
+            .contains("probe is unavailable on windows"));
+        let maintenance_err =
+            plan_probe_action(&windows_config, &windows, ProbeAction::LogsDbExecute)
+                .expect_err("Windows should not allow Probe logs DB maintenance");
+        assert!(maintenance_err
+            .to_string()
+            .contains("probe_log_maintenance is unavailable on windows"));
+    }
+
+    #[test]
+    fn logs_db_maintenance_plan_can_include_compact_without_adapter_mutation() {
+        let config = Config::for_platform_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+
+        let execute = plan_probe_logs_db_maintenance(
+            &config,
+            &platform,
+            ProbeLogsDbMaintenanceRequest {
+                dry_run: false,
+                compact: true,
+            },
+        )
+        .expect("Linux should plan execute maintenance with compact metadata");
+
+        let maintenance = execute.maintenance.expect("maintenance spec");
+        assert!(!maintenance.dry_run);
+        assert!(maintenance.compact);
+        let job = execute.job.expect("fixed job spec");
+        assert_eq!(job.kind, "probe_logs_db_maintain");
+        assert!(job.args.iter().any(|arg| arg == "--compact"));
+        assert!(job.command.contains("--compact"));
+
+        let dry_run = plan_probe_logs_db_maintenance(
+            &config,
+            &platform,
+            ProbeLogsDbMaintenanceRequest {
+                dry_run: true,
+                compact: true,
+            },
+        )
+        .expect("dry-run maintenance should stay plannable");
+        let maintenance = dry_run.maintenance.expect("maintenance spec");
+        assert!(maintenance.dry_run);
+        assert!(!maintenance.compact);
+        let job = dry_run.job.expect("fixed job spec");
+        assert!(job.args.iter().any(|arg| arg == "--dry-run"));
+        assert!(!job.args.iter().any(|arg| arg == "--compact"));
     }
 }

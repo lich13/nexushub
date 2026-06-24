@@ -7,7 +7,7 @@ import type {
   ProbeStatus,
   SentinelStatus
 } from "../../types";
-import { runtimeRpc } from "./transport";
+import { callCommand } from "./transport";
 import { jobIdFromRuntimeResult, normalizeOptionalResult, normalizeProbeRuntimePayload, USE_DEMO } from "./shared";
 import { demoProbeSettings, demoProbeStatus } from "./demo";
 
@@ -22,7 +22,7 @@ export async function getProbeStatus(): Promise<OptionalResult<ProbeStatus>> {
       data: demoProbeStatus()
     };
   }
-  return normalizeOptionalResult<ProbeStatus>(await runtimeRpc<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
+  return normalizeOptionalResult<ProbeStatus>(await callCommand<ProbeStatus | OptionalResult<ProbeStatus>>("probe.status"));
 }
 
 export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>> {
@@ -32,7 +32,7 @@ export async function getProbeSettings(): Promise<OptionalResult<ProbeSettings>>
       data: demoProbeSettings()
     };
   }
-  const payload = await runtimeRpc<ProbeSettings | OptionalResult<ProbeSettings>>("probe.settings.get");
+  const payload = await callCommand<ProbeSettings | OptionalResult<ProbeSettings>>("probe.settings.get");
   const result = normalizeOptionalResult<ProbeSettings>(payload);
   return result.available
     ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeSettings }
@@ -56,7 +56,7 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
 export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
   if (USE_DEMO) return { ...demoProbeSettings(), ...settings } as ProbeSettings;
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
-  const payload = await runtimeRpc<ProbeSettings>("probe.settings.save", {
+  const payload = await callCommand<ProbeSettings>("probe.settings.save", {
     settings: normalizedSettings,
     csrfToken
   });
@@ -92,7 +92,7 @@ export async function getProbeLogsDbStatus(): Promise<OptionalResult<ProbeLogsDb
       recent_result: "dry-run: would_delete_rows=6"
     }
   };
-  const payload = await runtimeRpc<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("probe.logsDb.status");
+  const payload = await callCommand<ProbeLogsDbStatus | OptionalResult<ProbeLogsDbStatus>>("probe.logsDb.status");
   const result = normalizeOptionalResult<ProbeLogsDbStatus>(payload);
   return result.available
     ? { ...result, data: normalizeProbeRuntimePayload(result.data) as ProbeLogsDbStatus }
@@ -189,7 +189,7 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
       }
     };
   }
-  return normalizeOptionalResult<ProbeEventsResponse>(await runtimeRpc<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("probe.events", { limit }));
+  return normalizeOptionalResult<ProbeEventsResponse>(await callCommand<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("probe.events", { limit }));
 }
 
 export async function runProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {
@@ -214,6 +214,6 @@ async function startProbeCommand(
   csrfToken?: string | null,
 ): Promise<{ job_id: string }> {
   if (USE_DEMO) return { job_id: `${fallback}-demo` };
-  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null }>(command, { csrfToken });
+  const result = await callCommand<{ job_id?: string | null; jobId?: string | null }>(command, { csrfToken });
   return jobIdFromRuntimeResult(result, fallback);
 }

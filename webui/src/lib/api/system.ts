@@ -10,7 +10,7 @@ import type {
   SystemStatus,
   SystemVersion
 } from "../../types";
-import { runtimeRpc } from "./transport";
+import { callCommand } from "./transport";
 import {
   isMissingEndpoint,
   normalizeModels,
@@ -25,7 +25,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
   if (USE_DEMO) {
     return demoSystemStatus();
   }
-  return runtimeRpc<SystemStatus>("system.status");
+  return callCommand<SystemStatus>("system.status");
 }
 
 export async function getSystemVersion(): Promise<SystemVersion> {
@@ -42,7 +42,7 @@ export async function getSystemVersion(): Promise<SystemVersion> {
       codex_raw: "codex-cli 0.137.0"
     };
   }
-  return runtimeRpc<SystemVersion>("system.version");
+  return callCommand<SystemVersion>("system.version");
 }
 
 export async function listProviders(): Promise<AgentProviderInfo[]> {
@@ -68,7 +68,7 @@ export async function listProviders(): Promise<AgentProviderInfo[]> {
       { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
     ];
   }
-  return runtimeRpc<AgentProviderInfo[]>("system.providers");
+  return callCommand<AgentProviderInfo[]>("system.providers");
 }
 
 export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOverview>> {
@@ -132,7 +132,7 @@ export async function getClaudeCodeOverview(): Promise<OptionalResult<ClaudeOver
     };
   }
   try {
-    return normalizeOptionalResult(await runtimeRpc<ClaudeOverview>("system.claudeCodeOverview"));
+    return normalizeOptionalResult(await callCommand<ClaudeOverview>("system.claudeCodeOverview"));
   } catch (error) {
     if (isMissingEndpoint(error)) {
       return { available: false, error: error instanceof Error ? error.message : String(error) };
@@ -145,7 +145,7 @@ export async function getPlatformOverview(): Promise<PlatformOverview> {
   if (USE_DEMO) {
     return demoPlatformOverview();
   }
-  return runtimeRpc<PlatformOverview>("system.platform");
+  return callCommand<PlatformOverview>("system.platform");
 }
 
 export async function listPlugins(): Promise<PluginInfo[]> {
@@ -186,7 +186,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
       }
     ];
   }
-  return runtimeRpc<PluginInfo[]>("system.plugins");
+  return callCommand<PluginInfo[]>("system.plugins");
 }
 
 export async function listModels(): Promise<OptionalResult<CodexModel[]>> {
@@ -203,7 +203,7 @@ export async function listModels(): Promise<OptionalResult<CodexModel[]>> {
     };
   }
   try {
-    const result = normalizeOptionalResult(await runtimeRpc<unknown[]>("system.models"));
+    const result = normalizeOptionalResult(await callCommand<unknown[]>("system.models"));
     return result.available ? { available: true, data: normalizeModels(result.data ?? []) } : result as OptionalResult<CodexModel[]>;
   } catch (error) {
     if (isMissingEndpoint(error)) {
@@ -225,7 +225,7 @@ export async function listPermissionProfiles(): Promise<OptionalResult<Permissio
     };
   }
   try {
-    const result = normalizeOptionalResult(await runtimeRpc<unknown[]>("system.permissionProfiles"));
+    const result = normalizeOptionalResult(await callCommand<unknown[]>("system.permissionProfiles"));
     return result.available ? { available: true, data: normalizePermissionProfiles(result.data ?? []) } : result as OptionalResult<PermissionProfile[]>;
   } catch (error) {
     if (isMissingEndpoint(error)) {
@@ -243,7 +243,7 @@ export async function getCodexConfig(): Promise<OptionalResult<CodexConfig>> {
     };
   }
   try {
-    return normalizeOptionalResult(await runtimeRpc<CodexConfig>("system.codexConfig"));
+    return normalizeOptionalResult(await callCommand<CodexConfig>("system.codexConfig"));
   } catch (error) {
     if (isMissingEndpoint(error)) {
       return { available: false, error: error instanceof Error ? error.message : String(error) };

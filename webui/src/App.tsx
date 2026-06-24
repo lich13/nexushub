@@ -61,11 +61,19 @@ import {
 import {
   OPS_PANEL_TITLES,
   approvalActionMode,
+  canStartHiddenThreadDelete,
+  canStartUpdateInstall,
   canShowForkAction,
   capabilitiesForInput,
   failureCategoryLabel,
+  formatGoalTimestamp,
+  goalControlState,
+  goalStatusLabel,
+  goalStatusTone,
   jobFailureAnalysisView,
   jobOutputView,
+  resolvedSelectedThreadId,
+  threadInspectorActionState,
   type RuntimeCapabilityInput
 } from "./lib/domain/runtimeViewModel";
 import {
@@ -149,13 +157,21 @@ export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
 export { mergeThreadSummaryIntoListCache } from "./lib/query/threads";
 export {
   approvalActionMode,
+  canStartHiddenThreadDelete,
+  canStartUpdateInstall,
   canShowForkAction,
   desktopRuntimeVisibleCopy,
   failureCategoryLabel,
+  formatGoalTimestamp,
+  goalControlState,
+  goalStatusLabel,
+  goalStatusTone,
   jobFailureAnalysisView,
   jobOutputView,
+  resolvedSelectedThreadId,
   opsWorkspacePanelTitles,
-  opsWorkspaceVisibleCopy
+  opsWorkspaceVisibleCopy,
+  threadInspectorActionState
 } from "./lib/domain/runtimeViewModel";
 export { slashCommandAction, slashCommands, slashCommandsForRuntime } from "./lib/domain/slashCommands";
 export { preservePreviousQueryData } from "./lib/query/shared";
@@ -706,10 +722,6 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
       </section>
     </div>
   );
-}
-
-export function resolvedSelectedThreadId(selectedId: SelectedThread): string | null {
-  return selectedId === "__new" ? null : selectedId;
 }
 
 function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onNew, onRefresh, loading }: {
@@ -1983,14 +1995,6 @@ export function hiddenThreadDeleteStats(plan: HiddenThreadDeletePlan | null, sta
   };
 }
 
-export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
-  return (plan?.hidden_threads ?? 0) > 0;
-}
-
-export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
-  return status?.update_available === true;
-}
-
 export function archivePlanAfterExecute(current: ArchiveDeletePlan | null, result: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">): ArchiveDeletePlan | null {
   if (!current) return current;
   return {
@@ -2304,6 +2308,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
   const feedback = slot.feedback;
   const showAllHistory = slot.showAllHistory;
   const hiddenActionKey = slot.hiddenActionKey;
+  const inspectorActions = threadInspectorActionState(capabilities);
 
   useEffect(() => {
     const defaults = makeRunConfig(runOptions.config, detail.summary);
@@ -2576,7 +2581,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         break;
       case "archive_thread":
         setDraft("");
-        if (!capabilities.threadArchiveActions) {
+        if (!inspectorActions.showArchive) {
           messageStore.setFeedback(threadId, "当前运行时不支持归档操作");
           break;
         }
@@ -2584,7 +2589,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         break;
       case "fork_thread":
         setDraft("");
-        if (!canShowForkAction(capabilities)) {
+        if (!inspectorActions.showFork) {
           messageStore.setFeedback(threadId, "macOS App 当前不支持 Fork 操作");
           break;
         }
@@ -2635,7 +2640,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
         messageStore.setFeedback(threadId, action.message ?? "已执行");
         break;
     }
-  }, [archiveMutation, blocks, capabilities, csrfToken, forkMutation, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
+  }, [archiveMutation, blocks, csrfToken, forkMutation, inspectorActions.showArchive, inspectorActions.showFork, lastResult?.job_id, lastResult?.turn_id, messageStore, onPanelSelect, onSelect, runConfig, runOptions.models, stopMutation, summary.id, summary.status, summary.active_job_id, summary.active_turn_id, threadId]);
 
   const loadEarlierPending = slot.loadingEarlier;
   const sendPending = sendMutation.isPending && sendMutation.variables?.threadId === summary.id;
@@ -2705,8 +2710,8 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
       onArchive={() => archiveMutation.mutate({ threadId: summary.id, status: summary.status })}
       forkPending={forkPending}
       onFork={() => forkMutation.mutate({ threadId: summary.id })}
-      showFork={canShowForkAction(capabilities)}
-      showArchive={capabilities.threadArchiveActions}
+      showFork={inspectorActions.showFork}
+      showArchive={inspectorActions.showArchive}
       onFeedback={setActiveFeedback}
     />
   );
@@ -2760,7 +2765,7 @@ function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelec
 
         {approvalBlock && (
           <div className="action-stack">
-            {approvalActionMode(capabilities) === "unsupported" ? (
+            {inspectorActions.approvalMode === "unsupported" ? (
               <UnsupportedApprovalCard block={approvalBlock} />
             ) : (
               <ApprovalCard
@@ -3054,74 +3059,8 @@ function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
 function goalSaveInput(objective: string, tokenBudget: string): CodexGoalSaveInput {
   return {
     objective: objective.trim(),
-    token_budget: goalTokenBudgetValue(tokenBudget)
+    token_budget: tokenBudget.trim() ? Number.isFinite(Number(tokenBudget.trim())) && Number(tokenBudget.trim()) > 0 ? Math.floor(Number(tokenBudget.trim())) : null : null
   };
-}
-
-function goalTokenBudgetValue(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
-}
-
-function validGoalTokenBudget(value: string): boolean {
-  return !value.trim() || goalTokenBudgetValue(value) !== null;
-}
-
-export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): string {
-  if (!goal) return loading ? "读取中" : "未设置";
-  if (goal.available === false) return "未接入";
-  switch (goal.status) {
-    case "active":
-      return goal.enabled ? "进行中" : "已设置";
-    case "paused":
-      return "已暂停";
-    case "cleared":
-      return "已清除";
-    case "blocked":
-      return "阻塞";
-    case "complete":
-    case "completed":
-      return "完成";
-    case "idle":
-      return "未设置";
-    case "missing_thread":
-      return "缺少线程";
-    default:
-      return goal.status || "未设置";
-  }
-}
-
-export function goalStatusTone(goal: CodexGoal | undefined): "success" | "warning" | "danger" | undefined {
-  if (!goal) return undefined;
-  if (goal.available === false || goal.status === "blocked" || goal.status === "missing_thread") return "danger";
-  if (goal.status === "paused" || goal.status === "cleared" || goal.status === "idle") return "warning";
-  return "success";
-}
-
-export function goalControlState(
-  goal: CodexGoal | undefined,
-  options: { busy?: boolean; objective?: string; tokenBudget?: string } = {}
-): { saveDisabled: boolean; clearDisabled: boolean; pauseDisabled: boolean; resumeDisabled: boolean } {
-  const busy = Boolean(options.busy);
-  const objective = options.objective ?? goal?.objective ?? "";
-  const hasSavedObjective = Boolean(goal?.objective?.trim());
-  const status = goal?.status;
-  return {
-    saveDisabled: busy || !objective.trim() || !validGoalTokenBudget(options.tokenBudget ?? ""),
-    clearDisabled: busy || !hasSavedObjective,
-    pauseDisabled: busy || !hasSavedObjective || status === "paused" || status === "cleared" || status === "idle",
-    resumeDisabled: busy || !hasSavedObjective || status === "active"
-  };
-}
-
-export function formatGoalTimestamp(value: number | string | null | undefined): string {
-  if (value === null || value === undefined) return "无";
-  const numeric = typeof value === "number" ? value : Number(value);
-  const millis = Number.isFinite(numeric) ? (numeric > 10_000_000_000 ? numeric : numeric * 1000) : Date.parse(String(value));
-  if (!Number.isFinite(millis)) return String(value);
-  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
 }
 
 function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false, threadStatus, hasPendingPlan = false, hasPendingQuestion = false }: {

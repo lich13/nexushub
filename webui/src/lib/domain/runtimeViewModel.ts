@@ -1,4 +1,4 @@
-import type { JobRecord } from "../../types";
+import type { CodexGoal, HiddenThreadDeletePlan, JobRecord, UpdateStatus } from "../../types";
 import { runtimeCapabilitiesForRuntime, type RuntimeCapabilityMatrix } from "./capabilities";
 
 export type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
@@ -93,6 +93,31 @@ export function approvalActionMode(input?: RuntimeCapabilityInput): "interactive
   return capabilitiesForInput(input).approvalActions ? "interactive" : "unsupported";
 }
 
+export function threadInspectorActionState(input?: RuntimeCapabilityInput): {
+  showFork: boolean;
+  showArchive: boolean;
+  approvalMode: "interactive" | "unsupported";
+} {
+  const capabilities = capabilitiesForInput(input);
+  return {
+    showFork: canShowForkAction(capabilities),
+    showArchive: capabilities.threadArchiveActions,
+    approvalMode: approvalActionMode(capabilities)
+  };
+}
+
+export function resolvedSelectedThreadId(selectedId: string | "__new" | null): string | null {
+  return selectedId === "__new" ? null : selectedId;
+}
+
+export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
+  return (plan?.hidden_threads ?? 0) > 0;
+}
+
+export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
+  return status?.update_available === true;
+}
+
 const linuxFailureLabels: Record<string, string> = {
   systemd_failure: "systemd 失败",
   nginx_failure: "Nginx 失败",
@@ -164,4 +189,71 @@ export function jobOutputView(value: string, input?: RuntimeCapabilityInput): st
   return capabilitiesForInput(input).updateServiceLabels
     ? output
     : sanitizeDesktopFailureCopy(output, "任务输出不可用");
+}
+
+function goalTokenBudgetValue(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function validGoalTokenBudget(value: string): boolean {
+  return !value.trim() || goalTokenBudgetValue(value) !== null;
+}
+
+export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): string {
+  if (!goal) return loading ? "读取中" : "未设置";
+  if (goal.available === false) return "未接入";
+  switch (goal.status) {
+    case "active":
+      return goal.enabled ? "进行中" : "已设置";
+    case "paused":
+      return "已暂停";
+    case "cleared":
+      return "已清除";
+    case "blocked":
+      return "阻塞";
+    case "complete":
+    case "completed":
+      return "完成";
+    case "idle":
+      return "未设置";
+    case "missing_thread":
+      return "缺少线程";
+    default:
+      return goal.status || "未设置";
+  }
+}
+
+export function goalStatusTone(goal: CodexGoal | undefined): "success" | "warning" | "danger" | undefined {
+  if (!goal) return undefined;
+  if (goal.available === false || goal.status === "blocked" || goal.status === "missing_thread") return "danger";
+  if (goal.status === "paused" || goal.status === "cleared" || goal.status === "idle") return "warning";
+  return "success";
+}
+
+export function goalControlState(
+  goal: CodexGoal | undefined,
+  options: { busy?: boolean; objective?: string; tokenBudget?: string } = {}
+): { saveDisabled: boolean; clearDisabled: boolean; pauseDisabled: boolean; resumeDisabled: boolean } {
+  const unavailable = goal?.available === false;
+  const busy = Boolean(options.busy) || unavailable;
+  const objective = options.objective ?? goal?.objective ?? "";
+  const hasSavedObjective = Boolean(goal?.objective?.trim());
+  const status = goal?.status;
+  return {
+    saveDisabled: busy || !objective.trim() || !validGoalTokenBudget(options.tokenBudget ?? ""),
+    clearDisabled: busy || !hasSavedObjective,
+    pauseDisabled: busy || !hasSavedObjective || status === "paused" || status === "cleared" || status === "idle",
+    resumeDisabled: busy || !hasSavedObjective || status === "active"
+  };
+}
+
+export function formatGoalTimestamp(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) return "无";
+  const numeric = typeof value === "number" ? value : Number(value);
+  const millis = Number.isFinite(numeric) ? (numeric > 10_000_000_000 ? numeric : numeric * 1000) : Date.parse(String(value));
+  if (!Number.isFinite(millis)) return String(value);
+  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
 }

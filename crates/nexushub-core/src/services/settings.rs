@@ -11,6 +11,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 pub const PROBE_BARK_DEVICE_KEY_SETTING: &str = "probe_bark_device_key";
 
@@ -245,9 +246,16 @@ pub struct SecretSettingWritePlan {
 pub struct ProbeSettingsSavePlan {
     pub required_capability: Capability,
     pub config_patch: ProbeConfigFilePatch,
+    pub config_write: Option<ProbeConfigWritePlan>,
     #[serde(default, skip_serializing)]
     pub bark_device_key: Option<String>,
     pub secret_writes: Vec<SecretSettingWritePlan>,
+    pub audit_detail: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeConfigWritePlan {
+    pub patch: ProbeConfigFilePatch,
 }
 
 pub fn plan_probe_settings_save(
@@ -256,17 +264,25 @@ pub fn plan_probe_settings_save(
 ) -> Result<ProbeSettingsSavePlan> {
     require_capability(platform, Capability::Settings)?;
     let normalized = normalize_probe_settings_save_request(request)?;
-    let secret_writes = normalized
+    let secret_writes: Vec<SecretSettingWritePlan> = normalized
         .bark_device_key
         .as_deref()
         .map(bark_device_key_write_plan)
         .into_iter()
         .collect();
+    let config_write = probe_config_file_patch_has_changes(&normalized.config_patch).then(|| {
+        ProbeConfigWritePlan {
+            patch: normalized.config_patch.clone(),
+        }
+    });
+    let audit_detail = probe_settings_save_audit_detail(&config_write, &secret_writes);
     Ok(ProbeSettingsSavePlan {
         required_capability: Capability::Settings,
         config_patch: normalized.config_patch,
+        config_write,
         bark_device_key: normalized.bark_device_key,
         secret_writes,
+        audit_detail,
     })
 }
 
@@ -363,6 +379,22 @@ fn bark_device_key_write_plan(secret_value: &str) -> SecretSettingWritePlan {
         secret_value: secret_value.to_string(),
         audit_value: "[configured]".to_string(),
     }
+}
+
+fn probe_settings_save_audit_detail(
+    config_write: &Option<ProbeConfigWritePlan>,
+    secret_writes: &[SecretSettingWritePlan],
+) -> Value {
+    let mut detail = serde_json::Map::new();
+    detail.insert("config_write".to_string(), json!(config_write.is_some()));
+    for write in secret_writes {
+        detail.insert(write.setting_key.clone(), json!(write.audit_value));
+    }
+    Value::Object(detail)
+}
+
+fn probe_config_file_patch_has_changes(patch: &ProbeConfigFilePatch) -> bool {
+    patch.codex.is_some() || patch.probe.is_some()
 }
 
 fn is_probe_settings_patch_empty(patch: &ProbeSettingsPatch) -> bool {
@@ -551,6 +583,7 @@ mod tests {
             Some("https://api.day.app")
         );
         assert_eq!(notifications.group.as_deref(), Some("NexusHub"));
+        assert!(plan.config_write.is_some());
     }
 
     #[test]
@@ -562,5 +595,33 @@ mod tests {
         assert!(err
             .to_string()
             .contains("settings is unavailable on windows"));
+    }
+
+    #[test]
+    fn probe_settings_save_plan_separates_config_write_from_secret_write_audit() {
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let plan = plan_probe_settings_save(
+            &platform,
+            ProbeSettingsSaveRequest {
+                notifications: Some(ProbeNotificationsSavePatch {
+                    device_key: Some("  bark-secret  ".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("macOS should allow shared settings planning");
+
+        assert!(plan.config_patch.probe.is_none());
+        assert!(plan.config_write.is_none());
+        assert_eq!(plan.secret_writes.len(), 1);
+        assert_eq!(plan.secret_writes[0].secret_value, "bark-secret");
+        assert_eq!(
+            plan.audit_detail["probe_bark_device_key"],
+            serde_json::json!("[configured]")
+        );
+        let serialized = serde_json::to_string(&plan).unwrap();
+        assert!(serialized.contains("[configured]"));
+        assert!(!serialized.contains("bark-secret"));
     }
 }

@@ -43,6 +43,15 @@ pub struct ThreadListPlan {
     pub response_limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListReadPlan {
+    pub list: ThreadListPlan,
+    pub include_hidden_thread_ids: bool,
+    pub include_archived_thread_ids: bool,
+    pub include_running_jobs: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailRequest {
@@ -60,6 +69,21 @@ pub struct ThreadDetailPlan {
     pub block_limit: Option<usize>,
     pub full: bool,
     pub before: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadDetailResponseKind {
+    Detail,
+    Blocks,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDetailReadPlan {
+    pub detail: ThreadDetailPlan,
+    pub response_kind: ThreadDetailResponseKind,
+    pub include_active_job: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +161,18 @@ pub fn plan_threads_list_request(
     })
 }
 
+pub fn plan_thread_list_read(
+    platform: &PlatformPaths,
+    query: ThreadsQuery,
+) -> anyhow::Result<ThreadListReadPlan> {
+    Ok(ThreadListReadPlan {
+        list: plan_threads_list_request(platform, query)?,
+        include_hidden_thread_ids: true,
+        include_archived_thread_ids: true,
+        include_running_jobs: true,
+    })
+}
+
 pub fn plan_thread_detail_request(
     platform: &PlatformPaths,
     request: ThreadDetailRequest,
@@ -150,6 +186,17 @@ pub fn plan_thread_detail_request(
         block_limit: detail_block_limit(request.limit, Some(full)),
         full,
         before: request.before,
+    })
+}
+
+pub fn plan_thread_detail_read(
+    platform: &PlatformPaths,
+    request: ThreadDetailRequest,
+) -> anyhow::Result<ThreadDetailReadPlan> {
+    Ok(ThreadDetailReadPlan {
+        detail: plan_thread_detail_request(platform, request)?,
+        response_kind: ThreadDetailResponseKind::Detail,
+        include_active_job: true,
     })
 }
 
@@ -168,6 +215,19 @@ pub fn plan_thread_blocks_request(
             before,
         },
     )
+}
+
+pub fn plan_thread_blocks_read(
+    platform: &PlatformPaths,
+    id: &str,
+    limit: Option<usize>,
+    before: Option<String>,
+) -> anyhow::Result<ThreadDetailReadPlan> {
+    Ok(ThreadDetailReadPlan {
+        detail: plan_thread_blocks_request(platform, id, limit, before)?,
+        response_kind: ThreadDetailResponseKind::Blocks,
+        include_active_job: true,
+    })
 }
 
 pub fn window_thread_detail_for_plan(
@@ -202,6 +262,22 @@ pub fn apply_thread_list_runtime_state(
         runtime.archived_thread_ids,
     );
     prune_hidden_thread_summaries(threads, runtime.hidden_thread_ids)
+}
+
+pub fn apply_thread_detail_runtime_state(
+    mut detail: ThreadDetail,
+    active_job: Option<&JobRecord>,
+) -> ThreadDetail {
+    if let Some(job) = active_job {
+        if job
+            .thread_id
+            .as_deref()
+            .is_some_and(|thread_id| thread_id == detail.summary.id)
+        {
+            apply_running_job_to_summary(&mut detail.summary, job);
+        }
+    }
+    detail
 }
 
 pub fn merge_running_jobs(
@@ -404,11 +480,14 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::{
-        codex::{ThreadStatus, ThreadSummary},
+        codex::{ThreadDetail, ThreadStatus, ThreadSummary},
         db::JobRecord,
+        platform::{PlatformKind, PlatformPaths},
         services::threads::{
-            build_threads_overview, merge_running_jobs, thread_list_fetch_limit,
-            thread_summaries_for_status, ThreadsQuery,
+            apply_thread_detail_runtime_state, build_threads_overview, merge_running_jobs,
+            plan_thread_blocks_read, plan_thread_detail_read, plan_thread_list_read,
+            thread_list_fetch_limit, thread_summaries_for_status, ThreadDetailResponseKind,
+            ThreadsQuery,
         },
     };
 
@@ -573,6 +652,85 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "running");
+    }
+
+    #[test]
+    fn read_plans_capture_shared_thread_sources_for_linux_and_macos_only() {
+        let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+        let macos = PlatformPaths::for_kind(PlatformKind::Macos);
+        let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+
+        let list = plan_thread_list_read(
+            &linux,
+            ThreadsQuery {
+                status: Some(" running ".to_string()),
+                q: Some("  task  ".to_string()),
+                limit: Some(25),
+            },
+        )
+        .unwrap();
+
+        assert!(list.include_hidden_thread_ids);
+        assert!(list.include_archived_thread_ids);
+        assert!(list.include_running_jobs);
+        assert_eq!(list.list.query.status.as_deref(), Some("running"));
+        assert_eq!(list.list.query.q.as_deref(), Some("task"));
+        assert_eq!(list.list.fetch_limit, usize::MAX);
+        assert_eq!(list.list.response_limit, 25);
+
+        let detail = plan_thread_detail_read(
+            &macos,
+            super::ThreadDetailRequest {
+                id: " thread-a ".to_string(),
+                limit: Some(600),
+                full: Some(false),
+                before: None,
+            },
+        )
+        .unwrap();
+        assert!(detail.include_active_job);
+        assert_eq!(detail.response_kind, ThreadDetailResponseKind::Detail);
+        assert_eq!(detail.detail.thread_id, "thread-a");
+        assert_eq!(
+            detail.detail.block_limit,
+            Some(super::THREAD_DETAIL_MAX_BLOCK_LIMIT)
+        );
+
+        let blocks = plan_thread_blocks_read(&macos, " thread-a ", Some(0), None).unwrap();
+        assert!(blocks.include_active_job);
+        assert_eq!(blocks.response_kind, ThreadDetailResponseKind::Blocks);
+        assert_eq!(blocks.detail.block_limit, Some(1));
+
+        assert!(plan_thread_list_read(&windows, ThreadsQuery::default()).is_err());
+        assert!(plan_thread_blocks_read(&windows, "thread-a", None, None).is_err());
+    }
+
+    #[test]
+    fn detail_runtime_state_applies_running_job_once_in_core() {
+        let detail = ThreadDetail {
+            summary: thread(
+                "thread-a",
+                ThreadStatus::Recent,
+                Some("2026-06-18T10:00:00Z"),
+            ),
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+        };
+        let job = running_job("job-a", "thread-a", Some("turn-a"), 30);
+
+        let detail = apply_thread_detail_runtime_state(detail, Some(&job));
+
+        assert_eq!(detail.summary.status, ThreadStatus::Running);
+        assert_eq!(detail.summary.active_job_id.as_deref(), Some("job-a"));
+        assert_eq!(detail.summary.active_turn_id.as_deref(), Some("turn-a"));
+        assert_eq!(
+            detail.summary.latest_message.as_deref(),
+            Some("latest thread-a")
+        );
     }
 
     fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {

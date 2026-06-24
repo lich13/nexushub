@@ -4,6 +4,18 @@ use crate::{
         session_cookie, verify_password, SESSION_COOKIE,
     },
     linux_adapter,
+    rpc_payload::{
+        rpc_nested_payload as parse_rpc_nested_payload,
+        rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
+        rpc_payload as parse_rpc_payload, rpc_payload_or_empty as parse_rpc_payload_or_empty,
+        rpc_query_strings, rpc_required_string as parse_rpc_required_string, rpc_string,
+        rpc_wrapped_payload as parse_rpc_wrapped_payload,
+    },
+    rpc_surface::{
+        is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
+        LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE, RPC_THREAD_EVENTS_ROUTE,
+        RPC_UPLOAD_FILES_ROUTE,
+    },
     state::{
         AppState, CachedProbeStatus, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature,
     },
@@ -47,7 +59,7 @@ use nexushub_core::{
     update,
     uploads::{self, prepare_uploads, PreparedAttachment, MAX_TOTAL_UPLOAD_BYTES},
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -78,13 +90,13 @@ impl From<anyhow::Error> for ApiError {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/rpc/threadEvents/:id", get(thread_events))
+        .route(RPC_THREAD_EVENTS_ROUTE, get(thread_events))
         .route(
-            "/api/rpc/uploadFiles",
+            RPC_UPLOAD_FILES_ROUTE,
             post(upload_files).layer(DefaultBodyLimit::max(MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024)),
         )
-        .route("/api/rpc/:command", post(rpc_dispatch))
-        .route("/api/*path", any(api_not_found))
+        .route(RPC_COMMAND_ROUTE, post(rpc_dispatch))
+        .route(LEGACY_API_FALLBACK_ROUTE, any(api_not_found))
         .with_state(state)
 }
 
@@ -103,6 +115,25 @@ async fn rpc_dispatch(
     headers: HeaderMap,
     Json(args): Json<Value>,
 ) -> ApiResponse {
+    if is_transport_rpc_command(&command) {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            &format!("transport endpoint is not a business rpc command: {command}"),
+        ));
+    }
+    if is_retired_rpc_command(&command) {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            &format!("retired rpc command: {command}"),
+        ));
+    }
+    if !is_business_rpc_command(&command) {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            &format!("unknown rpc command: {command}"),
+        ));
+    }
+
     match command.as_str() {
         rpc_commands::AUTH_PUBLIC_SETTINGS => public_settings(State(state)).await,
         rpc_commands::AUTH_LOGIN => {
@@ -457,167 +488,58 @@ async fn rpc_dispatch(
         }
         _ => Err(api_error(
             StatusCode::NOT_FOUND,
-            &format!("unknown rpc command: {command}"),
+            &format!("rpc command allowlist drifted without handler mapping: {command}"),
         )),
     }
 }
 
-fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    serde_json::from_value(value.clone())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+fn rpc_payload<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
+    api_rpc_payload(parse_rpc_payload(value))
 }
 
-fn rpc_payload_or_empty<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    if value.is_null() {
-        serde_json::from_value(json!({}))
-    } else {
-        serde_json::from_value(value.clone())
-    }
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+fn rpc_payload_or_empty<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
+    api_rpc_payload(parse_rpc_payload_or_empty(value))
 }
 
-fn rpc_nested_payload<T: DeserializeOwned>(value: &Value, key: &str) -> Result<T, ApiError> {
-    let Some(payload) = value.get(key) else {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            &format!("{key} is required"),
-        ));
-    };
-    serde_json::from_value(payload.clone())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
-}
-
-fn rpc_wrapped_payload<T: DeserializeOwned>(value: &Value, keys: &[&str]) -> Result<T, ApiError> {
-    let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
-    rpc_payload(&rpc_compat_value(payload))
-}
-
-#[cfg(test)]
-fn rpc_wrapped_payload_or_empty<T: DeserializeOwned>(
-    value: &Value,
-    keys: &[&str],
-) -> Result<T, ApiError> {
-    let payload = keys.iter().find_map(|key| value.get(*key)).unwrap_or(value);
-    rpc_payload_or_empty(&rpc_compat_value(payload))
-}
-
-fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
+fn rpc_nested_payload<T: serde::de::DeserializeOwned>(
     value: &Value,
     key: &str,
 ) -> Result<T, ApiError> {
-    let payload = value.get(key).cloned().unwrap_or_else(|| json!({}));
-    serde_json::from_value(payload)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))
+    api_rpc_payload(parse_rpc_nested_payload(value, key))
+}
+
+fn rpc_wrapped_payload<T: serde::de::DeserializeOwned>(
+    value: &Value,
+    keys: &[&str],
+) -> Result<T, ApiError> {
+    api_rpc_payload(parse_rpc_wrapped_payload(value, keys))
+}
+
+#[cfg(test)]
+fn rpc_wrapped_payload_or_empty<T: serde::de::DeserializeOwned>(
+    value: &Value,
+    keys: &[&str],
+) -> Result<T, ApiError> {
+    api_rpc_payload(crate::rpc_payload::rpc_wrapped_payload_or_empty(
+        value, keys,
+    ))
+}
+
+fn rpc_nested_payload_or_empty<T: serde::de::DeserializeOwned>(
+    value: &Value,
+    key: &str,
+) -> Result<T, ApiError> {
+    api_rpc_payload(parse_rpc_nested_payload_or_empty(value, key))
 }
 
 fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
-    rpc_string(value, key)
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, &format!("{key} is required")))
+    api_rpc_payload(parse_rpc_required_string(value, key))
 }
 
-fn rpc_string(value: &Value, key: &str) -> Option<String> {
-    rpc_value(value, key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn rpc_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
-    rpc_direct_value(value, key).or_else(|| {
-        ["payload", "request", "settings"]
-            .iter()
-            .filter_map(|wrapper| value.get(*wrapper))
-            .find_map(|nested| rpc_direct_value(nested, key))
-    })
-}
-
-fn rpc_direct_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
-    value.get(key).or_else(|| {
-        key.strip_suffix("Id")
-            .and_then(|prefix| value.get(format!("{prefix}_id")))
-    })
-}
-
-fn rpc_compat_value(value: &Value) -> Value {
-    let mut value = value.clone();
-    rpc_normalize_value(&mut value);
-    value
-}
-
-fn rpc_normalize_value(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                rpc_normalize_value(value);
-            }
-            for (from, to) in RPC_COMPAT_FIELD_ALIASES {
-                if object.contains_key(*to) {
-                    continue;
-                }
-                if let Some(value) = object.remove(*from) {
-                    object.insert((*to).to_string(), value);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                rpc_normalize_value(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-const RPC_COMPAT_FIELD_ALIASES: &[(&str, &str)] = &[
-    ("turnstileToken", "turnstile_token"),
-    ("threadId", "thread_id"),
-    ("followUpId", "followup_id"),
-    ("tokenBudget", "token_budget"),
-    ("serviceTier", "service_tier"),
-    ("reasoningEffort", "reasoning_effort"),
-    ("permissionProfile", "permission_profile"),
-    ("approvalPolicy", "approval_policy"),
-    ("sandboxMode", "sandbox_mode"),
-    ("networkAccess", "network_access"),
-    ("collaborationMode", "collaboration_mode"),
-    ("preparedAttachments", "prepared_attachments"),
-    ("turnId", "turn_id"),
-    ("itemId", "item_id"),
-    ("jobId", "job_id"),
-    ("requestId", "request_id"),
-    ("currentPassword", "current_password"),
-    ("newPassword", "new_password"),
-    ("sessionTtlSeconds", "session_ttl_seconds"),
-    ("turnstileEnabled", "turnstile_enabled"),
-    ("turnstileRequired", "turnstile_required"),
-    ("turnstileSiteKey", "turnstile_site_key"),
-    ("turnstileSecretKey", "turnstile_secret_key"),
-    ("turnstileExpectedHostname", "turnstile_expected_hostname"),
-    ("turnstileExpectedAction", "turnstile_expected_action"),
-    ("pollSeconds", "poll_seconds"),
-    ("recentLimit", "recent_limit"),
-    ("serverUrl", "server_url"),
-    ("deviceKey", "device_key"),
-    ("notifyCompletion", "notify_completion"),
-    ("notifyReplyNeeded", "notify_reply_needed"),
-    ("notifyRecoverable", "notify_recoverable"),
-    ("logsDb", "logs_db"),
-];
-
-fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
-    keys.iter()
-        .filter_map(|key| {
-            value.get(*key).and_then(|value| match value {
-                Value::String(text) if !text.trim().is_empty() => {
-                    Some(((*key).to_string(), text.trim().to_string()))
-                }
-                Value::Number(number) => Some(((*key).to_string(), number.to_string())),
-                Value::Bool(boolean) => Some(((*key).to_string(), boolean.to_string())),
-                _ => None,
-            })
-        })
-        .collect()
+fn api_rpc_payload<T>(
+    result: Result<T, crate::rpc_payload::RpcPayloadError>,
+) -> Result<T, ApiError> {
+    result.map_err(|err| api_error(StatusCode::BAD_REQUEST, err.message()))
 }
 
 async fn public_settings(State(state): State<AppState>) -> ApiResponse {
@@ -3465,6 +3387,9 @@ mod tests {
         thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
         update_service, LoginRequest, TurnstileLoginAction, UpdateAction,
     };
+    use crate::rpc_surface::{
+        is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
+    };
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -3739,6 +3664,26 @@ mod tests {
             .status()
     }
 
+    async fn request_path_status(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        session_token: Option<&str>,
+        csrf_token: Option<&str>,
+    ) -> StatusCode {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(session_token) = session_token {
+            builder = builder.header("cookie", format!("nexushub_session={session_token}"));
+        }
+        if let Some(csrf_token) = csrf_token {
+            builder = builder.header("x-csrf-token", csrf_token);
+        }
+        app.oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
     #[tokio::test]
     async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
         let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
@@ -3981,6 +3926,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_rpc_commands_are_rejected_even_when_authenticated() {
+        let retired_commands = [
+            "startProbeJob",
+            "runUpdateAction",
+            "getDesktopOverview",
+            "getDesktopPlatformStatus",
+        ];
+
+        for command in retired_commands {
+            let (state, session_token, csrf_token) = authenticated_test_state();
+            let status = request_rpc_status(
+                router(state),
+                command,
+                "{}",
+                Some(&session_token),
+                Some(&csrf_token),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{command}");
+        }
+    }
+
+    #[tokio::test]
     async fn rpc_probe_typed_commands_start_matching_jobs() {
         for (command, kind) in [
             ("probe.barkTest", "probe_bark_test"),
@@ -4070,6 +4038,22 @@ mod tests {
                 "{compat} must not remain in the production RPC dispatcher"
             );
         }
+        assert!(
+            source.contains("is_retired_rpc_command"),
+            "RPC dispatcher should consult retired command guard rails"
+        );
+        assert!(
+            source.contains("is_business_rpc_command"),
+            "RPC dispatcher should consult shared business RPC allowlist"
+        );
+        assert!(
+            !source.contains("/api/rpc/uploadFiles"),
+            "api.rs should reuse shared transport route constants"
+        );
+        assert!(
+            !source.contains("/api/rpc/threadEvents/:id"),
+            "api.rs should reuse shared transport route constants"
+        );
     }
 
     #[test]
@@ -4181,6 +4165,58 @@ mod tests {
             assert!(
                 !source.contains(forbidden),
                 "Linux RPC handlers must not reimplement migrated goal/follow-up transactions: {forbidden}"
+            );
+        }
+
+        for forbidden_keyword in ["desktop_", "getDesktop", "startProbeJob", "runUpdateAction"] {
+            assert!(
+                !source.contains(forbidden_keyword),
+                "api.rs must not reintroduce retired desktop/probe/update command surface: {forbidden_keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn rpc_surface_uses_shared_command_sets_and_transport_exceptions() {
+        for command in nexushub_core::services::commands::ALLOWED_RPC_COMMANDS {
+            assert!(
+                is_business_rpc_command(command),
+                "allowed business RPC command must pass shared surface guard: {command}"
+            );
+            assert!(
+                !is_transport_rpc_command(command),
+                "business RPC command must not be treated as transport exception: {command}"
+            );
+            assert!(
+                !is_retired_rpc_command(command),
+                "allowed business RPC command must not be retired: {command}"
+            );
+        }
+
+        for command in ["uploadFiles", "threadEvents"] {
+            assert!(
+                is_transport_rpc_command(command),
+                "transport exception must remain explicit: {command}"
+            );
+            assert!(
+                !is_business_rpc_command(command),
+                "transport exception must stay out of business allowlist: {command}"
+            );
+        }
+
+        for command in [
+            "startProbeJob",
+            "runUpdateAction",
+            "getDesktopOverview",
+            "getDesktopHome",
+        ] {
+            assert!(
+                is_retired_rpc_command(command),
+                "retired compatibility command must stay marked retired: {command}"
+            );
+            assert!(
+                !is_business_rpc_command(command),
+                "retired compatibility command must not re-enter business allowlist: {command}"
             );
         }
     }
@@ -4829,6 +4865,53 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         }
+    }
+
+    #[tokio::test]
+    async fn old_rest_domain_paths_return_404_while_transport_endpoints_remain_reserved() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state);
+
+        for (method, uri) in [
+            ("GET", "/api/threads"),
+            ("GET", "/api/threads/thread-a"),
+            ("POST", "/api/threads/thread-a/messages"),
+            ("GET", "/api/jobs"),
+            ("GET", "/api/system/status"),
+            ("POST", "/api/system/update/install"),
+            ("GET", "/api/uploads"),
+            ("POST", "/api/probe/service/restart"),
+        ] {
+            let status = request_path_status(
+                app.clone(),
+                method,
+                uri,
+                Some(&session_token),
+                Some(&csrf_token),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+        }
+
+        let upload_status = request_path_status(
+            app.clone(),
+            "POST",
+            "/api/rpc/uploadFiles",
+            Some(&session_token),
+            Some(&csrf_token),
+        )
+        .await;
+        assert_ne!(upload_status, StatusCode::NOT_FOUND);
+
+        let events_status = request_path_status(
+            app,
+            "GET",
+            "/api/rpc/threadEvents/thread-a",
+            Some(&session_token),
+            None,
+        )
+        .await;
+        assert_ne!(events_status, StatusCode::NOT_FOUND);
     }
 
     #[test]

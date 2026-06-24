@@ -1,6 +1,8 @@
 mod api;
 mod auth;
 mod linux_adapter;
+mod rpc_payload;
+mod rpc_surface;
 mod state;
 mod turnstile;
 

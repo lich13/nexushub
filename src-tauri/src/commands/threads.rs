@@ -1,14 +1,11 @@
 #![allow(non_snake_case)]
 
 use super::DesktopActionResponse;
-use crate::overview::DesktopState;
+use crate::{overview::DesktopState, services::threads::thread_summaries_with_query};
 
 use anyhow::Result;
 use nexushub_core::{
-    codex::{
-        archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
-        set_thread_title, thread_detail, ThreadDetail, ThreadSummary,
-    },
+    codex::{set_thread_archived, set_thread_title, thread_detail, ThreadDetail, ThreadSummary},
     db::ThreadFollowUp,
     services::{
         jobs as job_service,
@@ -422,22 +419,11 @@ pub fn answerApproval(threadId: String) -> DesktopActionResponse {
     response
 }
 
-pub(crate) fn threads_for_home(state: &DesktopState) -> Result<Vec<ThreadSummary>> {
-    thread_list_with_jobs(
-        state,
-        ThreadsQuery {
-            status: None,
-            q: None,
-            limit: Some(40),
-        },
-    )
-}
-
 fn threads_with_state(
     state: &DesktopState,
     request: ThreadListRequest,
 ) -> Result<Vec<ThreadSummary>> {
-    thread_list_with_jobs(
+    thread_summaries_with_query(
         state,
         ThreadsQuery {
             status: request.status,
@@ -793,21 +779,6 @@ fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String>
         .ok()
         .flatten()
         .map(|job| job.id)
-}
-
-fn thread_list_with_jobs(state: &DesktopState, query: ThreadsQuery) -> Result<Vec<ThreadSummary>> {
-    let paths = state.codex_paths();
-    let plan = thread_service::plan_threads_list_request(state.platform(), query)?;
-    let hidden_thread_ids = hidden_thread_ids(&paths).unwrap_or_default();
-    let archived_thread_ids = archived_thread_ids(&paths).unwrap_or_default();
-    Ok(thread_service::build_threads_overview(
-        list_threads(&paths, None, plan.query.q.as_deref(), plan.fetch_limit)?,
-        state.db.running_thread_jobs()?,
-        plan.query,
-        &hidden_thread_ids,
-        &archived_thread_ids,
-    )
-    .threads)
 }
 
 fn apply_running_job_to_detail(state: &DesktopState, detail: &mut ThreadDetail) -> Result<()> {

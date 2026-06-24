@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
+    codex::ThreadStatus,
     db::{PanelDb, ThreadFollowUp},
     jobs::CodexActionResult,
     platform::PlatformPaths,
@@ -286,6 +287,33 @@ pub struct FollowUpCancelPlan {
     pub required_capability: Capability,
     pub thread_id: String,
     pub followup_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FollowUpTransitionKind {
+    Claim,
+    Submitted { result: Value },
+    Error { error: String },
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpTransitionPlan {
+    pub followup_id: String,
+    pub from_status: Option<String>,
+    pub to_status: String,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpAutoSubmitPlan {
+    pub should_claim_pending: bool,
+    pub should_start_resume_job: bool,
+    pub skip_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,6 +645,84 @@ pub fn plan_followup_cancel_with_capability(
     })
 }
 
+pub fn plan_followup_status_transition(
+    followup_id: &str,
+    kind: FollowUpTransitionKind,
+) -> Result<FollowUpTransitionPlan> {
+    let followup_id =
+        non_empty_owned(followup_id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    let plan = match kind {
+        FollowUpTransitionKind::Claim => FollowUpTransitionPlan {
+            followup_id,
+            from_status: Some("pending".to_string()),
+            to_status: "submitting".to_string(),
+            result: None,
+            error: None,
+        },
+        FollowUpTransitionKind::Submitted { result } => FollowUpTransitionPlan {
+            followup_id,
+            from_status: Some("submitting".to_string()),
+            to_status: "submitted".to_string(),
+            result: Some(result),
+            error: None,
+        },
+        FollowUpTransitionKind::Error { error } => FollowUpTransitionPlan {
+            followup_id,
+            from_status: Some("submitting".to_string()),
+            to_status: "error".to_string(),
+            result: None,
+            error: Some(non_empty_owned(&error).ok_or_else(|| anyhow!("error is required"))?),
+        },
+        FollowUpTransitionKind::Cancel => FollowUpTransitionPlan {
+            followup_id,
+            from_status: Some("pending".to_string()),
+            to_status: "cancelled".to_string(),
+            result: None,
+            error: None,
+        },
+    };
+    Ok(plan)
+}
+
+pub fn plan_followup_autosubmit(
+    thread_status: ThreadStatus,
+    has_pending_followup: bool,
+) -> FollowUpAutoSubmitPlan {
+    if !matches!(thread_status, ThreadStatus::Recent) {
+        return FollowUpAutoSubmitPlan {
+            should_claim_pending: false,
+            should_start_resume_job: false,
+            skip_reason: Some("thread is not idle".to_string()),
+        };
+    }
+    if !has_pending_followup {
+        return FollowUpAutoSubmitPlan {
+            should_claim_pending: false,
+            should_start_resume_job: false,
+            skip_reason: Some("no pending follow-up".to_string()),
+        };
+    }
+    FollowUpAutoSubmitPlan {
+        should_claim_pending: true,
+        should_start_resume_job: true,
+        skip_reason: None,
+    }
+}
+
+pub fn plan_queued_followup_job_spec(
+    followup: &ThreadFollowUp,
+    default_workspace: PathBuf,
+) -> Result<CodexJobSpec> {
+    let mut request = followup_request(followup);
+    request.thread_id = Some(required_command_thread_id(Some(&followup.thread_id), None)?);
+    let mut spec = build_codex_job_spec(
+        &request.into_job_action(CodexActionKind::Resume),
+        default_workspace,
+    )?;
+    spec.title = "Codex queued follow-up".to_string();
+    Ok(spec)
+}
+
 pub fn plan_thread_stop_with_capability(
     platform: &PlatformPaths,
     request: ThreadStopRequest,
@@ -811,6 +917,15 @@ pub fn action_unavailable(command: &str, message: &str) -> ActionResponse {
         job_id: None,
         data: None,
     }
+}
+
+pub fn fork_thread_unavailable_response(thread_id: Option<String>) -> ActionResponse {
+    let mut response = action_unavailable(
+        commands::THREADS_FORK,
+        "fork is unavailable in the local Codex read model",
+    );
+    response.thread_id = thread_id.and_then(|value| non_empty_owned(&value));
+    response
 }
 
 pub fn archive_thread_response(thread_id: String, archived: bool) -> ActionResponse {
@@ -1251,14 +1366,17 @@ fn cli_config_string(value: &str) -> String {
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
 
+    use crate::codex::ThreadStatus;
     use crate::services::commands;
     use crate::services::jobs::{
         archive_thread_response, build_codex_job_spec, cancel_followup_response,
         codex_action_submitted, effective_message, elicitation_answer_resume_message,
-        followup_request, followup_view, normalize_thread_command_request,
-        plan_accept_resume_message, plan_revise_resume_message, plan_steer_thread_as_followup,
-        rename_thread_response, thread_message_options_json, CodexActionKind, JobActionRequest,
-        ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest,
+        followup_request, followup_view, fork_thread_unavailable_response,
+        normalize_thread_command_request, plan_accept_resume_message, plan_followup_autosubmit,
+        plan_followup_status_transition, plan_queued_followup_job_spec, plan_revise_resume_message,
+        plan_steer_thread_as_followup, rename_thread_response, thread_message_options_json,
+        CodexActionKind, FollowUpTransitionKind, JobActionRequest, ThreadCommandKind,
+        ThreadCommandRequest, ThreadMessageRequest,
     };
     use crate::{
         db::ThreadFollowUp,
@@ -1623,6 +1741,85 @@ mod tests {
     }
 
     #[test]
+    fn followup_lifecycle_plans_define_shared_status_transitions() {
+        let claim = plan_followup_status_transition(" f1 ", FollowUpTransitionKind::Claim).unwrap();
+        assert_eq!(claim.followup_id, "f1");
+        assert_eq!(claim.from_status.as_deref(), Some("pending"));
+        assert_eq!(claim.to_status, "submitting");
+        assert!(claim.result.is_none());
+        assert!(claim.error.is_none());
+
+        let submitted = plan_followup_status_transition(
+            " f1 ",
+            FollowUpTransitionKind::Submitted {
+                result: json!({"job_id":"job-a"}),
+            },
+        )
+        .unwrap();
+        assert_eq!(submitted.from_status.as_deref(), Some("submitting"));
+        assert_eq!(submitted.to_status, "submitted");
+        assert_eq!(submitted.result.unwrap()["job_id"], "job-a");
+
+        let failed = plan_followup_status_transition(
+            " f1 ",
+            FollowUpTransitionKind::Error {
+                error: "  failed locally  ".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(failed.to_status, "error");
+        assert_eq!(failed.error.as_deref(), Some("failed locally"));
+
+        let cancel =
+            plan_followup_status_transition(" f1 ", FollowUpTransitionKind::Cancel).unwrap();
+        assert_eq!(cancel.from_status.as_deref(), Some("pending"));
+        assert_eq!(cancel.to_status, "cancelled");
+
+        assert!(plan_followup_status_transition(" ", FollowUpTransitionKind::Claim).is_err());
+        assert!(plan_followup_status_transition(
+            "f1",
+            FollowUpTransitionKind::Error {
+                error: " ".to_string()
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn queued_followup_autosubmit_and_resume_spec_are_core_defined() {
+        let followup = ThreadFollowUp {
+            id: "f1".to_string(),
+            thread_id: "thread-a".to_string(),
+            status: "submitting".to_string(),
+            message: "continue later".to_string(),
+            options_json: json!({"model":"gpt-5.5","network_access":true}).to_string(),
+            created_at: 1,
+            updated_at: 2,
+            submitted_at: None,
+            cancelled_at: None,
+            result_json: None,
+            error: None,
+        };
+
+        let autosubmit = plan_followup_autosubmit(ThreadStatus::Recent, true);
+        assert!(autosubmit.should_claim_pending);
+        assert!(autosubmit.should_start_resume_job);
+        assert!(!plan_followup_autosubmit(ThreadStatus::Running, true).should_claim_pending);
+        assert!(!plan_followup_autosubmit(ThreadStatus::Recent, false).should_start_resume_job);
+
+        let spec = plan_queued_followup_job_spec(&followup, PathBuf::from("/workspace")).unwrap();
+
+        assert_eq!(spec.title, "Codex queued follow-up");
+        assert_eq!(spec.thread_id.as_deref(), Some("thread-a"));
+        assert_eq!(spec.prompt, "continue later");
+        assert!(spec.args.windows(2).any(|pair| pair == ["-m", "gpt-5.5"]));
+        assert!(spec
+            .args
+            .windows(2)
+            .any(|pair| pair == ["-c", "network_access=\"enabled\""]));
+    }
+
+    #[test]
     fn shared_action_responses_match_desktop_contract() {
         assert_eq!(
             codex_action_submitted(Some("thread-a".to_string()), Some("job-a".to_string()))
@@ -1649,5 +1846,11 @@ mod tests {
         );
         assert_eq!(cancelled.message, "follow-up was not pending");
         assert_eq!(cancelled.data.unwrap()["cancelled"], false);
+
+        let fork = fork_thread_unavailable_response(Some(" thread-a ".to_string()));
+        assert!(!fork.ok);
+        assert!(!fork.available);
+        assert_eq!(fork.command, commands::THREADS_FORK);
+        assert_eq!(fork.thread_id.as_deref(), Some("thread-a"));
     }
 }

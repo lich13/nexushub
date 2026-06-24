@@ -122,6 +122,7 @@ pub struct UpdateActionPlan {
     pub method: UpdateExecutionMethod,
     pub platform: PlatformKind,
     pub linux_job: Option<LinuxUpdateJobSpec>,
+    pub macos_job: Option<MacosUpdaterJobSpec>,
     pub native: Option<NativeUpdateSpec>,
 }
 
@@ -267,12 +268,13 @@ pub fn plan_update_action(
     let job_plan = update_action_plan(platform, action);
     let required_capability = update_action_capability(platform.kind, action);
     require_capability(platform, required_capability)?;
-    let (linux_job, native) = match job_plan.method {
+    let (linux_job, macos_job, native) = match job_plan.method {
         UpdateExecutionMethod::LinuxSystemdJob => {
-            (Some(linux_update_job_spec(config, job_plan)?), None)
+            (Some(linux_update_job_spec(config, job_plan)?), None, None)
         }
         UpdateExecutionMethod::MacosTauriUpdater => (
             None,
+            Some(macos_updater_job_spec(action)?),
             Some(NativeUpdateSpec {
                 command: native_update_command(action)?.to_string(),
             }),
@@ -287,6 +289,7 @@ pub fn plan_update_action(
         method: job_plan.method,
         platform: job_plan.platform,
         linux_job,
+        macos_job,
         native,
     })
 }
@@ -546,11 +549,37 @@ mod tests {
             plan.native.as_ref().unwrap().command,
             commands::UPDATES_INSTALL
         );
+        assert_eq!(
+            plan.macos_job.as_ref().unwrap().kind,
+            "nexushub_update_install"
+        );
+        assert_eq!(
+            plan.macos_job.as_ref().unwrap().initial_output,
+            super::MACOS_UPDATER_CHECKING_OUTPUT
+        );
 
         let err = plan_update_action(&config, &platform, UpdateAction::Prune)
             .expect_err("macOS should not plan Linux backup pruning");
-        assert!(err
-            .to_string()
-            .contains("prune_backups is unavailable on macos"));
+        let message = err.to_string();
+        assert!(message.contains("prune_backups is unavailable on macos"));
+        assert!(!message.contains("systemd"));
+        assert!(!message.contains("Nginx"));
+        assert!(!message.contains("sudo"));
+        assert!(!message.contains("/opt/nexushub"));
+    }
+
+    #[test]
+    fn windows_update_actions_fail_before_any_host_specific_plan() {
+        let config = Config::for_platform_kind(PlatformKind::Windows);
+        let platform = PlatformPaths::for_kind(PlatformKind::Windows);
+
+        let err = plan_update_action(&config, &platform, UpdateAction::Check)
+            .expect_err("Windows update check is not supported in this release");
+        let message = err.to_string();
+        assert!(message.contains("app_updater is unavailable on windows"));
+        assert!(!message.contains("systemd"));
+        assert!(!message.contains("Nginx"));
+        assert!(!message.contains("sudo"));
+        assert!(!message.contains("/opt/nexushub"));
     }
 }

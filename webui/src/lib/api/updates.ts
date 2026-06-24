@@ -2,8 +2,8 @@ import type {
   UpdateStatus
 } from "../../types";
 import {
+  callCommand,
   RuntimeUnavailableError,
-  runtimeRpc
 } from "./transport";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import { runtimeCapabilities } from "../domain/capabilities";
@@ -14,7 +14,7 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
   if (USE_DEMO) {
     return demoUpdateStatus();
   }
-  return runtimeRpc<UpdateStatus>("updates.status");
+  return callCommand<UpdateStatus>("updates.status");
 }
 
 export type UnifiedUpdateAction = "check" | "install" | "prune";
@@ -29,7 +29,7 @@ async function runTypedUpdateCommand(
   fallback: string,
   csrfToken?: string | null,
 ): Promise<UpdateActionResult> {
-  const result = await runtimeRpc<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>(command, { csrfToken });
+  const result = await callCommand<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>(command, { csrfToken });
   return {
     ...jobIdFromRuntimeResult(result, fallback),
     ...(result.status ? { status: result.status } : {})

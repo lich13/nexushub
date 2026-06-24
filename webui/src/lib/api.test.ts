@@ -9,6 +9,14 @@ import apiSharedSource from "./api/shared.ts?raw";
 import apiSystemSource from "./api/system.ts?raw";
 import apiThreadsSource from "./api/threads.ts?raw";
 import apiUpdatesSource from "./api/updates.ts?raw";
+import queryAuthSource from "./query/auth.ts?raw";
+import queryClaudeSource from "./query/claude.ts?raw";
+import queryCodexSource from "./query/codex.ts?raw";
+import queryOpsSource from "./query/ops.ts?raw";
+import queryProbeSource from "./query/probe.ts?raw";
+import querySecuritySource from "./query/security.ts?raw";
+import querySystemSource from "./query/system.ts?raw";
+import queryThreadsSource from "./query/threads.ts?raw";
 import runtimeSource from "./runtime.ts?raw";
 import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
 import demoCoreSource from "./domain/demoCore.ts?raw";
@@ -23,6 +31,17 @@ const domainApiSource = [
   apiSystemSource,
   apiThreadsSource,
   apiUpdatesSource
+].join("\n");
+
+const querySource = [
+  queryAuthSource,
+  queryClaudeSource,
+  queryCodexSource,
+  queryOpsSource,
+  queryProbeSource,
+  querySecuritySource,
+  querySystemSource,
+  queryThreadsSource
 ].join("\n");
 
 async function loadRealApi() {
@@ -1545,6 +1564,9 @@ describe("archive delete API compatibility", () => {
     expect(domainApiSource).not.toContain("SystemCapabilities =");
     expect(domainApiSource).not.toContain('from "../runtime"');
     expect(domainApiSource).not.toContain('from "./shared";\nexport { selectRuntimeFallback');
+    expect(domainApiSource).not.toContain("runtimeRpc(");
+    expect(domainApiSource).not.toContain("uploadRuntimeFiles");
+    expect(domainApiSource).not.toContain("createRuntimeThreadEventSource");
     expect(domainCapabilitiesSource).not.toContain("../api/");
     expect(domainCapabilitiesSource).not.toContain('from "../api');
     expect(domainCapabilitiesSource).not.toContain('from "../runtime"');
@@ -1573,17 +1595,50 @@ describe("archive delete API compatibility", () => {
 
   test("production API commands are unified dot commands with upload and events as transport exceptions", () => {
     const commands = [
-      ...domainApiSource.matchAll(/runtimeRpc(?:<[^>]+>)?\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/callCommand(?:<[^>]+>)?\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
     ].map((match) => match[1]);
 
     expect(commands.length).toBeGreaterThan(30);
     expect(commands.every((command) => command.includes("."))).toBe(true);
-    expect(domainApiSource).not.toMatch(/runtimeRpc(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
+    expect(domainApiSource).not.toMatch(/callCommand(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
     expect(runtimeSource).toContain('webFormRpc<T>("uploadFiles"');
     expect(runtimeSource).toContain("createRuntimeThreadEventSource");
     expect(runtimeSource).toContain("/api/rpc/threadEvents/");
+  });
+
+  test("transport and query cache APIs are scoped to their intended layers", () => {
+    const transportOnlyTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "fetch(",
+      "new EventSource",
+      "__TAURI_INTERNALS__",
+      "__NEXUSHUB_DESKTOP_RUNTIME__"
+    ];
+    const queryOnlyTokens = [
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries"
+    ];
+
+    for (const token of transportOnlyTokens) {
+      expect(domainApiSource, `domain API modules must not own transport token ${token}`).not.toContain(token);
+      expect(querySource, `query modules must not own transport token ${token}`).not.toContain(token);
+      expect(appSource, `components must not own transport token ${token}`).not.toContain(token);
+    }
+    for (const token of queryOnlyTokens) {
+      expect(domainApiSource, `domain API modules must not own query cache token ${token}`).not.toContain(token);
+      expect(appSource, `components must not own query cache token ${token}`).not.toContain(token);
+    }
+
+    expect(runtimeSource).toContain('buildRuntimeApiPath(`/api/rpc/threadEvents/');
+    expect(runtimeSource).toContain("fetch(");
+    expect(runtimeSource).toContain("EventSource");
+    expect(querySource).toContain("useQueryClient");
+    expect(querySource).toContain("invalidateQueries");
   });
 
   test("desktop demo and default run config do not leak Linux workspace paths", async () => {

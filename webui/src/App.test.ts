@@ -104,6 +104,11 @@ type AppExports = typeof import("./App") & {
     result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
   ) => import("./types").ArchiveDeletePlan | null;
   canStartUpdateInstall?: (status?: UpdateStatus | null) => boolean;
+  threadInspectorActionState?: (capabilities?: RuntimeCapabilityMatrix) => {
+    showFork: boolean;
+    showArchive: boolean;
+    approvalMode: "interactive" | "unsupported";
+  };
   desktopRuntimeVisibleCopy?: () => string[];
   runtimeCapabilitiesForRuntime?: (runtime?: boolean | "web" | "desktop") => RuntimeCapabilityMatrix;
   navigationLabelsForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => string[];
@@ -536,6 +541,16 @@ describe("conversation helpers", () => {
       expect(source).not.toContain("cancelQueries");
       expect(source).not.toContain("removeQueries");
     }
+  });
+
+  test("App.tsx keeps domain-only pure helpers out of the component file", () => {
+    expect(appSource).not.toContain("export function canStartHiddenThreadDelete(");
+    expect(appSource).not.toContain("export function canStartUpdateInstall(");
+    expect(appSource).not.toContain("export function goalStatusLabel(");
+    expect(appSource).not.toContain("export function goalStatusTone(");
+    expect(appSource).not.toContain("export function goalControlState(");
+    expect(appSource).not.toContain("export function formatGoalTimestamp(");
+    expect(appSource).not.toContain("export function resolvedSelectedThreadId(");
   });
 
   test("segments internal paths and Codex ids as copyable references", async () => {
@@ -1181,6 +1196,13 @@ describe("conversation helpers", () => {
       pauseDisabled: true,
       resumeDisabled: true
     });
+    expect(app.goalStatusLabel?.({ ...active, available: false }, false)).toBe("未接入");
+    expect(app.goalControlState?.({ ...active, available: false }, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+      saveDisabled: true,
+      clearDisabled: true,
+      pauseDisabled: true,
+      resumeDisabled: true
+    });
     expect(app.formatGoalTimestamp?.(0)).toContain("1970");
   });
 
@@ -1499,6 +1521,37 @@ describe("conversation helpers", () => {
     expect(app.canStartUpdateInstall?.({ ...baseStatus, update_available: null })).toBe(false);
     expect(app.canStartUpdateInstall?.(baseStatus)).toBe(false);
     expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.118", update_available: true })).toBe(true);
+  });
+
+  test("thread inspector gating and desktop ops copy stay capability-driven", async () => {
+    const app = await loadApp();
+    const desktopVisibleCopy = app.opsWorkspaceVisibleCopy?.(macosDesktopCapabilities).join("\n") ?? "";
+    const linuxVisibleCopy = app.opsWorkspaceVisibleCopy?.(linuxWebCapabilities).join("\n") ?? "";
+
+    expect(app.threadInspectorActionState?.(macosDesktopCapabilities)).toEqual({
+      showFork: false,
+      showArchive: true,
+      approvalMode: "unsupported"
+    });
+    expect(app.threadInspectorActionState?.(linuxWebCapabilities)).toEqual({
+      showFork: true,
+      showArchive: true,
+      approvalMode: "interactive"
+    });
+
+    expect(desktopVisibleCopy).not.toContain("Web 登录");
+    expect(desktopVisibleCopy).not.toContain("Turnstile");
+    expect(desktopVisibleCopy).not.toContain("systemd");
+    expect(desktopVisibleCopy).not.toContain("Nginx");
+    expect(desktopVisibleCopy).not.toContain("管理员密码");
+    expect(desktopVisibleCopy).not.toContain("公网入口");
+    expect(desktopVisibleCopy).not.toContain("Linux update");
+    expect(desktopVisibleCopy).not.toContain("Linux prune");
+
+    expect(linuxVisibleCopy).toContain("Public endpoint");
+    expect(linuxVisibleCopy).toContain("Prune");
+    expect(linuxVisibleCopy).toContain("systemd 失败");
+    expect(linuxVisibleCopy).toContain("Nginx 失败");
   });
 
 });

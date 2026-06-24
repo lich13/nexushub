@@ -216,6 +216,10 @@ pub fn execute_upload_retention_plan(root: &Path, plan: &UploadRetentionPlan) ->
     )
 }
 
+pub fn execute_delete_upload_plan(root: &Path, plan: &UploadDeletePlan) -> Result<bool> {
+    upload_core::delete_upload(root, &plan.id)
+}
+
 pub fn store_upload_plan(root: &Path, plan: UploadStorePlan) -> Result<UploadOutcome> {
     let mut files: Vec<UploadRecord> = Vec::with_capacity(plan.items.len());
     let result: Result<UploadOutcome> = (|| {
@@ -316,11 +320,13 @@ fn extension(name: &str) -> String {
 mod tests {
     use crate::{
         services::uploads::{
+            execute_delete_upload_plan, plan_delete_upload_with_capability,
             plan_desktop_batch_uploads, plan_store_uploads, validate_upload_batch, UploadBatchItem,
             UploadStorePlan,
         },
         uploads::UploadKind,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn upload_batch_validation_rejects_empty_too_many_and_oversized_payloads() {
@@ -446,5 +452,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("一次上传总大小不能超过 30 MiB"));
+    }
+
+    #[test]
+    fn upload_delete_execution_uses_validated_core_plan() {
+        let root = unique_test_dir("nexushub-upload-delete-plan");
+        std::fs::create_dir_all(&root).unwrap();
+        let record =
+            crate::uploads::store_upload(&root, "notes.md", Some("text/markdown"), b"# Notes")
+                .unwrap();
+        let linux = crate::platform::PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
+        let plan = plan_delete_upload_with_capability(&linux, format!(" {} ", record.id)).unwrap();
+
+        let deleted = execute_delete_upload_plan(&root, &plan).unwrap();
+
+        assert!(deleted);
+        assert!(!root.join(&plan.id).exists());
+        assert!(!execute_delete_upload_plan(&root, &plan).unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let suffix = uuid::Uuid::new_v4();
+        std::env::temp_dir().join(format!("{prefix}-{suffix}"))
     }
 }
