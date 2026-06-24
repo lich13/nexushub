@@ -170,6 +170,46 @@ fn probe_actions_parse_string_aliases_and_plan_fixed_jobs_in_core() {
 }
 
 #[test]
+fn retired_string_action_multiplexers_do_not_reenter_core_facades() {
+    let service_sources = [
+        ("cleanup", include_str!("../src/services/cleanup.rs")),
+        ("probe", include_str!("../src/services/probe.rs")),
+        ("updates", include_str!("../src/services/updates.rs")),
+        ("use_cases", include_str!("../src/services/use_cases.rs")),
+    ];
+
+    for (name, source) in service_sources {
+        for forbidden in [
+            "startProbeJob",
+            "runUpdateAction",
+            "updatesPrune",
+            "backupPrune",
+            "dryRunArchiveDelete",
+            "startArchiveDelete",
+            "dryRunHiddenThreadDelete",
+            "startHiddenThreadDelete",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{name} service must not accept retired string action: {forbidden}"
+            );
+        }
+    }
+
+    let cleanup_source = include_str!("../src/services/cleanup.rs");
+    assert!(
+        !cleanup_source.contains("impl FromStr for CleanupAction"),
+        "cleanup execute/dry-run selection must stay typed and must not parse string actions"
+    );
+
+    let update_source = include_str!("../src/services/updates.rs");
+    assert!(
+        !update_source.contains("impl FromStr for UpdateAction"),
+        "update actions must stay typed and must not reintroduce a string action multiplexer"
+    );
+}
+
+#[test]
 fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
@@ -742,6 +782,30 @@ fn cleanup_and_upload_facades_expose_validation_and_execution_boundaries() {
     assert_eq!(cleanup.target, CleanupTarget::Hidden);
     assert!(cleanup.execute);
     assert!(cleanup.requires_confirmation);
+
+    for execute in [
+        plan_cleanup_action(&linux, CleanupAction::ArchiveDeleteExecute).unwrap(),
+        plan_cleanup_action(&linux, CleanupAction::HiddenDeleteExecute).unwrap(),
+    ] {
+        assert!(execute.execute);
+        assert!(
+            execute.requires_confirmation,
+            "cleanup execute action must require confirmation: {:?}",
+            execute.action
+        );
+    }
+
+    for dry_run in [
+        plan_cleanup_action(&linux, CleanupAction::ArchiveDeleteDryRun).unwrap(),
+        plan_cleanup_action(&linux, CleanupAction::HiddenDeleteDryRun).unwrap(),
+    ] {
+        assert!(!dry_run.execute);
+        assert!(
+            !dry_run.requires_confirmation,
+            "cleanup dry-run must not require execute confirmation: {:?}",
+            dry_run.action
+        );
+    }
 
     let thread_reexport =
         plan_thread_cleanup_action(&linux, ThreadCleanupAction::ArchiveDeleteDryRun).unwrap();

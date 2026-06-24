@@ -373,6 +373,95 @@ pub struct CodexJobSpec {
     pub thread_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobThreadLinkPlan {
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionResponsePlan {
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditMetadataPlan {
+    pub action: String,
+    pub target_type: String,
+    pub target_id: Option<String>,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCommandExecutionPlan {
+    pub required_capability: Capability,
+    pub command: String,
+    pub spec: CodexJobSpec,
+    pub link: JobThreadLinkPlan,
+    pub response: ActionResponsePlan,
+    pub audit: AuditMetadataPlan,
+}
+
+impl ThreadCommandExecutionPlan {
+    pub fn submitted_response(&self, job_id: &str) -> Result<CodexActionResult> {
+        Ok(codex_action_submitted(
+            self.response.thread_id.clone(),
+            Some(required_job_id(job_id)?),
+        ))
+    }
+
+    pub fn audit_detail(&self, job_id: &str) -> Result<Value> {
+        let mut detail = self.audit.detail.clone();
+        let job_id = required_job_id(job_id)?;
+        if let Value::Object(ref mut object) = detail {
+            object.insert("job_id".to_string(), json!(job_id));
+            Ok(detail)
+        } else {
+            Ok(json!({"job_id": job_id}))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FollowUpAutoSubmitExecutionPlan {
+    pub required_capability: Capability,
+    pub autosubmit: FollowUpAutoSubmitPlan,
+    pub claim: Option<FollowUpClaimPlan>,
+    pub job: Option<ThreadCommandExecutionPlan>,
+    pub followup_id: Option<String>,
+}
+
+impl FollowUpAutoSubmitExecutionPlan {
+    pub fn submitted_result(&self, job_id: &str) -> Result<FollowUpSubmitResultPlan> {
+        let followup_id = self
+            .followup_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("followup_id is required"))?;
+        plan_followup_submitted_result(followup_id, json!({"job_id": required_job_id(job_id)?}))
+    }
+
+    pub fn submitted_response(&self, job_id: &str) -> Result<ActionResponse> {
+        Ok(followup_submitted_response(&self.submitted_result(job_id)?))
+    }
+
+    pub fn error_result(&self, error: &str) -> Result<FollowUpErrorPlan> {
+        let followup_id = self
+            .followup_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("followup_id is required"))?;
+        plan_followup_error_result(followup_id, error)
+    }
+
+    pub fn error_response(&self, error: &str) -> Result<ActionResponse> {
+        Ok(followup_error_response(&self.error_result(error)?))
+    }
+}
+
 impl JobActionRequest {
     pub fn exec(message: impl Into<String>) -> Self {
         Self {
@@ -723,6 +812,80 @@ pub fn plan_queued_followup_job_spec(
     Ok(spec)
 }
 
+pub fn plan_thread_command_job_execution(
+    platform: &PlatformPaths,
+    request: ThreadCommandRequest,
+    default_workspace: PathBuf,
+) -> Result<ThreadCommandExecutionPlan> {
+    let facade = plan_thread_command_with_capability(platform, request)?;
+    thread_command_execution_plan_from_facade(facade, default_workspace)
+}
+
+pub fn plan_thread_send_job_execution(
+    platform: &PlatformPaths,
+    request: ThreadSendRequest,
+    default_workspace: PathBuf,
+) -> Result<ThreadCommandExecutionPlan> {
+    let facade = plan_thread_send_with_capability(platform, request)?;
+    thread_command_execution_plan_from_facade(facade, default_workspace)
+}
+
+pub fn plan_followup_autosubmit_execution(
+    platform: &PlatformPaths,
+    thread_status: ThreadStatus,
+    followup: &ThreadFollowUp,
+    default_workspace: PathBuf,
+) -> Result<FollowUpAutoSubmitExecutionPlan> {
+    require_capability(platform, Capability::Jobs)?;
+    let thread_id = required_command_thread_id(Some(&followup.thread_id), None)?;
+    let autosubmit = plan_followup_autosubmit(thread_status, true);
+    if !autosubmit.should_claim_pending || !autosubmit.should_start_resume_job {
+        return Ok(FollowUpAutoSubmitExecutionPlan {
+            required_capability: Capability::Jobs,
+            autosubmit,
+            claim: None,
+            job: None,
+            followup_id: None,
+        });
+    }
+    let claim = plan_followup_claim_with_capability(
+        platform,
+        FollowUpClaimRequest {
+            thread_id: thread_id.clone(),
+        },
+    )?;
+    let spec = plan_queued_followup_job_spec(followup, default_workspace)?;
+    let followup_id =
+        non_empty_owned(&followup.id).ok_or_else(|| anyhow!("followup_id is required"))?;
+    Ok(FollowUpAutoSubmitExecutionPlan {
+        required_capability: Capability::Jobs,
+        autosubmit,
+        claim: Some(claim),
+        job: Some(ThreadCommandExecutionPlan {
+            required_capability: Capability::Jobs,
+            command: commands::THREADS_FOLLOWUPS_SUBMIT.to_string(),
+            spec,
+            link: JobThreadLinkPlan {
+                thread_id: Some(thread_id.clone()),
+                turn_id: None,
+            },
+            response: ActionResponsePlan {
+                thread_id: Some(thread_id.clone()),
+            },
+            audit: AuditMetadataPlan {
+                action: "thread.followup.autosubmit_job_started".to_string(),
+                target_type: "thread".to_string(),
+                target_id: Some(thread_id),
+                detail: json!({
+                    "followup_id": followup_id.clone(),
+                    "job_fallback": true,
+                }),
+            },
+        }),
+        followup_id: Some(followup_id),
+    })
+}
+
 pub fn plan_thread_stop_with_capability(
     platform: &PlatformPaths,
     request: ThreadStopRequest,
@@ -864,6 +1027,66 @@ pub fn build_codex_job_spec(
         prompt,
         thread_id,
     })
+}
+
+fn thread_command_execution_plan_from_facade(
+    facade: ThreadCommandFacadePlan,
+    default_workspace: PathBuf,
+) -> Result<ThreadCommandExecutionPlan> {
+    let command = facade.command;
+    let action = command
+        .action
+        .ok_or_else(|| anyhow!("thread command plan is missing Codex job action"))?;
+    let spec = build_codex_job_spec(&action, default_workspace)?;
+    let command_name = thread_command_rpc_name(command.command);
+    let thread_id = spec.thread_id.clone();
+    let audit = thread_command_audit_plan(command.command, thread_id.clone(), &spec);
+    Ok(ThreadCommandExecutionPlan {
+        required_capability: facade.required_capability,
+        command: command_name.to_string(),
+        link: JobThreadLinkPlan {
+            thread_id: thread_id.clone(),
+            turn_id: None,
+        },
+        response: ActionResponsePlan { thread_id },
+        spec,
+        audit,
+    })
+}
+
+fn thread_command_rpc_name(command: ThreadCommandKind) -> &'static str {
+    match command {
+        ThreadCommandKind::Create => commands::THREADS_CREATE,
+        ThreadCommandKind::Resume => commands::THREADS_SEND,
+        ThreadCommandKind::FollowUp => commands::THREADS_STEER,
+    }
+}
+
+fn thread_command_audit_plan(
+    command: ThreadCommandKind,
+    thread_id: Option<String>,
+    spec: &CodexJobSpec,
+) -> AuditMetadataPlan {
+    match command {
+        ThreadCommandKind::Create => AuditMetadataPlan {
+            action: "thread.create.job_started".to_string(),
+            target_type: "job".to_string(),
+            target_id: None,
+            detail: json!({"cwd": spec.cwd.display().to_string()}),
+        },
+        ThreadCommandKind::Resume => AuditMetadataPlan {
+            action: "thread.message.job_started".to_string(),
+            target_type: "thread".to_string(),
+            target_id: thread_id,
+            detail: json!({}),
+        },
+        ThreadCommandKind::FollowUp => AuditMetadataPlan {
+            action: "thread.followup.job_started".to_string(),
+            target_type: "thread".to_string(),
+            target_id: thread_id,
+            detail: json!({}),
+        },
+    }
 }
 
 pub fn effective_message(message: &str, attachments: &[PreparedAttachment]) -> String {
@@ -1304,6 +1527,33 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 fn non_empty_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn required_job_id(value: &str) -> Result<String> {
+    non_empty_owned(value).ok_or_else(|| anyhow!("job_id is required"))
+}
+
+fn plan_followup_submitted_result(
+    followup_id: &str,
+    result: Value,
+) -> Result<FollowUpSubmitResultPlan> {
+    Ok(FollowUpSubmitResultPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_SUBMIT.to_string(),
+        followup_id: non_empty_owned(followup_id)
+            .ok_or_else(|| anyhow!("followup_id is required"))?,
+        result,
+    })
+}
+
+fn plan_followup_error_result(followup_id: &str, error: &str) -> Result<FollowUpErrorPlan> {
+    Ok(FollowUpErrorPlan {
+        required_capability: Capability::Jobs,
+        command: commands::THREADS_FOLLOWUPS_ERROR.to_string(),
+        followup_id: non_empty_owned(followup_id)
+            .ok_or_else(|| anyhow!("followup_id is required"))?,
+        error: non_empty_owned(error).ok_or_else(|| anyhow!("error is required"))?,
+    })
 }
 
 fn required_command_thread_id(

@@ -10,7 +10,6 @@ use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DesktopUpdateCheckResponse {
     pub job_id: String,
@@ -139,9 +138,12 @@ fn native_update_job_plan_for_action(
     let native = plan
         .native
         .ok_or_else(|| anyhow::anyhow!("update action did not produce a native updater spec"))?;
+    let spec = plan
+        .macos_job
+        .ok_or_else(|| anyhow::anyhow!("update action did not produce a macOS updater job spec"))?;
     Ok(NativeUpdateJobPlan {
         id_action: native_update_id_action(&native.command)?,
-        spec: updates::macos_updater_job_spec(action)?,
+        spec,
     })
 }
 
@@ -300,8 +302,8 @@ mod tests {
             "Tauri commands should let core derive recent update check status"
         );
         assert!(
-            command_source.contains("updates::macos_updater_job_spec"),
-            "Tauri commands should use core job metadata for native updater jobs"
+            command_source.contains(".macos_job"),
+            "Tauri commands should use core action-plan job metadata for native updater jobs"
         );
         assert!(
             command_source.contains("updates::macos_updater_update_available_output")
@@ -312,6 +314,10 @@ mod tests {
             !command_source.contains("fn apply_recent_check_job")
                 && !command_source.contains("fn signed_update_version_from_output"),
             "Tauri commands must not duplicate recent check status parsing"
+        );
+        assert!(
+            !command_source.contains("macos_updater_job_spec(action)"),
+            "Tauri commands must consume the core update action plan macos_job instead of rebuilding job metadata"
         );
     }
 

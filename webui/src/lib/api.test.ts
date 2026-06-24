@@ -80,10 +80,19 @@ const queryProductionSources = productionSources.filter((file) => file.path.star
 const productionComponentSources = productionSources.filter(
   (file) => file.path === "App.tsx" || file.path === "main.tsx",
 );
+const appComponentSources = productionSources.filter((file) => file.path === "App.tsx");
 const nonRuntimeProductionSources = productionSources.filter((file) => file.path !== "lib/runtime.ts");
 const nonQueryProductionSources = productionSources.filter((file) => !file.path.startsWith("lib/query/"));
 const nonTransportApiProductionSources = productionSources.filter(
   (file) => file.path !== "lib/runtime.ts" && file.path !== "lib/api/transport.ts",
+);
+const nonTransportAndQueryProductionSources = productionSources.filter(
+  (file) => file.path !== "lib/runtime.ts"
+    && file.path !== "lib/api/transport.ts"
+    && !file.path.startsWith("lib/query/"),
+);
+const apiNonDemoProductionSources = domainApiProductionSources.filter(
+  (file) => file.path !== "lib/api/demo.ts",
 );
 
 function expectNoSourceMatches(
@@ -141,7 +150,7 @@ describe("archive delete API compatibility", () => {
     vi.resetModules();
   });
 
-  test("uses a boolean confirmation payload without requiring typed UI confirmation", async () => {
+  test("uses a typed confirmation payload with expected archive count", async () => {
     const { startArchiveDelete } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {
       status: 200,
@@ -149,16 +158,16 @@ describe("archive delete API compatibility", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await startArchiveDelete("csrf-token");
+    await startArchiveDelete({ csrfToken: "csrf-token", expectedCount: 3 });
 
     const call = rpcCall(fetchMock);
     expect(call.path).toBe("/api/rpc/cleanup.archiveExecute");
     expect(call.options.method).toBe("POST");
     expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(call.body).toEqual({ confirmed: true });
+    expect(call.body).toEqual({ confirmed: true, expectedCount: 3 });
   });
 
-  test("uses hidden thread cleanup endpoints with dry-run and boolean confirmation", async () => {
+  test("uses hidden thread cleanup endpoints with dry-run and expected hidden count", async () => {
     const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
     const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
       String(path).endsWith("/cleanup.hiddenDryRun")
@@ -203,7 +212,7 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const plan = await dryRunHiddenThreadDelete("csrf-token");
-    const result = await startHiddenThreadDelete("csrf-token");
+    const result = await startHiddenThreadDelete({ csrfToken: "csrf-token", expectedCount: plan.hidden_threads });
 
     expect(plan.hidden_threads).toBe(2);
     expect(result.deleted_threads).toBe(2);
@@ -214,7 +223,7 @@ describe("archive delete API compatibility", () => {
     const execute = rpcCall(fetchMock, 1);
     expect(execute.options.method).toBe("POST");
     expect(execute.options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(execute.body).toEqual({ confirmed: true });
+    expect(execute.body).toEqual({ confirmed: true, expectedCount: 2 });
   });
 
   test("upload API posts FormData without JSON content-type and deletes uploads with csrf", async () => {
@@ -1419,7 +1428,7 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       expect(command).toBe("cleanup.archiveExecute");
-      expect(args).toEqual({ confirmed: true });
+      expect(args).toEqual({ confirmed: true, expectedCount: 0 });
       return {
         before: {},
         deleted_threads: 0,
@@ -1429,7 +1438,7 @@ describe("archive delete API compatibility", () => {
       };
     });
 
-    await expect(startArchiveDelete("ignored-csrf")).resolves.toMatchObject({ after_integrity: "ok" });
+    await expect(startArchiveDelete({ csrfToken: "ignored-csrf", expectedCount: 0 })).resolves.toMatchObject({ after_integrity: "ok" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1469,13 +1478,13 @@ describe("archive delete API compatibility", () => {
           expect(args).toBeUndefined();
           return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
         case "cleanup.archiveExecute":
-          expect(args).toEqual({ confirmed: true });
+          expect(args).toEqual({ confirmed: true, expectedCount: 0 });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
         case "cleanup.hiddenDryRun":
           expect(args).toBeUndefined();
           return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
         case "cleanup.hiddenExecute":
-          expect(args).toEqual({ confirmed: true });
+          expect(args).toEqual({ confirmed: true, expectedCount: 0 });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
         case "probe.settings.get":
           expect(args).toBeUndefined();
@@ -1532,9 +1541,9 @@ describe("archive delete API compatibility", () => {
     await listThreads("all", "needle");
     await getThread("thread-a");
     await dryRunArchiveDelete("ignored-csrf");
-    await startArchiveDelete("ignored-csrf");
+    await startArchiveDelete({ csrfToken: "ignored-csrf", expectedCount: 0 });
     await dryRunHiddenThreadDelete("ignored-csrf");
-    await startHiddenThreadDelete("ignored-csrf");
+    await startHiddenThreadDelete({ csrfToken: "ignored-csrf", expectedCount: 0 });
     await expect(getProbeSettings()).resolves.toMatchObject({
       available: true,
       data: {
@@ -1568,9 +1577,9 @@ describe("archive delete API compatibility", () => {
       ["threads.list", { status: "all", q: "needle", limit: 120 }],
       ["threads.detail", { id: "thread-a", options: {} }],
       ["cleanup.archiveDryRun", undefined],
-      ["cleanup.archiveExecute", { confirmed: true }],
+      ["cleanup.archiveExecute", { confirmed: true, expectedCount: 0 }],
       ["cleanup.hiddenDryRun", undefined],
-      ["cleanup.hiddenExecute", { confirmed: true }],
+      ["cleanup.hiddenExecute", { confirmed: true, expectedCount: 0 }],
       ["probe.settings.get", undefined],
       ["probe.settings.save", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
       ["probe.barkTest", undefined],
@@ -1709,6 +1718,89 @@ describe("archive delete API compatibility", () => {
     expect(querySource).toContain("invalidateQueries");
   });
 
+  test("components do not import transport or own query cache state", () => {
+    expect(appComponentSources.map((file) => file.path)).toEqual(["App.tsx"]);
+
+    for (const token of [
+      'from "./lib/api/transport"',
+      'from "./lib/runtime"',
+      'from "./runtime"',
+      "callCommand(",
+      "runtimeRpc(",
+      "uploadRuntimeFiles",
+      "createRuntimeThreadEventSource",
+      "fetch(",
+      "new EventSource",
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries",
+      "QueryClient",
+      "queryClient",
+    ]) {
+      expectNoSourceMatches(appComponentSources, token, `component transport/query-cache token ${token}`);
+    }
+  });
+
+  test("App uses domain/query facades instead of the raw thread message store", () => {
+    expect(appSource).not.toContain("./lib/threadMessageStore");
+    expect(appSource).not.toMatch(/\bfrom\s+["'][^"']*threadMessageStore["']/);
+  });
+
+  test("query action hooks do not expose the raw QueryClient handle", () => {
+    for (const file of queryProductionSources) {
+      const exportedFunctions = Array.from(
+        file.source.matchAll(/export function (use[A-Z]\w+)\([^)]*\)\s*\{([\s\S]*?)(?=\nexport function|\nfunction|\nconst |\ntype |\Z)/g),
+        (match) => ({ name: match[1], body: match[2] }),
+      );
+
+      for (const fn of exportedFunctions) {
+        if (!/Actions$/.test(fn.name)) continue;
+        expect(fn.body, `${file.path} ${fn.name} must not return qc directly`).not.toMatch(/return\s+\{[\s\S]*?\bqc\s*(?:,|\})/);
+        expect(fn.body, `${file.path} ${fn.name} must not expose queryClient directly`).not.toMatch(/return\s+\{[\s\S]*?\bqueryClient\s*(?:,|\})/);
+      }
+    }
+  });
+
+  test("non-demo API modules do not inline bulky demo payloads", () => {
+    for (const file of apiNonDemoProductionSources) {
+      expect(file.source, `${file.path} should not create large demo arrays inline`).not.toMatch(/Array\.from\(\s*\{\s*length:\s*(?:[1-9]\d|[6-9])/);
+      expect(file.source, `${file.path} should not declare demo ThreadSummary arrays inline`).not.toMatch(/const\s+\w+\s*:\s*ThreadSummary\[\]\s*=\s*\[/);
+      expect(file.source, `${file.path} should not declare demo MessageBlock arrays inline`).not.toMatch(/const\s+\w+\s*:\s*MessageBlock\[\]\s*=\s*\[/);
+    }
+  });
+
+  test("macOS demo fixtures do not include Linux-only rendered copy or paths", async () => {
+    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    const {
+      buildDemoFixture,
+      buildDemoPlatformOverview,
+      buildDemoSecurity,
+      buildDemoSystemStatus
+    } = await import("./domain/demoCore");
+    const {
+      demoCodexConfig,
+      demoPlatformOverview,
+      demoProbeSettings,
+      demoSystemStatus,
+      demoUpdateStatus
+    } = await import("./api/demo");
+
+    const macosFixtures = [
+      buildDemoFixture("macos-tauri"),
+      buildDemoPlatformOverview("macos-tauri"),
+      buildDemoSystemStatus("macos-tauri"),
+      buildDemoSecurity("macos-tauri"),
+      demoPlatformOverview("macos-tauri"),
+      demoSystemStatus("macos-tauri"),
+      demoUpdateStatus("macos-tauri"),
+      demoCodexConfig("macos-tauri"),
+      demoProbeSettings()
+    ];
+    const serialized = JSON.stringify(macosFixtures);
+
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/nexushub|43\.155\.235\.227|661313\.xyz|\/home\/ubuntu|\/root\/\.codex/i);
+  });
+
   test("production source files keep transport, domain API, and query cache boundaries explicit", () => {
     expect(runtimeProductionSources.map((file) => file.path)).toEqual(["lib/runtime.ts"]);
     expect(apiTransportSources.map((file) => file.path)).toEqual(["lib/api/transport.ts"]);
@@ -1738,11 +1830,16 @@ describe("archive delete API compatibility", () => {
       expectNoSourceMatches(nonTransportApiProductionSources, token, `runtime primitive ${token}`);
     }
     expectNoSourceMatches(nonTransportApiProductionSources, /from\s+["']\.\.\/runtime["']/, "direct runtime import");
+    expectNoSourceMatches(nonTransportAndQueryProductionSources, /from\s+["'][^"']*api\/transport["']/, "direct transport import outside API/query boundary");
 
     const queryCacheTokens = [
       "useQueryClient",
       "setQueryData",
-      "invalidateQueries"
+      "invalidateQueries",
+      "getQueryCache",
+      "getQueryData",
+      "removeQueries",
+      "cancelQueries"
     ];
     for (const token of queryCacheTokens) {
       expectNoSourceMatches(nonQueryProductionSources, token, `query cache API ${token}`);

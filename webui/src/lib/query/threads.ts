@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptPlan,
   answerApproval,
@@ -43,6 +43,18 @@ import type {
   UploadOutcome
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
+import {
+  archivedSelectedThreadCleanupView,
+  selectedThreadDetailView,
+  threadSelectionView,
+  type SelectedThread
+} from "../domain/codexViewModel";
+import {
+  threadDetailFromMessageSlot,
+  useThreadMessageStoreController,
+  type ThreadMessageSlot,
+  type ThreadMessageStoreController
+} from "../threadMessageStore";
 import { preservePreviousQueryData } from "./shared";
 
 export const threadQueryKeys = {
@@ -57,6 +69,10 @@ export const threadQueryKeys = {
 
 type ThreadMessageStoreClear = {
   clear: (threadId: string) => void;
+};
+
+type ArchivedThreadCleanupCacheActions = {
+  clearArchivedThreadClientState: (messageStore: ThreadMessageStoreClear, threadId: string) => void;
 };
 
 type ThreadRefetchType = "active" | "all" | "inactive" | "none";
@@ -416,6 +432,114 @@ export function useThreadCacheActions() {
     cachedThreadSummary: (threadId: string) => cachedThreadSummary(qc, threadId)
   }), [qc]);
 }
+
+export function useSelectedThreadState(threads: ThreadSummary[] = []) {
+  const [selectedId, setSelectedId] = useState<SelectedThread>(null);
+  const selection = useMemo(
+    () => threadSelectionView({ threads, selectedId }),
+    [threads, selectedId]
+  );
+  const selectThread = useCallback((id: SelectedThread) => {
+    setSelectedId(id);
+  }, []);
+  const selectAfterRemoval = useCallback((removedThreadId: string) => {
+    setSelectedId(threadSelectionView({ threads, selectedId: removedThreadId }).nextThreadAfterRemoval);
+  }, [threads]);
+
+  return {
+    selectedId,
+    setSelectedId,
+    selectThread,
+    selectAfterRemoval,
+    ...selection
+  };
+}
+
+export function useThreadDetailHydration(input: {
+  threadId: string | null;
+  detail?: ThreadDetail | null;
+}) {
+  return useMemo(
+    () => selectedThreadDetailView(input),
+    [input.detail, input.threadId]
+  );
+}
+
+export function useArchivedSelectedThreadCleanup(input: {
+  threadId: string | null;
+  selectedId: SelectedThread;
+  rawSelectedDetail?: ThreadDetail | null;
+  visibleThreads: ThreadSummary[];
+  messageStore: ThreadMessageStoreClear;
+  threadCache: ArchivedThreadCleanupCacheActions;
+  onSelect: (threadId: SelectedThread) => void;
+}) {
+  const {
+    threadId,
+    selectedId,
+    rawSelectedDetail,
+    visibleThreads,
+    messageStore,
+    threadCache,
+    onSelect
+  } = input;
+
+  useEffect(() => {
+    const cleanup = archivedSelectedThreadCleanupView({
+      threadId,
+      selectedId,
+      detail: rawSelectedDetail,
+      visibleThreads
+    });
+    if (!threadId || !cleanup.shouldClearClientState) return;
+    threadCache.clearArchivedThreadClientState(messageStore, threadId);
+    if (cleanup.nextSelectedId !== selectedId) {
+      onSelect(cleanup.nextSelectedId);
+    }
+  }, [messageStore, onSelect, rawSelectedDetail, selectedId, threadCache, threadId, visibleThreads]);
+}
+
+export function useHydrateThreadMessageStore(input: {
+  threadId: string | null;
+  selectedThreadSummary?: ThreadSummary | null;
+  selectedDetail?: ThreadDetail | null;
+  messageStore: Pick<ThreadMessageStoreController, "setActive" | "getSlot" | "applySummary" | "applyDetail">;
+}) {
+  const {
+    threadId,
+    selectedThreadSummary,
+    selectedDetail,
+    messageStore
+  } = input;
+
+  useEffect(() => {
+    messageStore.setActive(threadId);
+  }, [messageStore, threadId]);
+
+  useEffect(() => {
+    if (!threadId || !selectedThreadSummary) return;
+    const slot = messageStore.getSlot(threadId);
+    if (!slot.summary) {
+      messageStore.applySummary(threadId, selectedThreadSummary);
+    }
+  }, [messageStore, threadId, selectedThreadSummary]);
+
+  useEffect(() => {
+    if (!threadId || !selectedDetail) return;
+    messageStore.applyDetail(threadId, selectedDetail);
+  }, [messageStore, threadId, selectedDetail]);
+}
+
+export {
+  threadDetailFromMessageSlot,
+  threadDetailFromMessageSlot as threadDetailFromSlot,
+  useThreadMessageStoreController
+};
+
+export type {
+  ThreadMessageSlot,
+  ThreadMessageStoreController
+};
 
 export function useThreadsQuery(input: {
   status: string;

@@ -1,26 +1,27 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codex::ThreadDetail,
+    codex::{ThreadDetail, ThreadStatus},
     config::{Config, SecurityConfig},
     db::{JobRecord, PanelDb, ThreadFollowUp, ThreadGoal},
     platform::PlatformPaths,
     services::{
         cleanup::{
-            self, CleanupAction, CleanupActionPlan, CleanupOperationKind, CleanupOperationPlan,
-            CleanupTarget,
+            self, CleanupAction, CleanupActionPlan, CleanupExecuteRequest, CleanupOperationKind,
+            CleanupOperationPlan, CleanupTarget,
         },
         goals::{
             self, GoalCommandFacadePlan, GoalGetPlan, GoalGetRequest, GoalUpdateRequest, GoalView,
         },
         jobs::{
-            self, ActionResponse, FollowUpCancelPlan, FollowUpCancelRequest, FollowUpClaimPlan,
-            FollowUpClaimRequest, FollowUpEnqueueFacadePlan, FollowUpErrorPlan,
-            FollowUpErrorRequest, FollowUpListPlan, FollowUpListRequest, FollowUpSubmitPlan,
-            FollowUpSubmitResultPlan, FollowUpSubmitResultRequest, ThreadCommandFacadePlan,
+            self, ActionResponse, FollowUpAutoSubmitExecutionPlan, FollowUpCancelPlan,
+            FollowUpCancelRequest, FollowUpClaimPlan, FollowUpClaimRequest,
+            FollowUpEnqueueFacadePlan, FollowUpErrorPlan, FollowUpErrorRequest, FollowUpListPlan,
+            FollowUpListRequest, FollowUpSubmitPlan, FollowUpSubmitResultPlan,
+            FollowUpSubmitResultRequest, ThreadCommandExecutionPlan, ThreadCommandFacadePlan,
             ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest, ThreadRenameRequest,
             ThreadSendRequest, ThreadStateActionPlan, ThreadSteerRequest, ThreadStopJobPlan,
             ThreadStopPlan, ThreadStopRequest,
@@ -206,8 +207,32 @@ impl<'a> ThreadUseCases<'a> {
         )
     }
 
+    pub fn create_job(
+        self,
+        message: ThreadMessageRequest,
+        default_workspace: PathBuf,
+    ) -> Result<ThreadCommandExecutionPlan> {
+        jobs::plan_thread_command_job_execution(
+            self.platform,
+            ThreadCommandRequest {
+                command: ThreadCommandKind::Create,
+                thread_id: None,
+                message,
+            },
+            default_workspace,
+        )
+    }
+
     pub fn send(self, request: ThreadSendRequest) -> Result<ThreadCommandFacadePlan> {
         jobs::plan_thread_send_with_capability(self.platform, request)
+    }
+
+    pub fn send_job(
+        self,
+        request: ThreadSendRequest,
+        default_workspace: PathBuf,
+    ) -> Result<ThreadCommandExecutionPlan> {
+        jobs::plan_thread_send_job_execution(self.platform, request, default_workspace)
     }
 
     pub fn steer(self, request: ThreadSteerRequest) -> Result<ThreadCommandFacadePlan> {
@@ -295,6 +320,20 @@ impl<'a> ThreadUseCases<'a> {
     pub fn cancel_followup(self, request: FollowUpCancelRequest) -> Result<FollowUpCancelPlan> {
         jobs::plan_followup_cancel_with_capability(self.platform, request)
     }
+
+    pub fn autosubmit_followup_job(
+        self,
+        thread_status: ThreadStatus,
+        followup: &ThreadFollowUp,
+        default_workspace: PathBuf,
+    ) -> Result<FollowUpAutoSubmitExecutionPlan> {
+        jobs::plan_followup_autosubmit_execution(
+            self.platform,
+            thread_status,
+            followup,
+            default_workspace,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -321,6 +360,14 @@ impl<'a> JobUseCases<'a> {
 
     pub fn response(self, job: JobRecord) -> JobResponse {
         job_response(job)
+    }
+
+    pub fn list_response(self, jobs: Vec<JobRecord>) -> Vec<JobResponse> {
+        jobs.into_iter().map(job_response).collect()
+    }
+
+    pub fn detail_response(self, job: Option<JobRecord>) -> Option<JobResponse> {
+        job.map(job_response)
     }
 }
 
@@ -426,6 +473,14 @@ impl<'a> CleanupUseCases<'a> {
 
     pub fn execute(self, target: CleanupTarget) -> Result<CleanupOperationPlan> {
         self.operation(target, CleanupOperationKind::Execute)
+    }
+
+    pub fn execute_confirmed(
+        self,
+        target: CleanupTarget,
+        request: CleanupExecuteRequest,
+    ) -> Result<CleanupOperationPlan> {
+        cleanup::plan_cleanup_execute_operation(self.platform, target, request)
     }
 
     pub fn archive_delete_dry_run(self) -> Result<CleanupActionPlan> {

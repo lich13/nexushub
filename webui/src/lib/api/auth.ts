@@ -4,7 +4,7 @@ import type {
 } from "../../types";
 import { callCommand } from "./transport";
 import { USE_DEMO } from "./shared";
-import { demoSessionUser } from "./demo";
+import { demoPublicSettings, demoSessionUser } from "./demo";
 
 function desktopSessionUser(): SessionUser {
   return {
@@ -21,7 +21,7 @@ export function desktopRuntimeSessionUser(): SessionUser {
 
 export async function getPublicSettings(): Promise<PublicSettings> {
   if (USE_DEMO) {
-    return { site_name: "NexusHub", turnstile_enabled: false, turnstile_required: false, turnstile_site_key: "", turnstile_action: "login", admin_configured: true };
+    return demoPublicSettings();
   }
   return callCommand<PublicSettings>("auth.publicSettings");
 }

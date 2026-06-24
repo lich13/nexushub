@@ -10,6 +10,32 @@ use nexushub_desktop_lib::{
 use serde_json::json;
 use std::{path::Path, process::Command};
 
+fn registered_invoke_command_paths() -> Vec<String> {
+    let lib_source = include_str!("../src/lib.rs");
+    let production_source = lib_source
+        .split("\n#[cfg(test)]")
+        .next()
+        .expect("lib source must include production section");
+    let marker = ".invoke_handler(tauri::generate_handler![";
+    let start = production_source
+        .find(marker)
+        .expect("lib source must include tauri generate_handler")
+        + marker.len();
+    let body = production_source[start..]
+        .split("\n        ])")
+        .next()
+        .expect("generate_handler block must close");
+    body.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("commands::"))
+        .map(|line| line.trim_end_matches(',').to_string())
+        .collect()
+}
+
+fn command_path(module: &str, name: &str) -> String {
+    format!("commands::{module}::{name}")
+}
+
 fn desktop_state(temp: &tempfile::TempDir) -> DesktopState {
     let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, temp.path());
     config.paths.data_dir = temp.path().join("data");
@@ -69,6 +95,94 @@ fn write_codex_thread(
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+#[test]
+fn tauri_does_not_register_retired_string_action_or_macos_prune_handlers() {
+    let commands = registered_invoke_command_paths();
+
+    for retired in [
+        command_path("settings", "startProbeJob"),
+        command_path("updates", "runUpdateAction"),
+        command_path("updates", "updatesPrune"),
+        command_path("updates", "backupPrune"),
+    ] {
+        assert!(
+            !commands.contains(&retired),
+            "Tauri must not register retired string action or compat handler: {retired}"
+        );
+    }
+
+    for typed in [
+        command_path("updates", "updatesCheck"),
+        command_path("updates", "updatesInstall"),
+    ] {
+        assert!(
+            commands.contains(&typed),
+            "Tauri must keep typed non-prune update handler: {typed}"
+        );
+    }
+
+    assert!(
+        !commands.iter().any(|command| command.contains("Prune")),
+        "macOS Tauri invoke handler must not register update prune handlers"
+    );
+}
+
+#[test]
+fn tauri_update_sources_never_plan_update_prune() {
+    for (name, source) in [
+        (
+            "commands/updates.rs",
+            include_str!("../src/commands/updates.rs"),
+        ),
+        (
+            "services/updates.rs",
+            include_str!("../src/services/updates.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("UpdateAction::Prune"),
+            "{name} must not plan Linux update prune from macOS Tauri"
+        );
+        assert!(
+            !source.contains("updatesPrune") && !source.contains("runUpdateAction"),
+            "{name} must not define retired update action wrappers"
+        );
+    }
+}
+
+#[test]
+fn tauri_cleanup_execute_commands_keep_confirmation_boundary() {
+    let settings_source = include_str!("../src/services/settings.rs");
+
+    for handler in [
+        "archive_delete_execute_with_state",
+        "hidden_delete_execute_with_state",
+        "ensure_cleanup_expected_count",
+    ] {
+        assert!(
+            settings_source.contains(handler),
+            "settings service must keep cleanup confirmation helper: {handler}"
+        );
+    }
+    assert!(
+        settings_source.matches("cleanup_service::plan_cleanup_execute_operation").count() >= 2,
+        "cleanup execute must plan confirmed archive and hidden deletes through shared core operation"
+    );
+    assert!(
+        settings_source.contains("plan.confirmation.expected_count"),
+        "cleanup execute must verify the expected dry-run count before deleting"
+    );
+    for command in [
+        "cleanup_service::execute_archived_with_capability",
+        "cleanup_service::execute_hidden_with_capability",
+    ] {
+        assert!(
+            settings_source.contains(command),
+            "cleanup execute must go through capability/confirmation-aware core helper: {command}"
+        );
+    }
 }
 
 #[tokio::test]

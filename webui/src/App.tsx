@@ -132,37 +132,28 @@ import {
 } from "./lib/domain/slashCommands";
 import {
   type ThreadCacheSnapshot,
+  threadDetailFromSlot,
+  useArchivedSelectedThreadCleanup,
   useThreadCacheActions,
   useCreateThreadMutation,
   useFollowUpsQuery,
+  useHydrateThreadMessageStore,
   usePluginsQuery,
+  useSelectedThreadState,
   useThreadActionMutations,
   useThreadBlockPageMutation,
+  useThreadDetailHydration,
   useThreadDetailQuery,
   useThreadGoalActions,
   useThreadGoalQuery,
+  useThreadMessageStoreController,
   useThreadRealtimeSubscription,
   useThreadsQuery,
-  useUploadActions
+  useUploadActions,
+  type ThreadMessageSlot,
+  type ThreadMessageStoreController
 } from "./lib/query/threads";
 import { clearSession, loadSession, saveSession } from "./lib/session";
-import {
-  applyRealtimeBlocksToThreadSlot,
-  applyThreadBlockPageToSlot,
-  applyThreadDetailToSlot,
-  applyThreadSummaryToSlot,
-  clearThreadSlot,
-  createThreadMessageStoreState,
-  getThreadSlot,
-  setActiveThreadSlot,
-  setThreadFeedback as setThreadSlotFeedback,
-  setThreadHiddenActionKey,
-  setThreadHistoryExpanded,
-  setThreadLastResult,
-  setThreadLoadingEarlier,
-  type ThreadMessageSlot,
-  type ThreadMessageStoreState
-} from "./lib/threadMessageStore";
 import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
@@ -646,59 +637,44 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
   const threadCache = useThreadCacheActions();
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
-  const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const messageStore = useThreadMessageStoreController();
   const threads = useThreadsQuery({
     status,
     q,
     select: applyThreadTitleOverrides
   });
-  const visibleThreads = useMemo(() => filterVisibleThreadSummaries(threads.data ?? []), [threads.data]);
-  const resolvedSelected = resolvedSelectedThreadId(selectedId);
-  const selectedThreadSummary = useMemo(
-    () => visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null,
-    [visibleThreads, resolvedSelected]
-  );
+  const selection = useSelectedThreadState(threads.data ?? []);
+  const { selectedId, selectThread: setSelectedId, visibleThreads, resolvedSelected, selectedThreadSummary, nextThreadAfterRemoval } = selection;
   const detail = useThreadDetailQuery({
     threadId: resolvedSelected,
     selectedThreadSummary,
     select: applyThreadTitleOverrideToDetail,
     refetchInterval: threadDetailRefetchInterval
   });
-  const rawSelectedDetail = detail.data?.summary.id === resolvedSelected ? detail.data : null;
-  const selectedDetail = shouldHydrateThreadDetail(resolvedSelected, rawSelectedDetail) ? rawSelectedDetail : null;
-
-  useEffect(() => {
-    if (!resolvedSelected || rawSelectedDetail?.summary.status !== "Archived") return;
-    threadCache.clearArchivedThreadClientState(messageStore, resolvedSelected);
-    if (selectedId === resolvedSelected) {
-      setSelectedId(nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected));
-    }
-  }, [messageStore, threadCache, resolvedSelected, rawSelectedDetail, selectedId, visibleThreads]);
+  const { rawSelectedDetail, selectedDetail } = useThreadDetailHydration({
+    threadId: resolvedSelected,
+    detail: detail.data
+  });
+  useArchivedSelectedThreadCleanup({
+    threadId: resolvedSelected,
+    selectedId,
+    rawSelectedDetail,
+    visibleThreads,
+    messageStore,
+    threadCache,
+    onSelect: setSelectedId
+  });
 
   useEffect(() => {
     if (!resolvedSelected || !selectedThreadSummary) return;
     threadCache.mergeThreadDetailSummary(resolvedSelected, selectedThreadSummary);
   }, [threadCache, resolvedSelected, selectedThreadSummary]);
-
-  useEffect(() => {
-    messageStore.setActive(resolvedSelected);
-  }, [messageStore, resolvedSelected]);
-
-  useEffect(() => {
-    if (!resolvedSelected || !selectedThreadSummary) return;
-    const slot = messageStore.getSlot(resolvedSelected);
-    if (!slot.summary) {
-      messageStore.applySummary(resolvedSelected, selectedThreadSummary);
-    }
-  }, [messageStore, resolvedSelected, selectedThreadSummary]);
-
-  useEffect(() => {
-    const threadId = resolvedSelected;
-    const detailForSlot = selectedDetail;
-    if (!threadId || !shouldHydrateThreadDetail(threadId, detailForSlot)) return;
-    messageStore.applyDetail(threadId, detailForSlot);
-  }, [messageStore, resolvedSelected, selectedDetail]);
+  useHydrateThreadMessageStore({
+    threadId: resolvedSelected,
+    selectedThreadSummary,
+    selectedDetail,
+    messageStore
+  });
 
   const selectThread = (id: SelectedThread) => {
     setSelectedId(id);
@@ -741,7 +717,7 @@ function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, set
             csrfToken={csrfToken}
             onSelect={(id) => selectThread(id)}
             onPanelSelect={setView}
-            nextThreadAfterArchive={nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected)}
+            nextThreadAfterArchive={nextThreadAfterRemoval}
             capabilities={capabilities}
           />
         ) : (
@@ -1832,146 +1808,6 @@ function currentActionKindFromBlocks(
   if (questionIndex === -1) return "plan";
   if (planIndex === -1) return "question";
   return questionIndex >= planIndex ? "question" : "plan";
-}
-
-function threadDetailFromSlot(threadId: string, slot: ThreadMessageSlot, fallback?: ThreadSummary | null): ThreadDetail {
-  return {
-    summary: slot.summary ?? fallback ?? {
-      id: threadId,
-      title: "读取中",
-      status: "Recent" as ThreadStatus,
-      message_count: 0
-    },
-    messages: [],
-    blocks: slot.blocks,
-    raw_event_count: slot.totalBlocks,
-    total_blocks: slot.totalBlocks,
-    has_more_blocks: slot.hasMoreBlocks,
-    before_cursor: slot.beforeCursor
-  };
-}
-
-type ThreadMessageStoreController = {
-  store: ThreadMessageStoreState;
-  setActive: (threadId: string | null) => void;
-  getSlot: (threadId: string) => ThreadMessageSlot;
-  isActive: (threadId: string) => boolean;
-  applyDetail: (threadId: string, detail: ThreadDetail) => void;
-  applySummary: (threadId: string, summary: ThreadSummary) => void;
-  patchSummary: (threadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => void;
-  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
-  applyBlockPage: (threadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => void;
-  setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
-  setFeedback: (threadId: string, feedback: string | null) => void;
-  setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
-  setHistoryExpanded: (threadId: string, expanded: boolean) => void;
-  setHiddenActionKey: (threadId: string, key: string | null) => void;
-  clear: (threadId: string) => void;
-};
-
-function fallbackThreadSummary(threadId: string): ThreadSummary {
-  return {
-    id: threadId,
-    title: "读取中",
-    status: "Recent",
-    message_count: 0
-  };
-}
-
-function useThreadMessageStoreController(): ThreadMessageStoreController {
-  const storeRef = useRef<ThreadMessageStoreState>(createThreadMessageStoreState());
-  const [, setRevision] = useState(0);
-  const notify = useCallback((threadId: string | null) => {
-    if (threadId && storeRef.current.activeThreadId !== threadId) return;
-    setRevision((value) => value + 1);
-  }, []);
-  const setActive = useCallback((nextThreadId: string | null) => {
-    setActiveThreadSlot(storeRef.current, nextThreadId);
-    notify(nextThreadId);
-  }, [notify]);
-  const getSlotForThread = useCallback((nextThreadId: string) => getThreadSlot(storeRef.current, nextThreadId), []);
-  const isActive = useCallback((nextThreadId: string) => storeRef.current.activeThreadId === nextThreadId, []);
-  const applyDetail = useCallback((nextThreadId: string, nextDetail: ThreadDetail) => {
-    applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
-    notify(nextThreadId);
-  }, [notify]);
-  const applySummary = useCallback((nextThreadId: string, nextSummary: ThreadSummary) => {
-    applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
-    notify(nextThreadId);
-  }, [notify]);
-  const patchSummary = useCallback((nextThreadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => {
-    const slot = getThreadSlot(storeRef.current, nextThreadId);
-    const base = slot.summary ?? fallbackThreadSummary(nextThreadId);
-    const next = typeof patch === "function" ? patch(base) : { ...base, ...patch };
-    applyThreadSummaryToSlot(storeRef.current, nextThreadId, next);
-    notify(nextThreadId);
-  }, [notify]);
-  const applyRealtimeBlocks = useCallback((nextThreadId: string, blocks: MessageBlock[]) => {
-    applyRealtimeBlocksToThreadSlot(storeRef.current, nextThreadId, blocks);
-    notify(nextThreadId);
-  }, [notify]);
-  const applyBlockPage = useCallback((nextThreadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => {
-    applyThreadBlockPageToSlot(storeRef.current, nextThreadId, page, expectedCursor);
-    notify(nextThreadId);
-  }, [notify]);
-  const setLoadingEarlier = useCallback((nextThreadId: string, loading: boolean, error: string | null = null) => {
-    setThreadLoadingEarlier(storeRef.current, nextThreadId, loading, error);
-    notify(nextThreadId);
-  }, [notify]);
-  const setFeedbackForThread = useCallback((nextThreadId: string, feedback: string | null) => {
-    setThreadSlotFeedback(storeRef.current, nextThreadId, feedback);
-    notify(nextThreadId);
-  }, [notify]);
-  const setLastResultForThread = useCallback((nextThreadId: string, result: BridgeActionResult | null) => {
-    setThreadLastResult(storeRef.current, nextThreadId, result);
-    notify(nextThreadId);
-  }, [notify]);
-  const setHistoryExpanded = useCallback((nextThreadId: string, expanded: boolean) => {
-    setThreadHistoryExpanded(storeRef.current, nextThreadId, expanded);
-    notify(nextThreadId);
-  }, [notify]);
-  const setHiddenActionKeyForThread = useCallback((nextThreadId: string, key: string | null) => {
-    setThreadHiddenActionKey(storeRef.current, nextThreadId, key);
-    notify(nextThreadId);
-  }, [notify]);
-  const clearThread = useCallback((nextThreadId: string) => {
-    const wasActive = storeRef.current.activeThreadId === nextThreadId;
-    clearThreadSlot(storeRef.current, nextThreadId);
-    notify(wasActive ? null : nextThreadId);
-  }, [notify]);
-
-  return useMemo(() => ({
-    store: storeRef.current,
-    setActive,
-    getSlot: getSlotForThread,
-    isActive,
-    applyDetail,
-    applySummary,
-    patchSummary,
-    applyRealtimeBlocks,
-    applyBlockPage,
-    setLoadingEarlier,
-    setFeedback: setFeedbackForThread,
-    setLastResult: setLastResultForThread,
-    setHistoryExpanded,
-    setHiddenActionKey: setHiddenActionKeyForThread,
-    clear: clearThread
-  }), [
-    setActive,
-    getSlotForThread,
-    isActive,
-    applyDetail,
-    applySummary,
-    patchSummary,
-    applyRealtimeBlocks,
-    applyBlockPage,
-    setLoadingEarlier,
-    setFeedbackForThread,
-    setLastResultForThread,
-    setHistoryExpanded,
-    setHiddenActionKeyForThread,
-    clearThread
-  ]);
 }
 
 function Conversation({ threadId, detail, slot, messageStore, csrfToken, onSelect, onPanelSelect, nextThreadAfterArchive, capabilities }: {
@@ -3853,7 +3689,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
             <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0 || dryRun.isPending || executeDelete.isPending} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
           ) : (
             <>
-              <button className="danger-button" onClick={() => executeDelete.mutate()} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
+              <button className="danger-button" onClick={() => executeDelete.mutate({ expectedCount: plan?.archived_threads ?? 0 })} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
               <button className="secondary-button" onClick={() => setDeleteArmed(false)} disabled={executeDelete.isPending}>取消</button>
             </>
           )}
@@ -3877,7 +3713,7 @@ function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; 
             <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
           ) : (
             <>
-              <button className="danger-button" onClick={() => executeHiddenDelete.mutate()} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
+              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: hiddenStats.hidden })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
               <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)} disabled={executeHiddenDelete.isPending}>取消</button>
             </>
           )}

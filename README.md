@@ -68,7 +68,7 @@ The public site exposes `/nexushub/` for the Linux WebUI and `/nexushub/api/` fo
 
 `[probe]` config controls the built-in Probe runtime. Probe settings are split between `config.toml` for non-sensitive values and encrypted `PanelDb.settings` entries for sensitive values such as the Bark `device_key`.
 
-Probe routes are canonical under the daemon-local `/api/probe/*` namespace and are exposed publicly as `/nexushub/api/probe/*` on Linux. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
+Probe routes are canonical RPC commands under the daemon-local `/api/rpc/probe.*` namespace, for example `/api/rpc/probe.status`, `/api/rpc/probe.settings.get`, and `/api/rpc/probe.logsDb.status`. Through the Linux `/nexushub/api/` proxy these remain RPC routes such as `/nexushub/api/rpc/probe.status`; old REST Probe paths return `404`, including `/api/probe/*` and `/nexushub/api/probe/*`. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
 
 The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushubd probe hook-stop`.
 
@@ -163,7 +163,7 @@ test -s dist/latest.json
 shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
 ```
 
-Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
+Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, Probe uses `/api/rpc/probe.status`, old REST Probe paths return `404`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 

@@ -1,16 +1,28 @@
-use crate::{auth::AuthContext, state::AppState};
+use crate::{
+    auth::AuthContext,
+    state::{AppState, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature},
+};
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-    codex,
+    codex::{self, CodexPaths, ThreadDetail, ThreadStatus, ThreadSummary},
     config::{patch_probe_config_toml, Config},
+    db::JobRecord,
     platform::PlatformPaths,
     services::{
-        jobs as job_service, probe as probe_service, settings as settings_service,
+        cleanup as cleanup_service, jobs as job_service, probe as probe_service,
+        settings as settings_service,
+        threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
         updates::{self as update_service, UpdateAction},
+        use_cases::{JobDetailPlan, JobListPlan, NexusHubUseCases},
     },
 };
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, Path as FsPath},
+    time::UNIX_EPOCH,
+};
 
 pub struct CodexJobAuditPlan<'a> {
     pub action: &'a str,
@@ -135,6 +147,378 @@ pub fn start_codex_resume_spec(
     )?;
     state.db.link_job_thread(&job_id, Some(thread_id), None)?;
     Ok(job_id)
+}
+
+pub fn list_threads_read_model(
+    state: &AppState,
+    query: ThreadsQuery,
+) -> Result<Vec<ThreadSummary>> {
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .list_read(query)?;
+    let paths = state.codex_paths();
+    let hidden_thread_ids = if plan.include_hidden_thread_ids {
+        codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
+            tracing::warn!("failed to read hidden thread metadata: {err}");
+            HashSet::new()
+        })
+    } else {
+        HashSet::new()
+    };
+    let archived_thread_ids = if plan.include_archived_thread_ids {
+        codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
+            tracing::warn!("failed to read archived thread metadata: {err}");
+            HashSet::new()
+        })
+    } else {
+        HashSet::new()
+    };
+    let running_jobs = if plan.include_running_jobs {
+        state.db.running_thread_jobs()?
+    } else {
+        Vec::new()
+    };
+    Ok(thread_service::build_threads_overview(
+        codex::list_threads(
+            &paths,
+            None,
+            plan.list.query.q.as_deref(),
+            plan.list.fetch_limit,
+        )?,
+        running_jobs,
+        plan.list.query,
+        &hidden_thread_ids,
+        &archived_thread_ids,
+    )
+    .threads)
+}
+
+pub fn probe_threads_read_model(
+    state: &AppState,
+    status: &'static str,
+    limit: usize,
+) -> Result<Vec<ThreadSummary>> {
+    let paths = state.codex_paths();
+    if thread_service::thread_list_fetch_limit(Some(status), Some(limit)) == usize::MAX {
+        return probe_service::probe_threads_for_status_with_paths(
+            &paths,
+            state.db.path(),
+            status,
+            limit,
+        );
+    }
+    list_threads_read_model(
+        state,
+        ThreadsQuery {
+            status: Some(status.to_string()),
+            q: None,
+            limit: Some(limit.clamp(1, 200)),
+        },
+    )
+}
+
+pub fn load_thread_detail_read_model(
+    state: &AppState,
+    thread_id: &str,
+) -> Result<Option<ThreadDetail>> {
+    let paths = state.codex_paths();
+    let mut detail = load_base_thread_detail_cached(state, &paths, thread_id)?;
+    if let Some(detail) = detail.take() {
+        let active_job = state.db.running_job_for_thread(&detail.summary.id)?;
+        return Ok(Some(thread_service::apply_thread_detail_runtime_state(
+            detail,
+            active_job.as_ref(),
+        )));
+    }
+    Ok(None)
+}
+
+pub fn autosubmit_ready_followups(state: &AppState, threads: &mut [ThreadSummary]) {
+    for summary in threads {
+        if !matches!(summary.status, ThreadStatus::Recent) {
+            continue;
+        }
+        let mut detail = ThreadDetail {
+            summary: summary.clone(),
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+        };
+        autosubmit_pending_followup(state, &mut detail);
+        if matches!(detail.summary.status, ThreadStatus::Running) {
+            *summary = detail.summary;
+        }
+    }
+}
+
+pub fn autosubmit_pending_followup(state: &AppState, detail: &mut ThreadDetail) {
+    let autosubmit = job_service::plan_followup_autosubmit(detail.summary.status.clone(), true);
+    if !autosubmit.should_claim_pending {
+        return;
+    }
+    let thread_id = detail.summary.id.clone();
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    let use_cases = NexusHubUseCases::new(&platform).threads();
+    let Ok(Some(followup)) = use_cases.claim_next_followup(
+        &state.db,
+        job_service::FollowUpClaimRequest {
+            thread_id: thread_id.clone(),
+        },
+    ) else {
+        return;
+    };
+    let spec = match job_service::plan_queued_followup_job_spec(
+        &followup,
+        state.config().codex.workspace.clone(),
+    ) {
+        Ok(spec) => spec,
+        Err(err) => {
+            let message = err.to_string();
+            let _ = use_cases.apply_followup_error(
+                &state.db,
+                job_service::FollowUpErrorRequest {
+                    followup_id: followup.id.clone(),
+                    error: message.clone(),
+                },
+            );
+            tracing::warn!("failed to build follow-up codex job spec: {message}");
+            return;
+        }
+    };
+    match start_codex_resume_spec(state, spec, &thread_id) {
+        Ok(job_id) => {
+            let _ = use_cases.apply_followup_submitted(
+                &state.db,
+                job_service::FollowUpSubmitResultRequest {
+                    followup_id: followup.id.clone(),
+                    result: json!({"job_id": job_id}),
+                },
+            );
+            detail.summary.status = ThreadStatus::Running;
+            detail.summary.active_job_id = Some(job_id);
+        }
+        Err(err) => {
+            let _ = use_cases.apply_followup_error(
+                &state.db,
+                job_service::FollowUpErrorRequest {
+                    followup_id: followup.id,
+                    error: err.to_string(),
+                },
+            );
+        }
+    }
+}
+
+pub fn derive_active_job_id(state: &AppState, thread_id: &str) -> Option<String> {
+    state
+        .db
+        .running_job_for_thread(thread_id)
+        .ok()
+        .flatten()
+        .map(|job| job.id)
+}
+
+pub fn thread_blocks_page(
+    detail: ThreadDetail,
+    plan: &thread_service::ThreadDetailPlan,
+) -> ThreadBlocksPage {
+    thread_service::thread_blocks_page_for_plan(detail, plan)
+}
+
+pub fn window_thread_detail(
+    detail: ThreadDetail,
+    plan: &thread_service::ThreadDetailPlan,
+) -> ThreadDetail {
+    thread_service::window_thread_detail_for_plan(detail, plan)
+}
+
+pub fn list_jobs_plan(state: &AppState, plan: JobListPlan) -> Result<Vec<Value>> {
+    state
+        .db
+        .list_jobs(plan.limit)?
+        .into_iter()
+        .map(job_response_value)
+        .collect()
+}
+
+pub fn job_detail_plan(state: &AppState, plan: JobDetailPlan) -> Result<Option<Value>> {
+    state
+        .db
+        .job(&plan.job_id)?
+        .map(job_response_value)
+        .transpose()
+}
+
+pub fn execute_cleanup_plan(
+    state: &AppState,
+    auth: &AuthContext,
+    plan: cleanup_service::CleanupActionPlan,
+    confirmed: bool,
+) -> Result<Value> {
+    if plan.requires_confirmation && !confirmed {
+        anyhow::bail!(cleanup_confirmation_message(plan.target));
+    }
+    let paths = state.codex_paths();
+    let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    match plan.target {
+        cleanup_service::CleanupTarget::Archived => {
+            let result = if plan.execute {
+                let result = cleanup_service::execute_archived_with_capability(&platform, &paths)?;
+                state.db.record_audit(
+                    Some(&auth.admin_id),
+                    "archives.delete.execute",
+                    Some("archives"),
+                    Some("root-codex"),
+                    None,
+                    json!({"before_archived": result.before.archived_threads, "deleted_rollout_files": result.deleted_rollout_files}),
+                )?;
+                serde_json::to_value(result)?
+            } else {
+                serde_json::to_value(cleanup_service::dry_run_archived_with_capability(
+                    &platform, &paths,
+                )?)?
+            };
+            Ok(result)
+        }
+        cleanup_service::CleanupTarget::Hidden => {
+            let result = if plan.execute {
+                let result = cleanup_service::execute_hidden_with_capability(&platform, &paths)?;
+                state.db.record_audit(
+                    Some(&auth.admin_id),
+                    "hidden_threads.delete.execute",
+                    Some("hidden_threads"),
+                    Some("root-codex"),
+                    None,
+                    json!({
+                        "before_hidden": result.before.hidden_threads,
+                        "deleted_threads": result.deleted_threads,
+                        "deleted_rollout_files": result.deleted_rollout_files,
+                    }),
+                )?;
+                serde_json::to_value(result)?
+            } else {
+                serde_json::to_value(cleanup_service::dry_run_hidden_with_capability(
+                    &platform, &paths,
+                )?)?
+            };
+            Ok(result)
+        }
+    }
+}
+
+fn cleanup_confirmation_message(target: cleanup_service::CleanupTarget) -> &'static str {
+    match target {
+        cleanup_service::CleanupTarget::Archived => "archive deletion must be confirmed",
+        cleanup_service::CleanupTarget::Hidden => "hidden thread deletion must be confirmed",
+    }
+}
+
+fn job_response_value(job: JobRecord) -> Result<Value> {
+    let response = NexusHubUseCases::new(&PlatformPaths::for_kind(
+        nexushub_core::platform::PlatformKind::Linux,
+    ))
+    .jobs()
+    .response(job);
+    let mut value = serde_json::to_value(response)?;
+    let Some(analysis) = value
+        .get("failure_analysis")
+        .cloned()
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(value);
+    };
+    if let Some(explanation) = analysis.get("explanation").and_then(Value::as_str) {
+        value["analysis"] = Value::String(explanation.to_string());
+    }
+    let suggestions = analysis
+        .get("suggestions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    value["explanation"] = Value::String(suggestions);
+    Ok(value)
+}
+
+fn load_base_thread_detail_cached(
+    state: &AppState,
+    paths: &CodexPaths,
+    id: &str,
+) -> Result<Option<ThreadDetail>> {
+    if let Some(cached) = state
+        .rollout_detail_cache
+        .lock()
+        .expect("rollout detail cache mutex")
+        .get(id)
+        .cloned()
+    {
+        let signature = thread_detail_cache_signature(paths, cached.signature.rollout_path.clone());
+        if cached.signature == signature {
+            return Ok(Some(cached.detail));
+        }
+    }
+
+    let detail = codex::thread_detail(paths, id)?;
+    let signature = thread_detail_cache_signature(
+        paths,
+        detail
+            .as_ref()
+            .and_then(|detail| detail.summary.rollout_path.clone()),
+    );
+    if let Some(detail) = detail.as_ref() {
+        state
+            .rollout_detail_cache
+            .lock()
+            .expect("rollout detail cache mutex")
+            .insert(
+                id.to_string(),
+                CachedThreadDetail {
+                    signature,
+                    detail: detail.clone(),
+                },
+            );
+    } else {
+        state
+            .rollout_detail_cache
+            .lock()
+            .expect("rollout detail cache mutex")
+            .remove(id);
+    }
+    Ok(detail)
+}
+
+fn thread_detail_cache_signature(
+    paths: &CodexPaths,
+    rollout_path: Option<std::path::PathBuf>,
+) -> ThreadDetailCacheSignature {
+    ThreadDetailCacheSignature {
+        rollout: rollout_path.as_deref().and_then(file_signature),
+        rollout_path,
+        state_db: file_signature(&paths.state_db()),
+        session_index: file_signature(&paths.session_index()),
+    }
+}
+
+fn file_signature(path: &FsPath) -> Option<FileSignature> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis());
+    Some(FileSignature {
+        len: metadata.len(),
+        modified_ms,
+    })
 }
 
 pub fn cancel_thread_stop_plan(

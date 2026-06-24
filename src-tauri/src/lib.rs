@@ -7,9 +7,9 @@ mod services;
 use std::path::Path;
 use tauri::Manager;
 
-pub use commands::probe::desktop_probe_status_with_state;
-pub use services::updates::desktop_update_status_with_state;
 pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
+pub use services::probe::desktop_probe_status_with_state;
+pub use services::updates::desktop_update_status_with_state;
 
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
 const NEXUSHUBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
@@ -581,6 +581,55 @@ log_dir = "{}"
     }
 
     #[test]
+    fn tauri_cleanup_execute_commands_require_confirmation_payload() {
+        let source = include_str!("commands/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings command source must include production section");
+
+        for command in ["startArchiveDelete", "startHiddenThreadDelete"] {
+            let start = source
+                .find(&format!("pub fn {command}("))
+                .unwrap_or_else(|| panic!("cleanup execute command must exist: {command}"));
+            let body = &source[start..];
+            let signature = body.split(") ->").next().unwrap_or_else(|| {
+                panic!("cleanup execute command signature must close: {command}")
+            });
+            assert!(
+                signature.contains("request:") || signature.contains("payload:"),
+                "cleanup execute command must accept a confirmation payload: {command}"
+            );
+            assert!(
+                signature.contains("DesktopCleanupExecuteRequest"),
+                "cleanup execute command must use the typed cleanup confirmation payload: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn tauri_cleanup_service_uses_core_execute_confirmation_plan() {
+        let source = include_str!("services/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings service source must include production section");
+
+        assert!(
+            source.contains(
+                "type DesktopCleanupExecuteRequest = cleanup_service::CleanupExecuteRequest"
+            ),
+            "Tauri cleanup execute payload must reuse the shared core confirmation request"
+        );
+        assert!(
+            source.contains("cleanup_service::plan_cleanup_execute_operation"),
+            "Tauri cleanup execute must pass through the shared core confirmation plan"
+        );
+        assert!(
+            source.contains("ensure_cleanup_expected_count"),
+            "Tauri cleanup execute must reject stale dry-run counts before deletion"
+        );
+    }
+
+    #[test]
     fn overview_only_keeps_desktop_state_home_and_startup_types() {
         let overview_source = include_str!("overview.rs")
             .split("\n#[cfg(test)]")
@@ -631,12 +680,13 @@ log_dir = "{}"
 
         for required in [
             "thread_summaries_with_query(",
-            "thread_service::plan_thread_detail_request",
-            "thread_service::plan_thread_blocks_request",
-            "thread_service::window_thread_detail_for_plan",
-            "thread_service::thread_blocks_page_for_plan",
-            "job_service::plan_thread_send_with_capability",
-            "job_service::plan_thread_steer_with_capability",
+            "plan_thread_detail_request",
+            "plan_thread_blocks_request",
+            "window_thread_detail_for_plan",
+            "thread_blocks_page_for_plan",
+            "plan_thread_send_job_execution",
+            "plan_thread_command_job_execution",
+            "plan_thread_steer_with_capability",
         ] {
             assert!(
                 threads_source.contains(required),
@@ -673,6 +723,37 @@ log_dir = "{}"
     }
 
     #[test]
+    fn tauri_thread_job_submission_uses_core_execution_plans() {
+        let threads_source = include_str!("services/threads.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(include_str!("services/threads.rs"));
+
+        for required in [
+            "job_service::plan_thread_command_job_execution",
+            "job_service::plan_thread_send_job_execution",
+            "job_service::ThreadCommandExecutionPlan",
+            "plan.submitted_response(&job_id)",
+        ] {
+            assert!(
+                threads_source.contains(required),
+                "Tauri thread service must consume shared core job execution plan: {required}"
+            );
+        }
+
+        for forbidden in [
+            ".command\n        .action",
+            "thread send plan is missing Codex job action",
+            "build_codex_job_spec(&action",
+        ] {
+            assert!(
+                !threads_source.contains(forbidden),
+                "Tauri thread service must not rebuild core job execution semantics: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn tauri_settings_commands_use_core_settings_view_and_secret_write_plans() {
         let settings_commands_source = include_str!("commands/settings.rs")
             .split("\n#[cfg(test)]\nmod tests")
@@ -686,6 +767,7 @@ log_dir = "{}"
         for required in [
             "settings_service::probe_settings_view_with_capability",
             "for secret_write in plan.secret_writes",
+            "state.db.create_job(&job_id, &job.kind, &job.title)",
         ] {
             assert!(
                 settings_source.contains(required),
@@ -695,7 +777,8 @@ log_dir = "{}"
 
         assert!(
             settings_commands_source.contains("settings_service::probe_settings_with_state")
-                && settings_commands_source.contains("settings_service::save_goal_with_state")
+                && settings_commands_source
+                    .contains("settings_service::save_goal_from_parts_with_state")
                 && !settings_commands_source.contains("state.db.")
                 && !settings_commands_source.contains("plan_probe_settings_save"),
             "Tauri settings commands must stay thin and delegate to services/settings.rs"
@@ -734,9 +817,8 @@ log_dir = "{}"
             "upload_service::plan_store_uploads_with_capability",
             "upload_service::plan_delete_upload_with_capability",
             "cleanup_service::dry_run_archived_with_capability",
-            "cleanup_service::execute_archived_with_capability",
             "cleanup_service::dry_run_hidden_with_capability",
-            "cleanup_service::execute_hidden_with_capability",
+            "cleanup_service::plan_cleanup_execute_operation",
         ] {
             assert!(
                 settings_source.contains(required),
@@ -745,7 +827,7 @@ log_dir = "{}"
         }
         for required in [
             "job_service::list_followups_with_capability",
-            "job_service::enqueue_followup_with_capability",
+            "job_service::plan_followup_enqueue_with_capability",
             "job_service::cancel_followup_with_capability",
             "job_service::plan_thread_archive_with_capability",
             "job_service::plan_thread_restore_with_capability",
@@ -762,7 +844,7 @@ log_dir = "{}"
         }
 
         assert!(
-            settings_commands_source.contains("settings_service::save_goal_with_state")
+            settings_commands_source.contains("settings_service::save_goal_from_parts_with_state")
                 && !settings_commands_source.contains("goal_service::"),
             "Tauri settings commands must delegate migrated goal transactions to services/settings.rs"
         );
@@ -884,6 +966,7 @@ log_dir = "{}"
             ("settings", include_str!("commands/settings.rs")),
             ("updates", include_str!("commands/updates.rs")),
             ("jobs", include_str!("commands/jobs.rs")),
+            ("probe", include_str!("commands/probe.rs")),
         ] {
             for forbidden in [
                 "state.db.",
@@ -898,6 +981,7 @@ log_dir = "{}"
                 "append_job_output(",
                 "finish_job(",
                 "running_job_for_thread",
+                "ok_or_else",
             ] {
                 assert!(
                     !source.contains(forbidden),
@@ -916,6 +1000,8 @@ log_dir = "{}"
         for retired in [
             command_path("settings", "startProbeJob"),
             command_path("updates", "runUpdateAction"),
+            command_path("updates", "updatesPrune"),
+            command_path("updates", "pruneBackups"),
         ] {
             assert!(
                 !test_source.contains(&retired),
@@ -941,6 +1027,30 @@ log_dir = "{}"
                 !test_source.contains(&retired),
                 "tests must not embed retired compatibility command token: {retired}"
             );
+        }
+    }
+
+    #[test]
+    fn macos_tauri_sources_do_not_suggest_linux_host_repair_steps() {
+        for (label, source) in [
+            ("commands/updates.rs", include_str!("commands/updates.rs")),
+            ("services/updates.rs", include_str!("services/updates.rs")),
+            ("commands/settings.rs", include_str!("commands/settings.rs")),
+            ("services/settings.rs", include_str!("services/settings.rs")),
+        ] {
+            for forbidden in [
+                "systemctl",
+                "systemd",
+                "Nginx",
+                "nginx",
+                "sudo ",
+                "/opt/nexushub",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "macOS Tauri source must not suggest Linux host repair step {forbidden} in {label}"
+                );
+            }
         }
     }
 

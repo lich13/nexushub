@@ -6,8 +6,59 @@ on:
       - "v*"
 
 jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Guard tag and package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          cargo_version="$(python3 -c 'import tomllib, pathlib; data = tomllib.loads(pathlib.Path("Cargo.toml").read_text()); print(data["workspace"]["package"]["version"])')"
+          expected_tag="v${cargo_version}"
+          if [[ "${tag}" != "${expected_tag}" ]]; then
+            echo "release tag ${tag} must match workspace version ${expected_tag}" >&2
+            exit 1
+          fi
+          node - "${cargo_version}" <<'NODE'
+          const fs = require("fs");
+          const expected = process.argv[2];
+          const checks = [
+            ["package.json", JSON.parse(fs.readFileSync("package.json", "utf8")).version],
+            ["webui/package.json", JSON.parse(fs.readFileSync("webui/package.json", "utf8")).version],
+            ["src-tauri/tauri.conf.json", JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version],
+          ];
+          for (const [file, version] of checks) {
+            if (version !== expected) {
+              console.error(`${file} version ${version} must match ${expected}`);
+              process.exit(1);
+            }
+          }
+          for (const file of ["src-tauri/Cargo.toml", "Cargo.lock", "src-tauri/Cargo.lock"]) {
+            const text = fs.readFileSync(file, "utf8");
+            if (!text.includes(`version = "${expected}"`)) {
+              console.error(`${file} must contain version = "${expected}"`);
+              process.exit(1);
+            }
+          }
+          NODE
+      - run: cargo test --workspace
+      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: corepack pnpm@11.0.8 --dir webui test
+      - run: corepack pnpm@11.0.8 --dir webui build
+      - run: bash scripts/test-install-script.sh
+
   linux:
     runs-on: ubuntu-24.04
+    needs: guard
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,6 +78,7 @@ jobs:
 
   macos-darwin-arm64:
     runs-on: macos-14
+    needs: guard
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,6 +88,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: bash scripts/package-darwin-arm64.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

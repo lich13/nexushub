@@ -5,11 +5,10 @@ use crate::{
     services::{
         actions::DesktopActionResponse,
         threads::{
-            self as thread_service, DesktopCancelFollowupRequest,
-            DesktopElicitationAnswerRequest, DesktopFollowupRequest, DesktopPlanAcceptRequest,
-            DesktopPlanReviseRequest, DesktopRenameThreadRequest, DesktopSendMessageRequest,
-            DesktopStopRequest, DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest,
-            ThreadListRequest,
+            self as thread_service, DesktopCancelFollowupRequest, DesktopElicitationAnswerRequest,
+            DesktopFollowupRequest, DesktopPlanAcceptRequest, DesktopPlanReviseRequest,
+            DesktopRenameThreadRequest, DesktopSendMessageRequest, DesktopStopRequest,
+            DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
         },
     },
 };
@@ -107,34 +106,30 @@ pub fn getThreadBlocks(
 #[tauri::command(rename = "threads.create")]
 pub fn createThread(
     state: tauri::State<'_, DesktopState>,
-    mut payload: DesktopSendMessageRequest,
+    payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    payload.thread_id = None;
-    thread_service::send_message_with_state(&state, payload).map_err(|err| err.to_string())
+    thread_service::send_message_with_state(&state, payload.without_thread_id())
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.send")]
 pub fn sendMessage(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
-    mut payload: DesktopSendMessageRequest,
+    payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    if payload.thread_id.is_none() {
-        payload.thread_id = threadId;
-    }
-    thread_service::send_message_with_state(&state, payload).map_err(|err| err.to_string())
+    thread_service::send_message_with_state(&state, payload.with_thread_id_fallback(threadId))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.steer")]
 pub fn steerThread(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
-    mut payload: DesktopSendMessageRequest,
+    payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult, String> {
-    if payload.thread_id.is_none() {
-        payload.thread_id = threadId;
-    }
-    thread_service::steer_thread_with_state(&state, payload).map_err(|err| err.to_string())
+    thread_service::steer_thread_with_state(&state, payload.with_thread_id_fallback(threadId))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.followups.list")]
@@ -156,12 +151,10 @@ pub fn listFollowUps(
 pub fn enqueueFollowUp(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
-    mut payload: DesktopSendMessageRequest,
+    payload: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::db::ThreadFollowUp, String> {
-    if payload.thread_id.is_none() {
-        payload.thread_id = threadId;
-    }
-    thread_service::enqueue_followup_with_state(&state, payload).map_err(|err| err.to_string())
+    thread_service::enqueue_followup_with_state(&state, payload.with_thread_id_fallback(threadId))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.followups.cancel")]
@@ -203,7 +196,8 @@ pub fn archiveThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    thread_service::archive_thread_with_state(&state, thread_id_request(threadId)).map_err(|err| err.to_string())
+    thread_service::archive_thread_with_state(&state, thread_id_request(threadId))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.restore")]
@@ -211,7 +205,8 @@ pub fn restoreThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
 ) -> Result<DesktopActionResponse, String> {
-    thread_service::restore_thread_with_state(&state, thread_id_request(threadId)).map_err(|err| err.to_string())
+    thread_service::restore_thread_with_state(&state, thread_id_request(threadId))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.rename")]

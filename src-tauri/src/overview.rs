@@ -223,14 +223,13 @@ pub(crate) fn first_thread_goal(
     first_thread: Option<&ThreadSummary>,
 ) -> DesktopGoal {
     let Some(thread) = first_thread else {
-        return settings_service::desktop_goal_from_view(nexushub_core::services::goals::goal_empty(
-            "missing_thread",
-        ));
+        return settings_service::desktop_goal_from_view(
+            nexushub_core::services::goals::goal_empty("missing_thread"),
+        );
     };
-    settings_service::get_goal_with_state(state, Some(thread.id.clone()))
-        .unwrap_or_else(|err| {
-            settings_service::unavailable_desktop_goal(Some(thread.id.clone()), err.to_string())
-        })
+    settings_service::get_goal_with_state(state, Some(thread.id.clone())).unwrap_or_else(|err| {
+        settings_service::unavailable_desktop_goal(Some(thread.id.clone()), err.to_string())
+    })
 }
 
 fn load_desktop_config() -> Config {

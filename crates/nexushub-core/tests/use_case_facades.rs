@@ -1,9 +1,10 @@
 use nexushub_core::{
+    codex::ThreadStatus,
     config::Config,
     db::{JobRecord, SecuritySettings, ThreadFollowUp},
     platform::{PlatformKind, PlatformPaths},
     services::{
-        cleanup::{CleanupOperationKind, CleanupTarget},
+        cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
         commands,
         jobs::{
             FollowUpClaimRequest, FollowUpErrorRequest, FollowUpSubmitResultRequest,
@@ -23,6 +24,7 @@ use nexushub_core::{
     },
 };
 use serde_json::json;
+use std::path::PathBuf;
 
 #[test]
 fn thread_use_cases_emit_same_action_plans_for_linux_and_macos_adapters() {
@@ -183,6 +185,165 @@ fn followup_use_cases_plan_claim_submit_completion_and_error_without_adapter_log
 }
 
 #[test]
+fn followup_autosubmit_use_case_plans_claim_resume_completion_and_audit_semantics() {
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = NexusHubUseCases::new(&linux_platform);
+    let mac_home = temp_dir("nexushub-followup-autosubmit-macos");
+    std::fs::create_dir_all(&mac_home).unwrap();
+    let mac_platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let macos = NexusHubUseCases::new(&mac_platform);
+
+    let followup = ThreadFollowUp {
+        id: " followup-a ".to_string(),
+        thread_id: " thread-a ".to_string(),
+        status: "submitting".to_string(),
+        message: "  continue queued work  ".to_string(),
+        options_json: json!({
+            "model": "gpt-5.5",
+            "network_access": true,
+            "cwd": " /tmp/project "
+        })
+        .to_string(),
+        created_at: 1,
+        updated_at: 2,
+        submitted_at: None,
+        cancelled_at: None,
+        result_json: None,
+        error: None,
+    };
+
+    let linux_plan = linux
+        .threads()
+        .autosubmit_followup_job(
+            ThreadStatus::Recent,
+            &followup,
+            PathBuf::from("/default/workspace"),
+        )
+        .unwrap();
+    let mac_plan = macos
+        .threads()
+        .autosubmit_followup_job(
+            ThreadStatus::Recent,
+            &followup,
+            PathBuf::from("/default/workspace"),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&linux_plan).unwrap(),
+        serde_json::to_value(&mac_plan).unwrap()
+    );
+    assert!(linux_plan.autosubmit.should_claim_pending);
+    assert!(linux_plan.autosubmit.should_start_resume_job);
+    assert_eq!(
+        linux_plan.claim.as_ref().unwrap().command,
+        commands::THREADS_FOLLOWUPS_CLAIM
+    );
+
+    let job = linux_plan.job.as_ref().unwrap();
+    assert_eq!(job.command, commands::THREADS_FOLLOWUPS_SUBMIT);
+    assert_eq!(job.spec.title, "Codex queued follow-up");
+    assert_eq!(job.spec.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(job.spec.cwd, PathBuf::from("/tmp/project"));
+    assert_eq!(job.link.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(job.response.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(job.audit.action, "thread.followup.autosubmit_job_started");
+    assert_eq!(job.audit.target_type, "thread");
+    assert_eq!(job.audit.target_id.as_deref(), Some("thread-a"));
+    assert_eq!(job.audit.detail["followup_id"], "followup-a");
+    assert_eq!(job.audit.detail["job_fallback"], true);
+
+    let submitted = linux_plan.submitted_result(" job-a ").unwrap();
+    assert_eq!(submitted.command, commands::THREADS_FOLLOWUPS_SUBMIT);
+    assert_eq!(submitted.followup_id, "followup-a");
+    assert_eq!(submitted.result["job_id"], "job-a");
+    let submitted_response = linux_plan.submitted_response(" job-a ").unwrap();
+    assert_eq!(
+        submitted_response.data.unwrap()["followup_id"],
+        "followup-a"
+    );
+
+    let errored = linux_plan.error_result(" local spawn failed ").unwrap();
+    assert_eq!(errored.command, commands::THREADS_FOLLOWUPS_ERROR);
+    assert_eq!(errored.followup_id, "followup-a");
+    assert_eq!(errored.error, "local spawn failed");
+    let error_response = linux_plan.error_response(" local spawn failed ").unwrap();
+    assert_eq!(error_response.data.unwrap()["error"], "local spawn failed");
+
+    assert!(linux
+        .threads()
+        .autosubmit_followup_job(
+            ThreadStatus::Running,
+            &followup,
+            PathBuf::from("/default/workspace"),
+        )
+        .unwrap()
+        .job
+        .is_none());
+
+    std::fs::remove_dir_all(mac_home).unwrap();
+}
+
+#[test]
+fn thread_command_lifecycle_use_cases_plan_codex_job_link_response_and_audit() {
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let use_cases = NexusHubUseCases::new(&linux_platform);
+
+    let create = use_cases
+        .threads()
+        .create_job(
+            ThreadMessageRequest {
+                message: "  start work  ".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                ..ThreadMessageRequest::default()
+            },
+            PathBuf::from("/workspace"),
+        )
+        .unwrap();
+    assert_eq!(create.command, commands::THREADS_CREATE);
+    assert_eq!(create.spec.title, "Codex new thread");
+    assert_eq!(create.spec.cwd, PathBuf::from("/workspace"));
+    assert!(create.link.thread_id.is_none());
+    assert!(create.response.thread_id.is_none());
+    assert_eq!(create.audit.action, "thread.create.job_started");
+    assert_eq!(create.audit.target_type, "job");
+    assert_eq!(create.audit.detail["cwd"], "/workspace");
+    let create_response = create.submitted_response(" job-new ").unwrap();
+    assert_eq!(create_response.job_id.as_deref(), Some("job-new"));
+    assert!(create_response.thread_id.is_none());
+    assert_eq!(
+        create.audit_detail(" job-new ").unwrap()["job_id"],
+        "job-new"
+    );
+
+    let send = use_cases
+        .threads()
+        .send_job(
+            ThreadSendRequest {
+                thread_id: Some(" thread-a ".to_string()),
+                message: ThreadMessageRequest {
+                    message: "  continue  ".to_string(),
+                    reasoning_effort: Some("high".to_string()),
+                    ..ThreadMessageRequest::default()
+                },
+            },
+            PathBuf::from("/workspace"),
+        )
+        .unwrap();
+    assert_eq!(send.command, commands::THREADS_SEND);
+    assert_eq!(send.spec.title, "Codex resume thread");
+    assert_eq!(send.spec.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(send.link.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(send.link.turn_id, None);
+    assert_eq!(send.response.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(send.audit.action, "thread.message.job_started");
+    assert_eq!(send.audit.target_type, "thread");
+    assert_eq!(send.audit.target_id.as_deref(), Some("thread-a"));
+    let send_response = send.submitted_response(" job-a ").unwrap();
+    assert_eq!(send_response.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(send_response.job_id.as_deref(), Some("job-a"));
+}
+
+#[test]
 fn upload_use_cases_plan_validation_store_delete_and_retention_policy() {
     let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let linux = NexusHubUseCases::new(&linux_platform);
@@ -300,6 +461,59 @@ fn read_and_history_use_cases_expose_complete_adapter_transaction_plans() {
     });
     assert_eq!(failed.job.id, "job-a");
     assert!(failed.failure_analysis.is_some());
+
+    let listed = use_cases.jobs().list_response(vec![
+        JobRecord {
+            id: "job-a".to_string(),
+            kind: "codex".to_string(),
+            status: "failed".to_string(),
+            title: "Codex".to_string(),
+            thread_id: Some("thread-a".to_string()),
+            turn_id: None,
+            started_at: 1,
+            finished_at: Some(2),
+            exit_code: Some(1),
+            output: "auth failed".to_string(),
+            error: Some("401 Unauthorized".to_string()),
+        },
+        JobRecord {
+            id: "job-b".to_string(),
+            kind: "nexushub_update_check".to_string(),
+            status: "succeeded".to_string(),
+            title: "Update".to_string(),
+            thread_id: None,
+            turn_id: None,
+            started_at: 3,
+            finished_at: Some(4),
+            exit_code: Some(0),
+            output: "ok".to_string(),
+            error: None,
+        },
+    ]);
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].job.id, "job-a");
+    assert!(listed[0].failure_analysis.is_some());
+    assert_eq!(listed[1].job.id, "job-b");
+    assert!(listed[1].failure_analysis.is_none());
+
+    let detail_response = use_cases
+        .jobs()
+        .detail_response(Some(JobRecord {
+            id: "job-c".to_string(),
+            kind: "codex".to_string(),
+            status: "succeeded".to_string(),
+            title: "Codex".to_string(),
+            thread_id: Some("thread-c".to_string()),
+            turn_id: None,
+            started_at: 5,
+            finished_at: Some(6),
+            exit_code: Some(0),
+            output: "done".to_string(),
+            error: None,
+        }))
+        .unwrap();
+    assert_eq!(detail_response.job.id, "job-c");
+    assert!(use_cases.jobs().detail_response(None).is_none());
 }
 
 #[test]
@@ -330,6 +544,80 @@ fn upload_and_cleanup_use_cases_expose_execute_ready_plans_without_host_types() 
     assert!(execute.execute);
     assert!(execute.requires_confirmation);
     assert!(execute.requires_prior_dry_run);
+    assert_eq!(execute.confirmation.expected_count, None);
+    assert!(!execute.confirmation.confirmed);
+    assert_eq!(
+        execute.confirmation.payload,
+        json!({"confirmed": false, "expectedCount": null})
+    );
+
+    let confirmed = use_cases
+        .cleanup()
+        .execute_confirmed(
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(3),
+            },
+        )
+        .unwrap();
+    assert_eq!(confirmed.target, CleanupTarget::Hidden);
+    assert!(confirmed.confirmation.confirmed);
+    assert_eq!(confirmed.confirmation.expected_count, Some(3));
+    assert_eq!(
+        confirmed.confirmation.payload,
+        json!({"confirmed": true, "expectedCount": 3})
+    );
+
+    assert!(use_cases
+        .cleanup()
+        .execute_confirmed(
+            CleanupTarget::Archived,
+            CleanupExecuteRequest {
+                confirmed: false,
+                expected_count: Some(1),
+            },
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("confirmed"));
+}
+
+#[test]
+fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
+    let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
+    let linux = NexusHubUseCases::new(&linux_platform);
+    let mac_home = temp_dir("nexushub-cleanup-confirmation-macos");
+    std::fs::create_dir_all(&mac_home).unwrap();
+    let mac_platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let macos = NexusHubUseCases::new(&mac_platform);
+
+    let request = CleanupExecuteRequest {
+        confirmed: true,
+        expected_count: Some(8),
+    };
+    let linux_plan = linux
+        .cleanup()
+        .execute_confirmed(CleanupTarget::Archived, request.clone())
+        .unwrap();
+    let mac_plan = macos
+        .cleanup()
+        .execute_confirmed(CleanupTarget::Archived, request)
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&linux_plan).unwrap(),
+        serde_json::to_value(&mac_plan).unwrap()
+    );
+    assert_eq!(linux_plan.command, commands::CLEANUP_ARCHIVE_EXECUTE);
+    assert!(linux_plan.confirmation.confirmed);
+    assert_eq!(linux_plan.confirmation.expected_count, Some(8));
+    assert_eq!(
+        linux_plan.confirmation.payload,
+        json!({"confirmed": true, "expectedCount": 8})
+    );
+
+    std::fs::remove_dir_all(mac_home).unwrap();
 }
 
 #[test]

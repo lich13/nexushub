@@ -1,9 +1,7 @@
 use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::{
-    db::JobRecord,
-    services::use_cases::NexusHubUseCases,
-    update::JobFailureAnalysis,
+    db::JobRecord, services::use_cases::NexusHubUseCases, update::JobFailureAnalysis,
 };
 use serde::{Deserialize, Serialize};
 

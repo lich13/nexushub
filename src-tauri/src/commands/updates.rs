@@ -13,7 +13,8 @@ use tauri::AppHandle;
 pub fn getUpdateStatus(
     state: tauri::State<'_, DesktopState>,
 ) -> std::result::Result<UpdateStatus, String> {
-    update_service::desktop_update_status_with_state(&state, None, None).map_err(|err| err.to_string())
+    update_service::desktop_update_status_with_state(&state, None, None)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "updates.check")]

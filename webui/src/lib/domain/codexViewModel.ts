@@ -318,6 +318,59 @@ export function nextVisibleThreadIdAfterRemoval(threads: ThreadSummary[], remove
   return (remaining[removedIndex] ?? remaining[removedIndex - 1] ?? remaining[0]).id;
 }
 
+export type ThreadSelectionView = {
+  visibleThreads: ThreadSummary[];
+  resolvedSelected: string | null;
+  selectedThreadSummary: ThreadSummary | null;
+  nextThreadAfterRemoval: string | null;
+};
+
+export function threadSelectionView(input: {
+  threads: ThreadSummary[];
+  selectedId: SelectedThread;
+}): ThreadSelectionView {
+  const visibleThreads = filterVisibleThreadSummaries(input.threads);
+  const resolvedSelected = resolvedSelectedThreadId(input.selectedId);
+  const selectedThreadSummary = visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null;
+  return {
+    visibleThreads,
+    resolvedSelected,
+    selectedThreadSummary,
+    nextThreadAfterRemoval: resolvedSelected ? nextVisibleThreadIdAfterRemoval(visibleThreads, resolvedSelected) : null
+  };
+}
+
+export function selectedThreadDetailView(input: {
+  threadId: string | null | undefined;
+  detail?: ThreadDetail | null;
+}): { rawSelectedDetail: ThreadDetail | null; selectedDetail: ThreadDetail | null } {
+  const rawSelectedDetail = input.detail && input.detail.summary.id === input.threadId ? input.detail : null;
+  return {
+    rawSelectedDetail,
+    selectedDetail: shouldHydrateThreadDetail(input.threadId, rawSelectedDetail) ? rawSelectedDetail : null
+  };
+}
+
+export type ArchivedSelectedThreadCleanupView = {
+  shouldClearClientState: boolean;
+  nextSelectedId: SelectedThread;
+};
+
+export function archivedSelectedThreadCleanupView(input: {
+  threadId: string | null | undefined;
+  selectedId: SelectedThread;
+  detail?: Pick<ThreadDetail, "summary"> | null;
+  visibleThreads: ThreadSummary[];
+}): ArchivedSelectedThreadCleanupView {
+  const shouldClearClientState = Boolean(input.threadId && input.detail?.summary.status === "Archived");
+  return {
+    shouldClearClientState,
+    nextSelectedId: shouldClearClientState && input.selectedId === input.threadId
+      ? nextVisibleThreadIdAfterRemoval(input.visibleThreads, input.threadId!)
+      : input.selectedId
+  };
+}
+
 export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null): detail is ThreadDetail {
   return Boolean(threadId && detail?.summary.id === threadId && detail.summary.status !== "Archived");
 }

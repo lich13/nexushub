@@ -63,7 +63,15 @@ async fn legacy_rest_routes_all_return_404() {
         ("GET", "/api/threads"),
         ("GET", "/api/threads/thread-a"),
         ("POST", "/api/threads/thread-a/messages"),
+        ("POST", "/api/threads/thread-a/stop"),
+        ("POST", "/api/threads/thread-a/archive"),
+        ("POST", "/api/threads/thread-a/restore"),
+        ("PATCH", "/api/threads/thread-a"),
+        ("GET", "/api/threads/thread-a/followups"),
+        ("POST", "/api/threads/thread-a/followups"),
+        ("POST", "/api/threads/thread-a/followups/followup-a/cancel"),
         ("GET", "/api/probe/status"),
+        ("GET", "/nexushub/api/probe/status"),
         ("POST", "/api/system/update/precheck"),
         ("POST", "/api/system/update/install"),
         ("POST", "/api/system/update/prune"),
@@ -80,6 +88,7 @@ async fn legacy_rest_routes_all_return_404() {
         ("GET", "/api/security"),
         ("POST", "/api/auth/login"),
         ("GET", "/api/probe/diagnostics"),
+        ("GET", "/nexushub/api/probe/diagnostics"),
         ("GET", "/api/probe/running"),
         ("GET", "/api/probe/reply-needed"),
         ("GET", "/api/probe/recoverable"),
@@ -88,6 +97,7 @@ async fn legacy_rest_routes_all_return_404() {
         ("POST", "/api/probe/legacy-cleanup/dry-run"),
         ("POST", "/api/probe/legacy-cleanup/execute"),
         ("GET", "/api/probe/dashboard"),
+        ("GET", "/nexushub/api/probe/dashboard"),
         ("GET", "/api/probe/thread-probe/thread-a"),
         ("POST", "/api/probe/lifecycle/repair"),
         ("POST", "/api/probe/service/restart"),
@@ -105,6 +115,11 @@ async fn legacy_rest_routes_all_return_404() {
         ("POST", "/api/providers/claude-code/jobs/update/start"),
         ("POST", "/api/providers/claude-code/jobs/smoke"),
         ("POST", "/api/providers/claude-code/jobs/cache-status"),
+        ("GET", "/api/jobs/job-a"),
+        ("GET", "/api/cleanup/archive/dry-run"),
+        ("POST", "/api/cleanup/archive/execute"),
+        ("GET", "/api/cleanup/hidden/dry-run"),
+        ("POST", "/api/cleanup/hidden/execute"),
         ("GET", "/api/no-such-route"),
     ] {
         let status = request_path_status(
@@ -137,6 +152,20 @@ async fn only_rpc_transport_endpoints_are_reserved_under_api() {
     .await;
     assert_ne!(upload, StatusCode::NOT_FOUND);
 
+    let probe = request_path_status(
+        app.clone(),
+        "POST",
+        "/api/rpc/probe.status",
+        Some(&session_token),
+        Some(&csrf_token),
+    )
+    .await;
+    assert_ne!(
+        probe,
+        StatusCode::NOT_FOUND,
+        "/api/rpc/probe.status is the canonical Probe API route"
+    );
+
     let event_response = app
         .clone()
         .oneshot(
@@ -166,11 +195,15 @@ async fn only_rpc_transport_endpoints_are_reserved_under_api() {
 fn legacy_rest_test_cases_cover_required_retired_paths() {
     let required = [
         "/api/threads",
+        "/api/threads/thread-a/followups",
         "/api/probe/status",
+        "/nexushub/api/probe/status",
         "/api/system/update/precheck",
         "/api/system/panel/update/precheck",
         "/api/system/codex/update/precheck",
         "/api/jobs",
+        "/api/jobs/job-a",
+        "/api/cleanup/archive/execute",
         "/api/security",
         "/api/auth/login",
         "/api/probe/diagnostics",

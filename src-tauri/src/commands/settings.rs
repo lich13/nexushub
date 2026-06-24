@@ -5,9 +5,9 @@ use crate::{
     services::{
         actions::DesktopActionResponse,
         settings::{
-            self as settings_service, DesktopDeleteUploadRequest, DesktopDeleteUploadResponse,
-            DesktopGoal, DesktopGoalRequest, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
-            DesktopProbeSettings, DesktopUploadFile,
+            self as settings_service, DesktopCleanupExecuteRequest, DesktopDeleteUploadRequest,
+            DesktopDeleteUploadResponse, DesktopGoal, DesktopProbeEventsRequest,
+            DesktopProbeEventsResponse, DesktopProbeSettings, DesktopUploadFile,
         },
     },
 };
@@ -26,7 +26,8 @@ pub fn saveProbeSettings(
     state: tauri::State<'_, DesktopState>,
     settings: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings, String> {
-    settings_service::probe_save_settings_with_state(&state, settings).map_err(|err| err.to_string())
+    settings_service::probe_save_settings_with_state(&state, settings)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "probe.barkTest")]
@@ -87,8 +88,10 @@ pub fn dryRunArchiveDelete(
 #[tauri::command(rename = "cleanup.archiveExecute")]
 pub fn startArchiveDelete(
     state: tauri::State<'_, DesktopState>,
+    request: DesktopCleanupExecuteRequest,
 ) -> Result<nexushub_core::archive::ArchiveDeleteResult, String> {
-    settings_service::archive_delete_execute_with_state(&state).map_err(|err| err.to_string())
+    settings_service::archive_delete_execute_with_state(&state, request)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "cleanup.hiddenDryRun")]
@@ -101,8 +104,10 @@ pub fn dryRunHiddenThreadDelete(
 #[tauri::command(rename = "cleanup.hiddenExecute")]
 pub fn startHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
+    request: DesktopCleanupExecuteRequest,
 ) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
-    settings_service::hidden_delete_execute_with_state(&state).map_err(|err| err.to_string())
+    settings_service::hidden_delete_execute_with_state(&state, request)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "uploads.delete")]
@@ -141,16 +146,11 @@ pub fn saveCodexGoal(
     tokenBudget: Option<u64>,
     token_budget: Option<u64>,
 ) -> Result<DesktopGoal, String> {
-    let thread_id = threadId
-        .or(thread_id)
-        .ok_or_else(|| "threadId is required".to_string())?;
-    settings_service::save_goal_with_state(
+    settings_service::save_goal_from_parts_with_state(
         &state,
-        DesktopGoalRequest {
-            thread_id,
-            objective,
-            token_budget: tokenBudget.or(token_budget),
-        },
+        threadId.or(thread_id),
+        objective,
+        tokenBudget.or(token_budget),
     )
     .map_err(|err| err.to_string())
 }
@@ -161,10 +161,8 @@ pub fn clearCodexGoal(
     threadId: Option<String>,
     thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
-    let thread_id = threadId
-        .or(thread_id)
-        .ok_or_else(|| "threadId is required".to_string())?;
-    settings_service::clear_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
+    settings_service::clear_goal_from_parts_with_state(&state, threadId.or(thread_id))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.pause")]
@@ -173,10 +171,8 @@ pub fn pauseCodexGoal(
     threadId: Option<String>,
     thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
-    let thread_id = threadId
-        .or(thread_id)
-        .ok_or_else(|| "threadId is required".to_string())?;
-    settings_service::pause_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
+    settings_service::pause_goal_from_parts_with_state(&state, threadId.or(thread_id))
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.resume")]
@@ -185,8 +181,6 @@ pub fn resumeCodexGoal(
     threadId: Option<String>,
     thread_id: Option<String>,
 ) -> Result<DesktopGoal, String> {
-    let thread_id = threadId
-        .or(thread_id)
-        .ok_or_else(|| "threadId is required".to_string())?;
-    settings_service::resume_goal_with_state(&state, &thread_id).map_err(|err| err.to_string())
+    settings_service::resume_goal_from_parts_with_state(&state, threadId.or(thread_id))
+        .map_err(|err| err.to_string())
 }

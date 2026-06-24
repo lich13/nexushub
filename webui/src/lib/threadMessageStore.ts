@@ -1,3 +1,4 @@
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { BridgeActionResult, MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
 
 export type ThreadMessageSlot = {
@@ -20,6 +21,24 @@ export type ThreadMessageSlot = {
 export type ThreadMessageStoreState = {
   activeThreadId: string | null;
   slots: Map<string, ThreadMessageSlot>;
+};
+
+export type ThreadMessageStoreController = {
+  store: ThreadMessageStoreState;
+  setActive: (threadId: string | null) => void;
+  getSlot: (threadId: string) => ThreadMessageSlot;
+  isActive: (threadId: string) => boolean;
+  applyDetail: (threadId: string, detail: ThreadDetail) => void;
+  applySummary: (threadId: string, summary: ThreadSummary) => void;
+  patchSummary: (threadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => void;
+  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
+  applyBlockPage: (threadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => void;
+  setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
+  setFeedback: (threadId: string, feedback: string | null) => void;
+  setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
+  setHistoryExpanded: (threadId: string, expanded: boolean) => void;
+  setHiddenActionKey: (threadId: string, key: string | null) => void;
+  clear: (threadId: string) => void;
 };
 
 export function createThreadMessageStoreState(): ThreadMessageStoreState {
@@ -46,6 +65,129 @@ export function createThreadMessageSlot(): ThreadMessageSlot {
     hiddenActionKey: null,
     fetchedAt: null
   };
+}
+
+export function fallbackThreadSummary(threadId: string): ThreadSummary {
+  return {
+    id: threadId,
+    title: "读取中",
+    status: "Recent",
+    message_count: 0
+  };
+}
+
+export function threadDetailFromMessageSlot(
+  threadId: string,
+  slot: ThreadMessageSlot,
+  fallback?: ThreadSummary | null
+): ThreadDetail {
+  return {
+    summary: slot.summary ?? fallback ?? fallbackThreadSummary(threadId),
+    messages: [],
+    blocks: slot.blocks,
+    raw_event_count: slot.totalBlocks,
+    total_blocks: slot.totalBlocks,
+    has_more_blocks: slot.hasMoreBlocks,
+    before_cursor: slot.beforeCursor
+  };
+}
+
+export function useThreadMessageStoreController(
+  legacyBlocks: (detail: ThreadDetail) => MessageBlock[] = defaultLegacyBlocks
+): ThreadMessageStoreController {
+  const storeRef = useRef<ThreadMessageStoreState>(createThreadMessageStoreState());
+  const [, setRevision] = useState(0);
+  const notify = useCallback((threadId: string | null) => {
+    if (threadId && storeRef.current.activeThreadId !== threadId) return;
+    setRevision((value) => value + 1);
+  }, []);
+  const setActive = useCallback((nextThreadId: string | null) => {
+    setActiveThreadSlot(storeRef.current, nextThreadId);
+    notify(nextThreadId);
+  }, [notify]);
+  const getSlotForThread = useCallback((nextThreadId: string) => getThreadSlot(storeRef.current, nextThreadId), []);
+  const isActive = useCallback((nextThreadId: string) => storeRef.current.activeThreadId === nextThreadId, []);
+  const applyDetail = useCallback((nextThreadId: string, nextDetail: ThreadDetail) => {
+    applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
+    notify(nextThreadId);
+  }, [legacyBlocks, notify]);
+  const applySummary = useCallback((nextThreadId: string, nextSummary: ThreadSummary) => {
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
+    notify(nextThreadId);
+  }, [notify]);
+  const patchSummary = useCallback((nextThreadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => {
+    const slot = getThreadSlot(storeRef.current, nextThreadId);
+    const base = slot.summary ?? fallbackThreadSummary(nextThreadId);
+    const next = typeof patch === "function" ? patch(base) : { ...base, ...patch };
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, next);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyRealtimeBlocks = useCallback((nextThreadId: string, blocks: MessageBlock[]) => {
+    applyRealtimeBlocksToThreadSlot(storeRef.current, nextThreadId, blocks);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyBlockPage = useCallback((nextThreadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => {
+    applyThreadBlockPageToSlot(storeRef.current, nextThreadId, page, expectedCursor);
+    notify(nextThreadId);
+  }, [notify]);
+  const setLoadingEarlierForThread = useCallback((nextThreadId: string, loading: boolean, error: string | null = null) => {
+    setThreadLoadingEarlier(storeRef.current, nextThreadId, loading, error);
+    notify(nextThreadId);
+  }, [notify]);
+  const setFeedbackForThread = useCallback((nextThreadId: string, feedback: string | null) => {
+    setThreadFeedback(storeRef.current, nextThreadId, feedback);
+    notify(nextThreadId);
+  }, [notify]);
+  const setLastResultForThread = useCallback((nextThreadId: string, result: BridgeActionResult | null) => {
+    setThreadLastResult(storeRef.current, nextThreadId, result);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHistoryExpandedForThread = useCallback((nextThreadId: string, expanded: boolean) => {
+    setThreadHistoryExpanded(storeRef.current, nextThreadId, expanded);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHiddenActionKeyForThread = useCallback((nextThreadId: string, key: string | null) => {
+    setThreadHiddenActionKey(storeRef.current, nextThreadId, key);
+    notify(nextThreadId);
+  }, [notify]);
+  const clearThread = useCallback((nextThreadId: string) => {
+    const wasActive = storeRef.current.activeThreadId === nextThreadId;
+    clearThreadSlot(storeRef.current, nextThreadId);
+    notify(wasActive ? null : nextThreadId);
+  }, [notify]);
+
+  return useMemo(() => ({
+    store: storeRef.current,
+    setActive,
+    getSlot: getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlier: setLoadingEarlierForThread,
+    setFeedback: setFeedbackForThread,
+    setLastResult: setLastResultForThread,
+    setHistoryExpanded: setHistoryExpandedForThread,
+    setHiddenActionKey: setHiddenActionKeyForThread,
+    clear: clearThread
+  }), [
+    setActive,
+    getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlierForThread,
+    setFeedbackForThread,
+    setLastResultForThread,
+    setHistoryExpandedForThread,
+    setHiddenActionKeyForThread,
+    clearThread
+  ]);
 }
 
 export function setActiveThreadSlot(store: ThreadMessageStoreState, threadId: string | null): ThreadMessageSlot | null {

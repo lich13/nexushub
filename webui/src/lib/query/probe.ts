@@ -86,7 +86,6 @@ export function useProbeActions(input: {
   };
 
   return {
-    qc,
     refresh: () => {
       invalidateProbe();
       qc.invalidateQueries({ queryKey: probeQueryKeys.settings });

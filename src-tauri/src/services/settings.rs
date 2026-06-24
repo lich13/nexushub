@@ -1,7 +1,4 @@
-use crate::{
-    overview::DesktopState,
-    services::actions::DesktopActionResponse,
-};
+use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 use anyhow::Result;
 use nexushub_core::{
     config::{patch_probe_config_toml, Config},
@@ -21,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const PROBE_LOGS_DB_LAST_MAINTAIN_SETTING: &str = "probe_logs_db_last_maintain";
+
+pub(crate) type DesktopCleanupExecuteRequest = cleanup_service::CleanupExecuteRequest;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,7 +146,10 @@ pub(crate) fn store_uploads_with_state(
     upload_service::store_upload_plan(&root, facade.plan)
 }
 
-pub(crate) fn save_goal_with_state(state: &DesktopState, request: DesktopGoalRequest) -> Result<DesktopGoal> {
+pub(crate) fn save_goal_with_state(
+    state: &DesktopState,
+    request: DesktopGoalRequest,
+) -> Result<DesktopGoal> {
     let view = goal_service::save_goal_with_capability(
         &state.db,
         state.platform(),
@@ -162,10 +164,34 @@ pub(crate) fn save_goal_with_state(state: &DesktopState, request: DesktopGoalReq
     Ok(desktop_goal_from_view(view))
 }
 
+pub(crate) fn save_goal_from_parts_with_state(
+    state: &DesktopState,
+    thread_id: Option<String>,
+    objective: Option<String>,
+    token_budget: Option<u64>,
+) -> Result<DesktopGoal> {
+    save_goal_with_state(
+        state,
+        DesktopGoalRequest {
+            thread_id: required_thread_id(thread_id)?,
+            objective,
+            token_budget,
+        },
+    )
+}
+
 pub(crate) fn clear_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
     let view =
         goal_service::clear_goal_with_capability(&state.db, state.platform(), Some(thread_id))?;
     Ok(desktop_goal_from_view(view))
+}
+
+pub(crate) fn clear_goal_from_parts_with_state(
+    state: &DesktopState,
+    thread_id: Option<String>,
+) -> Result<DesktopGoal> {
+    let thread_id = required_thread_id(thread_id)?;
+    clear_goal_with_state(state, &thread_id)
 }
 
 pub(crate) fn pause_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
@@ -173,9 +199,34 @@ pub(crate) fn pause_goal_with_state(state: &DesktopState, thread_id: &str) -> Re
     Ok(desktop_goal_from_view(view))
 }
 
+pub(crate) fn pause_goal_from_parts_with_state(
+    state: &DesktopState,
+    thread_id: Option<String>,
+) -> Result<DesktopGoal> {
+    let thread_id = required_thread_id(thread_id)?;
+    pause_goal_with_state(state, &thread_id)
+}
+
 pub(crate) fn resume_goal_with_state(state: &DesktopState, thread_id: &str) -> Result<DesktopGoal> {
     let view = goal_service::resume_goal_with_capability(&state.db, state.platform(), thread_id)?;
     Ok(desktop_goal_from_view(view))
+}
+
+pub(crate) fn resume_goal_from_parts_with_state(
+    state: &DesktopState,
+    thread_id: Option<String>,
+) -> Result<DesktopGoal> {
+    let thread_id = required_thread_id(thread_id)?;
+    resume_goal_with_state(state, &thread_id)
+}
+
+fn required_thread_id(thread_id: Option<String>) -> Result<String> {
+    thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("threadId is required"))
 }
 
 pub(crate) fn get_goal_with_state(
@@ -367,16 +418,52 @@ pub(crate) fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<
     cleanup_service::dry_run_archived_with_capability(state.platform(), &state.codex_paths())
 }
 
-pub(crate) fn archive_delete_execute_with_state(state: &DesktopState) -> Result<ArchiveDeleteResult> {
-    cleanup_service::execute_archived_with_capability(state.platform(), &state.codex_paths())
+pub(crate) fn archive_delete_execute_with_state(
+    state: &DesktopState,
+    request: DesktopCleanupExecuteRequest,
+) -> Result<ArchiveDeleteResult> {
+    let paths = state.codex_paths();
+    let plan = cleanup_service::plan_cleanup_execute_operation(
+        state.platform(),
+        cleanup_service::CleanupTarget::Archived,
+        request,
+    )?;
+    let dry_run = cleanup_service::dry_run_archived_with_capability(state.platform(), &paths)?;
+    ensure_cleanup_expected_count(plan.confirmation.expected_count, dry_run.archived_threads)?;
+    cleanup_service::execute_archived_with_capability(state.platform(), &paths)
 }
 
-pub(crate) fn hidden_delete_dry_run_with_state(state: &DesktopState) -> Result<HiddenThreadDeletePlan> {
+pub(crate) fn hidden_delete_dry_run_with_state(
+    state: &DesktopState,
+) -> Result<HiddenThreadDeletePlan> {
     cleanup_service::dry_run_hidden_with_capability(state.platform(), &state.codex_paths())
 }
 
-pub(crate) fn hidden_delete_execute_with_state(state: &DesktopState) -> Result<HiddenThreadDeleteResult> {
-    cleanup_service::execute_hidden_with_capability(state.platform(), &state.codex_paths())
+pub(crate) fn hidden_delete_execute_with_state(
+    state: &DesktopState,
+    request: DesktopCleanupExecuteRequest,
+) -> Result<HiddenThreadDeleteResult> {
+    let paths = state.codex_paths();
+    let plan = cleanup_service::plan_cleanup_execute_operation(
+        state.platform(),
+        cleanup_service::CleanupTarget::Hidden,
+        request,
+    )?;
+    let dry_run = cleanup_service::dry_run_hidden_with_capability(state.platform(), &paths)?;
+    ensure_cleanup_expected_count(plan.confirmation.expected_count, dry_run.hidden_threads)?;
+    cleanup_service::execute_hidden_with_capability(state.platform(), &paths)
+}
+
+fn ensure_cleanup_expected_count(expected_count: Option<u64>, actual_count: u64) -> Result<()> {
+    let Some(expected_count) = expected_count else {
+        anyhow::bail!("cleanup expectedCount is required before deletion");
+    };
+    if expected_count != actual_count {
+        anyhow::bail!(
+            "cleanup expectedCount mismatch: expected={expected_count} actual={actual_count}"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn probe_events_with_state(
@@ -449,6 +536,26 @@ mod tests {
         std::fs::create_dir_all(&config.paths.data_dir).unwrap();
         std::fs::create_dir_all(&config.paths.log_dir).unwrap();
         std::fs::create_dir_all(&config.codex.home).unwrap();
+        std::fs::create_dir_all(config.codex.home.join("sessions")).unwrap();
+        std::fs::write(config.codex.home.join("session_index.jsonl"), "").unwrap();
+        let status = std::process::Command::new("sqlite3")
+            .arg(config.codex.home.join("state_5.sqlite"))
+            .arg(
+                "CREATE TABLE threads(
+                    id TEXT PRIMARY KEY,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    archived_at INTEGER
+                );
+                CREATE TABLE thread_dynamic_tools(thread_id TEXT NOT NULL);
+                CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL);
+                CREATE TABLE agent_job_items(id TEXT PRIMARY KEY, assigned_thread_id TEXT, status TEXT NOT NULL);",
+            )
+            .status()
+            .unwrap();
+        assert!(status.success());
         std::fs::create_dir_all(&config.codex.workspace).unwrap();
         let mut platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
         platform.kind = kind;
@@ -582,6 +689,67 @@ mod tests {
             !source.contains("fixed_probe_shell_command"),
             "Tauri adapter must not rebuild Probe shell commands"
         );
+    }
+
+    #[test]
+    fn cleanup_archive_execute_requires_confirmation_before_deleting() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let err =
+            archive_delete_execute_with_state(&state, DesktopCleanupExecuteRequest::default())
+                .expect_err("archive cleanup execute must reject unconfirmed requests")
+                .to_string();
+
+        assert!(err.contains("confirmed"), "{err}");
+        let plan = archive_delete_dry_run_with_state(&state).unwrap();
+        assert_eq!(plan.total_threads, 0);
+    }
+
+    #[test]
+    fn cleanup_hidden_execute_requires_confirmation_before_deleting() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let err = hidden_delete_execute_with_state(&state, DesktopCleanupExecuteRequest::default())
+            .expect_err("hidden cleanup execute must reject unconfirmed requests")
+            .to_string();
+
+        assert!(err.contains("confirmed"), "{err}");
+        let plan = hidden_delete_dry_run_with_state(&state).unwrap();
+        assert_eq!(plan.total_threads, 0);
+    }
+
+    #[test]
+    fn cleanup_archive_execute_accepts_confirmed_matching_count() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let result = archive_delete_execute_with_state(
+            &state,
+            DesktopCleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(0),
+            },
+        )
+        .expect("confirmed archive cleanup with matching count should execute");
+
+        assert_eq!(result.before.archived_threads, 0);
+        assert_eq!(result.after_archived_threads, 0);
+    }
+
+    #[test]
+    fn cleanup_hidden_execute_rejects_stale_expected_count() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let err = hidden_delete_execute_with_state(
+            &state,
+            DesktopCleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(1),
+            },
+        )
+        .expect_err("hidden cleanup execute must reject stale dry-run counts")
+        .to_string();
+
+        assert!(err.contains("expectedCount mismatch"), "{err}");
     }
 
     fn settings_source_before_test_module() -> &'static str {

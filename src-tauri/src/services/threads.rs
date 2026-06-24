@@ -170,6 +170,7 @@ pub(crate) fn thread_summaries_with_query(
     .threads)
 }
 
+#[allow(dead_code)]
 pub(crate) fn codex_job_spec_for_request(
     state: &DesktopState,
     request: DesktopSendMessageRequest,
@@ -177,7 +178,8 @@ pub(crate) fn codex_job_spec_for_request(
 ) -> Result<job_service::CodexJobSpec> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
     let message = request.into_thread_message(attachments);
-    let facade = job_service::plan_thread_command_with_capability(
+    let config = state.config();
+    let plan = job_service::plan_thread_command_job_execution(
         state.platform(),
         job_service::ThreadCommandRequest {
             command: match kind {
@@ -187,13 +189,9 @@ pub(crate) fn codex_job_spec_for_request(
             thread_id: message.thread_id.clone(),
             message,
         },
+        config.codex.workspace.clone(),
     )?;
-    let action = facade
-        .command
-        .action
-        .ok_or_else(|| anyhow::anyhow!("thread command plan is missing Codex job action"))?;
-    let config = state.config();
-    job_service::build_codex_job_spec(&action, config.codex.workspace.clone())
+    Ok(plan.spec)
 }
 
 pub(crate) fn prepare_request_attachments(
@@ -206,6 +204,18 @@ pub(crate) fn prepare_request_attachments(
 }
 
 impl DesktopSendMessageRequest {
+    pub(crate) fn with_thread_id_fallback(mut self, thread_id: Option<String>) -> Self {
+        if self.thread_id.is_none() {
+            self.thread_id = thread_id;
+        }
+        self
+    }
+
+    pub(crate) fn without_thread_id(mut self) -> Self {
+        self.thread_id = None;
+        self
+    }
+
     pub(crate) fn into_thread_message(
         self,
         prepared_attachments: Vec<uploads::PreparedAttachment>,
@@ -227,7 +237,6 @@ impl DesktopSendMessageRequest {
         }
     }
 }
-
 
 pub(crate) fn threads_with_state(
     state: &DesktopState,
@@ -293,18 +302,16 @@ pub(crate) fn send_message_with_state(
     request: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let facade = job_service::plan_thread_send_with_capability(
+    let config = state.config();
+    let plan = job_service::plan_thread_send_job_execution(
         state.platform(),
         job_service::ThreadSendRequest {
             thread_id: request.thread_id.clone(),
             message: request.into_thread_message(attachments),
         },
+        config.codex.workspace.clone(),
     )?;
-    let action = facade
-        .command
-        .action
-        .ok_or_else(|| anyhow::anyhow!("thread send plan is missing Codex job action"))?;
-    start_codex_job_from_action(state, action)
+    start_codex_job_from_plan(state, plan)
 }
 
 pub(crate) fn steer_thread_with_state(
@@ -432,12 +439,7 @@ pub(crate) fn rename_thread_with_state(
 }
 
 pub(crate) fn fork_thread_unavailable(request: DesktopThreadIdRequest) -> DesktopActionResponse {
-    let mut response = unavailable_action(
-        "forkThread",
-        "fork is unavailable in the local Codex read model",
-    );
-    response.thread_id = Some(request.thread_id);
-    response
+    job_service::fork_thread_unavailable_response(Some(request.thread_id)).into()
 }
 
 pub(crate) fn list_followups_with_state(
@@ -459,22 +461,14 @@ pub(crate) fn enqueue_followup_with_state(
     request: DesktopSendMessageRequest,
 ) -> Result<ThreadFollowUp> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let Some(thread_id) = request
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    else {
-        anyhow::bail!("thread_id is required");
-    };
-    job_service::enqueue_followup_with_capability(
-        &state.db,
+    let plan = job_service::plan_followup_enqueue_with_capability(
         state.platform(),
         job_service::ThreadSteerRequest {
-            thread_id: Some(thread_id.to_string()),
+            thread_id: request.thread_id.clone(),
             message: request.into_thread_message(attachments),
         },
-    )
+    )?;
+    job_service::enqueue_planned_followup(&state.db, plan.followup)
 }
 
 pub(crate) fn cancel_followup_with_state(
@@ -513,38 +507,43 @@ pub(crate) fn start_codex_job_from_request(
     request: DesktopSendMessageRequest,
     kind: job_service::CodexActionKind,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let spec = codex_job_spec_for_request(state, request, kind)?;
-    start_codex_job_from_spec(state, spec)
-}
-
-pub(crate) fn start_codex_job_from_action(
-    state: &DesktopState,
-    action: job_service::JobActionRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
+    let attachments = prepare_request_attachments(state, &request.attachments)?;
+    let message = request.into_thread_message(attachments);
     let config = state.config();
-    let spec = job_service::build_codex_job_spec(&action, config.codex.workspace.clone())?;
-    start_codex_job_from_spec(state, spec)
+    let plan = job_service::plan_thread_command_job_execution(
+        state.platform(),
+        job_service::ThreadCommandRequest {
+            command: match kind {
+                job_service::CodexActionKind::Exec => job_service::ThreadCommandKind::Create,
+                job_service::CodexActionKind::Resume => job_service::ThreadCommandKind::Resume,
+            },
+            thread_id: message.thread_id.clone(),
+            message,
+        },
+        config.codex.workspace.clone(),
+    )?;
+    start_codex_job_from_plan(state, plan)
 }
 
-pub(crate) fn start_codex_job_from_spec(
+pub(crate) fn start_codex_job_from_plan(
     state: &DesktopState,
-    spec: job_service::CodexJobSpec,
+    plan: job_service::ThreadCommandExecutionPlan,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
+    let spec = &plan.spec;
     let resolved = state.resolved_codex_paths();
     let job_id = state.jobs.start_codex_job(
         &spec.title,
         &resolved.home,
         &spec.cwd,
-        spec.args,
-        spec.prompt,
+        spec.args.clone(),
+        spec.prompt.clone(),
     )?;
-    state
-        .db
-        .link_job_thread(&job_id, spec.thread_id.as_deref(), None)?;
-    Ok(job_service::codex_action_submitted(
-        spec.thread_id,
-        Some(job_id),
-    ))
+    state.db.link_job_thread(
+        &job_id,
+        plan.link.thread_id.as_deref(),
+        plan.link.turn_id.as_deref(),
+    )?;
+    plan.submitted_response(&job_id)
 }
 
 pub(crate) fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String> {
@@ -556,7 +555,10 @@ pub(crate) fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Opt
         .map(|job| job.id)
 }
 
-pub(crate) fn apply_running_job_to_detail(state: &DesktopState, detail: &mut ThreadDetail) -> Result<()> {
+pub(crate) fn apply_running_job_to_detail(
+    state: &DesktopState,
+    detail: &mut ThreadDetail,
+) -> Result<()> {
     if let Some(job) = state.db.running_job_for_thread(&detail.summary.id)? {
         thread_service::apply_running_job_to_summary(&mut detail.summary, &job);
     }

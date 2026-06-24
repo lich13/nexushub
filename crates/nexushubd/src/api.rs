@@ -4,9 +4,7 @@ use crate::{
         session_cookie, verify_password, SESSION_COOKIE,
     },
     linux_adapter,
-    state::{
-        AppState, CachedProbeStatus, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature,
-    },
+    state::{AppState, CachedProbeStatus},
     turnstile::verify_turnstile,
 };
 use anyhow::Result as AnyhowResult;
@@ -20,39 +18,35 @@ use axum::{
     },
     Json,
 };
+#[cfg(test)]
+use nexushub_core::codex::{ThreadDetail, ThreadStatus};
 use nexushub_core::{
     claude_code::{self, ClaudePaths},
-    codex::{self, CodexPaths, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
+    codex::{self, MessageBlock, ThreadSummary},
     config::Config,
-    db::{JobRecord, NewSession},
+    db::NewSession,
     local,
     platform::{PlatformKind, PlatformPaths},
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        cleanup as cleanup_service, goals as goal_service, jobs as job_service,
-        probe::{self as probe_service, probe_threads_for_status_with_paths},
+        goals as goal_service, jobs as job_service,
+        probe::{self as probe_service},
         security as security_service, settings as settings_service,
-        threads::{
-            apply_running_job_to_summary, build_threads_overview, filter_thread_summaries,
-            merge_running_jobs, normalize_thread_block_limit, normalize_thread_detail_block_limit,
-            prune_hidden_thread_summaries, thread_list_fetch_limit, ThreadsQuery,
-        },
+        threads::{self as thread_service, ThreadsQuery},
         updates::{self as update_service, UpdateAction},
         uploads as upload_service,
         use_cases::NexusHubUseCases,
     },
-    update,
     uploads::{self, prepare_uploads, PreparedAttachment},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     net::SocketAddr,
-    path::{Path as FsPath, PathBuf},
-    time::{Duration, UNIX_EPOCH},
+    path::PathBuf,
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -374,29 +368,7 @@ pub(crate) async fn load_probe_threads(
     status: &'static str,
     limit: usize,
 ) -> anyhow::Result<Vec<ThreadSummary>> {
-    let paths = state.codex_paths();
-    if thread_list_fetch_limit(Some(status), Some(limit)) == usize::MAX {
-        return probe_threads_for_status_with_paths(&paths, state.db.path(), status, limit);
-    }
-    let local_fetch_limit = thread_list_fetch_limit(Some(status), Some(limit));
-    let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
-        tracing::warn!("failed to read hidden thread metadata for probe: {err}");
-        HashSet::new()
-    });
-    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
-        tracing::warn!("failed to read archived thread metadata for probe: {err}");
-        HashSet::new()
-    });
-    let mut threads = codex::list_threads(&paths, None, None, local_fetch_limit)?;
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    apply_running_jobs_to_threads(state, &mut threads, &archived_thread_ids)?;
-    threads = prune_hidden_thread_summaries(threads, &hidden_thread_ids);
-    Ok(filter_thread_summaries(
-        threads,
-        Some(status),
-        None,
-        limit.clamp(1, 200),
-    ))
+    linux_adapter::probe_threads_read_model(state, status, limit)
 }
 
 fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
@@ -729,41 +701,14 @@ struct ThreadBlocksQuery {
     before: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct ThreadBlockPage {
-    thread_id: String,
-    blocks: Vec<MessageBlock>,
-    total_blocks: usize,
-    has_more_blocks: bool,
-    before_cursor: Option<String>,
-}
-
 async fn list_threads(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let paths = state.codex_paths();
-    let local_fetch_limit = thread_list_fetch_limit(query.status.as_deref(), query.limit);
-    let hidden_thread_ids = codex::hidden_thread_ids(&paths).unwrap_or_else(|err| {
-        tracing::warn!("failed to read hidden thread metadata: {err}");
-        HashSet::new()
-    });
-    let archived_thread_ids = codex::archived_thread_ids(&paths).unwrap_or_else(|err| {
-        tracing::warn!("failed to read archived thread metadata: {err}");
-        HashSet::new()
-    });
-    let running_jobs = state.db.running_thread_jobs()?;
-    let mut threads = build_threads_overview(
-        codex::list_threads(&paths, None, query.q.as_deref(), local_fetch_limit)?,
-        running_jobs,
-        query,
-        &hidden_thread_ids,
-        &archived_thread_ids,
-    )
-    .threads;
-    submit_ready_followups_from_list(&state, &mut threads).await;
+    let mut threads = linux_adapter::list_threads_read_model(&state, query)?;
+    linux_adapter::autosubmit_ready_followups(&state, &mut threads);
     ok(threads)
 }
 
@@ -774,16 +719,23 @@ async fn thread_detail(
     Query(query): Query<ThreadDetailQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let block_limit = detail_block_limit(query.limit, query.full);
-    match load_merged_thread_detail(&state, &id, "thread detail")
-        .await
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .detail_read(thread_service::ThreadDetailRequest {
+            id: id.clone(),
+            limit: query.limit,
+            full: query.full,
+            before: query.before.clone(),
+        })
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    match linux_adapter::load_thread_detail_read_model(&state, &plan.detail.thread_id)
         .map_err(api_error_for_thread_detail_load)?
     {
-        Some(detail) => ok(codex::window_thread_detail(
-            detail,
-            block_limit,
-            query.before.as_deref(),
-        )),
+        Some(mut detail) => {
+            linux_adapter::autosubmit_pending_followup(&state, &mut detail);
+            ok(linux_adapter::window_thread_detail(detail, &plan.detail))
+        }
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
     }
 }
@@ -800,121 +752,20 @@ async fn thread_blocks(
     Query(query): Query<ThreadBlocksQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match load_merged_thread_detail(&state, &id, "thread blocks")
-        .await
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .threads()
+        .blocks(&id, query.limit, query.before.clone())
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    match linux_adapter::load_thread_detail_read_model(&state, &plan.thread_id)
         .map_err(api_error_for_thread_detail_load)?
     {
-        Some(detail) => ok(thread_block_page(
-            &id,
-            detail,
-            query.limit,
-            query.before.as_deref(),
-        )),
+        Some(mut detail) => {
+            linux_adapter::autosubmit_pending_followup(&state, &mut detail);
+            ok(linux_adapter::thread_blocks_page(detail, &plan))
+        }
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
     }
-}
-
-fn thread_block_page(
-    thread_id: &str,
-    detail: ThreadDetail,
-    limit: Option<usize>,
-    before: Option<&str>,
-) -> ThreadBlockPage {
-    let window = codex::window_thread_detail(detail, Some(block_page_limit(limit)), before);
-    ThreadBlockPage {
-        thread_id: thread_id.to_string(),
-        blocks: window.blocks,
-        total_blocks: window.total_blocks,
-        has_more_blocks: window.has_more_blocks,
-        before_cursor: window.before_cursor,
-    }
-}
-
-async fn load_merged_thread_detail(
-    state: &AppState,
-    id: &str,
-    label: &str,
-) -> anyhow::Result<Option<ThreadDetail>> {
-    let paths = state.codex_paths();
-    let mut detail = load_base_thread_detail_cached(state, &paths, id)?;
-    let _ = label;
-    if let Some(detail) = detail.as_mut() {
-        apply_running_job_to_detail(state, detail)?;
-        submit_pending_followup_if_ready(state, detail).await;
-    }
-    Ok(detail)
-}
-
-fn load_base_thread_detail_cached(
-    state: &AppState,
-    paths: &CodexPaths,
-    id: &str,
-) -> anyhow::Result<Option<ThreadDetail>> {
-    if let Some(cached) = state
-        .rollout_detail_cache
-        .lock()
-        .expect("rollout detail cache mutex")
-        .get(id)
-        .cloned()
-    {
-        let signature = thread_detail_cache_signature(paths, cached.signature.rollout_path.clone());
-        if cached.signature == signature {
-            return Ok(Some(cached.detail));
-        }
-    }
-
-    let detail = codex::thread_detail(paths, id)?;
-    let signature = thread_detail_cache_signature(
-        paths,
-        detail
-            .as_ref()
-            .and_then(|detail| detail.summary.rollout_path.clone()),
-    );
-    if let Some(detail) = detail.as_ref() {
-        state
-            .rollout_detail_cache
-            .lock()
-            .expect("rollout detail cache mutex")
-            .insert(
-                id.to_string(),
-                CachedThreadDetail {
-                    signature,
-                    detail: detail.clone(),
-                },
-            );
-    } else {
-        state
-            .rollout_detail_cache
-            .lock()
-            .expect("rollout detail cache mutex")
-            .remove(id);
-    }
-    Ok(detail)
-}
-
-fn thread_detail_cache_signature(
-    paths: &CodexPaths,
-    rollout_path: Option<std::path::PathBuf>,
-) -> ThreadDetailCacheSignature {
-    ThreadDetailCacheSignature {
-        rollout: rollout_path.as_deref().and_then(file_signature),
-        rollout_path,
-        state_db: file_signature(&paths.state_db()),
-        session_index: file_signature(&paths.session_index()),
-    }
-}
-
-fn file_signature(path: &FsPath) -> Option<FileSignature> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis());
-    Some(FileSignature {
-        len: metadata.len(),
-        modified_ms,
-    })
 }
 
 async fn create_thread(
@@ -1111,98 +962,6 @@ async fn cancel_followup(
     ok(response)
 }
 
-fn apply_running_jobs_to_threads(
-    state: &AppState,
-    threads: &mut Vec<ThreadSummary>,
-    archived_thread_ids: &HashSet<String>,
-) -> anyhow::Result<()> {
-    let jobs = state.db.running_thread_jobs()?;
-    merge_running_jobs(threads, &jobs, archived_thread_ids);
-    Ok(())
-}
-
-fn apply_running_job_to_detail(state: &AppState, detail: &mut ThreadDetail) -> anyhow::Result<()> {
-    if let Some(job) = state.db.running_job_for_thread(&detail.summary.id)? {
-        apply_running_job_to_summary(&mut detail.summary, &job);
-    }
-    Ok(())
-}
-
-async fn submit_ready_followups_from_list(state: &AppState, threads: &mut [ThreadSummary]) {
-    for summary in threads {
-        if !matches!(summary.status, ThreadStatus::Recent) {
-            continue;
-        }
-        let mut detail = ThreadDetail {
-            summary: summary.clone(),
-            messages: Vec::new(),
-            blocks: Vec::new(),
-            raw_event_count: 0,
-            total_blocks: 0,
-            has_more_blocks: false,
-            before_cursor: None,
-        };
-        submit_pending_followup_if_ready(state, &mut detail).await;
-        if matches!(detail.summary.status, ThreadStatus::Running) {
-            *summary = detail.summary;
-        }
-    }
-}
-
-async fn submit_pending_followup_if_ready(state: &AppState, detail: &mut ThreadDetail) {
-    if !matches!(detail.summary.status, ThreadStatus::Recent) {
-        return;
-    }
-    let thread_id = detail.summary.id.clone();
-    let Ok(Some(followup)) = state.db.claim_next_pending_followup(&thread_id) else {
-        return;
-    };
-    let mut request = job_service::followup_request(&followup);
-    request.thread_id = Some(thread_id.clone());
-    let mut spec = match codex_resume_job_spec(state, request) {
-        Ok(spec) => spec,
-        Err(err) => {
-            let message = err.to_string();
-            let _ = state.db.mark_followup_error(&followup.id, &message);
-            tracing::warn!("failed to build follow-up codex job spec: {message}");
-            return;
-        }
-    };
-    spec.title = "Codex queued follow-up".to_string();
-    match linux_adapter::start_codex_resume_spec(state, spec, &thread_id) {
-        Ok(job_id) => {
-            let _ = state
-                .db
-                .mark_followup_submitted(&followup.id, json!({"job_id": job_id}));
-            detail.summary.status = ThreadStatus::Running;
-            detail.summary.active_job_id = Some(job_id);
-        }
-        Err(err) => {
-            let message = err.to_string();
-            let _ = state.db.mark_followup_error(&followup.id, &message);
-        }
-    }
-}
-
-fn codex_resume_job_spec(
-    state: &AppState,
-    request: job_service::ThreadMessageRequest,
-) -> anyhow::Result<job_service::CodexJobSpec> {
-    job_service::build_codex_job_spec(
-        &request.into_job_action(job_service::CodexActionKind::Resume),
-        state.config().codex.workspace.clone(),
-    )
-}
-
-fn derive_active_job_id(state: &AppState, thread_id: &str) -> Option<String> {
-    state
-        .db
-        .running_job_for_thread(thread_id)
-        .ok()
-        .flatten()
-        .map(|job| job.id)
-}
-
 #[derive(Debug, Deserialize)]
 struct StopThreadRequest {
     turn_id: Option<String>,
@@ -1229,7 +988,7 @@ async fn stop_thread(
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     let active_job_id = plan
         .requires_active_job_lookup
-        .then(|| derive_active_job_id(&state, &plan.thread_id))
+        .then(|| linux_adapter::derive_active_job_id(&state, &plan.thread_id))
         .flatten();
     let stop = match job_service::resolve_thread_stop_job(&plan, active_job_id) {
         Ok(stop) => stop,
@@ -1483,8 +1242,9 @@ async fn thread_events(
         let mut sent_blocks: HashMap<String, String> = HashMap::new();
         let mut seeded_blocks = false;
         loop {
-            match load_merged_thread_detail(&event_state, &id, "event stream").await {
+            match linux_adapter::load_thread_detail_read_model(&event_state, &id) {
                 Ok(Some(mut detail)) => {
+                    linux_adapter::autosubmit_pending_followup(&event_state, &mut detail);
                     detail = codex::window_thread_detail(detail, Some(THREAD_EVENT_BLOCK_WINDOW), None);
                     if !seeded_blocks {
                         seed_thread_event_blocks(&mut sent_blocks, &detail.blocks);
@@ -1736,14 +1496,12 @@ async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMa
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
-    let _plan = NexusHubUseCases::new(&platform)
+    let plan = NexusHubUseCases::new(&platform)
         .cleanup()
         .archive_delete_dry_run()
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let paths = state.codex_paths();
-    ok(cleanup_service::dry_run_archived_with_capability(
-        &http_update_platform(),
-        &paths,
+    ok(linux_adapter::execute_cleanup_plan(
+        &state, &auth, plan, false,
     )?)
 }
 
@@ -1764,24 +1522,10 @@ async fn archive_delete_execute(
         .cleanup()
         .archive_delete_execute()
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    if plan.requires_confirmation && !payload.confirmed {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "archive deletion must be confirmed",
-        ));
-    }
-    let paths = state.codex_paths();
-    let result =
-        cleanup_service::execute_archived_with_capability(&http_update_platform(), &paths)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "archives.delete.execute",
-        Some("archives"),
-        Some("root-codex"),
-        None,
-        json!({"before_archived": result.before.archived_threads, "deleted_rollout_files": result.deleted_rollout_files}),
-    )?;
-    ok(result)
+    ok(
+        linux_adapter::execute_cleanup_plan(&state, &auth, plan, payload.confirmed)
+            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
+    )
 }
 
 async fn hidden_threads_delete_dry_run(
@@ -1791,14 +1535,12 @@ async fn hidden_threads_delete_dry_run(
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
-    let _plan = NexusHubUseCases::new(&platform)
+    let plan = NexusHubUseCases::new(&platform)
         .cleanup()
         .hidden_delete_dry_run()
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let paths = state.codex_paths();
-    ok(cleanup_service::dry_run_hidden_with_capability(
-        &http_update_platform(),
-        &paths,
+    ok(linux_adapter::execute_cleanup_plan(
+        &state, &auth, plan, false,
     )?)
 }
 
@@ -1814,27 +1556,10 @@ async fn hidden_threads_delete_execute(
         .cleanup()
         .hidden_delete_execute()
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    if plan.requires_confirmation && !payload.confirmed {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "hidden thread deletion must be confirmed",
-        ));
-    }
-    let paths = state.codex_paths();
-    let result = cleanup_service::execute_hidden_with_capability(&http_update_platform(), &paths)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "hidden_threads.delete.execute",
-        Some("hidden_threads"),
-        Some("root-codex"),
-        None,
-        json!({
-            "before_hidden": result.before.hidden_threads,
-            "deleted_threads": result.deleted_threads,
-            "deleted_rollout_files": result.deleted_rollout_files,
-        }),
-    )?;
-    ok(result)
+    ok(
+        linux_adapter::execute_cleanup_plan(&state, &auth, plan, payload.confirmed)
+            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
+    )
 }
 
 async fn list_jobs(
@@ -1843,12 +1568,13 @@ async fn list_jobs(
     Query(query): Query<HashMap<String, String>>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = query
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
-        .min(200);
-    ok(job_responses(state.db.list_jobs(limit)?))
+    let limit = query.get("limit").and_then(|v| v.parse().ok());
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .jobs()
+        .list(limit)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    ok(linux_adapter::list_jobs_plan(&state, plan)?)
 }
 
 async fn job_detail(
@@ -1857,8 +1583,13 @@ async fn job_detail(
     Path(id): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    match state.db.job(&id)? {
-        Some(job) => ok(job_response(job)),
+    let platform = http_update_platform();
+    let plan = NexusHubUseCases::new(&platform)
+        .jobs()
+        .detail(&id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
+    match linux_adapter::job_detail_plan(&state, plan)? {
+        Some(job) => ok(job),
         None => Err(api_error(StatusCode::NOT_FOUND, "job not found")),
     }
 }
@@ -1884,14 +1615,6 @@ fn archived_filter(status: Option<&str>) -> Option<bool> {
         Some("all") | None => Some(false),
         _ => Some(false),
     }
-}
-
-fn detail_block_limit(limit: Option<usize>, full: Option<bool>) -> Option<usize> {
-    normalize_thread_detail_block_limit(limit, full.unwrap_or(false))
-}
-
-fn block_page_limit(limit: Option<usize>) -> usize {
-    normalize_thread_block_limit(limit)
 }
 
 #[cfg(test)]
@@ -2795,25 +2518,6 @@ fn probe_logs_db_last_result(raw: &str) -> String {
     format!("{dry_run}: events={events}, dedupe={dedupe}")
 }
 
-fn job_responses(jobs: Vec<JobRecord>) -> Vec<Value> {
-    jobs.into_iter().map(job_response).collect()
-}
-
-fn job_response(job: JobRecord) -> Value {
-    let analysis = if job.status == "failed" {
-        update::analyze_job_failure(&job.kind, &job.output, job.error.as_deref(), job.exit_code)
-    } else {
-        None
-    };
-    let mut value = serde_json::to_value(&job).unwrap_or_else(|_| json!({}));
-    if let Some(analysis) = analysis {
-        value["failure_analysis"] = serde_json::to_value(&analysis).unwrap_or(Value::Null);
-        value["analysis"] = Value::String(analysis.explanation.clone());
-        value["explanation"] = Value::String(analysis.suggestions.join(" "));
-    }
-    value
-}
-
 #[cfg(test)]
 fn normalize_goal_response(value: &Value) -> Value {
     let goal = value.get("goal").unwrap_or(value);
@@ -2922,12 +2626,12 @@ fn api_error(status: StatusCode, message: &str) -> ApiError {
 mod tests {
     use super::{
         app_server_detail_from_read, app_server_thread_list_fetch_limit,
-        app_server_thread_summaries, apply_app_server_thread_detail, apply_running_job_to_summary,
-        archived_filter, block_changed, load_probe_threads, merge_thread_summaries,
-        normalize_goal_response, probe_config_path, router, seed_thread_event_blocks,
-        thread_block_page, thread_event_block_key, thread_title, turnstile_login_action,
-        update_service, TurnstileLoginAction, UpdateAction,
+        app_server_thread_summaries, apply_app_server_thread_detail, archived_filter,
+        block_changed, load_probe_threads, merge_thread_summaries, normalize_goal_response,
+        probe_config_path, router, seed_thread_event_blocks, thread_event_block_key, thread_title,
+        turnstile_login_action, update_service, TurnstileLoginAction, UpdateAction,
     };
+    use crate::linux_adapter;
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -3528,6 +3232,7 @@ mod tests {
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
             .expect("api source must include production section");
+        let adapter_source = include_str!("linux_adapter.rs");
 
         for required in [
             "NexusHubUseCases::new",
@@ -3536,20 +3241,30 @@ mod tests {
             "linux_adapter::cancel_thread_stop_plan",
             "linux_adapter::apply_thread_state_action_plan",
             "linux_adapter::cancel_followup_plan",
+            "linux_adapter::execute_cleanup_plan",
+            "linux_adapter::list_jobs_plan",
+            "linux_adapter::job_detail_plan",
             "goal_service::goal_get_response_with_capability",
             "goal_service::save_goal_with_capability",
             "goal_service::clear_goal_with_capability",
             "goal_service::pause_goal_with_capability",
             "goal_service::resume_goal_with_capability",
             "job_service::resolve_thread_stop_job",
+        ] {
+            assert!(
+                source.contains(required),
+                "Linux RPC handlers must call the shared core facade/plan: {required}"
+            );
+        }
+        for required_adapter_landing in [
             "cleanup_service::dry_run_archived_with_capability",
             "cleanup_service::execute_archived_with_capability",
             "cleanup_service::dry_run_hidden_with_capability",
             "cleanup_service::execute_hidden_with_capability",
         ] {
             assert!(
-                source.contains(required),
-                "Linux RPC handlers must call the shared core facade/plan: {required}"
+                adapter_source.contains(required_adapter_landing),
+                "Linux adapter must retain cleanup side-effect landing: {required_adapter_landing}"
             );
         }
 
@@ -3570,6 +3285,8 @@ mod tests {
             "archive::execute_delete_archived(",
             "archive::plan_delete_hidden(",
             "archive::execute_delete_hidden(",
+            "cleanup_service::execute_archived_with_capability",
+            "cleanup_service::execute_hidden_with_capability",
             "\"stopThread\"",
             "\"bridge\": false",
             "\"cancelFollowUp\"",
@@ -4807,7 +4524,14 @@ mod tests {
             before_cursor: None,
         };
 
-        let page = thread_block_page("thread-a", detail, Some(2), None);
+        let plan = thread_service::plan_thread_blocks_request(
+            &PlatformPaths::for_kind(PlatformKind::Linux),
+            "thread-a",
+            Some(2),
+            None,
+        )
+        .unwrap();
+        let page = linux_adapter::thread_blocks_page(detail, &plan);
         let value = serde_json::to_value(&page).unwrap();
 
         assert_eq!(page.thread_id, "thread-a");
@@ -4857,7 +4581,14 @@ mod tests {
             before_cursor: None,
         };
 
-        let page = thread_block_page("thread-a", detail, Some(2), Some("b:4"));
+        let plan = thread_service::plan_thread_blocks_request(
+            &PlatformPaths::for_kind(PlatformKind::Linux),
+            "thread-a",
+            Some(2),
+            Some("b:4".to_string()),
+        )
+        .unwrap();
+        let page = linux_adapter::thread_blocks_page(detail, &plan);
 
         assert_eq!(page.total_blocks, 6);
         assert!(page.has_more_blocks);
@@ -5267,7 +4998,7 @@ mod tests {
             error: None,
         };
 
-        apply_running_job_to_summary(&mut summary, &job);
+        thread_service::apply_running_job_to_summary(&mut summary, &job);
 
         assert_eq!(summary.status, ThreadStatus::Running);
         assert_eq!(summary.active_job_id.as_deref(), Some("job-live"));

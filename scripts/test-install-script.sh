@@ -102,6 +102,14 @@ checks = {
     "install legacy listen migration": (install, '"listen": \'"127.0.0.1:15742"\''),
     "update health URL": (update, 'HEALTH_URL="http://127.0.0.1:15742/healthz"'),
     "deploy smoke health URL": (deploy, "http://127.0.0.1:15742/healthz"),
+    "deploy smoke systemd active": (deploy, "systemctl is-active --quiet nexushub"),
+    "deploy smoke daemon version": (deploy, "/opt/nexushub/bin/nexushubd --version"),
+    "deploy smoke public NexusHub URL": (deploy, 'PUBLIC_BASE="https://${DOMAIN%/}${PATH_PREFIX}"'),
+    "deploy smoke retired codex-cloud-panel": (deploy, 'expect_http_status "https://${DOMAIN%/}/codex-cloud-panel/" "404"'),
+    "deploy smoke root sentinel not NexusHub": (deploy, 'expect_404_or_not_nexushub "https://${DOMAIN%/}/api/sentinel/status"'),
+    "deploy smoke root probe not NexusHub": (deploy, 'expect_404_or_not_nexushub "https://${DOMAIN%/}/api/probe/status"'),
+    "deploy smoke scoped sentinel 404": (deploy, 'expect_http_status "${PUBLIC_BASE}api/sentinel/status" "404"'),
+    "deploy smoke scoped old probe 404": (deploy, 'expect_http_status "${PUBLIC_BASE}api/probe/status" "404"'),
 }
 
 missing = [name for name, (text, needle) in checks.items() if needle not in text]
@@ -245,6 +253,8 @@ checks = {
     "README Linux sha256": ("README.md", ".sha256"),
     "README Linux public URL": ("README.md", "https://661313.xyz/nexushub/"),
     "README scoped API proxy": ("README.md", "`/nexushub/api/`"),
+    "README canonical Probe RPC": ("README.md", "`/api/rpc/probe.status`"),
+    "README old Probe REST 404": ("README.md", "old REST Probe paths return `404`"),
     "runbook Linux systemd": ("docs/cloud-deploy-runbook.md", "systemd unit `nexushub`"),
     "runbook Linux runtime": ("docs/cloud-deploy-runbook.md", "/opt/nexushub"),
     "runbook macOS boundary": ("docs/cloud-deploy-runbook.md", "macOS ARM64 Boundary"),
@@ -268,6 +278,8 @@ checks = {
     "master macOS helper acceptance": ("docs/progress/MASTER.md", "helper sync check"),
     "master macOS DMG tarball": ("docs/progress/MASTER.md", "DMG/tarball `.sha256`"),
     "master Turnstile retained": ("docs/progress/MASTER.md", "Cloudflare Turnstile login verification"),
+    "master canonical Probe RPC": ("docs/progress/MASTER.md", "`/api/rpc/probe.status`"),
+    "master old Probe REST 404": ("docs/progress/MASTER.md", "old REST Probe paths `404`"),
 }
 missing = [name for name, (doc, needle) in checks.items() if needle not in texts[doc]]
 if missing:
@@ -312,6 +324,14 @@ for needle in [
 for doc_name, text in texts.items():
     if "root `/api/`" in text:
         raise SystemExit(f"{doc_name} must not describe root /api/ as a NexusHub public proxy")
+    for forbidden in [
+        "Probe routes are canonical under the daemon-local `/api/probe/*` namespace",
+        "exposed publicly as `/nexushub/api/probe/*`",
+        "canonical under `/api/probe/*`",
+        "canonical under `/nexushub/api/probe/*`",
+    ]:
+        if forbidden in text:
+            raise SystemExit(f"{doc_name} must not describe retired Probe REST routes as canonical: {forbidden}")
     forbidden = [
         "eyJhIjoi",
         "trycloudflare.com/",
@@ -481,6 +501,81 @@ with tempfile.TemporaryDirectory() as tmp:
         raise SystemExit("update.sh systemd refresh should daemon-reload after replacing unit")
 
 print("update.sh systemd unit removes legacy app-server dependency: ok")
+PY
+
+python3 - "${DEPLOY_CLOUD_SH}" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+import tempfile
+
+deploy = Path(sys.argv[1])
+root = deploy.parents[1]
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp_path = Path(tmp)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "commands.log"
+    archive = tmp_path / "nexushub-linux-x86_64.tar.gz"
+    archive.write_bytes(b"fake archive")
+
+    for name, body in {
+        "scp": "printf 'scp %s\\n' \"$*\" >> \"$NEXUSHUB_FAKE_DEPLOY_LOG\"\n",
+        "ssh": "printf 'ssh %s\\n' \"$*\" >> \"$NEXUSHUB_FAKE_DEPLOY_LOG\"\n",
+        "tar": "printf 'tar %s\\n' \"$*\" >> \"$NEXUSHUB_FAKE_DEPLOY_LOG\"\n",
+        "mktemp": "tmp=\"$NEXUSHUB_FAKE_DEPLOY_TMP/body.$RANDOM\"; : > \"$tmp\"; printf '%s\\n' \"$tmp\"\n",
+        "tr": "cat\n",
+        "grep": "exit 1\n",
+        "curl": """
+printf 'curl %s\\n' "$*" >> "$NEXUSHUB_FAKE_DEPLOY_LOG"
+for arg in "$@"; do
+  case "$arg" in
+    *codex-cloud-panel*|*api/sentinel/status*|*api/probe/status*)
+      printf '404'
+      exit 0
+      ;;
+  esac
+done
+printf '200'
+exit 0
+""",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/usr/bin/env bash\nset -Eeuo pipefail\n{body}")
+        path.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["NEXUSHUB_FAKE_DEPLOY_LOG"] = str(log)
+    env["NEXUSHUB_FAKE_DEPLOY_TMP"] = str(tmp_path)
+    subprocess.run(
+        ["bash", str(deploy), "fake-host", str(archive)],
+        cwd=root,
+        env=env,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    recorded = log.read_text()
+
+for needle in [
+    "systemctl is-active --quiet nexushub",
+    "/opt/nexushub/bin/nexushubd --version",
+    "http://127.0.0.1:15742/healthz",
+    "https://661313.xyz/nexushub/",
+    "https://661313.xyz/codex-cloud-panel/",
+    "https://661313.xyz/api/sentinel/status",
+    "https://661313.xyz/api/probe/status",
+    "https://661313.xyz/nexushub/api/sentinel/status",
+    "https://661313.xyz/nexushub/api/probe/status",
+]:
+    if needle not in recorded:
+        raise SystemExit(f"deploy-cloud.sh smoke simulation missed {needle}")
+
+print("deploy-cloud.sh smoke checks: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'
@@ -1416,8 +1511,20 @@ if existing_retired:
 
 workflow = workflow_path.read_text()
 workflow_checks = {
+    "release guard job": "guard:",
+    "release guard tag check": "release tag ${tag} must match workspace version ${expected_tag}",
+    "release guard package version check": "version ${version} must match ${expected}",
+    "release guard cargo tests": "cargo test --workspace",
+    "release guard WebUI install": "corepack pnpm@11.0.8 --dir webui install",
+    "release guard WebUI test": "corepack pnpm@11.0.8 --dir webui test",
+    "release guard WebUI build": "corepack pnpm@11.0.8 --dir webui build",
+    "release guard install script": "bash scripts/test-install-script.sh",
     "linux job stays on ubuntu-24.04": "runs-on: ubuntu-24.04",
+    "Linux package waits for release guard": "needs: guard",
     "macOS release job runs on macos-14": "runs-on: macos-14",
+    "macOS package waits for release guard": "needs: guard",
+    "macOS package Tauri tests": 'TAURI_CONFIG=\'{"bundle":{"resources":["resources/nexushubd"]}}\' cargo test --manifest-path src-tauri/Cargo.toml',
+    "macOS package Tauri clippy": 'TAURI_CONFIG=\'{"bundle":{"resources":["resources/nexushubd"]}}\' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings',
     "macOS package script": "scripts/package-darwin-arm64.sh",
     "Tauri signing private key env": "TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
     "Tauri signing password env": "TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::{
     archive,
@@ -54,6 +55,22 @@ pub struct CleanupActionPlan {
     pub requires_confirmation: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupExecuteRequest {
+    pub confirmed: bool,
+    #[serde(default, alias = "expectedCount", alias = "expected_count")]
+    pub expected_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupConfirmationPlan {
+    pub confirmed: bool,
+    pub expected_count: Option<u64>,
+    pub payload: Value,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupOperationKind {
@@ -61,7 +78,7 @@ pub enum CleanupOperationKind {
     Execute,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupOperationPlan {
     pub required_capability: Capability,
@@ -72,6 +89,7 @@ pub struct CleanupOperationPlan {
     pub execute: bool,
     pub requires_confirmation: bool,
     pub requires_prior_dry_run: bool,
+    pub confirmation: CleanupConfirmationPlan,
 }
 
 pub fn plan_cleanup_action(
@@ -100,6 +118,36 @@ pub fn plan_cleanup_operation(
     target: CleanupTarget,
     operation: CleanupOperationKind,
 ) -> Result<CleanupOperationPlan> {
+    plan_cleanup_operation_with_confirmation(
+        platform,
+        target,
+        operation,
+        CleanupExecuteRequest::default(),
+    )
+}
+
+pub fn plan_cleanup_execute_operation(
+    platform: &PlatformPaths,
+    target: CleanupTarget,
+    request: CleanupExecuteRequest,
+) -> Result<CleanupOperationPlan> {
+    if !request.confirmed {
+        anyhow::bail!("cleanup execute must be confirmed");
+    }
+    plan_cleanup_operation_with_confirmation(
+        platform,
+        target,
+        CleanupOperationKind::Execute,
+        request,
+    )
+}
+
+pub fn plan_cleanup_operation_with_confirmation(
+    platform: &PlatformPaths,
+    target: CleanupTarget,
+    operation: CleanupOperationKind,
+    confirmation: CleanupExecuteRequest,
+) -> Result<CleanupOperationPlan> {
     let action = match (target, operation) {
         (CleanupTarget::Archived, CleanupOperationKind::DryRun) => {
             CleanupAction::ArchiveDeleteDryRun
@@ -122,7 +170,19 @@ pub fn plan_cleanup_operation(
         execute: action_plan.execute,
         requires_confirmation: action_plan.requires_confirmation,
         requires_prior_dry_run: action_plan.execute,
+        confirmation: cleanup_confirmation_plan(confirmation),
     })
+}
+
+pub fn cleanup_confirmation_plan(request: CleanupExecuteRequest) -> CleanupConfirmationPlan {
+    CleanupConfirmationPlan {
+        confirmed: request.confirmed,
+        expected_count: request.expected_count,
+        payload: json!({
+            "confirmed": request.confirmed,
+            "expectedCount": request.expected_count,
+        }),
+    }
 }
 
 pub fn dry_run_archived_with_capability(

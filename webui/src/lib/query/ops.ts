@@ -67,7 +67,6 @@ export function useOpsActions(input: {
   };
 
   return {
-    qc,
     updateJob: useMutation({
       mutationFn: ({ action }: { action: UnifiedUpdateAction }) => {
         if (action === "check") return updates.check(csrfToken);
@@ -90,9 +89,9 @@ export function useOpsActions(input: {
       onSuccess: input.onArchiveDryRun
     }),
     archiveExecute: useMutation({
-      mutationFn: () => {
+      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
         requireThreadCleanup();
-        return startArchiveDelete(csrfToken);
+        return startArchiveDelete({ csrfToken, expectedCount });
       },
       onSuccess: (result) => {
         input.onArchiveExecute(result);
@@ -109,9 +108,9 @@ export function useOpsActions(input: {
       onSuccess: input.onHiddenDryRun
     }),
     hiddenExecute: useMutation({
-      mutationFn: () => {
+      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
         requireThreadCleanup();
-        return startHiddenThreadDelete(csrfToken);
+        return startHiddenThreadDelete({ csrfToken, expectedCount });
       },
       onSuccess: (result) => {
         input.onHiddenExecute(result);
