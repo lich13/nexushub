@@ -4,8 +4,12 @@ mod commands;
 mod overview;
 mod services;
 
-use std::path::Path;
-use tauri::Manager;
+use std::{
+    io::Write,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
 
 pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
 pub use services::probe::desktop_probe_status_with_state;
@@ -14,8 +18,28 @@ pub use services::updates::desktop_update_status_with_state;
 const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
 const NEXUSHUBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
 const WEBUI_RESOURCE_NAME: &str = "webui";
+const MAIN_WINDOW_LABEL: &str = "main";
 const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
 window.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+"#;
+const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
+(function () {
+  var root = document.getElementById("root");
+  var bodyText = (document.body && document.body.innerText ? document.body.innerText : "").replace(/\s+/g, " ").trim();
+  return {
+    readyState: document.readyState,
+    title: document.title,
+    desktopRuntime: window.__NEXUSHUB_DESKTOP_RUNTIME__ === true,
+    bootMounted: Boolean(window.__NEXUSHUB_BOOT__ && window.__NEXUSHUB_BOOT__.mounted),
+    rootChildren: root ? root.children.length : -1,
+    rootClass: root && root.firstElementChild ? root.firstElementChild.className : "",
+    bodyTextLength: bodyText.length,
+    hasMainShell: Boolean(document.querySelector(".app-shell")),
+    hasDesktopNav: bodyText.indexOf("Codex") >= 0 && bodyText.indexOf("探针") >= 0 && bodyText.indexOf("运维") >= 0,
+    hasWebLoginGate: Boolean(document.querySelector(".login-shell")),
+    hasVisibleLinuxHostCopy: Boolean(document.querySelector(".security-workspace, .turnstile-box"))
+  };
+})()
 "#;
 
 fn sync_nexushubd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
@@ -135,6 +159,46 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> std::io::Result<()>
     Ok(())
 }
 
+fn reveal_main_window<R: tauri::Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.maximize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+fn append_desktop_app_log(message: &str) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let paths = nexus_paths_for_home(home);
+    if std::fs::create_dir_all(&paths.log_dir).is_err() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths.app_log_file)
+    else {
+        return;
+    };
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let _ = writeln!(file, "{timestamp} {message}");
+}
+
+fn schedule_desktop_boot_probe<R: tauri::Runtime>(window: &WebviewWindow<R>) {
+    let probe_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if let Err(err) = probe_window.eval_with_callback(DESKTOP_BOOT_PROBE_SCRIPT, |payload| {
+            append_desktop_app_log(&format!("desktop_boot_probe {payload}"));
+        }) {
+            append_desktop_app_log(&format!("desktop_boot_probe_error {err}"));
+        }
+    });
+}
+
 #[cfg(unix)]
 fn ensure_executable(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -216,15 +280,30 @@ pub fn run() {
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             app.manage(state);
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.maximize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let main_window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == MAIN_WINDOW_LABEL)
+                .ok_or_else(|| "main Tauri window config not found".to_string())?;
+            let window = WebviewWindowBuilder::from_config(app.handle(), main_window_config)
+                .map_err(|err| err.to_string())?
+                .build()
+                .map_err(|err| err.to_string())?;
+            reveal_main_window(&window);
+            schedule_desktop_boot_probe(&window);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run NexusHub desktop app");
+        .build(tauri::generate_context!())
+        .expect("failed to build NexusHub desktop app")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Ready) {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    reveal_main_window(&window);
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1317,6 +1396,37 @@ log_dir = "{}"
         assert!(
             source.contains(".append_invoke_initialization_script("),
             "Tauri must register the marker through an initialization script that runs before the bundled WebUI"
+        );
+    }
+
+    #[test]
+    fn macos_shell_creates_and_reveals_main_window_explicitly() {
+        let source = production_lib_source();
+        let config = include_str!("../tauri.conf.json");
+
+        assert!(
+            config.contains(r#""create": false"#),
+            "Tauri must not rely on implicit tauri.conf window creation for the macOS shell"
+        );
+        assert!(
+            source.contains("WebviewWindowBuilder::from_config"),
+            "Tauri must explicitly build the main WebView window after desktop resources are prepared"
+        );
+        assert!(
+            source.contains("RunEvent::Ready"),
+            "Tauri must re-show and focus the main window once the event loop is ready"
+        );
+        assert!(
+            source.contains("desktop_boot_probe"),
+            "Tauri must leave a low-detail boot probe for macOS App acceptance"
+        );
+        assert!(
+            !source.contains("bodyTextSample"),
+            "desktop boot probe must not log visible thread or workspace text"
+        );
+        assert!(
+            !source.contains(r#"bodyText.indexOf("Turnstile")"#),
+            "desktop boot probe must not classify session text as Web login UI"
         );
     }
 }

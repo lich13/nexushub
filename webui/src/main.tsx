@@ -4,6 +4,15 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles.css";
 
+declare global {
+  interface Window {
+    __NEXUSHUB_BOOT__?: {
+      mounted: boolean;
+      showError: (error: unknown) => void;
+    };
+  }
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -56,3 +65,6 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+if (window.__NEXUSHUB_BOOT__) {
+  window.__NEXUSHUB_BOOT__.mounted = true;
+}
