@@ -3825,11 +3825,10 @@ pub fn db_integrity(paths: &CodexPaths) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        archived_thread_ids, hidden_thread_ids, is_macos_network_volume_path,
-        is_request_user_input, is_valid_codex_home, list_threads, parse_message_event,
-        resolve_codex_paths_with_options, scan_rollout, set_thread_title, thread_detail,
-        thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
-        ThreadStatus,
+        archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
+        parse_message_event, resolve_codex_paths_with_options, scan_rollout, set_thread_title,
+        thread_detail, thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions,
+        CodexPaths, ThreadStatus,
     };
     use rusqlite::Connection;
     use serde_json::json;
@@ -5084,8 +5083,10 @@ mod tests {
     fn codex_paths_rejects_network_volume_paths() {
         let paths = CodexPaths::new("/Volumes/share/.codex");
         assert!(!paths.contains_path(Path::new("/Volumes/share/.codex/sessions/a.jsonl")));
-        assert!(!is_valid_codex_home(Path::new("/Volumes/share/.codex")));
-        assert!(is_macos_network_volume_path(Path::new(
+        assert!(!super::is_valid_codex_home(Path::new(
+            "/Volumes/share/.codex"
+        )));
+        assert!(super::is_macos_network_volume_path(Path::new(
             "/Volumes/share/.codex"
         )));
     }
