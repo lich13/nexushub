@@ -3,6 +3,11 @@
 **Goal**: Verify repo readiness, release assets, and cloud deployment.<br>
 **Status**: Complete
 
+> Historical snapshot: this phase file records the original `v0.1.43` Linux
+> release readiness milestone. Current release/deploy acceptance is tracked in
+> `docs/progress/MASTER.md` under the latest `v0.1.126` cc-switch
+> release/deploy guard closure matrix.
+
 ## Tasks
 
 - [x] **Task 6.1**: Run full local verification
@@ -19,11 +24,13 @@
   - Test Expectation: Docs-only.
   - Memory Impact: Progress surface updated.
   - Acceptance: GitHub release assets and cloud deployment evidence are recorded after verification.
-  - Notes: `v0.1.43` release exists at `https://github.com/lich13/nexushub/releases/tag/v0.1.43` with Linux tarball and checksum assets. Cloud deployment on `43.155.235.227` serves `https://661313.xyz/nexushub/`, listens on `127.0.0.1:15742`, and leaves legacy `codex-cloud-panel` on `127.0.0.1:15732`.
+  - Notes: Historical `v0.1.43` release exists at `https://github.com/lich13/nexushub/releases/tag/v0.1.43` with Linux tarball and checksum assets. Current release/deploy status is maintained in `MASTER.md`; do not treat this old phase note as the active cloud state.
 
 ## Phase Notes
 
-Remote, release, and cloud deploy are verified. The current finish line is released Linux handoff; macOS DMG and Windows ZIP/service packaging remain preview/planned.
+This file is retained as a historical phase record. Current remote, release,
+Linux cloud deploy, and macOS Tauri App acceptance evidence belongs in
+`MASTER.md` and the latest release tag notes.
 
 ## Phase Completion Checklist
 

@@ -9,8 +9,8 @@ use super::{
     patch_probe_settings, patch_security, plan_accept, plan_revise, platform_overview,
     public_settings, rename_thread, restore_thread, send_message, start_probe_action,
     start_update_action, steer_thread, stop_thread, system_status, system_update_status,
-    system_version, thread_blocks, thread_detail, ApiResponse, ArchiveExecuteRequest, GoalQuery,
-    ProbeEventsQuery, ProbeStatusQuery,
+    system_version, thread_blocks, thread_detail, ApiResponse, GoalQuery, ProbeEventsQuery,
+    ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
@@ -146,7 +146,7 @@ pub(super) async fn rpc_dispatch(
             archive_delete_execute(
                 State(state),
                 headers,
-                Json(ArchiveExecuteRequest { confirmed: true }),
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
             )
             .await
         }
@@ -157,7 +157,7 @@ pub(super) async fn rpc_dispatch(
             hidden_threads_delete_execute(
                 State(state),
                 headers,
-                Json(ArchiveExecuteRequest { confirmed: true }),
+                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
             )
             .await
         }

@@ -356,10 +356,9 @@ pub fn job_detail_plan(state: &AppState, plan: JobDetailPlan) -> Result<Option<V
 pub fn execute_cleanup_plan(
     state: &AppState,
     auth: &AuthContext,
-    plan: cleanup_service::CleanupActionPlan,
-    confirmed: bool,
+    plan: cleanup_service::CleanupOperationPlan,
 ) -> Result<Value> {
-    if plan.requires_confirmation && !confirmed {
+    if plan.requires_confirmation && !plan.confirmation.confirmed {
         anyhow::bail!(cleanup_confirmation_message(plan.target));
     }
     let paths = state.codex_paths();
@@ -367,6 +366,11 @@ pub fn execute_cleanup_plan(
     match plan.target {
         cleanup_service::CleanupTarget::Archived => {
             let result = if plan.execute {
+                let before = cleanup_service::dry_run_archived_with_capability(&platform, &paths)?;
+                ensure_cleanup_expected_count(
+                    plan.confirmation.expected_count,
+                    before.archived_threads,
+                )?;
                 let result = cleanup_service::execute_archived_with_capability(&platform, &paths)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
@@ -386,6 +390,11 @@ pub fn execute_cleanup_plan(
         }
         cleanup_service::CleanupTarget::Hidden => {
             let result = if plan.execute {
+                let before = cleanup_service::dry_run_hidden_with_capability(&platform, &paths)?;
+                ensure_cleanup_expected_count(
+                    plan.confirmation.expected_count,
+                    before.hidden_threads,
+                )?;
                 let result = cleanup_service::execute_hidden_with_capability(&platform, &paths)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
@@ -408,6 +417,18 @@ pub fn execute_cleanup_plan(
             Ok(result)
         }
     }
+}
+
+fn ensure_cleanup_expected_count(expected_count: Option<u64>, actual_count: u64) -> Result<()> {
+    let Some(expected_count) = expected_count else {
+        anyhow::bail!("cleanup expectedCount is required before deletion");
+    };
+    if expected_count != actual_count {
+        anyhow::bail!(
+            "cleanup expectedCount mismatch: expected={expected_count} actual={actual_count}"
+        );
+    }
+    Ok(())
 }
 
 fn cleanup_confirmation_message(target: cleanup_service::CleanupTarget) -> &'static str {

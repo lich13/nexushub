@@ -19,6 +19,48 @@ if [[ -e "${ROOT}/desktop-ui" ]]; then
   echo "desktop-ui must stay removed; macOS Tauri uses the shared webui interface" >&2
   exit 1
 fi
+python3 - "${RELEASE_WORKFLOW}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+release = Path(sys.argv[1]).read_text()
+
+job_matches = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", release))
+jobs = {}
+for index, match in enumerate(job_matches):
+    name = match.group(1)
+    start = match.start()
+    end = job_matches[index + 1].start() if index + 1 < len(job_matches) else len(release)
+    jobs[name] = release[start:end]
+
+guard = jobs.get("guard")
+if not guard:
+    raise SystemExit("Release workflow must keep the guard job")
+for needle in [
+    "cargo fmt --all -- --check",
+    "cargo test --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "corepack pnpm@11.0.8 --dir webui typecheck",
+    "corepack pnpm@11.0.8 --dir webui test",
+    "corepack pnpm@11.0.8 --dir webui build",
+    "bash scripts/test-install-script.sh",
+]:
+    if needle not in guard:
+        raise SystemExit(f"Release guard must run {needle}")
+
+macos = jobs.get("macos-darwin-arm64")
+if not macos:
+    raise SystemExit("Release workflow must keep the macOS packaging job")
+for needle in [
+    "cargo test --manifest-path src-tauri/Cargo.toml",
+    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+]:
+    if needle not in macos:
+        raise SystemExit(f"macOS release job must run {needle}")
+
+print("Release workflow guard checks: ok")
+PY
 python3 - "${CI_WORKFLOW}" <<'PY'
 from pathlib import Path
 import re
@@ -103,11 +145,13 @@ checks = {
     "update health URL": (update, 'HEALTH_URL="http://127.0.0.1:15742/healthz"'),
     "deploy smoke health URL": (deploy, "http://127.0.0.1:15742/healthz"),
     "deploy smoke systemd active": (deploy, "systemctl is-active --quiet nexushub"),
-    "deploy smoke daemon version": (deploy, "/opt/nexushub/bin/nexushubd --version"),
+    "deploy smoke daemon version": (deploy, 'nexushubd ${EXPECTED_VERSION}'),
     "deploy smoke public NexusHub URL": (deploy, 'PUBLIC_BASE="https://${DOMAIN%/}${PATH_PREFIX}"'),
+    "deploy smoke public NexusHub 200": (deploy, 'expect_http_status "${PUBLIC_BASE}" "200"'),
     "deploy smoke retired codex-cloud-panel": (deploy, 'expect_http_status "https://${DOMAIN%/}/codex-cloud-panel/" "404"'),
     "deploy smoke root sentinel not NexusHub": (deploy, 'expect_404_or_not_nexushub "https://${DOMAIN%/}/api/sentinel/status"'),
     "deploy smoke root probe not NexusHub": (deploy, 'expect_404_or_not_nexushub "https://${DOMAIN%/}/api/probe/status"'),
+    "deploy smoke root api v1 not NexusHub": (deploy, 'expect_404_or_not_nexushub "https://${DOMAIN%/}/api/v1/models"'),
     "deploy smoke scoped sentinel 404": (deploy, 'expect_http_status "${PUBLIC_BASE}api/sentinel/status" "404"'),
     "deploy smoke scoped old probe 404": (deploy, 'expect_http_status "${PUBLIC_BASE}api/probe/status" "404"'),
 }
@@ -532,7 +576,7 @@ with tempfile.TemporaryDirectory() as tmp:
 printf 'curl %s\\n' "$*" >> "$NEXUSHUB_FAKE_DEPLOY_LOG"
 for arg in "$@"; do
   case "$arg" in
-    *codex-cloud-panel*|*api/sentinel/status*|*api/probe/status*)
+    *codex-cloud-panel*|*api/sentinel/status*|*api/probe/status*|*api/v1/models*)
       printf '404'
       exit 0
       ;;
@@ -564,11 +608,13 @@ exit 0
 for needle in [
     "systemctl is-active --quiet nexushub",
     "/opt/nexushub/bin/nexushubd --version",
+    "nexushubd 0.1.",
     "http://127.0.0.1:15742/healthz",
     "https://661313.xyz/nexushub/",
     "https://661313.xyz/codex-cloud-panel/",
     "https://661313.xyz/api/sentinel/status",
     "https://661313.xyz/api/probe/status",
+    "https://661313.xyz/api/v1/models",
     "https://661313.xyz/nexushub/api/sentinel/status",
     "https://661313.xyz/nexushub/api/probe/status",
 ]:

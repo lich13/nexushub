@@ -30,6 +30,7 @@ use nexushub_core::{
     probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
+        cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
         goals as goal_service, jobs as job_service,
         probe::{self as probe_service},
         security as security_service, settings as settings_service,
@@ -1498,16 +1499,16 @@ async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMa
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
-        .archive_delete_dry_run()
+        .dry_run(CleanupTarget::Archived)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(
-        &state, &auth, plan, false,
-    )?)
+    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
 }
 
 #[derive(Debug, Deserialize)]
 struct ArchiveExecuteRequest {
     confirmed: bool,
+    #[serde(default, alias = "expectedCount", alias = "expected_count")]
+    expected_count: Option<u64>,
 }
 
 async fn archive_delete_execute(
@@ -1520,12 +1521,16 @@ async fn archive_delete_execute(
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
-        .archive_delete_execute()
+        .execute_confirmed(
+            CleanupTarget::Archived,
+            CleanupExecuteRequest {
+                confirmed: payload.confirmed,
+                expected_count: payload.expected_count,
+            },
+        )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(
-        linux_adapter::execute_cleanup_plan(&state, &auth, plan, payload.confirmed)
-            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
-    )
+    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn hidden_threads_delete_dry_run(
@@ -1537,11 +1542,9 @@ async fn hidden_threads_delete_dry_run(
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
-        .hidden_delete_dry_run()
+        .operation(CleanupTarget::Hidden, CleanupOperationKind::DryRun)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(
-        &state, &auth, plan, false,
-    )?)
+    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
 }
 
 async fn hidden_threads_delete_execute(
@@ -1554,12 +1557,16 @@ async fn hidden_threads_delete_execute(
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
-        .hidden_delete_execute()
+        .execute_confirmed(
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: payload.confirmed,
+                expected_count: payload.expected_count,
+            },
+        )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(
-        linux_adapter::execute_cleanup_plan(&state, &auth, plan, payload.confirmed)
-            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?,
-    )
+    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
 async fn list_jobs(
@@ -3172,6 +3179,24 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn rpc_cleanup_execute_requires_expected_count_confirmation() {
+        let (state, session_token, csrf_token) = authenticated_test_state();
+        let app = router(state);
+
+        for command in ["cleanup.archiveExecute", "cleanup.hiddenExecute"] {
+            let status = request_rpc_status(
+                app.clone(),
+                command,
+                r#"{"confirmed":true}"#,
+                Some(&session_token),
+                Some(&csrf_token),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{command}");
+        }
+    }
+
     #[test]
     fn linux_probe_actions_execute_shared_core_job_command() {
         let api_source = include_str!("api.rs")
@@ -3261,6 +3286,7 @@ mod tests {
             "cleanup_service::execute_archived_with_capability",
             "cleanup_service::dry_run_hidden_with_capability",
             "cleanup_service::execute_hidden_with_capability",
+            "ensure_cleanup_expected_count",
         ] {
             assert!(
                 adapter_source.contains(required_adapter_landing),
@@ -3296,6 +3322,12 @@ mod tests {
                 "Linux RPC handlers must not reimplement migrated goal/follow-up transactions: {forbidden}"
             );
         }
+
+        let rpc_dispatch_source = include_str!("api/rpc_dispatch.rs");
+        assert!(
+            !rpc_dispatch_source.contains("ArchiveExecuteRequest { confirmed: true }"),
+            "Linux RPC cleanup execute must preserve confirmed/expectedCount from the request payload"
+        );
 
         for forbidden_keyword in [
             &format!("{}_", "desktop"),

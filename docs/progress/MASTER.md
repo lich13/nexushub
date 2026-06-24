@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-24
-> **Mode**: V0.1.125_CC_SWITCH_FINAL_USE_CASE_CLOSURE
+> **Mode**: V0.1.126_CC_SWITCH_RELEASE_DEPLOY_GUARD_CLOSURE
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.125 cc-switch final use-case closure<br>
-**Active Task**: `v0.1.125` keeps the hard-deleted REST/compat command surface intact, requires shared cleanup confirmation plans on both Linux and macOS, moves follow-up/thread/job lifecycle planning into core use-case facades, narrows Linux RPC and macOS Tauri to thin plan executors, and keeps WebUI transport/query/view-model boundaries explicit so Linux WebUI remains a Linux-only host capability while macOS stays native Tauri.
+**Active Phase**: v0.1.126 cc-switch release/deploy guard closure<br>
+**Active Task**: `v0.1.126` preserves the `v0.1.125` shared use-case closure and closes the remaining release/deploy audit gaps plus the final Linux cleanup confirmation gap: Release guard now runs workspace fmt/test/clippy plus WebUI typecheck/test/build/install-script, deploy smoke strictly asserts the public `/nexushub/` HTTP 200, verifies the deployed daemon version equals the release version, root `/api/v1/models` is not claimed by NexusHub, and Linux RPC cleanup execute requires `confirmed` plus matching `expectedCount`.
 **Blockers**: None. Current Linux rendered WebUI acceptance requires Chrome 插件验收 for logged-in QA; macOS acceptance is native Tauri App validation through Computer Use.
 
 ## Governance Status
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.125_CC_SWITCH_FINAL_USE_CASE_CLOSURE
+  mode: V0.1.126_CC_SWITCH_RELEASE_DEPLOY_GUARD_CLOSURE
   strategy: "cc-switch style single shared use-case layer with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
@@ -126,6 +126,7 @@ adaptive:
 | 2026-06-22 | v0.1.120 cc-switch final facade backfill | M | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.120`; adds shared core facades for Probe config-path commands, macOS updater job/output status, thread block limits, and attachment ID validation; keeps Linux WebUI-only surfaces capability-gated and `CLAUDE.md` intentionally absent. |
 | 2026-06-23 | v0.1.121 cc-switch use-case facade closure | L | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.121`; moves Goal DB actions, follow-up DB actions, thread state/stop action plans, upload store/delete planning, cleanup dry-run/execute facades, and App query/cache action gating behind shared core/query layers while preserving Linux-only WebUI capability boundaries and keeping `CLAUDE.md` intentionally absent. |
 | 2026-06-24 | v0.1.125 cc-switch final use-case closure | L | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.125`; adds shared cleanup confirmation plans with expected-count execution, moves thread command/follow-up/job response planning into core use cases, routes Linux RPC and macOS Tauri through thin plan executors, moves App message-store control behind query/domain facades, strengthens release/deploy smoke guards, and keeps Linux WebUI-only boundaries plus `CLAUDE.md` intentionally absent. |
+| 2026-06-24 | v0.1.126 cc-switch release/deploy guard closure | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.126`; self-corrects the release/deploy acceptance gaps found after `v0.1.125` by adding release fmt/clippy/typecheck gates, strict public `/nexushub/` 200 smoke, exact remote daemon version assertion, root `/api/v1/models` ownership smoke, current-doc clarification, and Linux RPC cleanup `expectedCount` enforcement while preserving the shared use-case architecture and `CLAUDE.md` absence. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -142,7 +143,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.125
+git ls-remote --tags origin refs/tags/v0.1.126
 ```
 
 ## Next Steps
@@ -153,11 +154,11 @@ git ls-remote --tags origin refs/tags/v0.1.125
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.125 Acceptance Matrix
+## v0.1.126 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
-| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, `nexushubd --version`, loopback `healthz`, public HTTPS smoke, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired paths `404`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
+| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.126`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
 | macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | `open -a NexusHub`, no Web login/API admin setup, no Linux update prune command registration, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, log tail, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
 
 ## Session Log
@@ -196,3 +197,4 @@ git ls-remote --tags origin refs/tags/v0.1.125
 | 2026-06-22 | v0.1.120-cc-switch-final-facade-backfill | Closes more of the remaining facade gap by moving Probe job command construction, macOS updater job/status markers, thread window limits, and attachment ID validation into core services while preserving the hard-deleted REST/compat command surface. |
 | 2026-06-23 | v0.1.121-cc-switch-use-case-facade-closure | Closes the next use-case facade gap by moving Goal/follow-up/thread state/stop/upload/cleanup transactions behind shared core facades, moving App cache/action mutation logic behind query hooks, and strengthening static guards so Linux HTTP and macOS Tauri remain thin adapters. |
 | 2026-06-24 | v0.1.125-cc-switch-final-use-case-closure | Closes the remaining audited cc-switch parity gaps by enforcing shared cleanup confirmation plans, moving thread/follow-up/job lifecycle response planning into core use cases, keeping Linux RPC and macOS Tauri as thin plan executors, moving App message-store control behind query/domain facades, and adding release/deploy smoke guards for `/nexushub/`, retired `/codex-cloud-panel/`, and old API paths. |
+| 2026-06-24 | v0.1.126-cc-switch-release-deploy-guard-closure | Self-corrects release/deploy guard gaps and the Linux cleanup execute confirmation gap after the final use-case closure: release now gates fmt/workspace test/workspace clippy/WebUI typecheck/test/build/install-script, deploy smoke asserts exact remote version and HTTP 200 for `/nexushub/`, root `/api/v1/models` stays outside NexusHub ownership, and Linux RPC cleanup execute preserves and enforces `expectedCount`. |
