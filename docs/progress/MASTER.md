@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-26
-> **Mode**: V0.1.138_IDEAL_REFACTOR_CLOSED
+> **Mode**: V0.1.139_IDEAL_CLOSURE_IN_PROGRESS
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.138` final ideal-state completion closed<br>
-**Active Task**: `v0.1.138` final structural/documentation backfill, release acceptance, dual-end verification, and cleanup are complete. Fresh local gates passed before release; GitHub CI `28244293738`, Release `28244296776`, and cleanup docs CI `28246594740` passed; Tencent Cloud runs exact `nexushubd 0.1.138`; public `/nexushub/` returns `200`; Browser-plugin Linux WebUI acceptance and Computer Use macOS Tauri acceptance passed; local/cloud temporary artifacts and backup shells were cleaned while preserving production data, config, WebUI, the installed macOS App, and active systemd runtime directories.
+**Active Phase**: `v0.1.139` ideal closure in progress<br>
+**Active Task**: `v0.1.139` closes the remaining maintainability and evidence gaps after the `v0.1.138` ideal refactor: move large facade tests out of `api.rs` and `codex.rs`, slim the remaining Conversation/Composer UI orchestration, add a reusable Linux/macOS visual contract, publish/deploy/accept `v0.1.139`, and then clean local/cloud temporary artifacts. Baseline captured from isolated worktree `ideal-closure-v0.1.139`: local `main = origin/main = b4b305b`, `v0.1.138` Release assets are present, Tencent Cloud runs exact `nexushubd 0.1.138` with active service and healthy loopback `/healthz`, public `/nexushub/` returns `200`, and installed macOS App/helper are `0.1.138`.
 **Blockers**: None for the deep-refactor plan. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Deep Refactor Goal Tracker
@@ -62,7 +62,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.138_IDEAL_REFACTOR_CLOSED
+  mode: V0.1.139_IDEAL_CLOSURE_IN_PROGRESS
   strategy: "cc-switch style single shared use-case layer with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
