@@ -37,8 +37,8 @@
 ## Current Status
 
 **Active Phase**: Goal 5 - dual-end release acceptance, in progress<br>
-**Active Task**: `v0.1.135` local gates, GitHub CI, GitHub Release assets, Tencent Cloud deployment, and macOS Tauri App DMG acceptance are complete. Linux WebUI public unauthenticated smoke is complete; authenticated Browser-plugin WebUI behavior verification remains pending because the in-app Browser has no current login session and is stopped at the NexusHub login page.
-**Blockers**: Authenticated Linux WebUI Browser-plugin checks need the user to log in manually in the Browser page first. Do not enter or request the admin password, do not bypass Turnstile/CAPTCHA, and continue from `/nexushub/` after the user confirms the Browser is logged in.
+**Active Task**: `v0.1.135` local gates, GitHub CI, GitHub Release assets, Tencent Cloud deployment, and macOS Tauri App DMG acceptance are complete. Linux WebUI public unauthenticated smoke is complete; authenticated Browser-plugin WebUI behavior verification remains pending because the in-app Browser is still stopped at the NexusHub login page.
+**Blockers**: Authenticated Linux WebUI Browser-plugin checks need the user to log in manually in the Browser page first. 2026-06-26 continuation check still shows `turnstile token is empty`; do not enter or request the admin password, do not bypass Turnstile/CAPTCHA, do not clear server-side login/rate-limit state without explicit authorization, and continue from `/nexushub/` after the user confirms the Browser is logged in.
 
 ## Deep Refactor Goal Tracker
 
@@ -226,3 +226,4 @@ git ls-remote --tags origin refs/tags/v0.1.135
 | 2026-06-26 | v0.1.133-compat-backfill-release-closure | Keeps the explicit Tauri window creation path, restores flat Tauri Goal invoke ABI compatibility, and deploys Linux successfully; official DMG acceptance later found the window still opened at about `1281x821`, so the release is superseded by `v0.1.134`. |
 | 2026-06-26 | v0.1.134-macos-maximized-window-release-closure | Adds a monitor work-area fallback and delayed main-thread reveal replay for the explicit Tauri window path, preserving visible-window protection while restoring the v0.1.128 maximized-window startup behavior. |
 | 2026-06-26 | v0.1.135-deep-refactor-release-acceptance | Released and deployed the deep refactor branch. Local gates, GitHub CI/Release, release asset sha256 verification, Tencent Cloud public smoke, and macOS DMG Computer Use acceptance passed. Authenticated Browser-plugin WebUI behavior checks remain pending because the Browser is at the NexusHub login page without an existing session. |
+| 2026-06-26 | v0.1.135-browser-auth-continuation | Continuation check reverified the current worktree is clean, Tencent Cloud runs exact `nexushubd 0.1.135`, service `nexushub` is active, loopback `healthz` is OK, and Browser remains at `https://661313.xyz/nexushub/` with title `NexusHub`, login form visible, empty warn/error console, and `turnstile token is empty`. Authenticated Probe/Ops/cleanup checks still require manual Browser login first. |
