@@ -1493,7 +1493,8 @@ log_dir = "{}"
             );
         }
         assert!(
-            settings_commands_source.contains("goal_service::save_goal_with_state(&state, request)")
+            settings_commands_source
+                .contains("goal_service::save_goal_with_state(&state, request)")
                 && goals_source.contains("goal_service::save_goal_with_capability"),
             "Goal compatibility shim must hand off a core GoalUpdateRequest to the service layer"
         );
