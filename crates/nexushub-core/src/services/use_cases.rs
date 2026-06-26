@@ -194,6 +194,15 @@ impl<'a> ThreadUseCases<'a> {
         threads::plan_thread_blocks_request(self.platform, thread_id, limit, before)
     }
 
+    pub fn blocks_read(
+        self,
+        thread_id: &str,
+        limit: Option<usize>,
+        before: Option<String>,
+    ) -> Result<ThreadDetailReadPlan> {
+        threads::plan_thread_blocks_read(self.platform, thread_id, limit, before)
+    }
+
     pub fn blocks_page(self, detail: ThreadDetail, plan: &ThreadDetailPlan) -> ThreadBlocksPage {
         threads::thread_blocks_page_for_plan(detail, plan)
     }
@@ -219,6 +228,22 @@ impl<'a> ThreadUseCases<'a> {
             ThreadCommandRequest {
                 command: ThreadCommandKind::Create,
                 thread_id: None,
+                message,
+            },
+            default_workspace,
+        )
+    }
+
+    pub fn resume_job(
+        self,
+        message: ThreadMessageRequest,
+        default_workspace: PathBuf,
+    ) -> Result<ThreadCommandExecutionPlan> {
+        jobs::plan_thread_command_job_execution(
+            self.platform,
+            ThreadCommandRequest {
+                command: ThreadCommandKind::Resume,
+                thread_id: message.thread_id.clone(),
                 message,
             },
             default_workspace,
@@ -518,6 +543,42 @@ impl<'a> CleanupUseCases<'a> {
         request: CleanupExecuteRequest,
     ) -> Result<CleanupOperationPlan> {
         cleanup::plan_cleanup_execute_operation(self.platform, target, request)
+    }
+
+    pub fn validate_expected_count(
+        self,
+        plan: &CleanupOperationPlan,
+        actual_count: u64,
+    ) -> Result<()> {
+        cleanup::validate_cleanup_expected_count(plan, actual_count)
+    }
+
+    pub fn dry_run_archived(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<cleanup::ArchiveDeletePlan> {
+        cleanup::dry_run_archived_with_capability(self.platform, paths)
+    }
+
+    pub fn execute_archived(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<cleanup::ArchiveDeleteResult> {
+        cleanup::execute_archived_with_capability(self.platform, paths)
+    }
+
+    pub fn dry_run_hidden(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<cleanup::HiddenThreadDeletePlan> {
+        cleanup::dry_run_hidden_with_capability(self.platform, paths)
+    }
+
+    pub fn execute_hidden(
+        self,
+        paths: &crate::codex::CodexPaths,
+    ) -> Result<cleanup::HiddenThreadDeleteResult> {
+        cleanup::execute_hidden_with_capability(self.platform, paths)
     }
 
     pub fn archive_delete_dry_run(self) -> Result<CleanupActionPlan> {

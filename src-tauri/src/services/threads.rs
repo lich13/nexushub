@@ -13,150 +13,25 @@ use nexushub_core::{
     },
     uploads,
 };
-use serde::Deserialize;
-use std::collections::HashMap;
 
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopSendMessageRequest {
-    #[serde(default, alias = "threadId", alias = "thread_id")]
-    pub thread_id: Option<String>,
-    pub message: String,
-    #[serde(default)]
-    pub attachments: Vec<String>,
-    pub model: Option<String>,
-    #[serde(alias = "service_tier")]
-    pub service_tier: Option<String>,
-    #[serde(alias = "reasoning_effort")]
-    pub reasoning_effort: Option<String>,
-    pub cwd: Option<String>,
-    #[serde(alias = "permission_profile")]
-    pub permission_profile: Option<String>,
-    #[serde(alias = "approval_policy")]
-    pub approval_policy: Option<String>,
-    #[serde(alias = "sandbox_mode")]
-    pub sandbox_mode: Option<String>,
-    #[serde(alias = "network_access")]
-    pub network_access: Option<bool>,
-    #[serde(alias = "collaboration_mode")]
-    pub collaboration_mode: Option<String>,
-}
+mod types;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ThreadListRequest {
-    pub status: Option<String>,
-    pub query: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ThreadDetailRequest {
-    pub id: String,
-    pub limit: Option<usize>,
-    pub full: Option<bool>,
-    pub before: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ThreadBlocksRequest {
-    pub id: String,
-    pub limit: Option<usize>,
-    pub before: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopStopRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "job_id")]
-    pub job_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopThreadIdRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopRenameThreadRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopPlanAcceptRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "item_id")]
-    pub item_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopPlanReviseRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "turn_id")]
-    pub turn_id: Option<String>,
-    #[serde(alias = "item_id")]
-    pub item_id: Option<String>,
-    pub instructions: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopElicitationAnswerRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    pub answers: HashMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopApprovalAnswerRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(default)]
-    pub payload: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopFollowupRequest {
-    pub thread_id: String,
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopCancelFollowupRequest {
-    #[serde(alias = "threadId", alias = "thread_id")]
-    pub thread_id: String,
-    #[serde(alias = "followUpId", alias = "followupId", alias = "followup_id")]
-    pub followup_id: String,
-}
+pub(crate) use types::{
+    DesktopApprovalAnswerRequest, DesktopCancelFollowupRequest, DesktopElicitationAnswerRequest,
+    DesktopFollowupRequest, DesktopPlanAcceptRequest, DesktopPlanReviseRequest,
+    DesktopRenameThreadRequest, DesktopSendMessageRequest, DesktopStopRequest,
+    DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
+};
 
 pub(crate) fn thread_summaries_with_query(
     state: &DesktopState,
     query: ThreadsQuery,
 ) -> Result<Vec<ThreadSummary>> {
     let paths = state.codex_paths();
-    let plan = thread_service::plan_thread_list_read(state.platform(), query)?;
+    let use_cases = NexusHubUseCases::new(state.platform()).threads();
+    let plan = use_cases.list_read(query)?;
     let hidden_thread_ids = if plan.include_hidden_thread_ids {
         hidden_thread_ids(&paths).unwrap_or_default()
     } else {
@@ -207,18 +82,15 @@ pub(crate) fn codex_job_spec_for_request(
     let attachments = prepare_request_attachments(state, &request.attachments)?;
     let message = request.into_thread_message(attachments);
     let config = state.config();
-    let plan = job_service::plan_thread_command_job_execution(
-        state.platform(),
-        job_service::ThreadCommandRequest {
-            command: match kind {
-                job_service::CodexActionKind::Exec => job_service::ThreadCommandKind::Create,
-                job_service::CodexActionKind::Resume => job_service::ThreadCommandKind::Resume,
-            },
-            thread_id: message.thread_id.clone(),
-            message,
-        },
-        config.codex.workspace.clone(),
-    )?;
+    let use_cases = NexusHubUseCases::new(state.platform()).threads();
+    let plan = match kind {
+        job_service::CodexActionKind::Exec => {
+            use_cases.create_job(message, config.codex.workspace.clone())
+        }
+        job_service::CodexActionKind::Resume => {
+            use_cases.resume_job(message, config.codex.workspace.clone())
+        }
+    }?;
     Ok(plan.spec)
 }
 
@@ -229,41 +101,6 @@ pub(crate) fn prepare_request_attachments(
     upload_service::validate_attachment_id_count(attachment_ids)?;
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
     uploads::prepare_uploads(&root, attachment_ids)
-}
-
-impl DesktopSendMessageRequest {
-    pub(crate) fn with_thread_id_fallback(mut self, thread_id: Option<String>) -> Self {
-        if self.thread_id.is_none() {
-            self.thread_id = thread_id;
-        }
-        self
-    }
-
-    pub(crate) fn without_thread_id(mut self) -> Self {
-        self.thread_id = None;
-        self
-    }
-
-    pub(crate) fn into_thread_message(
-        self,
-        prepared_attachments: Vec<uploads::PreparedAttachment>,
-    ) -> job_service::ThreadMessageRequest {
-        job_service::ThreadMessageRequest {
-            thread_id: self.thread_id,
-            message: self.message,
-            attachments: self.attachments,
-            prepared_attachments,
-            model: self.model,
-            service_tier: self.service_tier,
-            reasoning_effort: self.reasoning_effort,
-            cwd: self.cwd,
-            permission_profile: self.permission_profile,
-            approval_policy: self.approval_policy,
-            sandbox_mode: self.sandbox_mode,
-            network_access: self.network_access,
-            collaboration_mode: self.collaboration_mode,
-        }
-    }
 }
 
 pub(crate) fn threads_with_state(
@@ -284,15 +121,14 @@ pub(crate) fn thread_detail_with_state(
     state: &DesktopState,
     request: ThreadDetailRequest,
 ) -> Result<Option<ThreadDetail>> {
-    let plan = thread_service::plan_thread_detail_read(
-        state.platform(),
-        thread_service::ThreadDetailRequest {
+    let plan = NexusHubUseCases::new(state.platform())
+        .threads()
+        .detail_read(thread_service::ThreadDetailRequest {
             id: request.id,
             limit: request.limit,
             full: request.full,
             before: request.before,
-        },
-    )?;
+        })?;
     let Some(detail) = load_thread_detail_read_model(state, &plan.detail.thread_id)? else {
         return Ok(None);
     };
@@ -306,12 +142,9 @@ pub(crate) fn thread_blocks_with_state(
     state: &DesktopState,
     request: ThreadBlocksRequest,
 ) -> Result<Option<ThreadBlocksPage>> {
-    let plan = thread_service::plan_thread_blocks_read(
-        state.platform(),
-        &request.id,
-        request.limit,
-        request.before,
-    )?;
+    let plan = NexusHubUseCases::new(state.platform())
+        .threads()
+        .blocks_read(&request.id, request.limit, request.before)?;
     let Some(detail) = load_thread_detail_read_model(state, &plan.detail.thread_id)? else {
         return Ok(None);
     };
@@ -327,8 +160,7 @@ pub(crate) fn send_message_with_state(
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
     let config = state.config();
-    let plan = job_service::plan_thread_send_job_execution(
-        state.platform(),
+    let plan = NexusHubUseCases::new(state.platform()).threads().send_job(
         job_service::ThreadSendRequest {
             thread_id: request.thread_id.clone(),
             message: request.into_thread_message(attachments),
@@ -343,8 +175,7 @@ pub(crate) fn steer_thread_with_state(
     request: DesktopSendMessageRequest,
 ) -> Result<nexushub_core::jobs::CodexActionResult> {
     let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let facade = job_service::plan_thread_steer_with_capability(
-        state.platform(),
+    let facade = NexusHubUseCases::new(state.platform()).threads().steer(
         job_service::ThreadSteerRequest {
             thread_id: request.thread_id.clone(),
             message: request.into_thread_message(attachments),
@@ -365,19 +196,17 @@ pub(crate) fn stop_thread_with_state(
     state: &DesktopState,
     request: DesktopStopRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = job_service::plan_thread_stop_with_capability(
-        state.platform(),
-        job_service::ThreadStopRequest {
-            thread_id: request.thread_id,
-            turn_id: request.turn_id,
-            job_id: request.job_id,
-        },
-    )?;
+    let use_cases = NexusHubUseCases::new(state.platform()).threads();
+    let plan = use_cases.stop(job_service::ThreadStopRequest {
+        thread_id: request.thread_id,
+        turn_id: request.turn_id,
+        job_id: request.job_id,
+    })?;
     let active_job_id = plan
         .requires_active_job_lookup
         .then(|| derive_active_job_id(state, &plan.thread_id))
         .flatten();
-    let Ok(stop) = job_service::resolve_thread_stop_job(&plan, active_job_id) else {
+    let Ok(stop) = use_cases.resolve_stop(&plan, active_job_id) else {
         return Ok(unavailable_action(
             nexushub_core::services::commands::THREADS_STOP,
             "stop requires a running local fallback job; Codex app-server stop is not available in the native read model",
@@ -442,8 +271,9 @@ pub(crate) fn archive_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan =
-        job_service::plan_thread_archive_with_capability(state.platform(), &request.thread_id)?;
+    let plan = NexusHubUseCases::new(state.platform())
+        .threads()
+        .archive(&request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, true)?;
     Ok(job_service::thread_state_action_response(&plan)?.into())
 }
@@ -452,8 +282,9 @@ pub(crate) fn restore_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan =
-        job_service::plan_thread_restore_with_capability(state.platform(), &request.thread_id)?;
+    let plan = NexusHubUseCases::new(state.platform())
+        .threads()
+        .restore(&request.thread_id)?;
     set_thread_archived(&state.codex_paths(), &plan.thread_id, false)?;
     Ok(job_service::thread_state_action_response(&plan)?.into())
 }
@@ -462,8 +293,7 @@ pub(crate) fn rename_thread_with_state(
     state: &DesktopState,
     request: DesktopRenameThreadRequest,
 ) -> Result<DesktopActionResponse> {
-    let plan = job_service::plan_thread_rename_with_capability(
-        state.platform(),
+    let plan = NexusHubUseCases::new(state.platform()).threads().rename(
         job_service::ThreadRenameRequest {
             thread_id: request.thread_id,
             name: request.name,
@@ -549,18 +379,15 @@ pub(crate) fn start_codex_job_from_request(
     let attachments = prepare_request_attachments(state, &request.attachments)?;
     let message = request.into_thread_message(attachments);
     let config = state.config();
-    let plan = job_service::plan_thread_command_job_execution(
-        state.platform(),
-        job_service::ThreadCommandRequest {
-            command: match kind {
-                job_service::CodexActionKind::Exec => job_service::ThreadCommandKind::Create,
-                job_service::CodexActionKind::Resume => job_service::ThreadCommandKind::Resume,
-            },
-            thread_id: message.thread_id.clone(),
-            message,
-        },
-        config.codex.workspace.clone(),
-    )?;
+    let use_cases = NexusHubUseCases::new(state.platform()).threads();
+    let plan = match kind {
+        job_service::CodexActionKind::Exec => {
+            use_cases.create_job(message, config.codex.workspace.clone())
+        }
+        job_service::CodexActionKind::Resume => {
+            use_cases.resume_job(message, config.codex.workspace.clone())
+        }
+    }?;
     start_codex_job_from_plan(state, plan)
 }
 

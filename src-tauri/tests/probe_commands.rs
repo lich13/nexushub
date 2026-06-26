@@ -164,9 +164,11 @@ fn tauri_cleanup_execute_services_are_native_effect_executors() {
         "hidden_delete_execute_with_state",
         ".cleanup()",
         ".execute_confirmed(",
-        "cleanup_service::validate_cleanup_expected_count",
-        "cleanup_service::execute_archived_with_capability",
-        "cleanup_service::execute_hidden_with_capability",
+        ".validate_expected_count(",
+        ".dry_run_archived(",
+        ".execute_archived(",
+        ".dry_run_hidden(",
+        ".execute_hidden(",
     ] {
         assert!(
             settings_source.contains(executor),
@@ -176,6 +178,9 @@ fn tauri_cleanup_execute_services_are_native_effect_executors() {
 
     for forbidden in [
         "cleanup_service::plan_cleanup_execute_operation",
+        "cleanup_service::validate_cleanup_expected_count",
+        "cleanup_service::execute_archived_with_capability",
+        "cleanup_service::execute_hidden_with_capability",
         "ARCHIVE_DELETE_CONFIRMATION_MESSAGE",
         "HIDDEN_DELETE_CONFIRMATION_MESSAGE",
         "CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE",

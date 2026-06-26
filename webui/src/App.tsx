@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { Component, ErrorInfo, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WebAuthGate } from "./components/auth/WebAuthGate";
+import { Metric, Panel } from "./components/common/Panel";
 import {
   ComposerAttachmentList,
   SlashCommandTextarea,
@@ -61,23 +62,13 @@ import {
   useComposerAttachments,
   type ComposerUpload
 } from "./components/composer/ComposerControls";
+import { OpsWorkspace } from "./components/ops/OpsWorkspace";
+import { ProbeWorkspace } from "./components/probe/ProbeWorkspace";
 import { threadDetailFromSlot, useConversationController, useConversationRealtimeController } from "./hooks/useConversationController";
-import {
-  buildProbeSettingsDraft,
-  buildProbeSettingsPayload,
-  probeEventCard,
-  probeNumberInputDraftValue,
-  probeSections,
-  probeSettingsValidation,
-  PROBE_NAV_LABEL,
-  type ProbeSectionId,
-  type ProbeSettingsDraft
-} from "./lib/probeUi";
+import { PROBE_NAV_LABEL } from "./lib/probeUi";
 import { desktopRuntimeSessionUser, logoutRuntime } from "./lib/query/auth";
 import { useClaudeQueries } from "./lib/query/claude";
 import { useCodexConfigQuery, useCodexModelQuery, useCodexPermissionProfilesQuery } from "./lib/query/codex";
-import { useOpsActions, useOpsQueries } from "./lib/query/ops";
-import { useProbeActions, useProbeQueries } from "./lib/query/probe";
 import { useSecurityActions, useSecurityQuery } from "./lib/query/security";
 import {
   useBootstrapRuntimeCapabilities,
@@ -86,8 +77,6 @@ import {
   type RuntimeCapabilityMatrix
 } from "./lib/query/system";
 import {
-  OPS_PANEL_TITLES,
-  archivePlanAfterExecute,
   approvalActionMode,
   canStartHiddenThreadDelete,
   canStartUpdateInstall,
@@ -194,8 +183,6 @@ import {
 } from "./lib/query/threads";
 import { clearSession, loadSession, saveSession } from "./lib/session";
 import type {
-  ArchiveDeletePlan,
-  ArchiveDeleteResult,
   AgentProviderInfo,
   BridgeActionResult,
   ClaudeOverview,
@@ -203,9 +190,6 @@ import type {
   CodexGoalSaveInput,
   CodexModel,
   FollowUpQueueItem,
-  HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  JobRecord,
   MessageBlock,
   PendingElicitation,
   PermissionProfile,
@@ -220,13 +204,13 @@ import type {
   SessionUser,
   SystemStatus,
   ThreadBlockPage,
-  UpdateStatus,
   ThreadDetail,
   ThreadStatus,
   ThreadSummary,
   UploadRecord
 } from "./types";
 
+export { probeEventCard } from "./lib/probeUi";
 export { runtimeCapabilitiesForRuntime } from "./lib/query/system";
 export { mergeMessageBlocks, mergeThreadSummaryIntoListCache, upsertMessageBlock } from "./lib/query/threads";
 export {
@@ -2359,367 +2343,6 @@ function ClaudeWorkspace() {
   );
 }
 
-function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
-  const { status, settings, logsDbStatus, events, jobs } = useProbeQueries();
-  const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
-  const [saveStatus, setSaveStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [actionStatus, setActionStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
-  const [activeSection, setActiveSection] = useState<ProbeSectionId>("overview");
-  const data = status.data?.data;
-  const available = status.data?.available ?? false;
-  const currentSettings = settings.data?.data;
-  const settingsErrors = draft ? probeSettingsValidation(draft) : [];
-  const logsDb = logsDbStatus.data?.data;
-  const recentEvents = events.data?.data?.events ?? [];
-  const probeView = probeWorkspaceView({
-    data,
-    available,
-    currentSettings,
-    logsDb,
-    recentEventCount: recentEvents.length,
-    jobs: jobs.data,
-    loading: status.isLoading,
-    fetching: status.isFetching,
-    error: status.isError,
-    draftDeviceKeyConfigured: draft?.notifications.device_key_configured
-  });
-  const probeActions = useProbeActions({
-    csrfToken,
-    capabilities,
-    savePayload: (submittedDeviceKey) => {
-      if (!draft) throw new Error("探针设置尚未载入");
-      const errors = probeSettingsValidation(draft);
-      if (errors.length) throw new Error(errors[0]);
-      return buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey);
-    },
-    onJobSuccess: (action) => {
-      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
-      if (action === "logs-db-dry-run") setLogsDbExecuteArmed(true);
-      if (action === "logs-db-execute") setLogsDbExecuteArmed(false);
-    },
-    onJobError: (err, action) => {
-      setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
-    },
-    onSaveSuccess: (saved, submittedDeviceKey) => {
-      const nextSettings = probeSettingsAfterBarkSave(saved, submittedDeviceKey ?? draft?.notifications.device_key);
-      if (!isProbeSettings(nextSettings)) {
-        setSaveStatus({ tone: "error", message: "保存响应结构异常，已保留当前输入" });
-        return;
-      }
-      setSaveStatus({ tone: "success", message: "设置已保存" });
-      setDraft(buildProbeSettingsDraft(nextSettings));
-    },
-    onSaveError: (err) => {
-      setSaveStatus({ tone: "error", message: err.message });
-    }
-  });
-  const probeJobMutation = probeActions.job;
-  const saveMutation = probeActions.save;
-  const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
-
-  useEffect(() => {
-    if (!currentSettings || draft) return;
-    setDraft(buildProbeSettingsDraft(currentSettings));
-  }, [currentSettings, draft]);
-
-  const overviewSection = (
-    <>
-      <section className="probe-core-metrics" aria-label="探针核心指标">
-        <Metric label="Codex APP" value={probeView.availability.metric} tone={probeView.statusTone} />
-        <Metric label="运行中" value={probeRunningCountValue(data)} tone={Number(probeRunningCountValue(data)) > 0 ? "success" : undefined} />
-        <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
-        <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
-        <Metric label="Bark" value={probeView.barkConfigured ? "已配置" : "未配置"} tone={probeView.barkConfigured ? "success" : "warning"} />
-        <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
-        <Metric label="日志库" value={probeStateLabel(probeView.logsDbStatusText)} tone={probeView.logsDbTone} />
-        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
-        <Metric label="刷新" value={probeView.snapshotText} tone={probeView.snapshotTone} />
-      </section>
-      <section className="probe-control-grid" aria-label="探针线程状态">
-        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
-        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />
-        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />
-      </section>
-    </>
-  );
-  const activeSectionContent = (() => {
-    switch (activeSection) {
-      case "reply-needed":
-        return <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />;
-      case "recoverable":
-        return <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />;
-      case "running":
-        return <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />;
-      case "hook":
-        return (
-          <Panel title="Hook" icon={<GitFork size={18} />}>
-            <ProbeHookCard
-              status={data}
-              draft={draft}
-              busy={probeJobMutation.isPending}
-              onInstall={() => probeJobMutation.mutate("hooks-install")}
-            />
-          </Panel>
-        );
-      case "bark":
-        return (
-          <Panel title="Bark" icon={<Cloud size={18} />}>
-            {draft ? (
-              <ProbeBarkCard
-                draft={draft}
-                setDraft={setDraft}
-                configuredDeviceKey={probeView.barkConfigured}
-                saveStatus={saveStatus}
-                saving={saveMutation.isPending}
-                testing={pendingProbeAction === "bark-test"}
-                onSave={(deviceKey) => saveMutation.mutate(deviceKey)}
-                onTest={() => probeJobMutation.mutate("bark-test")}
-              />
-            ) : (
-              <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
-            )}
-          </Panel>
-        );
-      case "logs-db":
-        return (
-          <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
-            <ProbeLogsDbCard
-              logsDb={logsDb}
-              busy={probeJobMutation.isPending || !capabilities.probeLogMaintenance}
-              executeArmed={logsDbExecuteArmed}
-              onDryRun={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-dry-run")}
-              onArmExecute={() => capabilities.probeLogMaintenance && setLogsDbExecuteArmed(true)}
-              onCancelExecute={() => setLogsDbExecuteArmed(false)}
-              onExecute={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-execute")}
-            />
-          </Panel>
-        );
-      case "events":
-        return (
-          <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
-            <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
-          </Panel>
-        );
-      case "settings":
-        return (
-          <>
-            <Panel title="设置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
-              {actionStatus && <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
-              {draft ? (
-                <ProbeRuntimeSettingsCard
-                  draft={draft}
-                  setDraft={setDraft}
-                  errors={settingsErrors}
-                  saveStatus={saveStatus}
-                  saving={saveMutation.isPending}
-                  status={data}
-                  settings={currentSettings}
-                  logsDb={logsDb}
-                  configuredDeviceKey={probeView.barkConfigured}
-                  capabilities={capabilities}
-                  onSave={() => saveMutation.mutate(undefined)}
-                />
-              ) : (
-                <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
-              )}
-            </Panel>
-            <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
-              <JobList jobs={probeView.probeJobs} capabilities={capabilities} />
-            </Panel>
-          </>
-        );
-      case "overview":
-      default:
-        return overviewSection;
-    }
-  })();
-
-  return (
-    <div className="probe-layout">
-      <div className="probe-header">
-        <div>
-          <span>{PROBE_NAV_LABEL}</span>
-          <h1>探针</h1>
-        </div>
-        <div className="button-row">
-          <button className="secondary-button" onClick={probeActions.refresh}><RefreshCw size={17} />刷新</button>
-          <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!probeView.barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
-        </div>
-      </div>
-
-      <section className={`probe-status-banner tone-${probeView.statusTone}`}>
-        <div>
-          <strong>{probeView.availability.headline}</strong>
-          <span>{probeView.serviceText} · {data?.host_label ?? currentSettings?.codex?.host_label ?? "未知主机"}</span>
-        </div>
-        <span>{probeStateLabel(data?.hook_status)} · {probeStateLabel(probeView.logsDbStatusText)}</span>
-      </section>
-
-      <div className="segmented" aria-label="Probe sections">
-        {probeSections.map((section) => (
-          <button
-            key={section.id}
-            className={activeSection === section.id ? "active" : ""}
-            onClick={() => setActiveSection(section.id)}
-            type="button"
-          >
-            {section.label}
-          </button>
-        ))}
-      </div>
-
-      {activeSectionContent}
-
-      {probeView.availability.tone === "danger" && (
-        <Panel title="端点" icon={<TriangleAlert size={18} />} className="wide-panel">
-          <div className="muted-row">探针端点不可用</div>
-        </Panel>
-      )}
-    </div>
-  );
-}
-
-function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
-  const { status, update, jobs } = useOpsQueries();
-  const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
-  const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
-  const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
-  const [deleteArmed, setDeleteArmed] = useState(false);
-  const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
-  const opsActions = useOpsActions({
-    csrfToken,
-    capabilities,
-    onArchiveDryRun: (nextPlan) => {
-      setPlan(nextPlan);
-      setDeleteArmed(false);
-    },
-    onArchiveExecute: (result) => {
-      setDeleteArmed(false);
-      setPlan((current) => archivePlanAfterExecute(current, result));
-    },
-    onHiddenDryRun: (nextPlan) => {
-      setHiddenPlan(nextPlan);
-      setHiddenDeleteResult(null);
-      setHiddenDeleteArmed(false);
-    },
-    onHiddenExecute: (result) => {
-      setHiddenDeleteArmed(false);
-      setHiddenDeleteResult(result);
-      setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
-    }
-  });
-  const jobMutation = opsActions.updateJob;
-  const dryRun = opsActions.archiveDryRun;
-  const executeDelete = opsActions.archiveExecute;
-  const hiddenDryRun = opsActions.hiddenDryRun;
-  const executeHiddenDelete = opsActions.hiddenExecute;
-  const opsView = opsWorkspaceView({
-    status: status.data,
-    update: update.data,
-    hiddenPlan,
-    archivePlan: plan,
-    archiveDryRunPending: dryRun.isPending,
-    archiveDeleteArmed: deleteArmed,
-    archiveExecutePending: executeDelete.isPending,
-    hiddenDryRunPending: hiddenDryRun.isPending,
-    hiddenDeleteArmed,
-    hiddenExecutePending: executeHiddenDelete.isPending,
-    capabilities
-  });
-
-  return (
-    <div className="ops-grid">
-      <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
-        <div className="ops-status-overview">
-          {opsView.systemMetrics.map((metric) => (
-            <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} wide={metric.wide} />
-          ))}
-        </div>
-      </Panel>
-      <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
-        <UpdateMetrics status={update.data} />
-        <div className="button-row ops-action-row">
-          {opsView.updateActions.map((action) => {
-            const className = action.tone === "primary" ? "primary-button" : action.tone === "danger" ? "danger-button soft" : "secondary-button";
-            const icon = action.action === "check" ? <CheckCircle2 size={17} /> : action.action === "install" ? <Play size={17} /> : <Trash2 size={17} />;
-            return (
-              <button key={action.action} className={className} disabled={jobMutation.isPending || action.disabled} onClick={() => jobMutation.mutate({ action: action.action })}>
-                {icon}{action.label}
-              </button>
-            );
-          })}
-        </div>
-      </Panel>
-      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
-        <div className="cleanup-panel-head">
-          <span>删除 archived 线程与 rollout</span>
-          <span className={`status-chip ${opsView.archivedCleanupStage.tone ? `tone-${opsView.archivedCleanupStage.tone}` : "tone-muted"}`}>{opsView.archivedCleanupStage.label}</span>
-        </div>
-        <div className="archive-plan">
-          <Metric label="active" value={plan ? String(plan.active_threads) : "dry-run 未执行"} />
-          <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
-          <Metric label="integrity" value={plan?.integrity ?? status.data?.state_db_integrity ?? "unknown"} tone={(plan?.integrity ?? status.data?.state_db_integrity) === "ok" ? "success" : "danger"} />
-          <Metric label="session index" value={plan ? String(plan.session_index_lines) : "dry-run 未执行"} />
-          <Metric label="rollout 文件" value={plan ? String(plan.rollout_files) : "dry-run 未执行"} />
-        </div>
-        <div className="button-row ops-action-row cleanup-actions">
-          <button className="secondary-button" disabled={dryRun.isPending || executeDelete.isPending} onClick={() => dryRun.mutate()}><Database size={17} />Dry-run</button>
-          {!deleteArmed ? (
-            <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0 || dryRun.isPending || executeDelete.isPending} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
-          ) : (
-            <>
-              <button className="danger-button" onClick={() => executeDelete.mutate({ expectedCount: plan?.archived_threads ?? 0 })} disabled={executeDelete.isPending}><Trash2 size={17} />确认清理归档</button>
-              <button className="secondary-button" onClick={() => setDeleteArmed(false)} disabled={executeDelete.isPending}>取消</button>
-            </>
-          )}
-        </div>
-      </Panel>}
-      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
-        <div className="cleanup-panel-head">
-          <span>删除 non-archived subagent/internal</span>
-          <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
-        </div>
-        <div className="archive-plan">
-          <Metric label="visible" value={hiddenPlan ? String(opsView.hiddenStats.visible) : "dry-run 未执行"} />
-          <Metric label="hidden" value={String(opsView.hiddenStats.hidden)} tone={opsView.hiddenStats.hidden > 0 ? "warning" : undefined} />
-          <Metric label="sources" value={opsView.hiddenStats.sourceCounts} />
-          <Metric label="integrity" value={opsView.hiddenStats.integrity} tone={opsView.hiddenStats.integrity === "ok" ? "success" : "danger"} />
-          <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
-        </div>
-        <div className="button-row ops-action-row cleanup-actions">
-          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => hiddenDryRun.mutate()}><Database size={17} />扫描隐藏线程</button>
-          {!hiddenDeleteArmed ? (
-            <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
-          ) : (
-            <>
-              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: opsView.hiddenStats.hidden })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
-              <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)} disabled={executeHiddenDelete.isPending}>取消</button>
-            </>
-          )}
-        </div>
-      </Panel>}
-      <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
-        <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
-      </Panel>
-    </div>
-  );
-}
-
-function UpdateMetrics({ status }: { status?: UpdateStatus }) {
-  return (
-    <div className="version-grid">
-      <Metric label="Current" value={status?.current_version ?? "读取中"} />
-      <Metric
-        label="Latest"
-        value={status?.latest_version ?? "unknown"}
-        tone={status?.update_available ? "warning" : "success"}
-      />
-      <Metric label="Update" value={status?.update_available ? "available" : status?.state ?? "current"} tone={status?.update_available ? "warning" : "success"} />
-    </div>
-  );
-}
-
 function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null; username: string }) {
   const security = useSecurityQuery();
   const systemStatus = useSystemStatusQuery();
@@ -2787,271 +2410,6 @@ function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null;
   );
 }
 
-function Panel({ title, icon, children, className = "" }: { title: string; icon: ReactNode; children: ReactNode; className?: string }) {
-  return <section className={`panel ${className}`}><header>{icon}<strong>{title}</strong></header>{children}</section>;
-}
-
-function Metric({ label, value, tone, wide = false }: { label: string; value: string; tone?: "success" | "warning" | "danger"; wide?: boolean }) {
-  return <div className={wide ? "metric metric-wide" : "metric"}><span>{label}</span><strong className={tone ? `tone-${tone}` : ""}>{value}</strong></div>;
-}
-
-type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
-
-function ProbeThreadBucket({
-  title,
-  icon,
-  threads,
-  emptyText
-}: {
-  title: string;
-  icon: ReactNode;
-  threads: ThreadSummary[];
-  emptyText: string;
-}) {
-  return (
-    <Panel title={title} icon={icon}>
-      <div className="preview-list compact">
-        {threads.map((thread) => (
-          <article className="preview-item" key={`${thread.status}-${thread.id}`}>
-            <div>
-              <strong>{threadListItemText(thread)}</strong>
-              <span>{threadListItemPreviewText(thread) || thread.id}</span>
-            </div>
-            <small>{threadListItemStatusText(thread)} · {thread.updated_at ?? thread.id}</small>
-          </article>
-        ))}
-        {threads.length === 0 && <div className="muted-row">{emptyText}</div>}
-      </div>
-    </Panel>
-  );
-}
-
-function ProbeBarkCard({
-  draft,
-  setDraft,
-  configuredDeviceKey,
-  saveStatus,
-  saving,
-  testing,
-  onSave,
-  onTest
-}: {
-  draft: ProbeSettingsDraft;
-  setDraft: (draft: ProbeSettingsDraft) => void;
-  configuredDeviceKey: boolean;
-  saveStatus: ProbeSaveStatus;
-  saving: boolean;
-  testing: boolean;
-  onSave: (deviceKey?: string) => void;
-  onTest: () => void;
-}) {
-  const deviceKeyInputRef = useRef<HTMLInputElement>(null);
-  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
-  const handleSave = () => onSave(deviceKeyInputRef.current?.value ?? draft.notifications.device_key);
-  return (
-    <div className="probe-card-stack">
-      <Metric label="配置状态" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
-      <label className="field-label">
-        Device Key
-        <input
-          ref={deviceKeyInputRef}
-          type="password"
-          value={draft.notifications.device_key}
-          placeholder={configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key"}
-          onChange={(event) => setNotifications({ device_key: event.target.value })}
-        />
-      </label>
-      <div className="button-row">
-        <button className="primary-button" disabled={saving} onClick={handleSave}><CheckCircle2 size={17} />保存</button>
-        <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
-      </div>
-      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-    </div>
-  );
-}
-
-function ProbeRuntimeSettingsCard({
-  draft,
-  setDraft,
-  errors,
-  saveStatus,
-  saving,
-  status,
-  settings,
-  logsDb,
-  configuredDeviceKey,
-  capabilities,
-  onSave
-}: {
-  draft: ProbeSettingsDraft;
-  setDraft: (draft: ProbeSettingsDraft) => void;
-  errors: string[];
-  saveStatus: ProbeSaveStatus;
-  saving: boolean;
-  status?: ProbeStatus;
-  settings?: ProbeSettings;
-  logsDb?: ProbeLogsDbStatus;
-  configuredDeviceKey: boolean;
-  capabilities: RuntimeCapabilityMatrix;
-  onSave: () => void;
-}) {
-  const setCodex = (patch: Partial<ProbeSettingsDraft["codex"]>) => setDraft({ ...draft, codex: { ...draft.codex, ...patch } });
-  const setProbe = (patch: Partial<ProbeSettingsDraft["probe"]>) => setDraft({ ...draft, probe: { ...draft.probe, ...patch } });
-  const setHooks = (patch: Partial<ProbeSettingsDraft["hooks"]>) => setDraft({ ...draft, hooks: { ...draft.hooks, ...patch } });
-  const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
-  const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
-  const setLogsDb = (patch: Partial<ProbeSettingsDraft["logs_db"]>) => setDraft({ ...draft, logs_db: { ...draft.logs_db, ...patch } });
-  return (
-    <div className="probe-card-stack">
-      <div className="settings-meta-grid">
-        <Metric label="通知" value={draft.notifications.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled ? "success" : "warning"} />
-        <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
-        <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
-        <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
-        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
-        <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />
-        <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex?.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
-      </div>
-      <div className="form-grid compact-three">
-        {capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}
-        <label className="field-label">主机标签<input value={draft.codex.host_label} onChange={(event) => setCodex({ host_label: event.target.value })} /></label>
-        <label className="field-label">轮询秒数<input type="number" min={5} max={3600} value={draft.probe.poll_seconds} onChange={(event) => setProbe({ poll_seconds: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">最近事件数<input type="number" min={1} max={500} value={draft.probe.recent_limit} onChange={(event) => setProbe({ recent_limit: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">Hook 事件行数<input type="number" min={1} max={5000} value={draft.observability.hook_event_max_lines} onChange={(event) => setObservability({ hook_event_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">冷却行数<input type="number" min={1} max={5000} value={draft.observability.hook_cooldown_max_lines} onChange={(event) => setObservability({ hook_cooldown_max_lines: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">日志上限 MB<input type="number" min={1} max={10} value={logBytesDraftToMb(draft.observability.log_max_bytes)} onChange={(event) => setObservability({ log_max_bytes: mbDraftToLogBytes(event.target.value) })} /></label>
-        <label className="field-label">Logs 保留天数<input type="number" min={1} max={3650} value={draft.logs_db.retention_days} onChange={(event) => setLogsDb({ retention_days: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">维护间隔小时<input type="number" min={1} max={8760} value={draft.logs_db.maintenance_interval_hours} onChange={(event) => setLogsDb({ maintenance_interval_hours: probeNumberInputDraftValue(event.target.value) })} /></label>
-        <label className="field-label">最大删除行数<input type="number" min={1} max={1000000} value={draft.logs_db.max_delete_rows_per_run} onChange={(event) => setLogsDb({ max_delete_rows_per_run: probeNumberInputDraftValue(event.target.value) })} /></label>
-      </div>
-      <div className="probe-toggle-grid">
-        <label className="toggle-row"><span>启用 Probe</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
-        <label className="toggle-row"><span>异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
-        <label className="toggle-row"><span>管理 Stop Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
-        <label className="toggle-row"><span>启用 Logs DB</span><input type="checkbox" checked={draft.logs_db.enabled} onChange={(event) => setLogsDb({ enabled: event.target.checked })} /></label>
-        <label className="toggle-row"><span>退出后维护</span><input type="checkbox" checked={draft.logs_db.maintain_on_codex_exit} onChange={(event) => setLogsDb({ maintain_on_codex_exit: event.target.checked })} /></label>
-      </div>
-      {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
-      {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-      <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存设置</button>
-    </div>
-  );
-}
-
-function ProbeLogsDbCard({
-  logsDb,
-  busy,
-  onDryRun,
-  executeArmed,
-  onArmExecute,
-  onCancelExecute,
-  onExecute
-}: {
-  logsDb?: ProbeLogsDbStatus;
-  busy?: boolean;
-  onDryRun?: () => void;
-  executeArmed?: boolean;
-  onArmExecute?: () => void;
-  onCancelExecute?: () => void;
-  onExecute?: () => void;
-}) {
-  const status = logsDb?.logs_db_status ?? logsDb?.status;
-  return (
-    <div className="probe-card-stack">
-      <Metric label="状态" value={probeStateLabel(status)} tone={probeLogsDbTone(status)} />
-      <Metric label="数据库路径" value={logsDbPathStatusValue(logsDb)} wide />
-      <Metric label="旧行数" value={probeLogDbNumber(logsDb, ["old_rows", "pending_cleanup_rows", "stale_rows", "would_delete_probe_events"])} />
-      <Metric label="保留行数" value={probeLogDbNumber(logsDb, ["retained_rows", "retained_row_count", "total_rows", "row_count", "event_count"])} />
-      <Metric label="DB 大小" value={probeLogDbSize(logsDb, ["database_size", "db_size_bytes", "database_size_bytes", "size_bytes"])} />
-      <Metric label="WAL 大小" value={probeLogDbSize(logsDb, ["wal_size", "wal_size_bytes", "wal_bytes"])} />
-      <Metric label="SHM 大小" value={probeLogDbSize(logsDb, ["shm_size", "shm_size_bytes", "shm_bytes"])} />
-      <Metric label="上次维护" value={probeLogDbString(logsDb, ["last_run_at", "last_maintain_at", "last_maintenance_at", "last_maintain"])} />
-      <Metric label="下次维护" value={probeLogDbString(logsDb, ["next_run_at", "next_maintain_at", "next_maintenance_at"])} />
-      <Metric label="最近结果" value={probeLogDbString(logsDb, ["recent_result", "last_result", "last_maintain_result", "skip_reason"])} />
-      {(onDryRun || onExecute) && (
-        <div className="button-row">
-          {onDryRun && <button className="secondary-button" disabled={busy} onClick={onDryRun}><Database size={17} />Dry-run</button>}
-          {onExecute && !executeArmed && <button className="secondary-button" disabled={busy} onClick={onArmExecute}><Play size={17} />准备执行</button>}
-          {onExecute && executeArmed && <button className="primary-button" disabled={busy} onClick={onExecute}><Play size={17} />确认执行</button>}
-          {executeArmed && onCancelExecute && <button className="secondary-button" disabled={busy} onClick={onCancelExecute}>取消</button>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProbeHookCard({
-  status,
-  draft,
-  busy,
-  onInstall
-}: {
-  status?: ProbeStatus | null;
-  draft?: ProbeSettingsDraft | null;
-  busy?: boolean;
-  onInstall: () => void;
-}) {
-  const managed = status?.hook_status === "managed";
-  const configured = managed || draft?.hooks.manage_stop_hook === true;
-  return (
-    <div className="probe-card-stack">
-      <Metric label="Stop Hook" value={probeStateLabel(status?.hook_status)} tone={managed ? "success" : "warning"} />
-      <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
-      <Metric label="动作" value="固定 Hook 安装 job" />
-      <button className="secondary-button" disabled={busy} onClick={onInstall}><TerminalSquare size={17} />安装 Hook</button>
-    </div>
-  );
-}
-
-function ProbeEventsCard({
-  events,
-  available,
-  loading
-}: {
-  events: ProbeEvent[];
-  available: boolean;
-  loading: boolean;
-}) {
-  if (!available) {
-    return <div className="muted-row">{loading ? "正在读取事件" : "事件接口不可用"}</div>;
-  }
-  if (events.length === 0) {
-    return <div className="muted-row">暂无最近 Hook 事件</div>;
-  }
-  return (
-    <div className="preview-list compact">
-      {events.map((event) => (
-        <ProbeEventRow event={event} key={event.id} />
-      ))}
-    </div>
-  );
-}
-
-function ProbeEventRow({ event }: { event: ProbeEvent }) {
-  const card = probeEventCard(event);
-  return (
-    <article className="preview-item probe-event-card">
-      <div>
-        <strong>{card.title} · {card.headline}</strong>
-        <span>{card.summary}</span>
-      </div>
-      {card.reason && <small>{card.reason}</small>}
-      <div className="probe-event-detail-row">
-        <span className={`status-chip tone-${card.bark.tone}`}>{card.bark.label}</span>
-        <span className={`status-chip tone-${card.dedupe.tone}`}>{card.dedupe.label}</span>
-        {card.details.map((detail) => (
-          <span key={`${detail.label}:${detail.value}`}>{detail.label}: {detail.value}</span>
-        ))}
-        <span>{card.time}</span>
-      </div>
-    </article>
-  );
-}
-
-export { probeEventCard };
-
 function providerById(providers: AgentProviderInfo[] | undefined, id: string): AgentProviderInfo | undefined {
   return providers?.find((provider) => provider.id === id);
 }
@@ -3102,45 +2460,6 @@ function recentClaudeSessions(overview?: ClaudeOverview): Array<{
     })))
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
     .slice(0, 12);
-}
-
-function JobList({ jobs, capabilities }: { jobs: JobRecord[]; capabilities: RuntimeCapabilityMatrix }) {
-  return (
-    <div className="job-list">
-      {jobs.map((job) => {
-        const analysis = job.failure_analysis ? jobFailureAnalysisView(job.failure_analysis, capabilities) : null;
-        return (
-          <details key={job.id} className="job-item">
-            <summary>
-              <span>{job.title}</span>
-              <StatusDot status={job.status} />
-              <ChevronRight size={16} />
-            </summary>
-            <div className="job-meta">
-              <span>{job.kind}</span>
-              {job.thread_id && <span>{job.thread_id}</span>}
-              {job.turn_id && <span>{job.turn_id}</span>}
-            </div>
-            {analysis && (
-              <div className="job-analysis">
-                <strong>{analysis.label}</strong>
-                <p>{analysis.explanation}</p>
-                <ul>
-                  {analysis.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
-                </ul>
-              </div>
-            )}
-            <pre>{jobOutputView(job.output || job.error || "no output", capabilities)}</pre>
-          </details>
-        );
-      })}
-      {jobs.length === 0 && <div className="muted-row">暂无后台 job</div>}
-    </div>
-  );
-}
-
-function StatusDot({ status }: { status: string }) {
-  return <span className={`status-dot ${status}`} />;
 }
 
 function StatusChip({ status }: { status: ThreadStatus }) {

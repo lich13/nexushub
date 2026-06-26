@@ -1,17 +1,11 @@
 use crate::{
-    auth::{
-        expired_session_cookie, expires_at, random_token, require_auth, require_csrf,
-        session_cookie, verify_password, SESSION_COOKIE,
-    },
+    auth::{require_auth, require_csrf},
     linux_adapter,
-    state::{AppState, CachedProbeStatus},
-    turnstile::verify_turnstile,
+    state::AppState,
 };
-use anyhow::Result as AnyhowResult;
 use axum::{
-    extract::connect_info::ConnectInfo,
-    extract::{Multipart, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -19,43 +13,72 @@ use axum::{
     Json,
 };
 #[cfg(test)]
-use nexushub_core::codex::{ThreadDetail, ThreadStatus};
+use nexushub_core::codex::{ThreadDetail, ThreadStatus, ThreadSummary};
+#[cfg(test)]
+use nexushub_core::services::goals as goal_service;
+#[cfg(test)]
+use nexushub_core::services::updates::{self as update_service, UpdateAction};
 use nexushub_core::{
     claude_code::{self, ClaudePaths},
-    codex::{self, MessageBlock, ThreadSummary},
-    config::Config,
-    db::NewSession,
+    codex::{self, MessageBlock},
     local,
     platform::{PlatformKind, PlatformPaths},
-    probe::{redact_probe_event_for_output, ProbeRuntime},
     providers::ProviderRegistry,
     services::{
-        cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
-        goals as goal_service, jobs as job_service,
-        probe::{self as probe_service},
-        security as security_service, settings as settings_service,
+        jobs as job_service,
         threads::{self as thread_service, ThreadsQuery},
-        updates::{self as update_service, UpdateAction},
         uploads as upload_service,
         use_cases::NexusHubUseCases,
     },
-    uploads::{self, PreparedAttachment},
+    uploads::PreparedAttachment,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, time::Duration};
-use uuid::Uuid;
+use std::{collections::HashMap, time::Duration};
 
+mod cleanup;
+mod goals;
+mod jobs;
 mod payload;
+mod probe;
 mod routes;
 mod rpc_dispatch;
+mod security;
+mod system;
+mod uploads;
+mod web_auth;
 
 #[cfg(test)]
 mod entry_contract_tests;
 #[cfg(test)]
 mod legacy_routes_tests;
 
+pub(crate) use cleanup::{
+    archive_delete_dry_run, archive_delete_execute, hidden_threads_delete_dry_run,
+    hidden_threads_delete_execute,
+};
+pub(crate) use goals::{
+    codex_goal_clear, codex_goal_get, codex_goal_pause, codex_goal_resume, codex_goal_set,
+    GoalQuery,
+};
+pub(crate) use jobs::{job_detail, list_jobs};
+#[cfg(test)]
+pub(crate) use probe::probe_config_path;
+pub(crate) use probe::{
+    get_probe_events, get_probe_logs_db_status, get_probe_settings, get_probe_status,
+    load_probe_threads, patch_probe_settings, spawn_probe_status_refresh, start_probe_action,
+    ProbeEventsQuery, ProbeStatusQuery,
+};
 pub(crate) use routes::router;
+pub(crate) use security::{change_password, get_security, patch_security, public_settings};
+pub(crate) use system::{
+    codex_config, codex_models, codex_permission_profiles, http_update_platform,
+    start_update_action, system_status, system_update_status, system_version,
+};
+pub(crate) use uploads::{delete_upload_file, upload_files};
+pub(crate) use web_auth::{login, logout, me};
+#[cfg(test)]
+pub(crate) use web_auth::{turnstile_login_action, LoginRequest, TurnstileLoginAction};
 
 type ApiResponse = Result<Response, ApiError>;
 const THREAD_EVENT_BLOCK_WINDOW: usize = 160;
@@ -72,19 +95,6 @@ impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         api_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string())
     }
-}
-
-async fn public_settings(State(state): State<AppState>) -> ApiResponse {
-    let security = state
-        .db
-        .security_settings(state.config().security.session_ttl_seconds)?;
-    ok(security_service::public_security_view(
-        security,
-        &state.config().security,
-        state.db.get_setting("turnstile_expected_action")?,
-        state.db.admin_count()? > 0,
-        state.config().server.public_base_url.clone(),
-    ))
 }
 
 async fn list_providers(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
@@ -108,541 +118,6 @@ async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) ->
 async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(local::local_plugin_catalog())
-}
-
-#[derive(Debug, Deserialize)]
-struct ProbeStatusQuery {
-    refresh: Option<bool>,
-}
-
-async fn get_probe_status(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeStatusQuery>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_status_cached_value(state, query.refresh.unwrap_or(false)).await)
-}
-
-async fn get_probe_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(probe_settings_value(&state)?)
-}
-
-async fn patch_probe_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<settings_service::ProbeSettingsSaveRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let config_path = probe_config_path();
-    if !config_path.exists() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            &format!("config file not found: {}", config_path.display()),
-        ));
-    }
-    let platform = http_update_platform();
-    let plan = settings_service::SettingsUseCases::new(&state.config(), &platform)
-        .save_probe_settings(request)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let response_config =
-        linux_adapter::apply_probe_settings_save_plan(&state, &auth, &config_path, plan)?;
-    ok(probe_settings_value_for_config(&state, &response_config)?)
-}
-
-#[derive(Debug, Deserialize)]
-struct ProbeEventsQuery {
-    limit: Option<u32>,
-}
-
-async fn get_probe_events(
-    State(state): State<AppState>,
-    Query(query): Query<ProbeEventsQuery>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = query
-        .limit
-        .unwrap_or(state.config().probe.recent_limit as u32)
-        .clamp(1, 500);
-    let events = state
-        .db
-        .list_probe_events(limit)?
-        .into_iter()
-        .map(redact_probe_event)
-        .collect::<Vec<_>>();
-    ok(json!({
-        "events": events,
-        "limit": limit,
-    }))
-}
-
-async fn get_probe_logs_db_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let config = state.config();
-    let status = ProbeRuntime::new(config.clone(), PlatformPaths::current()).logs_db_status();
-    let last_maintain = state
-        .db
-        .get_setting_with_updated_at("probe_logs_db_last_maintain")?
-        .map(
-            |(raw, updated_at_unix)| probe_service::ProbeLogsDbLastMaintain {
-                raw,
-                updated_at_unix,
-            },
-        );
-    let value = probe_service::probe_logs_db_status_view(status, &config, last_maintain)?;
-    ok(value)
-}
-
-async fn start_probe_action(
-    state: AppState,
-    headers: HeaderMap,
-    action: probe_service::ProbeAction,
-) -> ApiResponse {
-    start_probe_action_with_compact(state, headers, action, None).await
-}
-
-async fn start_probe_action_with_compact(
-    state: AppState,
-    headers: HeaderMap,
-    action: probe_service::ProbeAction,
-    compact: Option<bool>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let config_path = probe_config_path();
-    let maintenance = matches!(
-        action,
-        probe_service::ProbeAction::LogsDbDryRun | probe_service::ProbeAction::LogsDbExecute
-    )
-    .then_some(probe_service::ProbeLogsDbMaintenanceRequest {
-        dry_run: matches!(action, probe_service::ProbeAction::LogsDbDryRun),
-        compact: compact.unwrap_or(false),
-    });
-    let plan = linux_adapter::linux_probe_action_plan(
-        &state,
-        &platform,
-        action,
-        &config_path,
-        maintenance,
-    )?;
-    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
-    ok(json!({"job_id": id}))
-}
-
-fn probe_runtime(state: &AppState) -> ProbeRuntime {
-    ProbeRuntime::new(state.config(), PlatformPaths::current())
-}
-
-fn probe_config_path() -> PathBuf {
-    std::env::var_os("NEXUSHUB_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PlatformPaths::current().config_file)
-}
-
-async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Value {
-    if force_refresh {
-        let value = probe_status_fresh_value(state.clone()).await;
-        store_probe_status_snapshot(&state, value.clone());
-        return probe_service::probe_status_snapshot_view(
-            value,
-            0,
-            false,
-            probe_service::ProbeSnapshotStatus::Fresh,
-        );
-    }
-
-    if let Some(snapshot) = current_probe_status_snapshot(&state) {
-        spawn_probe_status_refresh(state);
-        let now = chrono::Utc::now().timestamp();
-        let age = now.saturating_sub(snapshot.refreshed_at_unix).max(0);
-        return probe_service::probe_status_snapshot_view(
-            snapshot.value,
-            age,
-            true,
-            probe_service::ProbeSnapshotStatus::Cached,
-        );
-    }
-
-    let value = probe_status_base_value(state.clone()).await;
-    spawn_probe_status_refresh(state);
-    probe_service::probe_status_snapshot_view(
-        value,
-        0,
-        true,
-        probe_service::ProbeSnapshotStatus::Initial,
-    )
-}
-
-async fn probe_status_fresh_value(state: AppState) -> Value {
-    match probe_runtime(&state).status().await {
-        Ok(status) => json!(status),
-        Err(err) => json!({
-            "label": "Probe",
-            "enabled": state.config().probe.enabled,
-            "available": false,
-            "flavor": "builtin",
-            "error": err.to_string(),
-        }),
-    }
-}
-
-async fn probe_status_base_value(state: AppState) -> Value {
-    match probe_runtime(&state).status().await {
-        Ok(status) => json!(status),
-        Err(err) => json!({
-            "label": "Probe",
-            "enabled": state.config().probe.enabled,
-            "available": false,
-            "flavor": "builtin",
-            "error": err.to_string(),
-        }),
-    }
-}
-
-fn current_probe_status_snapshot(state: &AppState) -> Option<CachedProbeStatus> {
-    state
-        .probe_status_cache
-        .lock()
-        .expect("probe status cache")
-        .snapshot
-        .clone()
-}
-
-fn store_probe_status_snapshot(state: &AppState, value: Value) {
-    let mut cache = state.probe_status_cache.lock().expect("probe status cache");
-    cache.snapshot = Some(CachedProbeStatus {
-        value,
-        refreshed_at_unix: chrono::Utc::now().timestamp(),
-    });
-    cache.refreshing = false;
-}
-
-pub(crate) fn spawn_probe_status_refresh(state: AppState) {
-    {
-        let mut cache = state.probe_status_cache.lock().expect("probe status cache");
-        if cache.refreshing {
-            return;
-        }
-        cache.refreshing = true;
-    }
-    tokio::spawn(async move {
-        let value = probe_status_fresh_value(state.clone()).await;
-        store_probe_status_snapshot(&state, value);
-    });
-}
-
-fn probe_settings_value(state: &AppState) -> anyhow::Result<Value> {
-    probe_settings_value_for_config(state, &state.config())
-}
-
-fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow::Result<Value> {
-    let secret_state = settings_service::ProbeSecretState::from_secret_bytes(
-        state
-            .db
-            .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
-            .as_deref(),
-    );
-    serde_json::to_value(settings_service::build_settings_view(config, secret_state))
-        .map_err(anyhow::Error::from)
-}
-
-pub(crate) async fn load_probe_threads(
-    state: &AppState,
-    status: &'static str,
-    limit: usize,
-) -> anyhow::Result<Vec<ThreadSummary>> {
-    linux_adapter::probe_threads_read_model(state, status, limit)
-}
-
-fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
-    redact_probe_event_for_output(event)
-}
-
-async fn upload_files(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    linux_adapter::cleanup_stale_uploads_plan(&state)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let result: Result<uploads::UploadOutcome, ApiError> = async {
-        let mut items = Vec::new();
-        while let Some(field) = multipart.next_field().await.map_err(|err| {
-            api_error(
-                StatusCode::BAD_REQUEST,
-                &format!("invalid upload body: {err}"),
-            )
-        })? {
-            let Some(file_name) = field.file_name().map(str::to_string) else {
-                continue;
-            };
-            let mime = field.content_type().map(str::to_string);
-            let bytes = field.bytes().await.map_err(|err| {
-                api_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("read upload failed: {err}"),
-                )
-            })?;
-            items.push(upload_service::UploadBatchItem {
-                name: file_name,
-                mime,
-                bytes: bytes.to_vec(),
-            });
-        }
-        let platform = http_update_platform();
-        let facade = NexusHubUseCases::new(&platform)
-            .uploads()
-            .store(items)
-            .map_err(|err| upload_service_error(err.to_string()))?;
-        let outcome = linux_adapter::store_upload_plan(&state, &auth, facade.plan)
-            .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-        Ok(outcome)
-    }
-    .await;
-    ok(result?)
-}
-
-fn upload_service_error(message: String) -> ApiError {
-    let status = if message.contains("一次最多上传")
-        || message.contains("单个文件不能超过")
-        || message.contains("一次上传总大小不能超过")
-    {
-        StatusCode::PAYLOAD_TOO_LARGE
-    } else {
-        StatusCode::BAD_REQUEST
-    };
-    api_error(status, &message)
-}
-
-async fn delete_upload_file(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .uploads()
-        .delete(&id)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    let deleted = linux_adapter::delete_upload_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(json!({"ok": true, "deleted": deleted}))
-}
-
-#[derive(Debug, Deserialize)]
-struct LoginRequest {
-    username: String,
-    password: String,
-    turnstile_token: Option<String>,
-}
-
-async fn login(
-    State(state): State<AppState>,
-    connect: Option<ConnectInfo<SocketAddr>>,
-    headers: HeaderMap,
-    Json(payload): Json<LoginRequest>,
-) -> ApiResponse {
-    let ip = client_ip(&headers, &state, connect.as_ref().map(|c| c.0));
-    let limiter_key = format!(
-        "{}:{}",
-        payload.username,
-        ip.as_deref().unwrap_or("unknown")
-    );
-    if !state
-        .login_limiter
-        .lock()
-        .expect("login limiter")
-        .check(&limiter_key)
-    {
-        return Err(api_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many login attempts",
-        ));
-    }
-    let security = state
-        .db
-        .security_settings(state.config().security.session_ttl_seconds)?;
-    match turnstile_login_action(security.turnstile_enabled, security.turnstile_required) {
-        TurnstileLoginAction::Skip => {}
-        TurnstileLoginAction::FailClosed => {
-            return Err(api_error(StatusCode::FORBIDDEN, "turnstile is required"));
-        }
-        TurnstileLoginAction::Verify => {
-            let token = payload.turnstile_token.as_deref().unwrap_or("");
-            if let Err(err) = verify_turnstile(&state, token, ip.as_deref()).await {
-                state.db.record_audit(
-                    None,
-                    "login.turnstile_failed",
-                    Some("auth"),
-                    Some(&payload.username),
-                    ip.as_deref(),
-                    json!({"error": err.to_string()}),
-                )?;
-                return Err(api_error(StatusCode::UNAUTHORIZED, &err.to_string()));
-            }
-        }
-    }
-    let Some(admin) = state.db.admin_by_username(&payload.username)? else {
-        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid credentials"));
-    };
-    if !verify_password(&payload.password, &admin.password_hash) {
-        state.db.record_audit(
-            Some(&admin.id),
-            "login.failed",
-            Some("admin"),
-            Some(&payload.username),
-            ip.as_deref(),
-            Value::Object(Default::default()),
-        )?;
-        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid credentials"));
-    }
-    let token = random_token();
-    let csrf = random_token();
-    let ttl = security.session_ttl_seconds;
-    let session_id = Uuid::new_v4().to_string();
-    state.db.create_session(NewSession {
-        id: &session_id,
-        admin_id: &admin.id,
-        token: &token,
-        csrf_token: &csrf,
-        user_agent: headers
-            .get(header::USER_AGENT)
-            .and_then(|v| v.to_str().ok()),
-        ip: ip.as_deref(),
-        expires_at: expires_at(ttl),
-    })?;
-    state.db.record_audit(
-        Some(&admin.id),
-        "login.success",
-        Some("admin"),
-        Some(&admin.username),
-        ip.as_deref(),
-        Value::Object(Default::default()),
-    )?;
-    let mut response = Json(json!({
-        "id": admin.id,
-        "username": admin.username,
-        "csrf_token": csrf,
-    }))
-    .into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&session_cookie(
-            &token,
-            state.config().security.cookie_secure,
-            ttl,
-        ))
-        .expect("valid cookie"),
-    );
-    Ok(response)
-}
-
-async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    if let Some(token) = crate::auth::extract_cookie(&headers, SESSION_COOKIE) {
-        state.db.revoke_session(&token)?;
-    }
-    let mut response = Json(json!({"ok": true})).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&expired_session_cookie(
-            state.config().security.cookie_secure,
-        ))
-        .expect("valid cookie"),
-    );
-    Ok(response)
-}
-
-async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(json!({
-        "id": auth.admin_id,
-        "username": auth.username,
-        "csrf_token": null,
-        "session_id": auth.session_id
-    }))
-}
-
-async fn get_security(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(security_response(&state)?)
-}
-
-async fn patch_security(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<security_service::SecurityPatch>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let plan = security_service::plan_security_patch_with_capability(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        payload,
-    )
-    .map(|plan| plan.patch)
-    .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    for write in &plan.settings {
-        state.db.set_setting(write.key, &write.value)?;
-    }
-    if let Some(secret_key) = plan.turnstile_secret_key.as_deref() {
-        state.db.set_turnstile_secret(secret_key)?;
-    }
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "security.updated",
-        Some("security"),
-        Some("settings"),
-        None,
-        plan.audit_detail,
-    )?;
-    ok(security_response(&state)?)
-}
-
-async fn change_password(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<security_service::PasswordChangeRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let admin = state
-        .db
-        .admin_by_id(&auth.admin_id)?
-        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthorized"))?;
-    let current_password_matches = verify_password(&payload.current_password, &admin.password_hash);
-    let plan = security_service::plan_password_change(payload, current_password_matches).map_err(
-        |err| {
-            let message = err.to_string();
-            let status = if message.contains("invalid current password") {
-                StatusCode::UNAUTHORIZED
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            api_error(status, &message)
-        },
-    )?;
-    let hash = crate::auth::hash_password(&plan.new_password)?;
-    state.db.upsert_admin(&admin.id, &admin.username, &hash)?;
-    state.db.record_audit(
-        Some(&auth.admin_id),
-        "security.password_changed",
-        Some("admin"),
-        Some(&admin.username),
-        None,
-        Value::Object(Default::default()),
-    )?;
-    ok(json!({"ok": true}))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1180,334 +655,6 @@ async fn thread_events(
                 .text("ping"),
         )
         .into_response())
-}
-
-async fn system_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(nexushub_core::system::system_status_with_paths(
-        &state.config(),
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-    )
-    .await?)
-}
-
-async fn system_version(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(http_version_info().await?)
-}
-
-async fn system_update_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let version = http_version_info().await?;
-    ok(update_service::update_status(
-        &state.config(),
-        &http_update_platform(),
-        version.panel_latest.as_deref(),
-        None,
-    ))
-}
-
-async fn http_version_info() -> AnyhowResult<nexushub_core::system::VersionInfo> {
-    let inputs = nexushub_core::system::VersionInfoInputs {
-        panel_latest: github_latest_release("lich13", "nexushub").await.ok(),
-        codex_latest: npm_latest_version("@openai/codex").await.ok(),
-    };
-    nexushub_core::system::version_info_with_inputs(inputs).await
-}
-
-async fn github_latest_release(owner: &str, repo: &str) -> AnyhowResult<String> {
-    #[derive(Deserialize)]
-    struct Release {
-        tag_name: String,
-    }
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let release: Release = reqwest::Client::new()
-        .get(url)
-        .header("user-agent", "nexushub")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(release.tag_name)
-}
-
-async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
-    #[derive(Deserialize)]
-    struct DistTags {
-        latest: String,
-    }
-    #[derive(Deserialize)]
-    struct PackageInfo {
-        #[serde(rename = "dist-tags")]
-        dist_tags: DistTags,
-    }
-    let encoded = package.replace('/', "%2F");
-    let url = format!("https://registry.npmjs.org/{encoded}");
-    let package: PackageInfo = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()?
-        .get(url)
-        .header("user-agent", "nexushub")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(package.dist_tags.latest)
-}
-
-#[derive(Debug, Deserialize)]
-struct CwdQuery {
-    cwd: Option<String>,
-}
-
-async fn codex_models(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local::default_codex_models())
-}
-
-async fn codex_permission_profiles(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<CwdQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let _ = query.cwd;
-    ok(local::default_permission_profiles())
-}
-
-async fn codex_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<CwdQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local::local_codex_config(
-        &state.config(),
-        query.cwd.as_deref(),
-    ))
-}
-
-#[derive(Debug, Deserialize)]
-struct GoalQuery {
-    thread_id: Option<String>,
-}
-
-async fn codex_goal_get(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<GoalQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .goals()
-        .get(goal_service::GoalGetRequest {
-            thread_id: query.thread_id,
-        })
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::goal_get_plan(&state, plan)?)
-}
-
-async fn codex_goal_set(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<goal_service::GoalUpdateRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .goals()
-        .save(payload)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_goal_command_plan(&state, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn codex_goal_clear(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<goal_service::GoalUpdateRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .goals()
-        .clear(payload.thread_id.as_deref())
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_goal_command_plan(&state, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn codex_goal_pause(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<goal_service::GoalUpdateRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let thread_id = payload.thread_id.as_deref().unwrap_or_default();
-    let plan = linux_adapter::goal_pause_plan(&state, thread_id)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_goal_command_plan(&state, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn codex_goal_resume(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<goal_service::GoalUpdateRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let thread_id = payload.thread_id.as_deref().unwrap_or_default();
-    let plan = linux_adapter::goal_resume_plan(&state, thread_id)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_goal_command_plan(&state, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn start_update_action(
-    state: AppState,
-    headers: HeaderMap,
-    action: UpdateAction,
-    audit_action: Option<&str>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = linux_adapter::linux_update_action_plan(&state, &platform, action)?;
-    let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
-    ok(json!({"job_id": id}))
-}
-
-fn http_update_platform() -> PlatformPaths {
-    PlatformPaths::for_kind(PlatformKind::Linux)
-}
-
-async fn archive_delete_dry_run(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .cleanup()
-        .dry_run(CleanupTarget::Archived)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
-}
-
-#[derive(Debug, Deserialize)]
-struct ArchiveExecuteRequest {
-    confirmed: bool,
-    #[serde(default, alias = "expectedCount", alias = "expected_count")]
-    expected_count: Option<u64>,
-}
-
-async fn archive_delete_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<ArchiveExecuteRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .cleanup()
-        .execute_confirmed(
-            CleanupTarget::Archived,
-            CleanupExecuteRequest {
-                confirmed: payload.confirmed,
-                expected_count: payload.expected_count,
-            },
-        )
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn hidden_threads_delete_dry_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .cleanup()
-        .operation(CleanupTarget::Hidden, CleanupOperationKind::DryRun)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
-}
-
-async fn hidden_threads_delete_execute(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<ArchiveExecuteRequest>,
-) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .cleanup()
-        .execute_confirmed(
-            CleanupTarget::Hidden,
-            CleanupExecuteRequest {
-                confirmed: payload.confirmed,
-                expected_count: payload.expected_count,
-            },
-        )
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
-}
-
-async fn list_jobs(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let limit = query.get("limit").and_then(|v| v.parse().ok());
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .jobs()
-        .list(limit)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::list_jobs_plan(&state, plan)?)
-}
-
-async fn job_detail(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
-        .jobs()
-        .detail(&id)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    match linux_adapter::job_detail_plan(&state, plan)? {
-        Some(job) => ok(job),
-        None => Err(api_error(StatusCode::NOT_FOUND, "job not found")),
-    }
-}
-
-fn security_response(state: &AppState) -> anyhow::Result<Value> {
-    let security = state
-        .db
-        .security_settings(state.config().security.session_ttl_seconds)?;
-    let view = security_service::security_view_with_capability(
-        &PlatformPaths::for_kind(PlatformKind::Linux),
-        security,
-        &state.config().security,
-        state.db.get_setting("turnstile_expected_hostname")?,
-        state.db.get_setting("turnstile_expected_action")?,
-    )?;
-    serde_json::to_value(view).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -2448,35 +1595,6 @@ fn goal_unavailable(status: &str) -> Value {
     })
 }
 
-fn client_ip(headers: &HeaderMap, state: &AppState, source: Option<SocketAddr>) -> Option<String> {
-    if state.config().server.trust_forwarded_headers {
-        if let Some(ip) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            return ip.split(',').next().map(|v| v.trim().to_string());
-        }
-        if let Some(ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-            return Some(ip.to_string());
-        }
-    }
-    source.map(|addr| addr.ip().to_string())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TurnstileLoginAction {
-    Skip,
-    Verify,
-    FailClosed,
-}
-
-fn turnstile_login_action(enabled: bool, required: bool) -> TurnstileLoginAction {
-    if enabled {
-        TurnstileLoginAction::Verify
-    } else if required {
-        TurnstileLoginAction::FailClosed
-    } else {
-        TurnstileLoginAction::Skip
-    }
-}
-
 fn ok<T: Serialize>(value: T) -> ApiResponse {
     Ok(Json(value).into_response())
 }
@@ -3056,10 +2174,10 @@ mod tests {
 
     #[test]
     fn linux_probe_actions_execute_shared_core_job_command() {
-        let api_source = include_str!("api.rs")
+        let api_source = include_str!("api/probe.rs")
             .split("\nmod tests {")
             .next()
-            .expect("api source must include production section");
+            .expect("api/probe.rs source must include production section");
         let adapter_source = include_str!("linux_adapter.rs");
 
         assert!(
@@ -3114,6 +2232,10 @@ mod tests {
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
             .expect("api source must include production section");
+        let cleanup_source = include_str!("api/cleanup.rs");
+        let goals_source = include_str!("api/goals.rs");
+        let jobs_source = include_str!("api/jobs.rs");
+        let handler_source = format!("{source}\n{cleanup_source}\n{goals_source}\n{jobs_source}");
         let adapter_source = include_str!("linux_adapter.rs");
 
         for required in [
@@ -3134,16 +2256,17 @@ mod tests {
             "linux_adapter::goal_resume_plan",
         ] {
             assert!(
-                source.contains(required),
+                handler_source.contains(required),
                 "Linux RPC handlers must call the shared core facade/plan: {required}"
             );
         }
         for required_adapter_landing in [
-            "cleanup_service::dry_run_archived_with_capability",
-            "cleanup_service::execute_archived_with_capability",
-            "cleanup_service::dry_run_hidden_with_capability",
-            "cleanup_service::execute_hidden_with_capability",
-            "cleanup_service::validate_cleanup_expected_count",
+            "NexusHubUseCases::new(&platform).cleanup()",
+            ".dry_run_archived(",
+            ".execute_archived(",
+            ".dry_run_hidden(",
+            ".execute_hidden(",
+            ".validate_expected_count(",
         ] {
             assert!(
                 adapter_source.contains(required_adapter_landing),
@@ -3168,8 +2291,11 @@ mod tests {
             "archive::execute_delete_archived(",
             "archive::plan_delete_hidden(",
             "archive::execute_delete_hidden(",
+            "cleanup_service::dry_run_archived_with_capability",
             "cleanup_service::execute_archived_with_capability",
+            "cleanup_service::dry_run_hidden_with_capability",
             "cleanup_service::execute_hidden_with_capability",
+            "cleanup_service::validate_cleanup_expected_count",
             "\"stopThread\"",
             "\"bridge\": false",
             "\"cancelFollowUp\"",

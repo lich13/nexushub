@@ -3,6 +3,9 @@ import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
 import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
 import composerControlsSource from "./components/composer/ComposerControls.tsx?raw";
+import jobListSource from "./components/jobs/JobList.tsx?raw";
+import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
+import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -186,18 +189,22 @@ function extractThreadInspectorSource(): string {
 }
 
 function extractProbeWorkspaceSource(): string {
-  const source = appSource;
+  const source = probeWorkspaceSource;
   const start = source.indexOf("function ProbeWorkspace(");
-  const end = source.indexOf("function OpsWorkspace(", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return source.slice(start);
 }
 
 function extractFunctionSource(name: string): string {
   const source = name === "SlashCommandTextarea"
     ? composerControlsSource
+    : name === "OpsWorkspace"
+      ? opsWorkspaceSource
+      : name === "JobList"
+        ? jobListSource
+        : name === "ProbeWorkspace"
+          ? probeWorkspaceSource
     : name === "WebAuthGate" || name === "LoginScreen"
       ? authGateSource
       : appSource;
@@ -1568,9 +1575,11 @@ describe("conversation helpers", () => {
   });
 
   test("probe path metrics keep Linux Codex Home while hiding it from desktop runtime", () => {
-    expect(appSource).toContain('{capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
-    expect(appSource).toContain('{capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
-    expect(appSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
+    const probeSource = extractProbeWorkspaceSource();
+
+    expect(probeSource).toContain('{capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
+    expect(probeSource).toContain('{capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
+    expect(probeSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
   });
 
   test("probe workspace tolerates partial desktop settings DTOs without white-screen assumptions", () => {
@@ -1580,7 +1589,7 @@ describe("conversation helpers", () => {
     expect(runtimeViewModelSource).toContain("input.currentSettings?.notifications?.device_key_configured");
     expect(runtimeViewModelSource).toContain("input.currentSettings?.probe?.enabled");
     expect(probeSource).toContain("currentSettings?.codex?.host_label");
-    expect(appSource).toContain("settings?.codex?.discovery_warnings");
+    expect(probeSource).toContain("settings?.codex?.discovery_warnings");
   });
 
   test("archive cleanup execute clears stale dry-run counts without touching hidden cleanup state", async () => {

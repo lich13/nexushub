@@ -567,12 +567,13 @@ pub fn execute_cleanup_plan(
     }
     let paths = state.codex_paths();
     let platform = PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux);
+    let cleanup = NexusHubUseCases::new(&platform).cleanup();
     match plan.target {
         cleanup_service::CleanupTarget::Archived => {
             let result = if plan.execute {
-                let before = cleanup_service::dry_run_archived_with_capability(&platform, &paths)?;
-                cleanup_service::validate_cleanup_expected_count(&plan, before.archived_threads)?;
-                let result = cleanup_service::execute_archived_with_capability(&platform, &paths)?;
+                let before = cleanup.dry_run_archived(&paths)?;
+                cleanup.validate_expected_count(&plan, before.archived_threads)?;
+                let result = cleanup.execute_archived(&paths)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
                     "archives.delete.execute",
@@ -583,17 +584,15 @@ pub fn execute_cleanup_plan(
                 )?;
                 serde_json::to_value(result)?
             } else {
-                serde_json::to_value(cleanup_service::dry_run_archived_with_capability(
-                    &platform, &paths,
-                )?)?
+                serde_json::to_value(cleanup.dry_run_archived(&paths)?)?
             };
             Ok(result)
         }
         cleanup_service::CleanupTarget::Hidden => {
             let result = if plan.execute {
-                let before = cleanup_service::dry_run_hidden_with_capability(&platform, &paths)?;
-                cleanup_service::validate_cleanup_expected_count(&plan, before.hidden_threads)?;
-                let result = cleanup_service::execute_hidden_with_capability(&platform, &paths)?;
+                let before = cleanup.dry_run_hidden(&paths)?;
+                cleanup.validate_expected_count(&plan, before.hidden_threads)?;
+                let result = cleanup.execute_hidden(&paths)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
                     "hidden_threads.delete.execute",
@@ -608,9 +607,7 @@ pub fn execute_cleanup_plan(
                 )?;
                 serde_json::to_value(result)?
             } else {
-                serde_json::to_value(cleanup_service::dry_run_hidden_with_capability(
-                    &platform, &paths,
-                )?)?
+                serde_json::to_value(cleanup.dry_run_hidden(&paths)?)?
             };
             Ok(result)
         }

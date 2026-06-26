@@ -81,8 +81,8 @@ pub(crate) fn store_uploads_with_state(
     files: Vec<DesktopUploadFile>,
 ) -> Result<uploads::UploadOutcome> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let facade = upload_service::plan_store_uploads_with_capability(
-        state.platform(),
+    let uploads = NexusHubUseCases::new(state.platform()).uploads();
+    let facade = uploads.store(
         files
             .into_iter()
             .map(|file| upload_service::UploadBatchItem {
@@ -92,7 +92,7 @@ pub(crate) fn store_uploads_with_state(
             })
             .collect(),
     )?;
-    upload_service::store_upload_plan(&root, facade.plan)
+    uploads.store_to_root(&root, facade.plan)
 }
 
 pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
@@ -103,11 +103,9 @@ pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopP
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    let plan = settings_service::probe_settings_view_with_capability(
-        &config,
-        state.platform(),
-        secret_state,
-    )?;
+    let plan = NexusHubUseCases::with_config(&config, state.platform())
+        .settings()?
+        .probe_settings_view(secret_state)?;
     Ok(DesktopProbeSettings::from(plan.settings))
 }
 
@@ -115,7 +113,10 @@ pub(crate) fn probe_save_settings_with_state(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
-    let plan = settings_service::plan_probe_settings_save(state.platform(), request)?;
+    let config = state.config();
+    let plan = NexusHubUseCases::with_config(&config, state.platform())
+        .settings()?
+        .save_probe_settings(request)?;
     let config_path = state.platform().config_file.clone();
     if !config_path.exists() {
         anyhow::bail!("config file not found: {}", config_path.display());
@@ -150,12 +151,10 @@ pub(crate) fn probe_action_with_state(
         .db
         .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
-    let plan = probe_service::plan_probe_action_with_device_key(
-        &state.config(),
-        state.platform(),
-        action,
-        device_key_configured,
-    )?;
+    let config = state.config();
+    let plan = NexusHubUseCases::with_config(&config, state.platform())
+        .probe()?
+        .action_with_device_key(action, device_key_configured)?;
     match plan.execution {
         probe_service::ProbeExecutionKind::FixedShellJob => {
             probe_fixed_shell_job_with_state(state, action, plan)
@@ -269,7 +268,9 @@ pub(crate) fn probe_fixed_shell_job_with_state(
 }
 
 pub(crate) fn archive_delete_dry_run_with_state(state: &DesktopState) -> Result<ArchiveDeletePlan> {
-    cleanup_service::dry_run_archived_with_capability(state.platform(), &state.codex_paths())
+    NexusHubUseCases::new(state.platform())
+        .cleanup()
+        .dry_run_archived(&state.codex_paths())
 }
 
 pub(crate) fn archive_delete_execute_with_state(
@@ -279,15 +280,17 @@ pub(crate) fn archive_delete_execute_with_state(
     let paths = state.codex_paths();
     let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Archived, request)?;
-    let dry_run = cleanup_service::dry_run_archived_with_capability(state.platform(), &paths)?;
-    cleanup_service::validate_cleanup_expected_count(&plan, dry_run.archived_threads)?;
-    cleanup_service::execute_archived_with_capability(state.platform(), &paths)
+    let dry_run = cleanup.dry_run_archived(&paths)?;
+    cleanup.validate_expected_count(&plan, dry_run.archived_threads)?;
+    cleanup.execute_archived(&paths)
 }
 
 pub(crate) fn hidden_delete_dry_run_with_state(
     state: &DesktopState,
 ) -> Result<HiddenThreadDeletePlan> {
-    cleanup_service::dry_run_hidden_with_capability(state.platform(), &state.codex_paths())
+    NexusHubUseCases::new(state.platform())
+        .cleanup()
+        .dry_run_hidden(&state.codex_paths())
 }
 
 pub(crate) fn hidden_delete_execute_with_state(
@@ -297,9 +300,9 @@ pub(crate) fn hidden_delete_execute_with_state(
     let paths = state.codex_paths();
     let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Hidden, request)?;
-    let dry_run = cleanup_service::dry_run_hidden_with_capability(state.platform(), &paths)?;
-    cleanup_service::validate_cleanup_expected_count(&plan, dry_run.hidden_threads)?;
-    cleanup_service::execute_hidden_with_capability(state.platform(), &paths)
+    let dry_run = cleanup.dry_run_hidden(&paths)?;
+    cleanup.validate_expected_count(&plan, dry_run.hidden_threads)?;
+    cleanup.execute_hidden(&paths)
 }
 
 pub(crate) fn probe_events_with_state(
@@ -324,8 +327,9 @@ pub(crate) fn delete_upload_with_state(
     request: DesktopDeleteUploadRequest,
 ) -> Result<DesktopDeleteUploadResponse> {
     let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let plan = upload_service::plan_delete_upload_with_capability(state.platform(), request.id)?;
-    let deleted = uploads::delete_upload(&root, &plan.id)?;
+    let uploads = NexusHubUseCases::new(state.platform()).uploads();
+    let plan = uploads.delete_execute(request.id)?;
+    let deleted = uploads.execute_delete(&root, &plan)?;
     Ok(DesktopDeleteUploadResponse { ok: true, deleted })
 }
 
@@ -500,8 +504,8 @@ mod tests {
         let source = settings_source_before_test_module();
 
         assert!(
-            source.contains("settings_service::plan_probe_settings_save"),
-            "probe.settings.save must use the shared core save plan"
+            source.contains(".settings()?") && source.contains(".save_probe_settings("),
+            "probe.settings.save must use the shared core settings use-case facade"
         );
         assert!(
             !source.contains("normalize_probe_config_file_patch"),

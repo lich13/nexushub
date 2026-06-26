@@ -20,6 +20,15 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 - Claude Code provider work is read-only in V1: project/session/settings discovery only. Do not write `~/.claude` or launch/resume/send/stop Claude sessions unless a later task explicitly adds that feature with tests.
 - Probe is now an internal NexusHub replacement path for the cloud `codex-sentinel-server` runtime. Keep it observable and maintenance oriented: no hidden desktop control, no automatic recovery/reply, no arbitrary shell, and no direct destructive deletion endpoint outside the existing dry-run plus confirmation model.
 
+## Architecture Boundaries
+
+- Shared Goal, thread, settings, Probe, security, cleanup, upload, job, and update contracts must enter core through `nexushub_core::services::use_cases::NexusHubUseCases`.
+- Linux HTTP handlers and macOS Tauri commands/services may execute host DB, job, filesystem, updater, and Codex-state effects from core plans, but must not bypass the facade by calling lower-level `*_with_capability` helpers for shared business contracts.
+- Linux HTTP API entry code must stay split by domain under `crates/nexushubd/src/api/`; do not re-inline auth, Probe, security, cleanup, Goal, job, system/update, or upload handlers back into `api.rs`.
+- Tauri thread command DTOs are owned by `src-tauri/src/services/threads/types.rs`; keep `services/threads.rs` focused on shared plan execution and native effects.
+- Linux WebUI-only behavior must remain behind `SystemCapabilities` or capability gates; macOS Tauri must not expose Web auth, Turnstile, systemd, Nginx, admin password, public endpoint, or Linux prune surfaces.
+- `webui/src/App.tsx` should stay an app shell for navigation, runtime/session gating, and composition. Domain workspace components belong under `webui/src/components/<domain>/` and should consume query/action hooks, domain view-model helpers, and capability props instead of importing transport, raw API functions, or React Query cache primitives.
+
 ## Verification
 
 Use these commands for normal handoff:

@@ -743,11 +743,20 @@ log_dir = "{}"
         assert!(
             source.contains("NexusHubUseCases::new(state.platform()).cleanup()")
                 && source.contains(".execute_confirmed(")
-                && source.contains("cleanup_service::validate_cleanup_expected_count"),
+                && source.contains(".validate_expected_count(")
+                && source.contains(".dry_run_archived(")
+                && source.contains(".execute_archived(")
+                && source.contains(".dry_run_hidden(")
+                && source.contains(".execute_hidden("),
             "Tauri cleanup service must consume the core cleanup use-case facade before native delete effects"
         );
         for forbidden in [
             "cleanup_service::plan_cleanup_execute_operation",
+            "cleanup_service::dry_run_archived_with_capability(",
+            "cleanup_service::execute_archived_with_capability(",
+            "cleanup_service::dry_run_hidden_with_capability(",
+            "cleanup_service::execute_hidden_with_capability(",
+            "cleanup_service::validate_cleanup_expected_count(",
             "ARCHIVE_DELETE_CONFIRMATION_MESSAGE",
             "HIDDEN_DELETE_CONFIRMATION_MESSAGE",
             "CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE",
@@ -824,14 +833,17 @@ log_dir = "{}"
 
         for required in [
             "thread_summaries_with_query(",
-            "plan_thread_detail_read",
-            "plan_thread_blocks_read",
+            ".list_read(query)?",
+            ".detail_read(",
+            ".blocks_read(",
             "thread_detail_read_model",
             "window_thread_detail_for_plan",
             "thread_blocks_page_for_plan",
-            "plan_thread_send_job_execution",
-            "plan_thread_command_job_execution",
-            "plan_thread_steer_with_capability",
+            "NexusHubUseCases::new(state.platform()).threads()",
+            ".send_job(",
+            ".create_job(",
+            ".resume_job(",
+            ".steer(",
         ] {
             assert!(
                 threads_source.contains(required),
@@ -861,7 +873,7 @@ log_dir = "{}"
             "Tauri thread commands must stay thin and delegate to services/threads.rs"
         );
         assert!(
-            threads_source.contains("thread_service::plan_thread_list_read")
+            threads_source.contains(".list_read(query)?")
                 && threads_source.contains("thread_service::thread_list_read_model")
                 && threads_source.contains("thread_service::thread_detail_read_model")
                 && !threads_source.contains("thread_service::build_threads_overview")
@@ -878,8 +890,10 @@ log_dir = "{}"
             .unwrap_or(include_str!("services/threads.rs"));
 
         for required in [
-            "job_service::plan_thread_command_job_execution",
-            "job_service::plan_thread_send_job_execution",
+            "NexusHubUseCases::new(state.platform()).threads()",
+            ".create_job(",
+            ".send_job(",
+            ".resume_job(",
             "job_service::ThreadCommandExecutionPlan",
             "plan.submitted_response(&job_id)",
         ] {
@@ -913,7 +927,10 @@ log_dir = "{}"
             .expect("settings service source must include production section");
 
         for required in [
-            "settings_service::probe_settings_view_with_capability",
+            "NexusHubUseCases::with_config",
+            ".settings()?",
+            ".probe_settings_view(",
+            ".save_probe_settings(",
             "for secret_write in plan.secret_writes",
             "state.db.create_job(&job_id, &job.kind, &job.title)",
         ] {
@@ -967,6 +984,22 @@ log_dir = "{}"
             goals_source.contains("type DesktopGoalView = goal_service::GoalView"),
             "Tauri goals service should expose the shared core Goal DTO instead of mapping a desktop DTO"
         );
+        assert!(
+            goals_source.contains("NexusHubUseCases::new(state.platform()).goals()"),
+            "Tauri goals service should enter core through the shared use-case facade"
+        );
+        for forbidden in [
+            "goal_get_response_with_capability(",
+            "save_goal_with_capability(",
+            "clear_goal_with_capability(",
+            "pause_goal_with_capability(",
+            "resume_goal_with_capability(",
+        ] {
+            assert!(
+                !goals_source.contains(forbidden),
+                "Tauri goals service must not bypass the shared use-case facade with {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -996,6 +1029,31 @@ log_dir = "{}"
                 "Tauri probe status must not assign read-model fields outside core helper: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn tauri_probe_actions_use_core_probe_use_case_facade() {
+        let settings_source = include_str!("services/settings.rs")
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("settings service source must include production section");
+
+        for required in [
+            "NexusHubUseCases::with_config",
+            ".probe()?",
+            ".action_with_device_key(",
+            "probe_fixed_shell_job_with_state(state, action, plan)",
+            "probe_logs_db_maintain_with_state(state, action, plan)",
+        ] {
+            assert!(
+                settings_source.contains(required),
+                "Tauri Probe actions must consume the shared Probe use-case facade: {required}"
+            );
+        }
+        assert!(
+            !settings_source.contains("probe_service::plan_probe_action_with_device_key("),
+            "Tauri Probe action service must not bypass the shared Probe use-case facade"
+        );
     }
 
     #[test]
@@ -1048,11 +1106,17 @@ log_dir = "{}"
             .unwrap_or(include_str!("services/threads.rs"));
 
         for required in [
-            "upload_service::plan_store_uploads_with_capability",
-            "upload_service::plan_delete_upload_with_capability",
-            "cleanup_service::dry_run_archived_with_capability",
-            "cleanup_service::dry_run_hidden_with_capability",
+            "NexusHubUseCases::new(state.platform()).uploads()",
+            ".store(",
+            ".store_to_root(",
+            ".delete_execute(",
+            ".execute_delete(",
             "let cleanup = NexusHubUseCases::new(state.platform()).cleanup()",
+            ".dry_run_archived(",
+            ".execute_archived(",
+            ".dry_run_hidden(",
+            ".execute_hidden(",
+            ".validate_expected_count(",
             ".execute_confirmed(",
         ] {
             assert!(
@@ -1061,11 +1125,13 @@ log_dir = "{}"
             );
         }
         for required in [
-            "goal_service::goal_get_response_with_capability",
-            "goal_service::save_goal_with_capability",
-            "goal_service::clear_goal_with_capability",
-            "goal_service::pause_goal_with_capability",
-            "goal_service::resume_goal_with_capability",
+            "NexusHubUseCases::new(state.platform()).goals()",
+            ".get(request)?",
+            ".save(request)?",
+            ".clear(request.thread_id.as_deref())?",
+            ".pause(&thread_id, existing.as_ref())?",
+            ".resume(&thread_id, existing.as_ref())?",
+            ".apply(&state.db, plan.command)",
         ] {
             assert!(
                 goals_source.contains(required),
@@ -1077,12 +1143,12 @@ log_dir = "{}"
             ".list_followups(",
             ".apply_enqueue_followup(",
             ".apply_cancel_followup(",
-            "job_service::plan_thread_archive_with_capability",
-            "job_service::plan_thread_restore_with_capability",
-            "job_service::plan_thread_rename_with_capability",
+            ".archive(",
+            ".restore(",
+            ".rename(",
             "job_service::thread_state_action_response",
-            "job_service::plan_thread_stop_with_capability",
-            "job_service::resolve_thread_stop_job",
+            ".stop(",
+            ".resolve_stop(",
             "job_service::thread_stop_response",
         ] {
             assert!(
@@ -1113,7 +1179,14 @@ log_dir = "{}"
             ".delete_thread_goal(",
             ".update_thread_goal_status(",
             "upload_service::plan_desktop_batch_uploads(",
+            "upload_service::plan_store_uploads_with_capability(",
+            "upload_service::plan_delete_upload_with_capability(",
             "uploads::delete_upload(&root, &request.id)",
+            "cleanup_service::dry_run_archived_with_capability(",
+            "cleanup_service::execute_archived_with_capability(",
+            "cleanup_service::dry_run_hidden_with_capability(",
+            "cleanup_service::execute_hidden_with_capability(",
+            "cleanup_service::validate_cleanup_expected_count(",
             "plan_delete_archived(",
             "execute_delete_archived(",
             "plan_delete_hidden(",
@@ -1136,6 +1209,14 @@ log_dir = "{}"
             "job_service::claim_next_followup_with_capability(",
             "job_service::mark_followup_submitted_with_capability(",
             "job_service::mark_followup_error_with_capability(",
+            "job_service::plan_thread_command_job_execution(",
+            "job_service::plan_thread_send_job_execution(",
+            "job_service::plan_thread_steer_with_capability(",
+            "job_service::plan_thread_stop_with_capability(",
+            "job_service::plan_thread_archive_with_capability(",
+            "job_service::plan_thread_restore_with_capability(",
+            "job_service::plan_thread_rename_with_capability(",
+            "job_service::resolve_thread_stop_job(",
             "request.name.trim()",
             "job_service::archive_thread_response(",
             "job_service::rename_thread_response(",
@@ -1556,8 +1637,8 @@ log_dir = "{}"
         assert!(
             settings_commands_source
                 .contains("goal_service::save_goal_with_state(&state, request)")
-                && goals_source.contains("goal_service::save_goal_with_capability"),
-            "Goal compatibility shim must hand off a core GoalUpdateRequest to the service layer"
+                && goals_source.contains("NexusHubUseCases::new(state.platform()).goals()"),
+            "Goal compatibility shim must hand off a core GoalUpdateRequest to the shared use-case facade"
         );
     }
 }

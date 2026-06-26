@@ -40,7 +40,19 @@ fn api_entry_delegates_transport_dispatch_and_payload_to_submodules() {
     let api = src("api.rs");
     assert_present(
         &api,
-        &["mod routes;", "mod rpc_dispatch;", "mod payload;"],
+        &[
+            "mod routes;",
+            "mod rpc_dispatch;",
+            "mod payload;",
+            "mod cleanup;",
+            "mod goals;",
+            "mod jobs;",
+            "mod probe;",
+            "mod security;",
+            "mod system;",
+            "mod uploads;",
+            "mod web_auth;",
+        ],
         "api.rs should declare thin API submodules",
     );
 
@@ -54,6 +66,53 @@ fn api_entry_delegates_transport_dispatch_and_payload_to_submodules() {
             "fn rpc_wrapped_payload<",
             "fn rpc_nested_payload<",
             "fn rpc_required_string(",
+            "async fn get_probe_status",
+            "async fn get_probe_settings",
+            "async fn patch_probe_settings",
+            "async fn get_probe_events",
+            "async fn get_probe_logs_db_status",
+            "async fn start_probe_action",
+            "async fn probe_status_cached_value",
+            "fn probe_settings_value(",
+            "fn redact_probe_event(",
+            "async fn public_settings",
+            "async fn get_security",
+            "async fn patch_security",
+            "async fn change_password",
+            "fn security_response(",
+            "async fn upload_files",
+            "async fn delete_upload_file",
+            "fn upload_service_error(",
+            "async fn login",
+            "async fn logout",
+            "async fn me",
+            "fn client_ip(",
+            "enum TurnstileLoginAction",
+            "fn turnstile_login_action(",
+            "async fn system_status",
+            "async fn system_version",
+            "async fn system_update_status",
+            "async fn http_version_info",
+            "async fn github_latest_release",
+            "async fn npm_latest_version",
+            "struct CwdQuery",
+            "async fn codex_models",
+            "async fn codex_permission_profiles",
+            "async fn codex_config",
+            "async fn start_update_action",
+            "async fn list_jobs",
+            "async fn job_detail",
+            "async fn archive_delete_dry_run",
+            "struct ArchiveExecuteRequest",
+            "async fn archive_delete_execute",
+            "async fn hidden_threads_delete_dry_run",
+            "async fn hidden_threads_delete_execute",
+            "struct GoalQuery",
+            "async fn codex_goal_get",
+            "async fn codex_goal_set",
+            "async fn codex_goal_clear",
+            "async fn codex_goal_pause",
+            "async fn codex_goal_resume",
         ],
         "api.rs should delegate transport/dispatch/payload concerns",
     );
@@ -63,6 +122,21 @@ fn api_entry_delegates_transport_dispatch_and_payload_to_submodules() {
 fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
     let api = src("api.rs");
     let production = production_section(&api);
+    let probe_api = src("api/probe.rs");
+    let probe_production = production_section(&probe_api);
+    let security_api = src("api/security.rs");
+    let security_production = production_section(&security_api);
+    let system_api = src("api/system.rs");
+    let system_production = production_section(&system_api);
+    let jobs_api = src("api/jobs.rs");
+    let jobs_production = production_section(&jobs_api);
+    let cleanup_api = src("api/cleanup.rs");
+    let cleanup_production = production_section(&cleanup_api);
+    let goals_api = src("api/goals.rs");
+    let goals_production = production_section(&goals_api);
+    let combined_production = format!(
+        "{production}\n{probe_production}\n{security_production}\n{system_production}\n{jobs_production}\n{cleanup_production}\n{goals_production}"
+    );
     let adapter = src("linux_adapter.rs");
 
     assert_present(
@@ -72,15 +146,30 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
             "linux_adapter::list_threads_read_model",
             "linux_adapter::window_thread_detail_read_model",
             "linux_adapter::thread_blocks_read_model",
-            "linux_adapter::execute_cleanup_plan",
-            "linux_adapter::list_jobs_plan",
-            "linux_adapter::job_detail_plan",
         ],
         "api.rs should call the core/linux adapter boundary",
     );
+    assert_present(
+        cleanup_production,
+        &["linux_adapter::execute_cleanup_plan"],
+        "api/cleanup.rs should call the fixed Linux cleanup execution landing",
+    );
+    assert_present(
+        jobs_production,
+        &[
+            "linux_adapter::list_jobs_plan",
+            "linux_adapter::job_detail_plan",
+        ],
+        "api/jobs.rs should call the fixed Linux job read-model landing",
+    );
+    assert_present(
+        &combined_production,
+        &["NexusHubUseCases::with_config", ".security()?"],
+        "api security/probe submodules should call config-backed core facades",
+    );
 
     assert_absent(
-        production,
+        &combined_production,
         &[
             "state.db.claim_next_pending_followup(",
             "state.db.mark_followup_submitted(",
@@ -94,6 +183,8 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
             "update::analyze_job_failure(",
             "cleanup_service::execute_archived_with_capability(",
             "cleanup_service::execute_hidden_with_capability(",
+            "security_service::plan_security_patch_with_capability(",
+            "security_service::security_view_with_capability(",
             "if plan.requires_confirmation && !payload.confirmed",
             "build_threads_overview(",
             "merge_running_jobs(",
@@ -114,8 +205,9 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
             "apply_followup_error(",
             "state.jobs.start_codex_job(",
             "codex::set_thread_archived(",
-            "cleanup_service::execute_archived_with_capability(",
-            "cleanup_service::execute_hidden_with_capability(",
+            "NexusHubUseCases::new(&platform).cleanup()",
+            ".execute_archived(",
+            ".execute_hidden(",
         ],
         "linux_adapter should keep the minimal fixed side-effect landing",
     );
@@ -125,6 +217,8 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
 fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_state() {
     let api = src("api.rs");
     let production = production_section(&api);
+    let goals_api = src("api/goals.rs");
+    let goals_production = production_section(&goals_api);
 
     assert_present(
         production,
@@ -132,12 +226,19 @@ fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_s
             "NexusHubUseCases::new(&platform)",
             "linux_adapter::start_thread_command_execution_plan",
             "linux_adapter::enqueue_followup_plan",
-            "linux_adapter::goal_get_plan",
-            "linux_adapter::apply_goal_command_plan",
             "linux_adapter::resolve_thread_stop_plan",
             "linux_adapter::start_codex_resume_action",
         ],
         "api.rs should stay at auth/payload/core-plan/adapter-call level",
+    );
+    assert_present(
+        goals_production,
+        &[
+            "NexusHubUseCases::new(&platform)",
+            "linux_adapter::goal_get_plan",
+            "linux_adapter::apply_goal_command_plan",
+        ],
+        "api/goals.rs should stay at auth/payload/core-plan/adapter-call level",
     );
 
     assert_absent(
@@ -209,6 +310,11 @@ fn linux_adapter_executes_core_plans_without_defining_business_semantics() {
             "archive deletion must be confirmed",
             "hidden thread deletion must be confirmed",
             "cleanup expectedCount is required before deletion",
+            "cleanup_service::dry_run_archived_with_capability(",
+            "cleanup_service::execute_archived_with_capability(",
+            "cleanup_service::dry_run_hidden_with_capability(",
+            "cleanup_service::execute_hidden_with_capability(",
+            "cleanup_service::validate_cleanup_expected_count(",
             "ThreadStatus::Running",
             "active_job_id = Some(job_id)",
         ],
@@ -230,10 +336,12 @@ fn linux_adapter_executes_core_plans_without_defining_business_semantics() {
             ".apply(&state.db, command)",
             "codex::set_thread_archived(",
             "codex::set_thread_title(",
-            "cleanup_service::dry_run_archived_with_capability(",
-            "cleanup_service::execute_archived_with_capability(",
-            "cleanup_service::dry_run_hidden_with_capability(",
-            "cleanup_service::execute_hidden_with_capability(",
+            "NexusHubUseCases::new(&platform).cleanup()",
+            ".dry_run_archived(",
+            ".execute_archived(",
+            ".dry_run_hidden(",
+            ".execute_hidden(",
+            ".validate_expected_count(",
             "upload_service::store_upload_plan(",
             "upload_service::execute_delete_upload_plan(",
             "upload_service::execute_upload_retention_plan(",
@@ -251,8 +359,8 @@ fn linux_adapter_executes_core_plans_without_defining_business_semantics() {
 fn linux_adapter_api_and_probe_daemon_do_not_reintroduce_read_model_or_probe_business_decisions() {
     let adapter = src("linux_adapter.rs");
     let adapter_production = production_section(&adapter);
-    let api = src("api.rs");
-    let api_production = production_section(&api);
+    let probe_api = src("api/probe.rs");
+    let probe_api_production = production_section(&probe_api);
     let daemon = src("main.rs");
     let daemon_production = production_section(&daemon);
     let core_probe = fs::read_to_string(
@@ -287,15 +395,15 @@ fn linux_adapter_api_and_probe_daemon_do_not_reintroduce_read_model_or_probe_bus
     );
 
     assert_present(
-        api_production,
+        probe_api_production,
         &[
             "probe_service::probe_logs_db_status_view",
             "probe_service::probe_status_snapshot_view",
         ],
-        "api.rs should use core Probe views for logs-db and snapshot metadata",
+        "api/probe.rs should use core Probe views for logs-db and snapshot metadata",
     );
     assert_absent(
-        api_production,
+        probe_api_production,
         &[
             "fn probe_logs_db_last_result",
             "\"last_run\".to_string()",
@@ -304,7 +412,7 @@ fn linux_adapter_api_and_probe_daemon_do_not_reintroduce_read_model_or_probe_bus
             "\"snapshot_status\".to_string()",
             "\"is_refreshing\".to_string()",
         ],
-        "api.rs must not own Probe logs-db view or snapshot metadata semantics",
+        "api/probe.rs must not own Probe logs-db view or snapshot metadata semantics",
     );
 
     assert_present(
