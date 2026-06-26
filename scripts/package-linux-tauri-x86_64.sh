@@ -65,9 +65,10 @@ find_tauri_artifact() {
 
 assert_desktop_binary() {
   local binary="${TAURI_TARGET_DIR}/release/nexushub"
+  local helper="${TAURI_TARGET_DIR}/release/nexushubd"
   [[ -x "${binary}" ]] || die "desktop build did not produce executable ${binary}"
-  if [[ -x "${TAURI_TARGET_DIR}/release/nexushubd" ]]; then
-    die "desktop build unexpectedly produced server helper at ${TAURI_TARGET_DIR}/release/nexushubd"
+  if [[ -x "${helper}" ]] && cmp -s "${binary}" "${helper}"; then
+    die "desktop binary unexpectedly matches server helper at ${helper}"
   fi
 }
 
