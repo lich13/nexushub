@@ -160,8 +160,9 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> std::io::Result<()>
 }
 
 fn reveal_main_window<R: tauri::Runtime>(window: &WebviewWindow<R>) {
-    let _ = window.maximize();
     let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.maximize();
     let _ = window.set_focus();
 }
 
@@ -1266,16 +1267,8 @@ log_dir = "{}"
                 "Goal commands must pass typed core DTOs into the service: {required}"
             );
         }
-        for forbidden in [
-            "threadId.or(thread_id)",
-            "tokenBudget.or(token_budget)",
-            "threadId: Option<String>",
-            "thread_id: Option<String>",
-            "tokenBudget: Option<u64>",
-            "token_budget: Option<u64>",
-            "save_goal_from_parts_with_state",
-            "GoalUpdateRequest {",
-        ] {
+        {
+            let forbidden = "save_goal_from_parts_with_state";
             assert!(
                 !settings_commands_source.contains(forbidden),
                 "commands/settings.rs must not assemble Goal compatibility payloads: {forbidden}"
@@ -1283,6 +1276,20 @@ log_dir = "{}"
             assert!(
                 !goals_source.contains(forbidden),
                 "services/goals.rs must not assemble Goal compatibility payloads: {forbidden}"
+            );
+        }
+        for service_forbidden in [
+            "threadId.or(thread_id)",
+            "tokenBudget.or(token_budget)",
+            "threadId: Option<String>",
+            "thread_id: Option<String>",
+            "tokenBudget: Option<u64>",
+            "token_budget: Option<u64>",
+            "GoalUpdateRequest {",
+        ] {
+            assert!(
+                !goals_source.contains(service_forbidden),
+                "services/goals.rs must keep v0.1.128 Goal ABI compatibility out of the service layer: {service_forbidden}"
             );
         }
     }
@@ -1404,6 +1411,19 @@ log_dir = "{}"
         let source = production_lib_source();
         let config = include_str!("../tauri.conf.json");
 
+        for required in [
+            r#""width": 1280"#,
+            r#""height": 820"#,
+            r#""minWidth": 1000"#,
+            r#""minHeight": 680"#,
+            r#""maximized": true"#,
+            r#""fullscreen": false"#,
+        ] {
+            assert!(
+                config.contains(required),
+                "main Tauri window config must preserve the v0.1.128 default maximized window contract: {required}"
+            );
+        }
         assert!(
             config.contains(r#""create": false"#),
             "Tauri must not rely on implicit tauri.conf window creation for the macOS shell"
@@ -1416,6 +1436,24 @@ log_dir = "{}"
             source.contains("RunEvent::Ready"),
             "Tauri must re-show and focus the main window once the event loop is ready"
         );
+        let show_index = source
+            .find("window.show()")
+            .expect("reveal_main_window must show the main window");
+        let unminimize_index = source
+            .find("window.unminimize()")
+            .expect("reveal_main_window must unminimize the main window before maximizing it");
+        let maximize_index = source
+            .find("window.maximize()")
+            .expect("reveal_main_window must maximize the main window");
+        let focus_index = source
+            .find("window.set_focus()")
+            .expect("reveal_main_window must focus the main window");
+        assert!(
+            show_index < unminimize_index
+                && unminimize_index < maximize_index
+                && maximize_index < focus_index,
+            "reveal_main_window must preserve show -> unminimize -> maximize -> set_focus startup order"
+        );
         assert!(
             source.contains("desktop_boot_probe"),
             "Tauri must leave a low-detail boot probe for macOS App acceptance"
@@ -1427,6 +1465,37 @@ log_dir = "{}"
         assert!(
             !source.contains(r#"bodyText.indexOf("Turnstile")"#),
             "desktop boot probe must not classify session text as Web login UI"
+        );
+    }
+
+    #[test]
+    fn tauri_goal_commands_preserve_v0128_flat_invoke_abi() {
+        let settings_commands_source = include_str!("commands/settings.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("settings command source must include production section");
+        let goals_source = include_str!("services/goals.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("goals service source must include production section");
+
+        for required in [
+            "threadId: Option<String>",
+            "thread_id: Option<String>",
+            "objective: Option<String>",
+            "tokenBudget: Option<u64>",
+            "token_budget: Option<u64>",
+            "GoalUpdateRequest {",
+        ] {
+            assert!(
+                settings_commands_source.contains(required),
+                "Tauri Goal commands must keep the v0.1.128 flat invoke ABI shim: {required}"
+            );
+        }
+        assert!(
+            settings_commands_source.contains("goal_service::save_goal_with_state(&state, request)")
+                && goals_source.contains("goal_service::save_goal_with_capability"),
+            "Goal compatibility shim must hand off a core GoalUpdateRequest to the service layer"
         );
     }
 }

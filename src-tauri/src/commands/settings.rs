@@ -135,39 +135,66 @@ pub fn uploadFiles(
 #[tauri::command(rename = "threads.goal.get")]
 pub fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    request: GoalGetRequest,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<goal_service::DesktopGoalView, String> {
+    let request = GoalGetRequest {
+        thread_id: threadId.or(thread_id),
+    };
     goal_service::get_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.save")]
 pub fn saveCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    request: GoalUpdateRequest,
+    threadId: Option<String>,
+    thread_id: Option<String>,
+    objective: Option<String>,
+    tokenBudget: Option<u64>,
+    token_budget: Option<u64>,
 ) -> Result<goal_service::DesktopGoalView, String> {
+    let request = GoalUpdateRequest {
+        thread_id: threadId.or(thread_id),
+        objective,
+        token_budget: tokenBudget.or(token_budget),
+        status: None,
+        enabled: None,
+    };
     goal_service::save_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.clear")]
 pub fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    request: GoalGetRequest,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<goal_service::DesktopGoalView, String> {
+    let request = GoalGetRequest {
+        thread_id: threadId.or(thread_id),
+    };
     goal_service::clear_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.pause")]
 pub fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    request: GoalGetRequest,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<goal_service::DesktopGoalView, String> {
+    let request = GoalGetRequest {
+        thread_id: threadId.or(thread_id),
+    };
     goal_service::pause_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.resume")]
 pub fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
-    request: GoalGetRequest,
+    threadId: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<goal_service::DesktopGoalView, String> {
+    let request = GoalGetRequest {
+        thread_id: threadId.or(thread_id),
+    };
     goal_service::resume_goal_with_state(&state, request).map_err(|err| err.to_string())
 }
