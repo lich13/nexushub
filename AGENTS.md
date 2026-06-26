@@ -25,9 +25,11 @@ NexusHub is a Rust + React operations console built from the codex-cloud-panel b
 - Shared Goal, thread, settings, Probe, security, cleanup, upload, job, and update contracts must enter core through `nexushub_core::services::use_cases::NexusHubUseCases`.
 - Linux HTTP handlers and macOS Tauri commands/services may execute host DB, job, filesystem, updater, and Codex-state effects from core plans, but must not bypass the facade by calling lower-level `*_with_capability` helpers for shared business contracts.
 - Linux HTTP API entry code must stay split by domain under `crates/nexushubd/src/api/`; do not re-inline auth, Probe, security, cleanup, Goal, job, system/update, or upload handlers back into `api.rs`.
+- Facade entry files must not become test warehouses again. Keep large API/Codex/Tauri source scans and integration fixtures in domain test modules such as `api/integration_tests.rs`, `api/test_support.rs`, `codex/tests.rs`, `codex/test_support.rs`, and dedicated Tauri guard test files.
 - Tauri thread command DTOs are owned by `src-tauri/src/services/threads/types.rs`; keep `services/threads.rs` focused on shared plan execution and native effects.
 - Linux WebUI-only behavior must remain behind `SystemCapabilities` or capability gates; macOS Tauri must not expose Web auth, Turnstile, systemd, Nginx, admin password, public endpoint, or Linux prune surfaces.
 - `webui/src/App.tsx` should stay an app shell for navigation, runtime/session gating, and composition. Domain workspace components belong under `webui/src/components/<domain>/` and should consume query/action hooks, domain view-model helpers, and capability props instead of importing transport, raw API functions, or React Query cache primitives.
+- macOS Tauri and Linux WebUI share the same `webui` visual vocabulary. Navigation labels, core panel titles, action copy, disabled states, and cleanup dry-run gating belong in shared visual/domain contracts; host differences must come only from `SystemCapabilities`, host policy, or runtime transport.
 
 ## Verification
 

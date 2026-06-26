@@ -1,30 +1,5 @@
-import {
-  Archive,
-  Bot,
-  CheckCircle2,
-  ChevronRight,
-  ClipboardCheck,
-  Copy,
-  Edit3,
-  Files,
-  GitFork,
-  Lock,
-  MessageSquare,
-  Play,
-  Plus,
-  RefreshCw,
-  Send,
-  ShieldCheck,
-  SlidersHorizontal,
-  Square,
-  TerminalSquare,
-  Trash2,
-  TriangleAlert,
-  Undo2,
-  X
-} from "lucide-react";
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Metric, Panel } from "../common/Panel";
+import { Bot, ClipboardCheck, MessageSquare, Play, Send, SlidersHorizontal, Square, TriangleAlert, X } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposerAttachmentList,
   SlashCommandTextarea,
@@ -35,17 +10,14 @@ import {
   slashCommandForComposerSubmit,
   useComposerAttachments
 } from "../composer/ComposerControls";
+import { CurrentActionCard } from "./CurrentActionCard";
+import { ApprovalCard, MessageBlockView, UnsupportedApprovalCard } from "./MessageStream";
+import { RunConfigControls } from "./RunConfigControls";
+import { ThreadInspectorPanels } from "./ThreadInspectorPanels";
 import { useConversationRealtimeController } from "../../hooks/useConversationController";
-import {
-  formatGoalTimestamp,
-  goalControlState,
-  goalStatusLabel,
-  goalStatusTone,
-  threadInspectorActionState
-} from "../../lib/domain/runtimeViewModel";
+import { threadInspectorActionState } from "../../lib/domain/runtimeViewModel";
 import {
   actionMessage,
-  applyPermissionPreset,
   buildPayload,
   conversationTitleText,
   extractPlanText,
@@ -53,66 +25,40 @@ import {
   makeRunConfig,
   mergeRunConfigFromDefaults,
   modelSupportsServiceTier,
-  reasoningOptions,
   runConfigAfterSuccessfulSend,
   runConfigWithSupportedServiceTier,
   threadStatusLabel,
-  type PermissionPresetId,
   type RunConfig,
   type SelectedThread,
   type View
 } from "../../lib/domain/codexViewModel";
 import {
-  blockKindLabel,
   blocksWithCurrentPending,
-  combinedQuestionAnswers,
   compactConversationBlocks,
-  conversationMessagePresentation,
   currentActionKey,
   currentActionKindFromBlocks,
   currentPendingElicitation,
-  currentPlanActionOptions,
   followUpMessagePreview,
   followUpStatusLabel,
-  formatPayload,
-  formatTime,
-  historyCollapseKind,
   initialMessageBlockState,
   isActionablePlanBlock,
   isActionableQuestionBlock,
   isApprovalBlock,
-  isHistoryCollapsedBlock,
   isPlanBlock,
-  isQuestionBlock,
-  isQuestionResultBlock,
   isResolvedActionBlock,
   isRunningToolBlock,
   isToolBlock,
   latestActionBlock,
   latestAssistantCopyText,
-  messageBlockText,
   mergeSavedThreadTitle,
-  moveActionSelection,
   nextRenameDraftValue,
   pendingFromBlocks,
-  planActionSubmission,
-  planModeButtonState,
   prioritizeCurrentActionBlocks,
-  questionAnswerPayload,
-  questionAnswersReady,
   roleLabel,
   segmentInternalReferences,
-  selectionFromDigitKey,
   shouldAutoFollowMessageStream,
   shouldRenderConversationMessage,
   shouldShowCurrentActionCard,
-  threadCopyId,
-  threadResumeCommand,
-  threadRolloutPath,
-  toolBlockDetailText,
-  toolBlockStatus,
-  toolBlockSummary,
-  toolBlockTitle,
   visibleConversationBlocksForHistory,
   type MessageBlockState
 } from "../../lib/domain/conversationViewModel";
@@ -124,21 +70,15 @@ import {
   usePluginsQuery,
   useThreadBlockPageMutation,
   useThreadConversationActions,
-  useThreadGoalActions,
-  useThreadGoalQuery,
   type ThreadMessageSlot,
   type ThreadMessageStoreController
 } from "../../lib/query/threads";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type {
   BridgeActionResult,
-  CodexGoal,
-  CodexGoalSaveInput,
-  CodexModel,
   FollowUpQueueItem,
   MessageBlock,
   PendingElicitation,
-  PermissionProfile,
   ThreadDetail,
   ThreadStatus,
   ThreadSummary
@@ -211,14 +151,6 @@ export type {
   MessageScrollSnapshot,
   PlanActionSubmission
 } from "../../lib/domain/conversationViewModel";
-
-const permissionPresets: Array<{ id: PermissionPresetId; label: string; description: string; icon: ReactNode }> = [
-  { id: "ask", label: "请求批准", description: "编辑外部文件和使用互联网时始终询问", icon: <Lock size={17} /> },
-  { id: "auto", label: "替我审批", description: "仅对检测到的风险操作请求批准", icon: <ShieldCheck size={17} /> },
-  { id: "full", label: "完全访问权限", description: "可不受限制地访问互联网和文件", icon: <CheckCircle2 size={17} /> },
-  { id: "custom", label: "自定义 (config.toml)", description: "使用 config.toml 中定义的权限", icon: <SlidersHorizontal size={17} /> }
-];
-
 
 function useCodexRunOptions() {
   const models = useCodexModelQuery();
@@ -736,272 +668,6 @@ export function Conversation({ threadId, detail, slot, messageStore, csrfToken, 
   );
 }
 
-function ThreadInspectorPanels({
-  summary,
-  csrfToken,
-  renameValue,
-  setRenameValue,
-  setRenameDirty,
-  renamePending,
-  onRename,
-  archivePending,
-  onArchive,
-  forkPending,
-  onFork,
-  showFork,
-  showArchive,
-  onFeedback
-}: {
-  summary: ThreadSummary;
-  csrfToken?: string | null;
-  renameValue: string;
-  setRenameValue: (value: string) => void;
-  setRenameDirty: (dirty: boolean) => void;
-  renamePending: boolean;
-  onRename: () => void;
-  archivePending: boolean;
-  onArchive: () => void;
-  forkPending: boolean;
-  onFork: () => void;
-  showFork: boolean;
-  showArchive: boolean;
-  onFeedback: (message: string | null) => void;
-}) {
-  const copyText = useCallback((text: string | null, message: string) => {
-    if (!text) return;
-    navigator.clipboard?.writeText(text);
-    onFeedback(message);
-  }, [onFeedback]);
-  const copyId = threadCopyId(summary.id);
-  const rolloutPath = threadRolloutPath(summary.rollout_path);
-  const resumeCommand = threadResumeCommand(summary.id);
-
-  return (
-    <>
-      <Panel title="名称与归档" icon={<SlidersHorizontal size={18} />}>
-        <label className="field-label">线程标题<input value={renameValue} onChange={(event) => {
-          setRenameDirty(true);
-          setRenameValue(event.target.value);
-        }} /></label>
-        <div className="button-row">
-          <button className="secondary-button" onClick={onRename} disabled={!renameValue.trim() || renamePending}><Edit3 size={17} />重命名</button>
-          <button className={summary.status === "Archived" ? "secondary-button" : "danger-button soft"} onClick={onArchive} disabled={archivePending || !showArchive}>
-            {summary.status === "Archived" ? <Undo2 size={17} /> : <Archive size={17} />}
-            {summary.status === "Archived" ? "恢复" : "归档"}
-          </button>
-        </div>
-        {showFork && (
-          <button className="secondary-button full-width-action" onClick={onFork} disabled={forkPending}>
-            <GitFork size={17} />Fork
-          </button>
-        )}
-      </Panel>
-
-      <ThreadGoalPanel threadId={summary.id} csrfToken={csrfToken} onFeedback={onFeedback} />
-
-      <Panel title="复制与路径" icon={<Files size={18} />}>
-        <Metric label="线程 ID" value={copyId || "无"} wide />
-        <Metric label="会话文件" value={rolloutPath || "无会话文件"} wide />
-        <div className="copy-row">
-          <button className="secondary-button" onClick={() => copyText(copyId, "已复制线程 ID")} disabled={!copyId}>
-            <Copy size={17} />复制 ID
-          </button>
-          <button className="secondary-button" onClick={() => copyText(rolloutPath, "已复制文件路径")} disabled={!rolloutPath}>
-            <Copy size={17} />复制文件路径
-          </button>
-          <button className="secondary-button" onClick={() => copyText(resumeCommand, "已复制 resume 命令")} disabled={!resumeCommand}>
-            <TerminalSquare size={17} />复制 codex resume+ID
-          </button>
-        </div>
-      </Panel>
-    </>
-  );
-}
-
-function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
-  threadId: string;
-  csrfToken?: string | null;
-  onFeedback: (message: string | null) => void;
-}) {
-  const goal = useThreadGoalQuery(threadId);
-  const [objective, setObjective] = useState("");
-  const [tokenBudget, setTokenBudget] = useState("");
-  const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const currentGoal = goal.data;
-
-  useEffect(() => {
-    if (!currentGoal || dirty) return;
-    setObjective(currentGoal.objective ?? "");
-    setTokenBudget(currentGoal.token_budget === null || currentGoal.token_budget === undefined ? "" : String(currentGoal.token_budget));
-  }, [currentGoal, dirty]);
-
-  useEffect(() => {
-    setDirty(false);
-    setError(null);
-  }, [threadId]);
-
-  const afterGoalSuccess = useCallback((next: CodexGoal, message: string) => {
-    setDirty(false);
-    setObjective(next.objective ?? "");
-    setTokenBudget(next.token_budget === null || next.token_budget === undefined ? "" : String(next.token_budget));
-    setError(null);
-    onFeedback(message);
-  }, [onFeedback]);
-
-  const onGoalError = useCallback((err: Error) => {
-    setError(err.message);
-    onFeedback(err.message);
-  }, [onFeedback]);
-
-  const goalActions = useThreadGoalActions({
-    threadId,
-    csrfToken,
-    saveInput: () => goalSaveInput(objective, tokenBudget),
-    onSuccess: afterGoalSuccess,
-    onError: onGoalError
-  });
-  const saveGoalMutation = goalActions.save;
-  const clearGoalMutation = goalActions.clear;
-  const pauseGoalMutation = goalActions.pause;
-  const resumeGoalMutation = goalActions.resume;
-
-  const busy = saveGoalMutation.isPending || clearGoalMutation.isPending || pauseGoalMutation.isPending || resumeGoalMutation.isPending;
-  const controls = goalControlState(currentGoal, { busy, objective, tokenBudget });
-  const unavailable = currentGoal?.available === false;
-
-  return (
-    <Panel title="Goal" icon={<ClipboardCheck size={18} />}>
-      <div className="settings-meta-grid">
-        <Metric label="状态" value={goalStatusLabel(currentGoal, goal.isLoading)} tone={goalStatusTone(currentGoal)} />
-        <Metric label="预算" value={currentGoal?.token_budget === null || currentGoal?.token_budget === undefined ? "无" : String(currentGoal.token_budget)} />
-        {currentGoal?.completed_at ? <Metric label="完成时间" value={formatGoalTimestamp(currentGoal.completed_at)} /> : null}
-        {currentGoal?.blocked_reason ? <Metric label="阻塞原因" value={currentGoal.blocked_reason} tone="danger" /> : null}
-      </div>
-      <label className="field-label">目标<input value={objective} onChange={(event) => {
-        setDirty(true);
-        setObjective(event.target.value);
-      }} placeholder={goal.isLoading ? "正在读取 Goal" : "输入当前线程目标"} /></label>
-      <label className="field-label">Token budget<input type="number" min={1} value={tokenBudget} onChange={(event) => {
-        setDirty(true);
-        setTokenBudget(event.target.value);
-      }} placeholder="可选" /></label>
-      <div className="button-row">
-        <button className="primary-button" disabled={controls.saveDisabled || unavailable} onClick={() => saveGoalMutation.mutate()}><CheckCircle2 size={17} />保存</button>
-        <button className="secondary-button" disabled={controls.clearDisabled || unavailable} onClick={() => clearGoalMutation.mutate()}><Trash2 size={17} />清除</button>
-        <button className="secondary-button" disabled={controls.pauseDisabled || unavailable} onClick={() => pauseGoalMutation.mutate()}><Square size={17} />暂停</button>
-        <button className="secondary-button" disabled={controls.resumeDisabled || unavailable} onClick={() => resumeGoalMutation.mutate()}><Play size={17} />恢复</button>
-      </div>
-      {error && <div className="form-error">{error}</div>}
-      {unavailable && <div className="muted-row">Goal 接口未接入</div>}
-    </Panel>
-  );
-}
-
-function goalSaveInput(objective: string, tokenBudget: string): CodexGoalSaveInput {
-  return {
-    objective: objective.trim(),
-    token_budget: tokenBudget.trim() ? Number.isFinite(Number(tokenBudget.trim())) && Number(tokenBudget.trim()) > 0 ? Math.floor(Number(tokenBudget.trim())) : null : null
-  };
-}
-
-function RunConfigControls({ config, setConfig, models, unavailable, onPickFiles, uploadInProgress = false, threadStatus, hasPendingPlan = false, hasPendingQuestion = false }: {
-  config: RunConfig;
-  setConfig: (config: RunConfig) => void;
-  models: CodexModel[];
-  profiles: PermissionProfile[];
-  unavailable: { models?: boolean; profiles?: boolean; config?: boolean };
-  onPickFiles?: () => void;
-  uploadInProgress?: boolean;
-  threadStatus?: ThreadStatus | string;
-  hasPendingPlan?: boolean;
-  hasPendingQuestion?: boolean;
-}) {
-  const modelList = models.some((item) => item.id === config.model)
-    ? models
-    : config.model
-      ? [{ id: config.model, label: config.model }, ...models]
-      : models;
-  const activePreset = permissionPresets.find((item) => item.id === config.permissionPreset) ?? permissionPresets[2];
-  const supportsFast = modelSupportsServiceTier(modelList, config.model, "priority");
-  const serviceTier = supportsFast ? config.serviceTier : "";
-  const planButton = planModeButtonState(config.collaborationMode === "plan", threadStatus, hasPendingPlan, hasPendingQuestion);
-  return (
-    <div className="composer-config">
-      <div className="composer-toolbar">
-        <button
-          type="button"
-          className="composer-chip icon-only"
-          title={uploadInProgress ? "附件上传中" : "上传本地文件"}
-          onClick={onPickFiles}
-          disabled={!onPickFiles || uploadInProgress}
-        >
-          <Plus size={15} />
-        </button>
-        {supportsFast && (
-          <button
-            type="button"
-            className={serviceTier === "priority" ? "composer-chip active" : "composer-chip"}
-            onClick={() => setConfig({ ...config, serviceTier: serviceTier === "priority" ? "" : "priority" })}
-            title="使用 Codex priority service tier"
-          >
-            <RefreshCw size={15} />Fast
-          </button>
-        )}
-        <button
-          type="button"
-          className={planButton.pressed ? "composer-chip active" : "composer-chip"}
-          aria-pressed={planButton.pressed}
-          title={planButton.statusText}
-          onClick={() => setConfig({ ...config, collaborationMode: config.collaborationMode === "plan" ? "" : "plan" })}
-        >
-          <ClipboardCheck size={15} />{planButton.label}
-        </button>
-        <span className="composer-chip muted">{planButton.statusText}</span>
-        <label className="permission-menu-trigger">
-          <ShieldCheck size={15} />
-          <select value={config.permissionPreset} onChange={(event) => setConfig(applyPermissionPreset(config, event.target.value as PermissionPresetId))}>
-            {permissionPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-          </select>
-        </label>
-      </div>
-      <div className="composer-grid main-config">
-        <label>
-          <span>模型</span>
-          {modelList.length > 0 ? (
-            <select value={config.model} onChange={(event) => {
-              const model = event.target.value;
-              setConfig({
-                ...config,
-                model,
-                serviceTier: modelSupportsServiceTier(modelList, model, "priority") ? config.serviceTier : ""
-              });
-            }}>
-              {modelList.map((item) => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}
-            </select>
-          ) : (
-            <input value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} placeholder={unavailable.models ? "模型接口不可用" : "model"} />
-          )}
-        </label>
-        <label>
-          <span>Reasoning</span>
-          <select value={config.reasoning} onChange={(event) => setConfig({ ...config, reasoning: event.target.value })}>
-            {reasoningOptions.map((value) => <option key={value || "default"} value={value}>{value || "default"}</option>)}
-          </select>
-        </label>
-      </div>
-      <div className="permission-summary">
-        <div className="permission-summary-icon">{activePreset.icon}</div>
-        <div>
-          <strong>{activePreset.label}</strong>
-          <span>{activePreset.description}</span>
-        </div>
-      </div>
-      {unavailable.config && <div className="config-note">Codex 默认配置接口不可用，使用当前表单值发送。</div>}
-    </div>
-  );
-}
-
 function FollowUpQueue({ items, onCancel, cancelling }: { items: FollowUpQueueItem[]; onCancel: (item: FollowUpQueueItem) => void; cancelling: boolean }) {
   const visible = items.filter((item) => item.status !== "submitted" || item.submitted_at);
   if (!visible.length) return null;
@@ -1169,405 +835,6 @@ export function EmptyConversation({ loading, csrfToken, onCreated, onPanelSelect
     </div>
   );
 }
-
-function MessageBlockView({
-  block,
-  activePlan = false,
-  planPending = false,
-  activeQuestion = false,
-  questionPending = false,
-  onShowHistory,
-  historyExpanded = false
-}: {
-  block: MessageBlock;
-  activePlan?: boolean;
-  planPending?: boolean;
-  activeQuestion?: boolean;
-  questionPending?: boolean;
-  onShowHistory?: () => void;
-  historyExpanded?: boolean;
-}) {
-  if (isHistoryCollapsedBlock(block)) {
-    return <HistoryCollapseCell block={block} onShowHistory={onShowHistory} expanded={historyExpanded} />;
-  }
-  if (isPlanBlock(block)) {
-    return (
-      <ProposedPlanCell
-        block={block}
-        active={activePlan}
-        pending={planPending}
-      />
-    );
-  }
-  if (isQuestionBlock(block)) {
-    if (activeQuestion) return <QuestionCell block={block} pendingSubmit={questionPending} />;
-    return <QuestionResultCell block={block} />;
-  }
-  if (isQuestionResultBlock(block)) {
-    return <QuestionResultCell block={block} />;
-  }
-  if (isToolBlock(block)) {
-    return <ToolBlockView block={block} />;
-  }
-  if (!shouldRenderConversationMessage(block)) {
-    return null;
-  }
-  const presentation = conversationMessagePresentation(block);
-  return (
-    <article className={presentation.rowClassName}>
-      <div className="chat-meta">
-        <span>{roleLabel(block.role)}</span>
-        <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
-      </div>
-      <div className={presentation.bodyClassName}>
-        <MessageContent text={messageBlockText(block)} />
-      </div>
-    </article>
-  );
-}
-
-function ToolBlockView({ block }: { block: MessageBlock }) {
-  const [open, setOpen] = useState(false);
-  const summary = toolBlockSummary(block);
-  return (
-    <details
-      className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-    >
-      <summary>
-        <span className="tool-title">{toolBlockTitle(block)}</span>
-        <small>{toolBlockStatus(block)}</small>
-        <ChevronRight size={16} />
-      </summary>
-      {summary && <div className="tool-summary">{summary}</div>}
-      {open && <pre>{toolBlockDetailText(block)}</pre>}
-    </details>
-  );
-}
-
-function MessageContent({ text }: { text: string }) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const segments = useMemo(() => segmentInternalReferences(text), [text]);
-  return (
-    <>
-      {segments.map((segment, index) => {
-        if (segment.type === "text") {
-          return <span key={`text-${index}`}>{segment.text}</span>;
-        }
-        return (
-          <button
-            key={`ref-${index}-${segment.text}`}
-            type="button"
-            className="internal-reference"
-            title="复制内部引用"
-            onClick={async () => {
-              const copyText = segment.copyText ?? segment.text;
-              await navigator.clipboard?.writeText(copyText);
-              setCopied(copyText);
-              window.setTimeout(() => setCopied((current) => current === copyText ? null : current), 1600);
-            }}
-          >
-            {segment.text}
-            {copied === (segment.copyText ?? segment.text) && <small>已复制</small>}
-          </button>
-        );
-      })}
-    </>
-  );
-}
-
-function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: MessageBlock; onShowHistory?: () => void; expanded: boolean }) {
-  const kind = historyCollapseKind(block);
-  const label = toolBlockSummary(block) ?? (kind === "tool" ? "历史工具活动已折叠" : kind === "action" ? "历史计划和问题已折叠" : "较早消息已折叠");
-  const eyebrow = kind === "tool" ? "Tool activity" : kind === "action" ? "Plan & questions" : "Earlier messages";
-  return (
-    <article className="history-collapse-cell">
-      <div>
-        <span>{eyebrow}</span>
-        <strong>{label}</strong>
-      </div>
-      {onShowHistory && (
-        <button className="secondary-button" disabled={expanded} onClick={onShowHistory} type="button">
-          {expanded ? "已显示全部" : "显示全部历史"}
-        </button>
-      )}
-    </article>
-  );
-}
-
-function ProposedPlanCell({ block, active, pending }: { block: MessageBlock; active: boolean; pending: boolean }) {
-  return (
-    <article className={active ? "plan-cell active" : "plan-cell"}>
-      <div className="message-meta">
-        <span>Proposed Plan</span>
-        <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
-      </div>
-      <div className="plan-body">{extractPlanText(block.text || "")}</div>
-      {active && pending && <div className="action-inline-status">正在提交计划操作...</div>}
-    </article>
-  );
-}
-
-function QuestionResultCell({ block }: { block: MessageBlock }) {
-  const answers = block.answers ?? [];
-  return (
-    <article className="question-result-cell">
-      <div className="message-meta">
-        <span>Questions</span>
-        <small>{block.status || "completed"}</small>
-      </div>
-      {answers.length > 0 ? (
-        <div className="answered-list">
-          {answers.map((answer) => (
-            <div className="answered-row" key={answer.question_id}>
-              <span>{answer.question_id}</span>
-              <strong>{answer.answers.length ? answer.answers.join(", ") : "未回答"}</strong>
-              {answer.note && <small>{answer.note}</small>}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p>Questions answered</p>
-      )}
-    </article>
-  );
-}
-
-function QuestionCell({ block, pendingSubmit }: { block: MessageBlock; pendingSubmit: boolean }) {
-  return (
-    <article className="question-cell active-choice">
-      <div className="message-meta">
-        <span>Questions</span>
-        <small>{block.turn_id || block.item_id || block.call_id || "request_user_input"}</small>
-      </div>
-      {block.questions.map((question) => (
-        <div key={question.id} className="question-block">
-          <strong>{question.question}</strong>
-          <div className="choice-grid">
-            {question.options.map((option, index) => (
-              <button
-                key={`${question.id}-${option.label}`}
-                className="choice-option"
-                disabled
-                type="button"
-              >
-                <span>{index + 1}</span>
-                <strong>{option.label}</strong>
-                {option.description && <small>{option.description}</small>}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-      {pendingSubmit && <div className="action-inline-status">正在提交选择...</div>}
-    </article>
-  );
-}
-
-function CurrentActionCard({
-  plan,
-  pending,
-  onAcceptPlan,
-  onRevisePlan,
-  planPending,
-  onSubmitQuestion,
-  questionPending,
-  onDismiss
-}: {
-  plan?: MessageBlock | null;
-  pending?: PendingElicitation | null;
-  onAcceptPlan: (block: MessageBlock) => void;
-  onRevisePlan: (block: MessageBlock, instructions: string) => void;
-  planPending: boolean;
-  onSubmitQuestion: (answers: Record<string, string[]>) => void;
-  questionPending: boolean;
-  onDismiss: () => void;
-}) {
-  const isPlan = Boolean(plan);
-  const busy = isPlan ? planPending : questionPending;
-  const questions = pending?.questions ?? [];
-  const questionSignature = questions.map((question) => `${question.id}:${question.options.map((option) => option.label).join("|")}`).join(";");
-  const [selected, setSelected] = useState(0);
-  const [revision, setRevision] = useState("");
-  const [questionAnswers, setQuestionAnswers] = useState<Record<string, string | string[] | undefined>>({});
-  const [questionNotes, setQuestionNotes] = useState<Record<string, string>>({});
-  const options = isPlan ? currentPlanActionOptions() : questions[0]?.options ?? [];
-  const selectedPlanRequiresRevision = isPlan && selected === 1;
-  const ready = isPlan
-    ? Boolean(plan && planActionSubmission(selected, revision))
-    : questionAnswersReady(questions, combinedQuestionAnswers(questions, questionAnswers, questionNotes));
-
-  function submitAction() {
-    if (busy || !ready) return;
-    if (plan) {
-      const submission = planActionSubmission(selected, revision);
-      if (!submission) return;
-      if (submission.action === "accept") {
-        onAcceptPlan(plan);
-      } else if (submission.action === "revise") {
-        onRevisePlan(plan, submission.instructions);
-      } else {
-        onDismiss();
-      }
-      return;
-    }
-    if (pending) onSubmitQuestion(questionAnswerPayload(questions, combinedQuestionAnswers(questions, questionAnswers, questionNotes)));
-  }
-
-  useEffect(() => {
-    setSelected(0);
-    setRevision("");
-    setQuestionAnswers((current) => {
-      const initial: Record<string, string | string[] | undefined> = {};
-      for (const question of questions) {
-        initial[question.id] = current[question.id] ?? question.options[0]?.label;
-      }
-      return initial;
-    });
-    setQuestionNotes({});
-  }, [plan?.id, pending?.turn_id, pending?.item_id, questionSignature]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const editable = target?.closest("input, textarea, select, [contenteditable='true']");
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onDismiss();
-        return;
-      }
-      if (!editable && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-        event.preventDefault();
-        setSelected((current) => moveActionSelection(current, options.length, event.key === "ArrowDown" ? 1 : -1));
-        return;
-      }
-      if (!editable) {
-        const digitSelection = selectionFromDigitKey(event.key, options.length);
-        if (digitSelection !== null) {
-          event.preventDefault();
-          setSelected(digitSelection);
-          if (!isPlan && questions[0]?.options[digitSelection]) {
-            setQuestionAnswers((current) => ({ ...current, [questions[0].id]: questions[0].options[digitSelection].label }));
-          }
-          return;
-        }
-      }
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        submitAction();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, isPlan, onDismiss, options.length, questions, ready, revision, selected, questionAnswers, questionNotes]);
-
-  const chooseQuestionOption = (questionId: string, label: string, index: number) => {
-    setSelected(index);
-    setQuestionAnswers((current) => ({ ...current, [questionId]: label }));
-  };
-
-  return (
-    <section className="current-action-card" aria-live="polite">
-      <div className="current-action-header">
-        <div>
-          <span>{isPlan ? "Plan Mode" : "Questions"}</span>
-          <strong>{isPlan ? "实施此计划?" : questions[0]?.question ?? "Codex 正在等待选择"}</strong>
-        </div>
-        <small>↑↓ 选择 · 1-9 快选</small>
-      </div>
-      <div className="current-action-options">
-        {isPlan ? options.map((option, index) => (
-          <button
-            type="button"
-            key={option.label}
-            className={selected === index ? "current-action-option selected" : "current-action-option"}
-            onClick={() => setSelected(index)}
-          >
-            <span>{index + 1}</span>
-            <div>
-              <strong>{option.label}</strong>
-              <small>{option.description}</small>
-            </div>
-          </button>
-        )) : questions.map((question) => (
-          <div className="current-action-question" key={question.id}>
-            {questions.length > 1 && <strong>{question.question}</strong>}
-            {question.options.map((option, index) => (
-              <button
-                type="button"
-                key={`${question.id}-${option.label}`}
-                className={questionAnswers[question.id] === option.label ? "current-action-option selected" : "current-action-option"}
-                onClick={() => chooseQuestionOption(question.id, option.label, index)}
-              >
-                <span>{index + 1}</span>
-                <div>
-                  <strong>{option.label}</strong>
-                  {option.description && <small>{option.description}</small>}
-                </div>
-              </button>
-            ))}
-            <textarea
-              className="current-action-textarea"
-              value={questionNotes[question.id] ?? ""}
-              onChange={(event) => setQuestionNotes((current) => ({ ...current, [question.id]: event.target.value }))}
-              placeholder="补充输入"
-            />
-          </div>
-        ))}
-      </div>
-      {selectedPlanRequiresRevision && (
-        <textarea
-          className="current-action-textarea"
-          value={revision}
-          onChange={(event) => setRevision(event.target.value)}
-          placeholder="告诉 Codex 需要怎样调整计划"
-        />
-      )}
-      <div className="current-action-footer">
-        <button className="secondary-button ghost" type="button" onClick={onDismiss}>
-          忽略 <kbd>ESC</kbd>
-        </button>
-        <button className="primary-button" type="button" disabled={!ready || busy} onClick={submitAction}>
-          提交 <kbd>↵</kbd>
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onDecision: (decision: string) => void; pending: boolean }) {
-  return (
-    <article className="approval-card action-request">
-      <div className="message-meta">
-        <span>审批请求</span>
-        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
-      </div>
-      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
-      <div className="button-row">
-        <button className="primary-button" disabled={pending} onClick={() => onDecision("accept")}>
-          <ClipboardCheck size={17} />批准
-        </button>
-        <button className="danger-button soft" disabled={pending} onClick={() => onDecision("decline")}>
-          <X size={17} />拒绝
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function UnsupportedApprovalCard({ block }: { block: MessageBlock }) {
-  return (
-    <article className="approval-card action-request">
-      <div className="message-meta">
-        <span>审批请求</span>
-        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
-      </div>
-      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
-      <div className="muted-row">macOS App 当前不支持在此面板处理权限审批，请在 Codex 原生会话中处理。</div>
-    </article>
-  );
-}
-
 
 function StatusChip({ status }: { status: ThreadStatus }) {
   return <span className={`status-chip ${status}`}>{threadStatusLabel(status)}</span>;

@@ -5,10 +5,15 @@ import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
 import chatWorkspaceSource from "./components/chat/ChatWorkspace.tsx?raw";
 import composerControlsSource from "./components/composer/ComposerControls.tsx?raw";
 import conversationSource from "./components/chat/Conversation.tsx?raw";
+import currentActionCardSource from "./components/chat/CurrentActionCard.tsx?raw";
 import jobListSource from "./components/jobs/JobList.tsx?raw";
+import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
+import runConfigControlsSource from "./components/chat/RunConfigControls.tsx?raw";
 import securityWorkspaceSource from "./components/security/SecurityWorkspace.tsx?raw";
+import threadGoalPanelSource from "./components/chat/ThreadGoalPanel.tsx?raw";
+import threadInspectorPanelsSource from "./components/chat/ThreadInspectorPanels.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -180,9 +185,9 @@ function extractThreadListSource(): string {
 }
 
 function extractThreadInspectorSource(): string {
-  const source = conversationSource;
+  const source = threadInspectorPanelsSource;
   const start = source.indexOf("function ThreadInspectorPanels(");
-  const end = source.indexOf("function ThreadGoalPanel(", start);
+  const end = source.length;
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -208,22 +213,27 @@ function extractFunctionSource(name: string): string {
           ? probeWorkspaceSource
           : name === "ChatWorkspace" || name === "ThreadList"
             ? chatWorkspaceSource
-            : [
-              "Conversation",
-              "EmptyConversation",
-              "ThreadGoalPanel",
-              "ThreadInspectorPanels",
-              "RunConfigControls",
-              "MessageBlockView",
-              "CurrentActionCard",
-              "StatusChip"
-            ].includes(name)
-              ? conversationSource
-              : name === "SecurityWorkspace"
-                ? securityWorkspaceSource
-                : name === "WebAuthGate" || name === "LoginScreen"
-                  ? authGateSource
-                  : appSource;
+            : name === "ThreadGoalPanel"
+              ? threadGoalPanelSource
+              : name === "ThreadInspectorPanels"
+                ? threadInspectorPanelsSource
+                : name === "RunConfigControls"
+                  ? runConfigControlsSource
+                  : name === "MessageBlockView"
+                    ? messageStreamSource
+                    : name === "CurrentActionCard"
+                      ? currentActionCardSource
+                      : [
+                        "Conversation",
+                        "EmptyConversation",
+                        "StatusChip"
+                      ].includes(name)
+                        ? conversationSource
+                        : name === "SecurityWorkspace"
+                          ? securityWorkspaceSource
+                          : name === "WebAuthGate" || name === "LoginScreen"
+                            ? authGateSource
+                            : appSource;
   const start = source.indexOf(`function ${name}`);
 
   expect(start).toBeGreaterThanOrEqual(0);

@@ -6,6 +6,14 @@ import {
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy
 } from "./runtimeViewModel";
+import {
+  macosForbiddenVisualSurfaces,
+  sharedActionLabels,
+  sharedCorePanelTitles,
+  sharedDisabledStates,
+  sharedNavigationLabels,
+  visualContractForRuntime
+} from "./visualContract";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
 
 const linuxWebCapabilities: RuntimeCapabilityMatrix = {
@@ -50,7 +58,56 @@ function extractFunctionSource(name: string): string {
 }
 
 describe("runtime capability rendering", () => {
+  test("shared visual contract keeps Linux WebUI and macOS Tauri on one layout vocabulary", () => {
+    const linuxContract = visualContractForRuntime(linuxWebCapabilities);
+    const macContract = visualContractForRuntime(macosTauriCapabilities);
+
+    expect(linuxContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
+    expect(macContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
+    expect(linuxContract.sharedPanels).toEqual(expect.arrayContaining([...sharedCorePanelTitles]));
+    expect(macContract.sharedPanels).toEqual(expect.arrayContaining([
+      "Codex 本地线程",
+      "Goal",
+      "系统状态",
+      "NexusHub 更新",
+      "Job History",
+      "归档线程清理",
+      "隐藏线程清理"
+    ]));
+    expect(linuxContract.sharedActions).toEqual(expect.arrayContaining([
+      sharedActionLabels.send,
+      sharedActionLabels.followup,
+      sharedActionLabels.stop,
+      sharedActionLabels.dryRun,
+      sharedActionLabels.archiveConfirm,
+      sharedActionLabels.hiddenConfirm
+    ]));
+    expect(macContract.sharedActions).toEqual(expect.arrayContaining([
+      sharedActionLabels.send,
+      sharedActionLabels.followup,
+      sharedActionLabels.stop,
+      sharedActionLabels.dryRun,
+      sharedActionLabels.archiveConfirm,
+      sharedActionLabels.hiddenConfirm
+    ]));
+    expect(linuxContract.cleanupRequiresDryRun).toBe(true);
+    expect(macContract.cleanupRequiresDryRun).toBe(true);
+    expect(linuxContract.disabledStates).toEqual(expect.arrayContaining([
+      sharedDisabledStates.updateInstallWithoutAvailableVersion,
+      sharedDisabledStates.cleanupArmBeforeDryRun,
+      sharedDisabledStates.cleanupConfirmBeforeArmed,
+      sharedDisabledStates.cleanupDuringMutation
+    ]));
+    expect(macContract.disabledStates).toEqual(expect.arrayContaining([
+      sharedDisabledStates.updateInstallWithoutAvailableVersion,
+      sharedDisabledStates.cleanupArmBeforeDryRun,
+      sharedDisabledStates.cleanupConfirmBeforeArmed,
+      sharedDisabledStates.cleanupDuringMutation
+    ]));
+  });
+
   test("macOS Tauri renders only shared capabilities plus app updater copy", () => {
+    const contract = visualContractForRuntime(macosTauriCapabilities);
     const visibleCopy = [
       ...opsWorkspacePanelTitles(macosTauriCapabilities),
       ...opsWorkspaceVisibleCopy(macosTauriCapabilities)
@@ -59,10 +116,13 @@ describe("runtime capability rendering", () => {
     expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", webAuth: false, securitySettings: false });
     expect(visibleCopy).toMatch(/系统状态|NexusHub 更新|Check|Install/);
     expect(visibleCopy).toMatch(/归档线程清理|隐藏线程清理|Job History/);
+    expect(contract.updateActions).toEqual(["Check", "Install"]);
+    expect(contract.forbidden).toEqual([...macosForbiddenVisualSurfaces]);
     expect(visibleCopy).not.toMatch(/登录|CSRF|Turnstile|security settings|管理员密码|systemd|Nginx|公网入口|Public endpoint|Linux update|Linux prune|Prune/i);
   });
 
   test("Linux WebUI renders auth, security, public endpoint, service, and Linux update operations", () => {
+    const contract = visualContractForRuntime(linuxWebCapabilities);
     const securityWorkspaceSource = extractFunctionSource("SecurityWorkspace");
     const loginScreenSource = extractFunctionSource("LoginScreen");
     const appShellSource = appSource.slice(
@@ -77,6 +137,8 @@ describe("runtime capability rendering", () => {
     ].join("\n");
 
     expect(linuxWebCapabilities).toMatchObject({ runtimeKind: "web", webAuth: true, securitySettings: true });
+    expect(contract.linuxWebOnly).toEqual(expect.arrayContaining(["Turnstile", "Public endpoint", "systemd", "Nginx", "Prune", "安全"]));
+    expect(contract.updateActions).toEqual(["Precheck", "Update", "Prune"]);
     expect(appShellSource).toContain('capabilities.securitySettings && view === "security"');
     expect(appShellSource).toContain("<WebAuthGate");
     expect(appShellSource).toContain("webAuth={capabilities.webAuth}");

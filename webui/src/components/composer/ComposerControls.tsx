@@ -1,25 +1,20 @@
-import { X } from "lucide-react";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   activeComposerMenuKind,
   applyPluginMentionSelection,
   applySlashCommandSelection,
   composerMenuKeyAction,
   exactSlashCommandFromDraft,
-  formatFileSize,
   pluginMentionSuggestions,
-  readyComposerUploads,
   slashCommandSuggestions,
-  uploadKindLabel,
-  uploadStatusText,
-  type ComposerUpload,
   type PluginMentionCandidate
 } from "../../lib/domain/composerViewModel";
 import { capabilitiesForInput } from "../../lib/domain/runtimeViewModel";
 import type { SlashCommand } from "../../lib/domain/slashCommands";
-import { useUploadActions } from "../../lib/query/threads";
 import type { PluginInfo } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
+export { ComposerAttachmentList } from "./ComposerAttachmentList";
+export { useComposerAttachments } from "./useComposerAttachments";
 
 export type { ComposerActionMode, ComposerUpload, PluginMentionCandidate } from "../../lib/domain/composerViewModel";
 export {
@@ -46,127 +41,6 @@ export {
   uploadKindLabel,
   uploadStatusText
 } from "../../lib/domain/composerViewModel";
-
-export function useComposerAttachments(csrfToken?: string | null, setFeedback?: (message: string | null) => void) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [uploads, setUploads] = useState<ComposerUpload[]>([]);
-  const [uploadInProgress, setUploadInProgress] = useState(false);
-  const [removingUploadId, setRemovingUploadId] = useState<string | null>(null);
-  const uploadActions = useUploadActions({ csrfToken });
-  const readyUploads = useMemo(() => readyComposerUploads(uploads), [uploads]);
-
-  const openPicker = () => {
-    if (!uploadInProgress) inputRef.current?.click();
-  };
-
-  const onFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    if (files.length === 0) return;
-
-    const pending = files.map((file, index): ComposerUpload => ({
-      id: `uploading-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
-      name: file.name || `file-${index + 1}`,
-      mime: file.type || "application/octet-stream",
-      size: file.size,
-      sha256: "",
-      kind: "text",
-      status: "uploading",
-      local_status: "uploading"
-    }));
-    const pendingIds = new Set(pending.map((item) => item.id));
-    setUploads((current) => [...current, ...pending]);
-    setUploadInProgress(true);
-    setFeedback?.("正在上传附件...");
-
-    try {
-      const outcome = await uploadActions.upload(files);
-      setUploads((current) => [
-        ...current.filter((item) => !pendingIds.has(item.id)),
-        ...outcome.files.map((file) => ({ ...file, local_status: "ready" as const }))
-      ]);
-      setFeedback?.(`已上传 ${outcome.files.length} 个附件`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setUploads((current) => current.map((item) => pendingIds.has(item.id)
-        ? {
-          ...item,
-          status: "error",
-          local_status: "error",
-          local_error: message,
-          error_preview: message
-        }
-        : item));
-      setFeedback?.(message);
-    } finally {
-      setUploadInProgress(false);
-    }
-  };
-
-  const removeUpload = async (upload: ComposerUpload) => {
-    setUploads((current) => current.filter((item) => item.id !== upload.id));
-    if (upload.status !== "ready") return;
-    setRemovingUploadId(upload.id);
-    try {
-      await uploadActions.delete(upload.id);
-    } catch (error) {
-      setFeedback?.(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRemovingUploadId(null);
-    }
-  };
-
-  const clearUploads = () => setUploads([]);
-
-  return {
-    inputRef,
-    uploads,
-    readyUploads,
-    uploadInProgress,
-    removingUploadId,
-    openPicker,
-    onFileInputChange,
-    removeUpload,
-    clearUploads
-  };
-}
-
-export function ComposerAttachmentList({
-  uploads,
-  removingUploadId,
-  onRemove
-}: {
-  uploads: ComposerUpload[];
-  removingUploadId?: string | null;
-  onRemove: (upload: ComposerUpload) => void;
-}) {
-  if (uploads.length === 0) return null;
-  return (
-    <div className="attachment-list" aria-label="已选择附件">
-      {uploads.map((upload) => {
-        const errored = upload.local_status === "error" || upload.status === "error";
-        const uploading = upload.local_status === "uploading" || upload.status === "uploading";
-        return (
-          <div key={upload.id} className={errored ? "attachment-chip error" : uploading ? "attachment-chip uploading" : "attachment-chip"}>
-            <div className="attachment-copy">
-              <strong title={upload.name}>{upload.name}</strong>
-              <small>{uploadKindLabel(upload.kind)} · {formatFileSize(upload.size)} · {uploadStatusText(upload)}</small>
-            </div>
-            <button
-              type="button"
-              className="icon-button compact attachment-remove"
-              onClick={() => onRemove(upload)}
-              disabled={removingUploadId === upload.id}
-              title="移除附件"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export function SlashCommandTextarea({
   inputRef,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 const productionBusinessSources = import.meta.glob([
   "../../App.tsx",
+  "../../components/**/*.ts",
   "../../components/**/*.tsx",
   "../../hooks/**/*.ts",
   "../api/**/*.ts",
@@ -57,6 +58,7 @@ const productionLeakPattern = /43\.155\.235\.227|661313\.xyz|\/opt\/nexushub/i;
 
 const productionComponentSources = import.meta.glob([
   "../../App.tsx",
+  "../../components/**/*.ts",
   "../../components/**/*.tsx",
   "../../hooks/**/*.ts"
 ], {
@@ -98,6 +100,7 @@ describe("production business source scan", () => {
     const source = productionComponentSources["../../App.tsx"];
     const chatWorkspace = productionComponentSources["../../components/chat/ChatWorkspace.tsx"];
     const conversation = productionComponentSources["../../components/chat/Conversation.tsx"];
+    const composerAttachments = productionComponentSources["../../components/composer/useComposerAttachments.ts"];
 
     expect(source).toContain("WebAuthGate");
     expect(source).toContain("ChatWorkspace");
@@ -107,6 +110,7 @@ describe("production business source scan", () => {
     expect(chatWorkspace).toContain("useConversationController");
     expect(conversation).toContain("SlashCommandTextarea");
     expect(conversation).toContain("useComposerAttachments");
+    expect(composerAttachments).toContain("function useComposerAttachments");
     expect(source).not.toMatch(/\bfunction\s+(LoginScreen|ensureTurnstileScript|SlashCommandTextarea|useComposerAttachments)\b/);
     expect(source).not.toContain("useThreadRealtimeSubscription(");
     expect(source).not.toContain("useThreadCacheActions(");
