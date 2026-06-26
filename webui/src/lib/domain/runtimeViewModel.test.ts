@@ -18,6 +18,7 @@ import {
 
 const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "web",
+  hostSurface: "linux_server_webui",
   webAuth: true,
   logout: true,
   securitySettings: true,
@@ -28,12 +29,14 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: true,
+  desktopWebuiControl: false,
   forkAction: true,
   approvalActions: true
 };
 
 const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
+  hostSurface: "desktop_embedded_tauri",
   webAuth: false,
   logout: false,
   securitySettings: false,
@@ -44,6 +47,7 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: false,
+  desktopWebuiControl: true,
   forkAction: false,
   approvalActions: false
 };

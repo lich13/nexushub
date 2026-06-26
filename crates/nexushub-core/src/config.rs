@@ -24,6 +24,8 @@ const LEGACY_PRECHECK_COMMAND_WITH_AUDIT: &str = "codex --version && sudo -n cod
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
+    #[serde(default)]
+    pub desktop_webui: DesktopWebuiConfig,
     pub codex: CodexConfig,
     #[serde(default)]
     pub probe: ProbeConfig,
@@ -37,6 +39,24 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: Option<String>,
     pub trust_forwarded_headers: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DesktopWebuiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_desktop_webui_listen")]
+    pub listen: SocketAddr,
+    #[serde(default = "default_desktop_webui_username")]
+    pub username: String,
+    #[serde(default = "default_desktop_webui_session_ttl_seconds")]
+    pub session_ttl_seconds: u64,
+    #[serde(default)]
+    pub cookie_secure: bool,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub turnstile_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +245,18 @@ fn default_probe_poll_seconds() -> u64 {
     15
 }
 
+fn default_desktop_webui_listen() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 15743)
+}
+
+fn default_desktop_webui_username() -> String {
+    "admin".to_string()
+}
+
+fn default_desktop_webui_session_ttl_seconds() -> u64 {
+    86_400
+}
+
 fn default_probe_recent_limit() -> usize {
     50
 }
@@ -304,6 +336,40 @@ impl Default for ProbeConfig {
             observability: ProbeObservabilityConfig::default(),
             logs_db: ProbeLogsDbConfig::default(),
         }
+    }
+}
+
+impl Default for DesktopWebuiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: default_desktop_webui_listen(),
+            username: default_desktop_webui_username(),
+            session_ttl_seconds: default_desktop_webui_session_ttl_seconds(),
+            cookie_secure: false,
+            public_base_url: None,
+            turnstile_enabled: false,
+        }
+    }
+}
+
+impl DesktopWebuiConfig {
+    pub fn normalize(&mut self) {
+        if self.username.trim().is_empty() {
+            self.username = default_desktop_webui_username();
+        } else {
+            self.username = self.username.trim().to_string();
+        }
+        if self.session_ttl_seconds < 300 {
+            self.session_ttl_seconds = 300;
+        }
+        self.public_base_url = self
+            .public_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        self.turnstile_enabled = false;
     }
 }
 
@@ -445,11 +511,33 @@ fn default_doctor_command_for_platform(platform: &PlatformPaths) -> String {
     }
 }
 
+fn default_desktop_doctor_command_for_platform(platform: &PlatformPaths) -> String {
+    format!(
+        "{} --config {} doctor",
+        shell_quote(&platform.daemon_binary().display().to_string()),
+        shell_quote(&platform.config_file.display().to_string())
+    )
+}
+
+fn default_desktop_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
+    format!(
+        "test -d {}",
+        shell_quote(&platform.data_dir.display().to_string())
+    )
+}
+
 fn default_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
     match platform.kind {
         PlatformKind::Linux => PathBuf::from("/home/ubuntu/codex-workspace"),
         PlatformKind::Macos => home.join("nexushub-workspace"),
         PlatformKind::Windows => PathBuf::from(r"%USERPROFILE%\NexusHub\workspace"),
+    }
+}
+
+fn default_desktop_workspace_for_platform(platform: &PlatformPaths, home: &Path) -> PathBuf {
+    match platform.kind {
+        PlatformKind::Linux | PlatformKind::Macos => home.join("nexushub-workspace"),
+        PlatformKind::Windows => home.join("NexusHub/workspace"),
     }
 }
 
@@ -483,17 +571,39 @@ impl Config {
 
     pub fn for_platform_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
         let home = home.into();
-        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
         let platform = PlatformPaths::for_kind_with_home(kind, &home);
+        Self::for_platform_paths_with_home(platform, &home, false)
+    }
+
+    pub fn for_desktop_platform_kind(kind: PlatformKind) -> Self {
+        Self::for_desktop_platform_kind_with_home(kind, current_home_dir())
+    }
+
+    pub fn for_desktop_platform_kind_with_home(
+        kind: PlatformKind,
+        home: impl Into<PathBuf>,
+    ) -> Self {
+        let home = home.into();
+        let platform = PlatformPaths::for_desktop_kind_with_home(kind, &home);
+        Self::for_platform_paths_with_home(platform, &home, true)
+    }
+
+    fn for_platform_paths_with_home(platform: PlatformPaths, home: &Path, desktop: bool) -> Self {
+        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
         Self {
             server: ServerConfig {
                 listen,
                 public_base_url: None,
                 trust_forwarded_headers: true,
             },
+            desktop_webui: DesktopWebuiConfig::default(),
             codex: CodexConfig {
                 home: default_codex_home(),
-                workspace: default_workspace_for_platform(&platform, &home),
+                workspace: if desktop {
+                    default_desktop_workspace_for_platform(&platform, home)
+                } else {
+                    default_workspace_for_platform(&platform, home)
+                },
                 app_server_service: String::new(),
                 app_server_socket: None,
                 bridge_enabled: false,
@@ -520,15 +630,27 @@ impl Config {
                 precheck_command: default_precheck_command(),
                 update_command: default_update_command(),
                 prune_command: default_prune_command(),
-                doctor_command: default_doctor_command_for_platform(&platform),
+                doctor_command: if desktop {
+                    default_desktop_doctor_command_for_platform(&platform)
+                } else {
+                    default_doctor_command_for_platform(&platform)
+                },
                 panel_update_command: default_panel_update_command(),
-                panel_precheck_command: default_panel_precheck_command_for_platform(&platform),
+                panel_precheck_command: if desktop {
+                    default_desktop_panel_precheck_command_for_platform(&platform)
+                } else {
+                    default_panel_precheck_command_for_platform(&platform)
+                },
             },
         }
     }
 
     pub fn current_default_config_path() -> PathBuf {
         PlatformPaths::current().config_file
+    }
+
+    pub fn current_desktop_config_path() -> PathBuf {
+        PlatformPaths::desktop_current().config_file
     }
 }
 
@@ -585,6 +707,7 @@ impl Config {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
         self.probe.normalize();
+        self.desktop_webui.normalize();
         if self.security.turnstile_expected_action.is_none() {
             self.security.turnstile_expected_action = default_turnstile_expected_action();
         }
@@ -628,6 +751,15 @@ impl Config {
         {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
+    }
+
+    pub fn apply_desktop_webui_server_surface(&mut self) {
+        self.server.listen = self.desktop_webui.listen;
+        self.server.public_base_url = self.desktop_webui.public_base_url.clone();
+        self.security.cookie_secure = self.desktop_webui.cookie_secure;
+        self.security.session_ttl_seconds = self.desktop_webui.session_ttl_seconds;
+        self.security.turnstile_expected_hostname = None;
+        self.security.turnstile_expected_action = default_turnstile_expected_action();
     }
 
     pub fn secret_box(&self) -> Result<SecretBox> {
@@ -1050,7 +1182,7 @@ fn toml_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Config, ProbeConfigFilePatch, ProbeSettingsPatch};
-    use crate::platform::PlatformKind;
+    use crate::platform::{PlatformKind, PlatformPaths};
     use std::{fs, time::SystemTime};
 
     #[test]
@@ -1077,6 +1209,43 @@ mod tests {
             .update
             .panel_precheck_command
             .contains("http://127.0.0.1:15742/healthz"));
+    }
+
+    #[test]
+    fn linux_desktop_config_uses_user_scoped_tauri_paths_not_server_paths() {
+        let config =
+            Config::for_desktop_platform_kind_with_home(PlatformKind::Linux, "/home/alice");
+
+        assert_eq!(
+            config.paths.data_dir.to_string_lossy(),
+            "/home/alice/.local/share/NexusHub"
+        );
+        assert_eq!(
+            config.paths.webui_dir.to_string_lossy(),
+            "/home/alice/.local/share/NexusHub/desktop-assets"
+        );
+        assert_eq!(
+            Config::current_default_config_path(),
+            PlatformPaths::current().config_file
+        );
+        assert_eq!(
+            config.codex.workspace.to_string_lossy(),
+            "/home/alice/nexushub-workspace"
+        );
+        assert_eq!(
+            config.update.panel_precheck_command,
+            "test -d '/home/alice/.local/share/NexusHub'"
+        );
+        assert!(config
+            .update
+            .doctor_command
+            .contains("/home/alice/.local/share/NexusHub/bin/nexushubd"));
+        assert!(!config.paths.data_dir.starts_with("/opt/nexushub"));
+        assert!(!config
+            .update
+            .panel_precheck_command
+            .contains("/usr/local/bin/nexushub-update"));
+        assert!(!config.codex.workspace.starts_with("/home/ubuntu"));
     }
 
     #[test]

@@ -32,7 +32,7 @@ use crate::{
             SecurityPatch, SecurityPatchFacadePlan, SecurityView,
         },
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
-        system::{self, Capability, CapabilityGatePlan, SystemCapabilities},
+        system::{self, Capability, CapabilityGatePlan, HostSurface, SystemCapabilities},
         threads::{
             self, ThreadBlocksPage, ThreadDetailPlan, ThreadDetailReadPlan, ThreadDetailRequest,
             ThreadListPlan, ThreadListReadPlan, ThreadsQuery,
@@ -75,6 +75,7 @@ pub struct JobResponse {
 pub struct NexusHubUseCases<'a> {
     config: Option<&'a Config>,
     platform: &'a PlatformPaths,
+    host_surface: HostSurface,
 }
 
 impl<'a> NexusHubUseCases<'a> {
@@ -82,6 +83,15 @@ impl<'a> NexusHubUseCases<'a> {
         Self {
             config: None,
             platform,
+            host_surface: HostSurface::default_for_platform(platform),
+        }
+    }
+
+    pub fn new_for_surface(platform: &'a PlatformPaths, host_surface: HostSurface) -> Self {
+        Self {
+            config: None,
+            platform,
+            host_surface,
         }
     }
 
@@ -89,6 +99,19 @@ impl<'a> NexusHubUseCases<'a> {
         Self {
             config: Some(config),
             platform,
+            host_surface: HostSurface::default_for_platform(platform),
+        }
+    }
+
+    pub fn with_config_for_surface(
+        config: &'a Config,
+        platform: &'a PlatformPaths,
+        host_surface: HostSurface,
+    ) -> Self {
+        Self {
+            config: Some(config),
+            platform,
+            host_surface,
         }
     }
 
@@ -137,9 +160,10 @@ impl<'a> NexusHubUseCases<'a> {
     }
 
     pub fn updates(self) -> Result<UpdateUseCases<'a>> {
-        Ok(CoreUpdateUseCases::new(
+        Ok(CoreUpdateUseCases::new_for_surface(
             self.config_required()?,
             self.platform,
+            self.host_surface,
         ))
     }
 
@@ -147,6 +171,7 @@ impl<'a> NexusHubUseCases<'a> {
         Ok(SystemUseCases {
             config: self.config_required()?,
             platform: self.platform,
+            host_surface: self.host_surface,
         })
     }
 
@@ -154,6 +179,7 @@ impl<'a> NexusHubUseCases<'a> {
         Ok(SecurityUseCases {
             config: &self.config_required()?.security,
             platform: self.platform,
+            host_surface: self.host_surface,
         })
     }
 
@@ -635,15 +661,16 @@ pub fn job_response(job: JobRecord) -> JobResponse {
 pub struct SystemUseCases<'a> {
     config: &'a Config,
     platform: &'a PlatformPaths,
+    host_surface: HostSurface,
 }
 
 impl<'a> SystemUseCases<'a> {
     pub fn capabilities(self) -> SystemCapabilities {
-        system::system_capabilities(self.config, self.platform)
+        system::system_capabilities_for_surface(self.config, self.platform, self.host_surface)
     }
 
     pub fn capability_gate(self, capability: Capability) -> CapabilityGatePlan {
-        system::capability_gate_plan(self.platform, capability)
+        system::capability_gate_plan_for_surface(self.platform, self.host_surface, capability)
     }
 }
 
@@ -651,6 +678,7 @@ impl<'a> SystemUseCases<'a> {
 pub struct SecurityUseCases<'a> {
     config: &'a SecurityConfig,
     platform: &'a PlatformPaths,
+    host_surface: HostSurface,
 }
 
 impl<'a> SecurityUseCases<'a> {
@@ -660,8 +688,9 @@ impl<'a> SecurityUseCases<'a> {
         stored_expected_hostname: Option<String>,
         stored_expected_action: Option<String>,
     ) -> Result<SecurityView> {
-        security::security_view_with_capability(
+        security::security_view_with_surface(
             self.platform,
+            self.host_surface,
             settings,
             self.config,
             stored_expected_hostname,
@@ -676,8 +705,9 @@ impl<'a> SecurityUseCases<'a> {
         admin_configured: bool,
         base_url: Option<String>,
     ) -> Result<PublicSecurityViewFacadePlan> {
-        security::public_security_view_with_capability(
+        security::public_security_view_with_surface(
             self.platform,
+            self.host_surface,
             settings,
             self.config,
             stored_turnstile_action,
@@ -687,7 +717,7 @@ impl<'a> SecurityUseCases<'a> {
     }
 
     pub fn patch(self, patch: SecurityPatch) -> Result<SecurityPatchFacadePlan> {
-        security::plan_security_patch_with_capability(self.platform, patch)
+        security::plan_security_patch_with_surface(self.platform, self.host_surface, patch)
     }
 
     pub fn change_password(
@@ -695,8 +725,9 @@ impl<'a> SecurityUseCases<'a> {
         request: PasswordChangeRequest,
         current_password_matches: bool,
     ) -> Result<PasswordChangeFacadePlan> {
-        security::plan_password_change_with_capability(
+        security::plan_password_change_with_surface(
             self.platform,
+            self.host_surface,
             request,
             current_password_matches,
         )

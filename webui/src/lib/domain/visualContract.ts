@@ -70,12 +70,33 @@ export const macosForbiddenVisualSurfaces = [
   "安全"
 ] as const;
 
+export const desktopLanForbiddenVisualSurfaces = [
+  "Turnstile",
+  "登录设置",
+  "修改密码",
+  "Public endpoint",
+  "systemd",
+  "Nginx",
+  "管理员密码",
+  "Linux prune",
+  "WebUI 服务",
+  "安全"
+] as const;
+
+export const desktopTauriOnlyVisualSurfaces = [
+  "WebUI 服务",
+  "启动 WebUI",
+  "停止 WebUI",
+  "重置 WebUI 密码"
+] as const;
+
 export type VisualContract = {
   sharedNavigation: string[];
   sharedPanels: string[];
   sharedActions: string[];
   disabledStates: string[];
   linuxWebOnly: string[];
+  desktopTauriOnly: string[];
   forbidden: string[];
   cleanupRequiresDryRun: boolean;
   updateActions: string[];
@@ -109,8 +130,13 @@ export function visualContractForRuntime(input?: RuntimeCapabilityMatrix): Visua
         sharedDisabledStates.cleanupDuringMutation
       ] : [])
     ],
-    linuxWebOnly: capabilities.runtimeKind === "web" ? [...linuxWebOnlyVisualSurfaces] : [],
-    forbidden: capabilities.runtimeKind === "desktop" ? [...macosForbiddenVisualSurfaces] : [],
+    linuxWebOnly: capabilities.hostSurface === "linux_server_webui" ? [...linuxWebOnlyVisualSurfaces] : [],
+    desktopTauriOnly: capabilities.desktopWebuiControl ? [...desktopTauriOnlyVisualSurfaces] : [],
+    forbidden: capabilities.hostSurface === "desktop_embedded_tauri"
+      ? [...macosForbiddenVisualSurfaces]
+      : capabilities.hostSurface === "desktop_lan_webui"
+        ? [...desktopLanForbiddenVisualSurfaces]
+        : [],
     cleanupRequiresDryRun: capabilities.threadCleanup,
     updateActions: opsUpdateActionView(null, capabilities).map((action) => action.label)
   };

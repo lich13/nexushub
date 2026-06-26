@@ -3,7 +3,7 @@ use crate::{
     db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::commands,
-    services::system::{require_capability, Capability},
+    services::system::{require_capability_for_surface, Capability, HostSurface},
     system::{compare_semver, extract_semver},
     update::{self, analyze_job_failure, JobFailureCategory},
 };
@@ -130,11 +130,28 @@ pub struct UpdateActionPlan {
 pub struct UpdateUseCases<'a> {
     config: &'a Config,
     platform: &'a PlatformPaths,
+    host_surface: HostSurface,
 }
 
 impl<'a> UpdateUseCases<'a> {
     pub fn new(config: &'a Config, platform: &'a PlatformPaths) -> Self {
-        Self { config, platform }
+        Self::new_for_surface(
+            config,
+            platform,
+            HostSurface::default_for_platform(platform),
+        )
+    }
+
+    pub fn new_for_surface(
+        config: &'a Config,
+        platform: &'a PlatformPaths,
+        host_surface: HostSurface,
+    ) -> Self {
+        Self {
+            config,
+            platform,
+            host_surface,
+        }
     }
 
     pub fn status(
@@ -142,7 +159,13 @@ impl<'a> UpdateUseCases<'a> {
         latest_version: Option<&str>,
         last_error: Option<&str>,
     ) -> Result<UpdateStatusFacadePlan> {
-        update_status_with_capability(self.config, self.platform, latest_version, last_error)
+        update_status_with_capability_for_surface(
+            self.config,
+            self.platform,
+            self.host_surface,
+            latest_version,
+            last_error,
+        )
     }
 
     pub fn status_with_recent_check_job(
@@ -151,12 +174,13 @@ impl<'a> UpdateUseCases<'a> {
         last_error: Option<&str>,
         recent_check_job: Option<&JobRecord>,
     ) -> Result<UpdateStatusFacadePlan> {
-        require_capability(self.platform, Capability::AppUpdater)?;
+        require_capability_for_surface(self.platform, self.host_surface, Capability::AppUpdater)?;
         Ok(UpdateStatusFacadePlan {
             required_capability: Capability::AppUpdater,
-            status: update_status_with_recent_check_job(
+            status: update_status_with_recent_check_job_for_surface(
                 self.config,
                 self.platform,
+                self.host_surface,
                 latest_version,
                 last_error,
                 recent_check_job,
@@ -165,7 +189,7 @@ impl<'a> UpdateUseCases<'a> {
     }
 
     pub fn action_plan(self, action: UpdateAction) -> Result<UpdateActionPlan> {
-        plan_update_action(self.config, self.platform, action)
+        plan_update_action_for_surface(self.config, self.platform, self.host_surface, action)
     }
 
     pub fn check_plan(self) -> Result<UpdateActionPlan> {
@@ -191,6 +215,22 @@ pub fn update_status(
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> UpdateStatus {
+    update_status_for_surface(
+        _config,
+        platform,
+        HostSurface::default_for_platform(platform),
+        latest_version,
+        last_error,
+    )
+}
+
+pub fn update_status_for_surface(
+    _config: &Config,
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    latest_version: Option<&str>,
+    last_error: Option<&str>,
+) -> UpdateStatus {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let normalized_latest = latest_version.and_then(non_empty_string);
     let update_available = normalized_latest
@@ -204,8 +244,8 @@ pub fn update_status(
     } else {
         UpdateState::Idle
     };
-    let method = execution_method(platform.kind);
-    let capabilities = capabilities_for(platform.kind);
+    let method = execution_method_for_surface(platform.kind, host_surface);
+    let capabilities = capabilities_for_surface(platform.kind, host_surface);
     let recommended_action = recommended_action(platform.kind, method, update_available);
 
     UpdateStatus {
@@ -227,10 +267,32 @@ pub fn update_status_with_capability(
     latest_version: Option<&str>,
     last_error: Option<&str>,
 ) -> Result<UpdateStatusFacadePlan> {
-    require_capability(platform, Capability::AppUpdater)?;
+    update_status_with_capability_for_surface(
+        config,
+        platform,
+        HostSurface::default_for_platform(platform),
+        latest_version,
+        last_error,
+    )
+}
+
+pub fn update_status_with_capability_for_surface(
+    config: &Config,
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    latest_version: Option<&str>,
+    last_error: Option<&str>,
+) -> Result<UpdateStatusFacadePlan> {
+    require_capability_for_surface(platform, host_surface, Capability::AppUpdater)?;
     Ok(UpdateStatusFacadePlan {
         required_capability: Capability::AppUpdater,
-        status: update_status(config, platform, latest_version, last_error),
+        status: update_status_for_surface(
+            config,
+            platform,
+            host_surface,
+            latest_version,
+            last_error,
+        ),
     })
 }
 
@@ -241,22 +303,54 @@ pub fn update_status_with_recent_check_job(
     last_error: Option<&str>,
     recent_check_job: Option<&JobRecord>,
 ) -> UpdateStatus {
-    let mut status = update_status(config, platform, latest_version, last_error);
+    update_status_with_recent_check_job_for_surface(
+        config,
+        platform,
+        HostSurface::default_for_platform(platform),
+        latest_version,
+        last_error,
+        recent_check_job,
+    )
+}
+
+pub fn update_status_with_recent_check_job_for_surface(
+    config: &Config,
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    latest_version: Option<&str>,
+    last_error: Option<&str>,
+    recent_check_job: Option<&JobRecord>,
+) -> UpdateStatus {
+    let mut status =
+        update_status_for_surface(config, platform, host_surface, latest_version, last_error);
     if latest_version.is_some() || last_error.is_some() || platform.kind != PlatformKind::Macos {
         return status;
     }
     if let Some(job) = recent_check_job {
-        derive_macos_recent_check_status(&mut status, job, config, platform);
+        derive_macos_recent_check_status(&mut status, job, config, platform, host_surface);
     }
     status
 }
 
 pub fn update_action_plan(platform: &PlatformPaths, action: UpdateAction) -> UpdateJobPlan {
+    update_job_plan_for_surface(
+        platform,
+        HostSurface::default_for_platform(platform),
+        action,
+    )
+}
+
+pub fn update_job_plan_for_surface(
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    action: UpdateAction,
+) -> UpdateJobPlan {
     UpdateJobPlan {
         action,
-        method: execution_method(platform.kind),
+        method: execution_method_for_surface(platform.kind, host_surface),
         platform: platform.kind,
-        exclusive: platform.kind == PlatformKind::Linux,
+        exclusive: platform.kind == PlatformKind::Linux
+            && host_surface == HostSurface::LinuxServerWebui,
     }
 }
 
@@ -265,9 +359,24 @@ pub fn plan_update_action(
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<UpdateActionPlan> {
-    let job_plan = update_action_plan(platform, action);
-    let required_capability = update_action_capability(platform.kind, action);
-    require_capability(platform, required_capability)?;
+    plan_update_action_for_surface(
+        config,
+        platform,
+        HostSurface::default_for_platform(platform),
+        action,
+    )
+}
+
+pub fn plan_update_action_for_surface(
+    config: &Config,
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    action: UpdateAction,
+) -> Result<UpdateActionPlan> {
+    let job_plan = update_job_plan_for_surface(platform, host_surface, action);
+    let required_capability =
+        update_action_capability_for_surface(platform.kind, host_surface, action);
+    require_capability_for_surface(platform, host_surface, required_capability)?;
     let (linux_job, macos_job, native) = match job_plan.method {
         UpdateExecutionMethod::LinuxSystemdJob => {
             (Some(linux_update_job_spec(config, job_plan)?), None, None)
@@ -350,6 +459,7 @@ fn derive_macos_recent_check_status(
     job: &JobRecord,
     config: &Config,
     platform: &PlatformPaths,
+    host_surface: HostSurface,
 ) {
     if job.kind != "nexushub_update_check" {
         return;
@@ -363,7 +473,7 @@ fn derive_macos_recent_check_status(
         return;
     }
     if let Some(version) = macos_signed_update_version_from_output(&job.output) {
-        *status = update_status(config, platform, Some(&version), None);
+        *status = update_status_for_surface(config, platform, host_surface, Some(&version), None);
         status.state = if status.update_available == Some(true) {
             UpdateState::Ready
         } else {
@@ -396,7 +506,17 @@ fn non_empty_string(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn update_action_capability(platform: PlatformKind, action: UpdateAction) -> Capability {
+fn update_action_capability_for_surface(
+    platform: PlatformKind,
+    host_surface: HostSurface,
+    action: UpdateAction,
+) -> Capability {
+    if host_surface == HostSurface::DesktopEmbeddedTauri {
+        return match action {
+            UpdateAction::Check | UpdateAction::Install => Capability::AppUpdater,
+            UpdateAction::Prune => Capability::PruneBackups,
+        };
+    }
     match (platform, action) {
         (PlatformKind::Linux, UpdateAction::Prune) => Capability::PruneBackups,
         (PlatformKind::Linux, UpdateAction::Check | UpdateAction::Install) => {
@@ -431,17 +551,24 @@ pub fn update_available_for_versions(current_version: &str, latest_version: &str
     )
 }
 
-fn execution_method(platform: PlatformKind) -> UpdateExecutionMethod {
-    match platform {
-        PlatformKind::Linux => UpdateExecutionMethod::LinuxSystemdJob,
-        PlatformKind::Macos => UpdateExecutionMethod::MacosTauriUpdater,
-        PlatformKind::Windows => UpdateExecutionMethod::Unsupported,
+fn execution_method_for_surface(
+    platform: PlatformKind,
+    host_surface: HostSurface,
+) -> UpdateExecutionMethod {
+    match (platform, host_surface) {
+        (PlatformKind::Linux, HostSurface::LinuxServerWebui) => {
+            UpdateExecutionMethod::LinuxSystemdJob
+        }
+        (PlatformKind::Linux | PlatformKind::Macos, HostSurface::DesktopEmbeddedTauri) => {
+            UpdateExecutionMethod::MacosTauriUpdater
+        }
+        _ => UpdateExecutionMethod::Unsupported,
     }
 }
 
-fn capabilities_for(platform: PlatformKind) -> Vec<String> {
-    match platform {
-        PlatformKind::Linux => [
+fn capabilities_for_surface(platform: PlatformKind, host_surface: HostSurface) -> Vec<String> {
+    match (platform, host_surface) {
+        (PlatformKind::Linux, HostSurface::LinuxServerWebui) => [
             "check",
             "confirm_install",
             "job_history",
@@ -453,7 +580,7 @@ fn capabilities_for(platform: PlatformKind) -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect(),
-        PlatformKind::Macos => [
+        (PlatformKind::Linux | PlatformKind::Macos, HostSurface::DesktopEmbeddedTauri) => [
             "check",
             "confirm_install",
             "job_history",
@@ -463,7 +590,7 @@ fn capabilities_for(platform: PlatformKind) -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect(),
-        PlatformKind::Windows => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
@@ -483,6 +610,12 @@ fn recommended_action(
             "Confirm install in the Tauri updater after signature verification.".to_string()
         }
         (PlatformKind::Macos, UpdateExecutionMethod::MacosTauriUpdater, _) => {
+            "Use the Tauri updater to check signed app releases.".to_string()
+        }
+        (PlatformKind::Linux, UpdateExecutionMethod::MacosTauriUpdater, Some(true)) => {
+            "Confirm install in the Tauri updater after signature verification.".to_string()
+        }
+        (PlatformKind::Linux, UpdateExecutionMethod::MacosTauriUpdater, _) => {
             "Use the Tauri updater to check signed app releases.".to_string()
         }
         _ => "Updates are unavailable on this platform in the current release.".to_string(),

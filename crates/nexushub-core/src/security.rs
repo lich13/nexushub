@@ -1,4 +1,26 @@
+use anyhow::{anyhow, Result};
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use sha2::{Digest, Sha256};
+
+pub fn hash_password(password: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Ok(Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|err| anyhow!("hash password: {err}"))?
+        .to_string())
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    let Ok(parsed_hash) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+}
 
 pub fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
@@ -41,7 +63,15 @@ pub fn redact_output(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_output;
+    use super::{hash_password, redact_output, verify_password};
+
+    #[test]
+    fn password_hash_round_trips_with_argon2() {
+        let hash = hash_password("correct horse battery staple").unwrap();
+        assert!(verify_password("correct horse battery staple", &hash));
+        assert!(!verify_password("wrong password", &hash));
+        assert!(!hash.contains("correct horse"));
+    }
 
     #[test]
     fn redacts_token_like_lines() {

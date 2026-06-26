@@ -37,8 +37,30 @@ impl PlatformPaths {
         }
     }
 
+    pub fn desktop_current() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::for_desktop_kind(PlatformKind::Macos)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Self::for_desktop_kind(PlatformKind::Windows)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Self::for_desktop_kind(PlatformKind::Linux)
+        }
+    }
+
     pub fn for_kind(kind: PlatformKind) -> Self {
         Self::for_kind_with_home(kind, dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")))
+    }
+
+    pub fn for_desktop_kind(kind: PlatformKind) -> Self {
+        Self::for_desktop_kind_with_home(
+            kind,
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")),
+        )
     }
 
     pub fn for_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
@@ -72,6 +94,36 @@ impl PlatformPaths {
                 log_dir: PathBuf::from(r"%ProgramData%\NexusHub\logs"),
                 service_name: "NexusHub".to_string(),
                 service_kind: "windows_service".to_string(),
+                service_file: None,
+            },
+        }
+    }
+
+    pub fn for_desktop_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
+        match kind {
+            PlatformKind::Linux => {
+                let data_dir = home.join(".local/share/NexusHub");
+                Self {
+                    kind,
+                    config_file: home.join(".config/NexusHub/config.toml"),
+                    webui_dir: data_dir.join("desktop-assets"),
+                    log_dir: home.join(".local/state/NexusHub/logs"),
+                    data_dir,
+                    service_name: "NexusHub".to_string(),
+                    service_kind: "tauri".to_string(),
+                    service_file: None,
+                }
+            }
+            PlatformKind::Macos => Self::for_kind_with_home(kind, home),
+            PlatformKind::Windows => Self {
+                kind,
+                data_dir: home.join("AppData/Roaming/NexusHub"),
+                config_file: home.join("AppData/Roaming/NexusHub/config.toml"),
+                webui_dir: home.join("AppData/Roaming/NexusHub/webui"),
+                log_dir: home.join("AppData/Local/NexusHub/Logs"),
+                service_name: "NexusHub".to_string(),
+                service_kind: "tauri".to_string(),
                 service_file: None,
             },
         }

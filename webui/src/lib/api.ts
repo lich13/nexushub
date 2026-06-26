@@ -14,6 +14,14 @@ export { ApiError } from "./api/shared";
 export { desktopRuntimeSessionUser, getPublicSettings, login, logout, me } from "./api/auth";
 export { getSecurity, saveSecurity, changePassword } from "./api/settings";
 export {
+  getDesktopWebUiSettings,
+  saveDesktopWebUiSettings,
+  getDesktopWebUiStatus,
+  startDesktopWebUi,
+  stopDesktopWebUi,
+  resetDesktopWebUiPassword
+} from "./api/desktopWebui";
+export {
   getSystemStatus,
   getSystemVersion,
   listProviders,

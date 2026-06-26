@@ -68,13 +68,19 @@ pub fn run() {
             commands::settings::clearCodexGoal,
             commands::settings::pauseCodexGoal,
             commands::settings::resumeCodexGoal,
+            commands::desktop_webui::getDesktopWebUiSettings,
+            commands::desktop_webui::saveDesktopWebUiSettings,
+            commands::desktop_webui::getDesktopWebUiStatus,
+            commands::desktop_webui::startDesktopWebUi,
+            commands::desktop_webui::stopDesktopWebUi,
+            commands::desktop_webui::resetDesktopWebUiPassword,
             commands::jobs::listJobs,
             commands::jobs::getJob
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
                 resources::sync_nexushubd_helper_from_resource(&resource_dir)?;
-                resources::prepare_macos_webui_assets_from_resource(&resource_dir)?;
+                resources::prepare_desktop_webui_assets_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             app.manage(state);

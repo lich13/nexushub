@@ -2,7 +2,7 @@ use crate::{
     codex::{resolve_codex_paths, CodexPaths},
     config::Config,
     platform::{PlatformKind, PlatformPaths},
-    services::system::{system_capabilities, SystemCapabilities},
+    services::system::{system_capabilities_for_surface, HostSurface, SystemCapabilities},
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use tokio::process::Command;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStatus {
     pub platform: PlatformKind,
+    pub host_surface: HostSurface,
     pub capabilities: SystemCapabilities,
     pub service_kind: String,
     pub service_name: String,
@@ -69,6 +70,19 @@ pub async fn system_status_with_paths(
     config: &Config,
     platform: &PlatformPaths,
 ) -> Result<SystemStatus> {
+    system_status_with_surface(
+        config,
+        platform,
+        HostSurface::default_for_platform(platform),
+    )
+    .await
+}
+
+pub async fn system_status_with_surface(
+    config: &Config,
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+) -> Result<SystemStatus> {
     let resolved = resolve_codex_paths(&config.codex.home);
     let paths = CodexPaths::new(&resolved.home);
     let state_db_integrity = crate::codex::db_integrity(&paths).ok();
@@ -78,7 +92,8 @@ pub async fn system_status_with_paths(
     let thread_source_counts = crate::codex::thread_source_counts(&paths).unwrap_or_default();
     Ok(SystemStatus {
         platform: platform.kind,
-        capabilities: system_capabilities(config, platform),
+        host_surface,
+        capabilities: system_capabilities_for_surface(config, platform, host_surface),
         service_kind: platform.service_kind.clone(),
         service_name: platform.service_name.clone(),
         service_file: platform

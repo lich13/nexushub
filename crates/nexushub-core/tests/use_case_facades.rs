@@ -821,7 +821,14 @@ fn new_core_facade_sources_do_not_import_host_runtime_surfaces() {
         ("system", include_str!("../src/services/system.rs")),
         ("security", include_str!("../src/services/security.rs")),
     ] {
-        for forbidden in ["axum", "tauri", "nexushubd", "src-tauri", "HeaderMap"] {
+        for forbidden in [
+            "axum",
+            "tauri::",
+            "tauri_plugin",
+            "nexushubd",
+            "src-tauri",
+            "HeaderMap",
+        ] {
             assert!(
                 !source.contains(forbidden),
                 "{name} service source must not depend on host runtime surface {forbidden}"

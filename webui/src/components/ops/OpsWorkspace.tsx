@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { JobList } from "../jobs/JobList";
 import { Metric, Panel } from "../common/Panel";
+import { DesktopWebUiPanel } from "./DesktopWebUiPanel";
 import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import {
@@ -146,6 +147,7 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           )}
         </div>
       </Panel>}
+      {capabilities.desktopWebuiControl && <DesktopWebUiPanel enabled={capabilities.desktopWebuiControl} />}
       <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
         <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
       </Panel>

@@ -12,7 +12,10 @@ use axum::{
 use nexushub_core::{
     local,
     platform::{PlatformKind, PlatformPaths},
-    services::updates::{self as update_service, UpdateAction},
+    services::{
+        system::{require_capability_for_surface, Capability},
+        updates::{self as update_service, UpdateAction},
+    },
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -23,9 +26,11 @@ pub(crate) async fn system_status(
     headers: HeaderMap,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(nexushub_core::system::system_status_with_paths(
+    let platform = state.platform().clone();
+    ok(nexushub_core::system::system_status_with_surface(
         &state.config(),
-        &PlatformPaths::for_kind(PlatformKind::Linux),
+        &platform,
+        state.host_surface(),
     )
     .await?)
 }
@@ -44,9 +49,11 @@ pub(crate) async fn system_update_status(
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let version = http_version_info().await?;
-    ok(update_service::update_status(
+    let platform = state.platform().clone();
+    ok(update_service::update_status_for_surface(
         &state.config(),
-        &http_update_platform(),
+        &platform,
+        state.host_surface(),
         version.panel_latest.as_deref(),
         None,
     ))
@@ -142,7 +149,15 @@ pub(crate) async fn start_update_action(
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
-    let platform = http_update_platform();
+    let platform = state.platform().clone();
+    require_capability_for_surface(
+        &platform,
+        state.host_surface(),
+        match action {
+            UpdateAction::Prune => Capability::PruneBackups,
+            UpdateAction::Check | UpdateAction::Install => Capability::LinuxUpdateJob,
+        },
+    )?;
     let plan = linux_adapter::linux_update_action_plan(&state, &platform, action)?;
     let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
     ok(json!({"job_id": id}))

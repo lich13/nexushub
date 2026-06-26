@@ -30,6 +30,7 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 export const OPS_PANEL_TITLES = {
   system: "系统状态",
   updates: "NexusHub 更新",
+  desktopWebui: "WebUI 服务",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
   jobs: "Job History"
@@ -40,6 +41,7 @@ export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[
   return [
     OPS_PANEL_TITLES.system,
     OPS_PANEL_TITLES.updates,
+    ...(capabilities.desktopWebuiControl ? [OPS_PANEL_TITLES.desktopWebui] : []),
     ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
     OPS_PANEL_TITLES.jobs
   ];
@@ -58,6 +60,21 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
     "Latest",
     "Update",
     ...opsUpdateActionView(null, capabilities).map((action) => action.label),
+    ...(capabilities.desktopWebuiControl ? [
+      "WebUI 服务",
+      "Status",
+      "Enabled",
+      "Password",
+      "Listen",
+      "URL",
+      "PID",
+      "启用 WebUI 服务",
+      "Secure cookie",
+      "保存 WebUI 服务",
+      "重置 WebUI 密码",
+      "启动 WebUI",
+      "停止 WebUI"
+    ] : []),
     ...(capabilities.threadCleanup ? [
       "Dry-run",
       "清理归档",

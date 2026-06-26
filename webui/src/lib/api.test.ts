@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
 import apiAuthSource from "./api/auth.ts?raw";
+import apiDesktopWebuiSource from "./api/desktopWebui.ts?raw";
 import apiJobsSource from "./api/jobs.ts?raw";
 import apiProbeSource from "./api/probe.ts?raw";
 import apiSettingsSource from "./api/settings.ts?raw";
@@ -15,6 +16,7 @@ import apiUpdatesSource from "./api/updates.ts?raw";
 import queryAuthSource from "./query/auth.ts?raw";
 import queryClaudeSource from "./query/claude.ts?raw";
 import queryCodexSource from "./query/codex.ts?raw";
+import queryDesktopWebuiSource from "./query/desktopWebui.ts?raw";
 import queryOpsSource from "./query/ops.ts?raw";
 import queryProbeSource from "./query/probe.ts?raw";
 import querySecuritySource from "./query/security.ts?raw";
@@ -27,6 +29,7 @@ import type { MessageBlock, ProbeLogsDbStatus, ProbeStatus, SystemStatus, Thread
 
 const domainApiSource = [
   apiAuthSource,
+  apiDesktopWebuiSource,
   apiJobsSource,
   apiProbeSource,
   apiSettingsSource,
@@ -40,6 +43,7 @@ const querySource = [
   queryAuthSource,
   queryClaudeSource,
   queryCodexSource,
+  queryDesktopWebuiSource,
   queryOpsSource,
   queryProbeSource,
   querySecuritySource,
@@ -717,6 +721,7 @@ describe("archive delete API compatibility", () => {
       "admin_password",
       "app_updater",
       "csrf",
+      "desktop_webui_control",
       "job_history",
       "jobs",
       "linux_update_job",
@@ -737,6 +742,7 @@ describe("archive delete API compatibility", () => {
     ];
     const macosVisibleCapabilityKeys = [
       "app_updater",
+      "desktop_webui_control",
       "job_history",
       "jobs",
       "probe",
@@ -766,7 +772,8 @@ describe("archive delete API compatibility", () => {
       public_endpoint: true,
       admin_password: true,
       linux_update_job: true,
-      prune_backups: true
+      prune_backups: true,
+      desktop_webui_control: false
     });
     expect(macSystem.capabilities).toMatchObject({
       web_auth: false,
@@ -780,7 +787,8 @@ describe("archive delete API compatibility", () => {
       prune_backups: false,
       thread_cleanup: true,
       probe_log_maintenance: true,
-      thread_archive_actions: true
+      thread_archive_actions: true,
+      desktop_webui_control: true
     });
     expect(linuxPlatform).toMatchObject({ kind: "linux", service_kind: "systemd" });
     expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "demo.nexushub.local");
@@ -1111,7 +1119,8 @@ describe("archive delete API compatibility", () => {
       prune_backups: true,
       thread_cleanup: true,
       probe_log_maintenance: true,
-      thread_archive_actions: true
+      thread_archive_actions: true,
+      desktop_webui_control: false
     };
     const macCore: SystemStatus["capabilities"] = {
       ...linuxCore,
@@ -1127,7 +1136,15 @@ describe("archive delete API compatibility", () => {
       prune_backups: false,
       thread_cleanup: true,
       probe_log_maintenance: true,
-      thread_archive_actions: true
+      thread_archive_actions: true,
+      desktop_webui_control: true
+    };
+    const lanCore: SystemStatus["capabilities"] = {
+      ...macCore,
+      app_updater: false,
+      web_auth: true,
+      csrf: true,
+      desktop_webui_control: false
     };
     const webBootstrap = runtimeCapabilitiesForRuntime("web");
     const desktopBootstrap = runtimeCapabilitiesForRuntime("desktop");
@@ -1135,6 +1152,7 @@ describe("archive delete API compatibility", () => {
     expect(runtimeCapabilities()).toEqual(webBootstrap);
     expect(webBootstrap).toMatchObject({
       runtimeKind: "web",
+      hostSurface: "linux_server_webui",
       webAuth: true,
       logout: true,
       securitySettings: false,
@@ -1145,11 +1163,13 @@ describe("archive delete API compatibility", () => {
       probeLogMaintenance: false,
       threadArchiveActions: false,
       updateServiceLabels: false,
+      desktopWebuiControl: false,
       forkAction: false,
       approvalActions: false
     });
     expect(desktopBootstrap).toMatchObject({
       runtimeKind: "desktop",
+      hostSurface: "desktop_embedded_tauri",
       webAuth: false,
       logout: false,
       securitySettings: false,
@@ -1160,12 +1180,14 @@ describe("archive delete API compatibility", () => {
       probeLogMaintenance: false,
       threadArchiveActions: false,
       updateServiceLabels: false,
+      desktopWebuiControl: false,
       forkAction: false,
       approvalActions: false
     });
 
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap)).toMatchObject({
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore, host_surface: "linux_server_webui" }, webBootstrap)).toMatchObject({
       runtimeKind: "web",
+      hostSurface: "linux_server_webui",
       webAuth: true,
       securitySettings: true,
       publicEndpointStatus: true,
@@ -1174,11 +1196,13 @@ describe("archive delete API compatibility", () => {
       probeLogMaintenance: true,
       threadArchiveActions: true,
       updateServiceLabels: true,
+      desktopWebuiControl: false,
       forkAction: true,
       approvalActions: true
     });
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore }, desktopBootstrap)).toMatchObject({
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore, host_surface: "desktop_embedded_tauri" }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
+      hostSurface: "desktop_embedded_tauri",
       webAuth: false,
       securitySettings: false,
       publicEndpointStatus: false,
@@ -1187,6 +1211,7 @@ describe("archive delete API compatibility", () => {
       probeLogMaintenance: true,
       threadArchiveActions: true,
       updateServiceLabels: false,
+      desktopWebuiControl: true,
       forkAction: false,
       approvalActions: false
     });
@@ -1202,8 +1227,23 @@ describe("archive delete API compatibility", () => {
       probeLogMaintenance: true,
       threadArchiveActions: true,
       updateServiceLabels: false,
+      desktopWebuiControl: false,
       forkAction: false,
       approvalActions: false
+    });
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: lanCore, host_surface: "desktop_lan_webui" }, webBootstrap)).toMatchObject({
+      runtimeKind: "web",
+      hostSurface: "desktop_lan_webui",
+      webAuth: true,
+      logout: true,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      updatePrune: false,
+      threadCleanup: true,
+      updateServiceLabels: false,
+      desktopWebuiControl: false,
+      forkAction: true,
+      approvalActions: true
     });
     expect(Object.keys(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap))).not.toEqual(expect.arrayContaining([
       "linuxBackupPrune",
@@ -1493,6 +1533,117 @@ describe("archive delete API compatibility", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  test("desktop WebUI helpers use typed Tauri commands and stay out of web transport", async () => {
+    const {
+      getDesktopWebUiSettings,
+      saveDesktopWebUiSettings,
+      getDesktopWebUiStatus,
+      startDesktopWebUi,
+      stopDesktopWebUi,
+      resetDesktopWebUiPassword
+    } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      switch (command) {
+        case "desktopWebUi.settings.get":
+          expect(args).toBeUndefined();
+          return {
+            enabled: false,
+            listen: "0.0.0.0:15743",
+            username: "admin",
+            sessionTtlSeconds: 86400,
+            cookieSecure: false,
+            publicBaseUrl: null,
+            turnstileEnabled: false,
+            passwordConfigured: false
+          };
+        case "desktopWebUi.settings.save":
+          expect(args).toEqual({
+            settings: {
+              enabled: true,
+              listen: "127.0.0.1:15743",
+              username: "admin",
+              sessionTtlSeconds: 86400,
+              cookieSecure: false,
+              publicBaseUrl: null
+            }
+          });
+          return {
+            ...(args as { settings: object }).settings,
+            turnstileEnabled: false,
+            passwordConfigured: false
+          };
+        case "desktopWebUi.status":
+          expect(args).toBeUndefined();
+          return {
+            configured: false,
+            enabled: false,
+            running: false,
+            pid: null,
+            listen: "0.0.0.0:15743",
+            url: "http://127.0.0.1:15743/nexushub/",
+            message: "stopped"
+          };
+        case "desktopWebUi.start":
+          expect(args).toBeUndefined();
+          return {
+            configured: true,
+            enabled: true,
+            running: true,
+            pid: 123,
+            listen: "0.0.0.0:15743",
+            url: "http://127.0.0.1:15743/nexushub/",
+            message: "running"
+          };
+        case "desktopWebUi.stop":
+          expect(args).toBeUndefined();
+          return {
+            configured: true,
+            enabled: true,
+            running: false,
+            pid: null,
+            listen: "0.0.0.0:15743",
+            url: "http://127.0.0.1:15743/nexushub/",
+            message: "stopped"
+          };
+        case "desktopWebUi.password.reset":
+          expect(args).toEqual({ request: { username: "admin", password: "desktop-webui-secret" } });
+          return {
+            enabled: false,
+            listen: "0.0.0.0:15743",
+            username: "admin",
+            sessionTtlSeconds: 86400,
+            cookieSecure: false,
+            publicBaseUrl: null,
+            turnstileEnabled: false,
+            passwordConfigured: true
+          };
+        default:
+          throw new Error(`unexpected command ${command}`);
+      }
+    });
+
+    await expect(getDesktopWebUiSettings()).resolves.toMatchObject({ enabled: false, passwordConfigured: false });
+    await expect(saveDesktopWebUiSettings({
+      enabled: true,
+      listen: "127.0.0.1:15743",
+      username: "admin",
+      sessionTtlSeconds: 86400,
+      cookieSecure: false,
+      publicBaseUrl: null
+    })).resolves.toMatchObject({ enabled: true, turnstileEnabled: false });
+    await expect(getDesktopWebUiStatus()).resolves.toMatchObject({ running: false, message: "stopped" });
+    await expect(startDesktopWebUi()).resolves.toMatchObject({ running: true, pid: 123 });
+    await expect(stopDesktopWebUi()).resolves.toMatchObject({ running: false });
+    await expect(resetDesktopWebUiPassword({
+      username: "admin",
+      password: "desktop-webui-secret"
+    })).resolves.toMatchObject({ passwordConfigured: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(6);
+  });
+
   test("desktop archive cleanup uses a typed native command instead of a route bridge", async () => {
     const { startArchiveDelete } = await loadDesktopApi();
     const fetchMock = vi.fn();
@@ -1756,6 +1907,12 @@ describe("archive delete API compatibility", () => {
       "cleanup.archiveExecute",
       "cleanup.hiddenDryRun",
       "cleanup.hiddenExecute",
+      "desktopWebUi.password.reset",
+      "desktopWebUi.settings.get",
+      "desktopWebUi.settings.save",
+      "desktopWebUi.start",
+      "desktopWebUi.status",
+      "desktopWebUi.stop",
       "jobs.detail",
       "jobs.list",
       "probe.barkTest",

@@ -2,15 +2,16 @@
 
 Target host: `43.155.235.227`
 
-This runbook is for the Tencent Cloud Linux deployment only. It keeps the public
-service at `https://661313.xyz/nexushub/`, the systemd unit `nexushub`, and the
-runtime under `/opt/nexushub`. Do not mix these Linux paths with the macOS ARM64
-Tauri App layout. macOS no longer provides a browser WebUI, LaunchAgent Web
-service, or Cloudflare Tunnel entry.
+This runbook is for the Tencent Cloud Linux server deployment only. It keeps the
+public service at `https://661313.xyz/nexushub/`, the systemd unit `nexushub`,
+and the runtime under `/opt/nexushub`. Do not mix these Linux server paths with
+macOS or Linux Tauri desktop layouts.
 
-The Linux chain remains the hosted WebUI deployment chain. The macOS Tauri build
-now consumes the same `webui` source as the main interface, but packages it as an
-App-only native bundle; it does not add any macOS browser service.
+The Linux server chain remains the hosted WebUI deployment chain. macOS and
+Linux Tauri builds consume the same `webui` source as the main interface and can
+optionally expose a Tauri-controlled desktop LAN WebUI, but they do not add a
+LaunchAgent, systemd user service, Cloudflare Tunnel, or Tencent Cloud GUI
+requirement.
 
 ## Build Release Artifact
 
@@ -30,10 +31,17 @@ dist/nexushub-darwin-arm64.tar.gz.sig
 dist/nexushub-darwin-arm64.tar.gz.sha256
 dist/NexusHub-<version>-darwin-arm64.dmg
 dist/NexusHub-<version>-darwin-arm64.dmg.sha256
+dist/NexusHub-<version>-Linux-x86_64.AppImage
+dist/NexusHub-<version>-Linux-x86_64.AppImage.sig
+dist/NexusHub-<version>-Linux-x86_64.AppImage.sha256
+dist/NexusHub-<version>-Linux-x86_64.deb
+dist/NexusHub-<version>-Linux-x86_64.deb.sha256
+dist/NexusHub-<version>-Linux-x86_64.rpm
+dist/NexusHub-<version>-Linux-x86_64.rpm.sha256
 dist/latest.json
 ```
 
-`latest.json` is the signed Tauri updater manifest for `darwin-aarch64`; its URL points at the release `nexushub-darwin-arm64.tar.gz` asset and its signature must match `nexushub-darwin-arm64.tar.gz.sig`.
+`latest.json` is the signed Tauri updater manifest for `darwin-aarch64` and `linux-x86_64`. The macOS URL points at `nexushub-darwin-arm64.tar.gz` and must match `nexushub-darwin-arm64.tar.gz.sig`; the Linux desktop URL points at `NexusHub-<version>-Linux-x86_64.AppImage` and must match the AppImage `.sig`.
 
 ## Deploy
 
@@ -102,9 +110,9 @@ Then log in through Chrome 插件验收 and verify:
 Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`. The root `/api/v1/...` namespace must not return NexusHub's `{"error":"not found"}` response; it should continue to be handled by Sub2API.
 NexusHub-scoped sensitive paths such as `/nexushub/v1`, `/nexushub/responses`, and `/nexushub/metrics` must return `404` or another non-NexusHub unavailable response. If host-root `/v1`, `/responses`, or `/metrics` returns content, confirm the owning gateway service before changing it.
 
-## macOS ARM64 Boundary
+## Desktop Tauri Boundary
 
-macOS acceptance is app-local and separate from this cloud runbook:
+macOS and Linux Tauri acceptance are app-local and separate from this cloud runbook. macOS uses the official DMG; Linux desktop uses CI `xvfb` smoke for the AppImage because Tencent Cloud stays headless.
 
 ```bash
 open -a NexusHub
@@ -114,6 +122,11 @@ shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
 test -s dist/nexushub-darwin-arm64.tar.gz.sig
 test -s dist/latest.json
 shasum -a 256 -c dist/NexusHub-<version>-darwin-arm64.dmg.sha256
+test -x dist/NexusHub-<version>-Linux-x86_64.AppImage
+test -s dist/NexusHub-<version>-Linux-x86_64.AppImage.sig
+shasum -a 256 -c dist/NexusHub-<version>-Linux-x86_64.AppImage.sha256
+shasum -a 256 -c dist/NexusHub-<version>-Linux-x86_64.deb.sha256
+shasum -a 256 -c dist/NexusHub-<version>-Linux-x86_64.rpm.sha256
 ```
 
 Expected macOS paths:
@@ -121,16 +134,26 @@ Expected macOS paths:
 ```text
 ~/Library/Application Support/NexusHub/
 ~/Library/Application Support/NexusHub/bin/nexushubd
+~/Library/Application Support/NexusHub/desktop-assets/
 ~/Library/Logs/NexusHub/
 ```
 
-The macOS App bundle carries the local `nexushubd` helper and syncs it into
-`Application Support` on launch. This helper is used for Probe Bark tests and
-Hook installation; macOS still does not expose a browser WebUI service.
+Expected Linux desktop paths:
 
-Do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel as a
-macOS entry point. The Tencent Cloud Linux WebUI remains available only at
-`https://661313.xyz/nexushub/`.
+```text
+~/.config/NexusHub/config.toml
+~/.local/share/NexusHub/bin/nexushubd
+~/.local/share/NexusHub/desktop-assets/
+~/.local/state/NexusHub/logs/
+```
+
+The Tauri App bundle carries the local `nexushubd` helper and syncs it into the
+desktop data directory on launch. This helper is used for Probe Bark tests, Hook
+installation, and the optional desktop LAN WebUI. The LAN WebUI is default-off,
+requires an independent `desktop-webui:<username>` password, disables Turnstile
+by default, and must be started or stopped only from embedded Tauri. Browser
+clients of the LAN WebUI must not see Linux server systemd, Nginx, public
+endpoint, or prune controls.
 
 ## Cleanup
 

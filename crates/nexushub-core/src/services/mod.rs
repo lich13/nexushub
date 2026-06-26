@@ -1,6 +1,7 @@
 pub mod app_server_threads;
 pub mod cleanup;
 pub mod commands;
+pub mod desktop_webui;
 pub mod goals;
 pub mod jobs;
 pub mod probe;

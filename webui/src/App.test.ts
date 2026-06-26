@@ -270,6 +270,7 @@ function expectSourceToAvoidTokens(source: string, label: string, tokens: string
 
 const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "web",
+  hostSurface: "linux_server_webui",
   webAuth: true,
   logout: true,
   securitySettings: true,
@@ -280,12 +281,14 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: true,
+  desktopWebuiControl: false,
   forkAction: true,
   approvalActions: true
 };
 
 const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
+  hostSurface: "desktop_embedded_tauri",
   webAuth: false,
   logout: false,
   securitySettings: false,
@@ -296,6 +299,7 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: false,
+  desktopWebuiControl: true,
   forkAction: false,
   approvalActions: false
 };

@@ -12,21 +12,23 @@ pub(crate) fn sync_nexushubd_helper_from_resource(resource_dir: &Path) -> Result
     if is_nexushubd_helper_placeholder(&source).map_err(|err| err.to_string())? {
         return Ok(());
     }
-    let platform = nexushub_core::platform::PlatformPaths::current();
+    let platform = nexushub_core::platform::PlatformPaths::desktop_current();
     let target = platform.daemon_binary();
     sync_nexushubd_helper_file(&source, &target).map_err(|err| err.to_string())
 }
 
-pub(crate) fn prepare_macos_webui_assets_from_resource(resource_dir: &Path) -> Result<(), String> {
+pub(crate) fn prepare_desktop_webui_assets_from_resource(
+    resource_dir: &Path,
+) -> Result<(), String> {
     let source = resource_dir.join(WEBUI_RESOURCE_NAME);
     if !source.join("index.html").is_file() {
         return Ok(());
     }
 
-    let platform = nexushub_core::platform::PlatformPaths::current();
+    let platform = nexushub_core::platform::PlatformPaths::desktop_current();
     sync_directory(&source, &platform.webui_dir).map_err(|err| err.to_string())?;
     remove_legacy_webui_dir(&platform).map_err(|err| err.to_string())?;
-    migrate_macos_webui_dir_config(&platform).map_err(|err| err.to_string())
+    migrate_desktop_webui_dir_config(&platform).map_err(|err| err.to_string())
 }
 
 fn remove_legacy_webui_dir(
@@ -39,7 +41,7 @@ fn remove_legacy_webui_dir(
     Ok(())
 }
 
-fn migrate_macos_webui_dir_config(
+fn migrate_desktop_webui_dir_config(
     platform: &nexushub_core::platform::PlatformPaths,
 ) -> anyhow::Result<()> {
     let config_path = &platform.config_file;
@@ -198,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_macos_webui_dir_config_moves_legacy_webui_path() {
+    fn migrate_desktop_webui_dir_config_moves_legacy_webui_path() {
         let temp = tempfile::tempdir().unwrap();
         let platform = nexushub_core::platform::PlatformPaths::for_kind_with_home(
             nexushub_core::platform::PlatformKind::Macos,
@@ -221,7 +223,7 @@ log_dir = "{}"
         );
         std::fs::write(&platform.config_file, config).unwrap();
 
-        migrate_macos_webui_dir_config(&platform).unwrap();
+        migrate_desktop_webui_dir_config(&platform).unwrap();
 
         let migrated = std::fs::read_to_string(&platform.config_file).unwrap();
         assert!(migrated.contains(&format!("webui_dir = \"{}\"", platform.webui_dir.display())));

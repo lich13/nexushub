@@ -1,11 +1,11 @@
 use crate::state::AppState;
-use anyhow::{anyhow, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
+use anyhow::Result;
 use axum::http::HeaderMap;
 use chrono::Utc;
+use nexushub_core::services::{
+    desktop_webui::{is_desktop_webui_admin, public_username, realm_username},
+    system::HostSurface,
+};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 
@@ -21,20 +21,11 @@ pub struct AuthContext {
 }
 
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Ok(Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow!("hash password: {e}"))?
-        .to_string())
+    nexushub_core::security::hash_password(password)
 }
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
-    let Ok(parsed_hash) = PasswordHash::new(hash) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok()
+    nexushub_core::security::verify_password(password, hash)
 }
 
 pub fn random_token() -> String {
@@ -91,12 +82,32 @@ pub fn require_auth(
         .admin_by_id(&session.admin_id)
         .map_err(|_| axum::http::StatusCode::UNAUTHORIZED)?
         .ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
+    if !admin_matches_surface(state.host_surface(), &admin.username) {
+        return Err(axum::http::StatusCode::UNAUTHORIZED);
+    }
     Ok(AuthContext {
         admin_id: admin.id,
-        username: admin.username,
+        username: public_username(&admin.username).to_string(),
         session_id: session.id,
         csrf_token_hash: session.csrf_token_hash,
     })
+}
+
+pub fn login_username_for_surface(surface: HostSurface, username: &str) -> String {
+    match surface {
+        HostSurface::DesktopLanWebui => realm_username(username),
+        HostSurface::LinuxServerWebui | HostSurface::DesktopEmbeddedTauri => {
+            username.trim().to_string()
+        }
+    }
+}
+
+fn admin_matches_surface(surface: HostSurface, username: &str) -> bool {
+    match surface {
+        HostSurface::DesktopLanWebui => is_desktop_webui_admin(username),
+        HostSurface::LinuxServerWebui => !is_desktop_webui_admin(username),
+        HostSurface::DesktopEmbeddedTauri => false,
+    }
 }
 
 pub fn require_csrf(headers: &HeaderMap, auth: &AuthContext) -> Result<(), axum::http::StatusCode> {

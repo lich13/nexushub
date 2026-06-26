@@ -8,12 +8,13 @@ import {
   type DemoFixtureKey
 } from "./demoCore";
 
-const fixtureKeys: DemoFixtureKey[] = ["linux-web", "macos-tauri"];
+const fixtureKeys: DemoFixtureKey[] = ["linux-web", "macos-tauri", "desktop-lan-webui"];
 
 const expectedCapabilityKeys = [
   "admin_password",
   "app_updater",
   "csrf",
+  "desktop_webui_control",
   "job_history",
   "jobs",
   "linux_update_job",
@@ -35,6 +36,7 @@ const expectedCapabilityKeys = [
 
 const macosVisibleCapabilityKeys = [
   "app_updater",
+  "desktop_webui_control",
   "job_history",
   "jobs",
   "probe",
@@ -58,6 +60,7 @@ describe("demo fixture builder", () => {
       log_dir: "/srv/nexushub-demo/logs"
     });
     expect(buildDemoSystemStatus("linux-web")).toMatchObject({
+      host_surface: "linux_server_webui",
       host_label: "demo-linux-web",
       public_endpoint: "https://demo.nexushub.local/nexushub/",
       panel_db: "/srv/nexushub-demo/panel.sqlite"
@@ -115,7 +118,8 @@ describe("demo fixture builder", () => {
       job_history: true,
       thread_cleanup: true,
       probe_log_maintenance: true,
-      thread_archive_actions: true
+      thread_archive_actions: true,
+      desktop_webui_control: true
     });
     expect({ ...macCapabilities }).not.toHaveProperty("systemd");
     expect({ ...macCapabilities }).not.toHaveProperty("turnstile");
@@ -131,8 +135,10 @@ describe("demo fixture builder", () => {
       service_kind: "tauri",
       service_name: "NexusHub.app"
     });
+    expect(fixture.system.host_surface).toBe("desktop_embedded_tauri");
     expect(fixture.system.capabilities).toMatchObject({
       app_updater: true,
+      desktop_webui_control: true,
       web_auth: false,
       systemd: false,
       nginx: false,
@@ -172,5 +178,42 @@ describe("demo fixture builder", () => {
       linux_update_job: true,
       prune_backups: true
     });
+  });
+
+  test("desktop LAN WebUI fixture keeps browser auth but hides Linux server administration", () => {
+    const fixture = buildDemoFixture("desktop-lan-webui");
+    const serializedFixture = JSON.stringify(fixture);
+
+    expect(buildDemoPlatformOverview("desktop-lan-webui")).toMatchObject({
+      kind: "macos",
+      service_kind: "desktop-lan-webui",
+      service_name: "NexusHub LAN WebUI"
+    });
+    expect(fixture.system).toMatchObject({
+      platform: "macos",
+      host_surface: "desktop_lan_webui",
+      public_endpoint: null
+    });
+    expect(fixture.system.capabilities).toMatchObject({
+      web_auth: true,
+      csrf: true,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false,
+      app_updater: false,
+      desktop_webui_control: false,
+      thread_cleanup: true
+    });
+    expect(buildDemoSecurity("desktop-lan-webui")).toMatchObject({
+      turnstile_enabled: false,
+      turnstile_required: false,
+      session_ttl_seconds: 86400
+    });
+    expect(serializedFixture).not.toMatch(/Linux update|Linux prune|\/opt\/nexushub|43\.155\.235\.227|661313\.xyz/i);
   });
 });

@@ -11,6 +11,7 @@ use nexushub_core::{
         LocalPluginInfo,
     },
     platform::{PlatformKind, PlatformPaths},
+    services::system::HostSurface,
 };
 use serde::Serialize;
 use std::{
@@ -62,11 +63,13 @@ pub struct DesktopState {
     pub db: PanelDb,
     pub jobs: JobRunner,
     platform: PlatformPaths,
+    host_surface: HostSurface,
 }
 
 impl DesktopState {
     pub fn current() -> Result<Self> {
-        let mut config = load_desktop_config();
+        let platform = PlatformPaths::desktop_current();
+        let mut config = load_desktop_config(&platform);
         std::fs::create_dir_all(&config.paths.data_dir)?;
         std::fs::create_dir_all(&config.paths.log_dir)?;
         if nexushub_core::codex::is_macos_network_volume_path(&config.codex.workspace) {
@@ -75,7 +78,7 @@ impl DesktopState {
         }
         std::fs::create_dir_all(&config.codex.workspace)?;
         let db = open_panel_db(&config)?;
-        Ok(Self::new(config, db, PlatformPaths::current()))
+        Ok(Self::new(config, db, platform))
     }
 
     pub fn new(config: Config, db: PanelDb, platform: PlatformPaths) -> Self {
@@ -85,6 +88,7 @@ impl DesktopState {
             db,
             jobs,
             platform,
+            host_surface: HostSurface::DesktopEmbeddedTauri,
         }
     }
 
@@ -108,6 +112,10 @@ impl DesktopState {
     pub fn platform(&self) -> &PlatformPaths {
         &self.platform
     }
+
+    pub fn host_surface(&self) -> HostSurface {
+        self.host_surface
+    }
 }
 
 fn default_local_desktop_workspace() -> Option<PathBuf> {
@@ -115,26 +123,28 @@ fn default_local_desktop_workspace() -> Option<PathBuf> {
 }
 
 pub fn nexus_paths_for_home(home: impl Into<PathBuf>) -> NexusPaths {
-    let home = home.into();
-    let app_support_dir = home
-        .join("Library")
-        .join("Application Support")
-        .join("NexusHub");
-    let log_dir = home.join("Library").join("Logs").join("NexusHub");
+    nexus_paths_for_platform_home(PlatformKind::Macos, home)
+}
 
+pub fn nexus_paths_for_platform_home(kind: PlatformKind, home: impl Into<PathBuf>) -> NexusPaths {
+    let platform = PlatformPaths::for_desktop_kind_with_home(kind, home);
+    nexus_paths_for_platform(&platform)
+}
+
+fn nexus_paths_for_platform(platform: &PlatformPaths) -> NexusPaths {
     NexusPaths {
-        config_file: app_support_dir.join("config.toml"),
-        database_file: app_support_dir.join("nexushub.sqlite"),
-        app_log_file: log_dir.join("nexushub.log"),
-        app_support_dir,
-        log_dir,
+        config_file: platform.config_file.clone(),
+        database_file: platform.data_dir.join("nexushub.sqlite"),
+        app_log_file: platform.log_dir.join("nexushub.log"),
+        app_support_dir: platform.data_dir.clone(),
+        log_dir: platform.log_dir.clone(),
     }
 }
 
 pub fn build_desktop_overview() -> Result<DesktopOverview> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
-    let paths = nexus_paths_for_home(home);
-    let config = load_desktop_config();
+    let platform = PlatformPaths::desktop_current();
+    let paths = nexus_paths_for_platform(&platform);
+    let config = load_desktop_config(&platform);
     build_desktop_overview_for_config(paths, &config)
 }
 
@@ -167,8 +177,8 @@ pub async fn build_desktop_home() -> Result<DesktopHome> {
 
 pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<DesktopHome> {
     let config = state.config();
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
-    let overview = build_desktop_overview_for_config(nexus_paths_for_home(home), &config)?;
+    let overview =
+        build_desktop_overview_for_config(nexus_paths_for_platform(state.platform()), &config)?;
     let mut warnings = overview_warning(&overview);
     let resolved = resolve_codex_paths(&config.codex.home);
     warnings.extend(resolved.discovery_warnings.clone());
@@ -183,9 +193,13 @@ pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<Deskt
     })
 }
 
-fn load_desktop_config() -> Config {
-    Config::load(Config::current_default_config_path())
-        .unwrap_or_else(|_| Config::for_platform_kind(PlatformKind::Macos))
+fn load_desktop_config(platform: &PlatformPaths) -> Config {
+    if platform.config_file.is_file() {
+        Config::load(&platform.config_file)
+            .unwrap_or_else(|_| Config::for_desktop_platform_kind(platform.kind))
+    } else {
+        Config::for_desktop_platform_kind(platform.kind)
+    }
 }
 
 pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {

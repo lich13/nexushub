@@ -10,7 +10,6 @@ use nexushub_core::services::updates::{self as update_service, UpdateAction};
 use nexushub_core::{
     claude_code::{self, ClaudePaths},
     local,
-    platform::{PlatformKind, PlatformPaths},
     providers::ProviderRegistry,
 };
 use serde::Serialize;
@@ -104,7 +103,7 @@ async fn claude_code_overview(State(state): State<AppState>, headers: HeaderMap)
 
 async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(PlatformPaths::for_kind(PlatformKind::Linux))
+    ok(state.platform().clone())
 }
 
 async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {

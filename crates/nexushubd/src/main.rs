@@ -26,6 +26,7 @@ use nexushub_core::{
         DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS,
     },
     services::probe as probe_service,
+    services::system::HostSurface,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -64,7 +65,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Serve,
+    Serve {
+        #[arg(long, default_value_t = HostSurface::LinuxServerWebui)]
+        surface: HostSurface,
+    },
     Doctor,
     InitConfig,
     Admin {
@@ -197,7 +201,7 @@ async fn main() -> Result<()> {
             let db = open_panel_db(&config)?;
             run_probe_command(command, &config, db).await?;
         }
-        Command::Serve => serve(cli.config).await?,
+        Command::Serve { surface } => serve(cli.config, surface).await?,
     }
     Ok(())
 }
@@ -1503,10 +1507,13 @@ fn init_admin(db: PanelDb, username: &str, password: &str, allow_existing: bool)
     Ok(())
 }
 
-async fn serve(config_path: PathBuf) -> Result<()> {
-    let config = Config::load(&config_path)?;
+async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
+    let mut config = Config::load(&config_path)?;
+    if host_surface == HostSurface::DesktopLanWebui {
+        config.apply_desktop_webui_server_surface();
+    }
     let db = open_panel_db(&config)?;
-    let state = AppState::new(config.clone(), db);
+    let state = AppState::new_for_surface(config.clone(), db, host_surface);
     spawn_probe_logs_db_scheduler(state.clone());
     spawn_probe_thread_scan(state.clone());
     api::spawn_probe_status_refresh(state.clone());
@@ -1517,7 +1524,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    tracing::info!("nexushub listening on {addr}");
+    tracing::info!("nexushub listening on {addr} surface={host_surface}");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

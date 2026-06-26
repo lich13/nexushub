@@ -1334,10 +1334,11 @@ dependencies = [
 
 [[package]]
 name = "nexushub-core"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "argon2",
  "base64",
  "calamine",
  "chrono",
@@ -1362,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "nexushubd"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "argon2",

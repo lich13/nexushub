@@ -3,6 +3,8 @@ use nexushub_core::{
     config::Config,
     db::PanelDb,
     jobs::JobRunner,
+    platform::PlatformPaths,
+    services::system::HostSurface,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -16,6 +18,8 @@ use std::{
 #[derive(Clone)]
 pub struct AppState {
     config: Arc<RwLock<Config>>,
+    host_surface: HostSurface,
+    platform: PlatformPaths,
     pub db: PanelDb,
     pub jobs: JobRunner,
     pub http: Client,
@@ -26,10 +30,24 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config, db: PanelDb) -> Self {
+        Self::new_for_surface(config, db, HostSurface::LinuxServerWebui)
+    }
+
+    pub fn new_for_surface(config: Config, db: PanelDb, host_surface: HostSurface) -> Self {
         let jobs = JobRunner::new(db.clone());
         let login_rate_limit = config.security.login_rate_limit_per_minute;
+        let platform = match host_surface {
+            HostSurface::LinuxServerWebui => {
+                PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux)
+            }
+            HostSurface::DesktopEmbeddedTauri | HostSurface::DesktopLanWebui => {
+                PlatformPaths::current()
+            }
+        };
         Self {
             config: Arc::new(RwLock::new(config)),
+            host_surface,
+            platform,
             db,
             jobs,
             http: Client::new(),
@@ -37,6 +55,14 @@ impl AppState {
             rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
         }
+    }
+
+    pub fn host_surface(&self) -> HostSurface {
+        self.host_surface
+    }
+
+    pub fn platform(&self) -> &PlatformPaths {
+        &self.platform
     }
 
     pub fn config(&self) -> Config {

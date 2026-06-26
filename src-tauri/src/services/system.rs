@@ -8,7 +8,7 @@ use nexushub_core::{
         LocalPluginInfo,
     },
     platform::PlatformPaths,
-    system::{system_status_with_paths, SystemStatus},
+    system::{system_status_with_surface, SystemStatus},
 };
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ pub struct DesktopSystemVersion {
 
 pub(crate) async fn system_status_with_state(state: &DesktopState) -> Result<SystemStatus> {
     let config = state.config();
-    system_status_with_paths(&config, state.platform()).await
+    system_status_with_surface(&config, state.platform(), state.host_surface()).await
 }
 
 pub(crate) fn system_version() -> DesktopSystemVersion {

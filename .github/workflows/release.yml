@@ -79,6 +79,81 @@ jobs:
             dist/nexushub-linux-x86_64.tar.gz
             dist/nexushub-linux-x86_64.tar.gz.sha256
 
+  linux-tauri-x86_64:
+    runs-on: ubuntu-24.04
+    needs: guard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Linux Tauri deps
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            curl \
+            wget \
+            file \
+            patchelf \
+            libssl-dev \
+            rpm \
+            xdg-utils \
+            xvfb \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+          sudo apt-get install -y --no-install-recommends libfuse2 \
+            || sudo apt-get install -y --no-install-recommends libfuse2t64 \
+            || true
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: bash scripts/package-linux-tauri-x86_64.sh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Smoke Linux Tauri AppImage with xvfb
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find dist -maxdepth 1 -name 'NexusHub-*-Linux-x86_64.AppImage' -print | sort | tail -n 1)"
+          test -x "${appimage}"
+          set +e
+          xvfb-run -a env \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+            WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+            timeout 20s "${appimage}"
+          status="$?"
+          set -e
+          if [[ "${status}" != "0" && "${status}" != "124" ]]; then
+            echo "Linux Tauri smoke failed with status ${status}" >&2
+            exit "${status}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexushub-linux-tauri-x86_64
+          path: |
+            dist/NexusHub-*-Linux-x86_64.AppImage
+            dist/NexusHub-*-Linux-x86_64.AppImage.sig
+            dist/NexusHub-*-Linux-x86_64.AppImage.sha256
+            dist/NexusHub-*-Linux-x86_64.deb
+            dist/NexusHub-*-Linux-x86_64.deb.sha256
+            dist/NexusHub-*-Linux-x86_64.rpm
+            dist/NexusHub-*-Linux-x86_64.rpm.sha256
+
   macos-darwin-arm64:
     runs-on: macos-14
     needs: guard
@@ -111,6 +186,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - linux
+      - linux-tauri-x86_64
       - macos-darwin-arm64
     permissions:
       contents: write
@@ -125,23 +201,30 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
-          signature="$(cat dist/nexushub-darwin-arm64.tar.gz.sig)"
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/nexushub-darwin-arm64.tar.gz"
+          darwin_signature="$(cat dist/nexushub-darwin-arm64.tar.gz.sig)"
+          darwin_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/nexushub-darwin-arm64.tar.gz"
+          linux_appimage="NexusHub-${version}-Linux-x86_64.AppImage"
+          linux_signature="$(cat "dist/${linux_appimage}.sig")"
+          linux_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${linux_appimage}"
           pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          python3 - "${version}" "${signature}" "${url}" "${pub_date}" <<'PY'
+          python3 - "${version}" "${pub_date}" "${darwin_signature}" "${darwin_url}" "${linux_signature}" "${linux_url}" <<'PY'
           import json
           import sys
 
-          version, signature, url, pub_date = sys.argv[1:]
+          version, pub_date, darwin_signature, darwin_url, linux_signature, linux_url = sys.argv[1:]
           latest = {
               "version": version,
               "notes": f"Release v{version}",
               "pub_date": pub_date,
               "platforms": {
                   "darwin-aarch64": {
-                      "signature": signature,
-                      "url": url,
-                  }
+                      "signature": darwin_signature,
+                      "url": darwin_url,
+                  },
+                  "linux-x86_64": {
+                      "signature": linux_signature,
+                      "url": linux_url,
+                  },
               },
           }
           with open("dist/latest.json", "w", encoding="utf-8") as fh:
@@ -153,6 +236,13 @@ jobs:
           files: |
             dist/nexushub-linux-x86_64.tar.gz
             dist/nexushub-linux-x86_64.tar.gz.sha256
+            dist/NexusHub-*-Linux-x86_64.AppImage
+            dist/NexusHub-*-Linux-x86_64.AppImage.sig
+            dist/NexusHub-*-Linux-x86_64.AppImage.sha256
+            dist/NexusHub-*-Linux-x86_64.deb
+            dist/NexusHub-*-Linux-x86_64.deb.sha256
+            dist/NexusHub-*-Linux-x86_64.rpm
+            dist/NexusHub-*-Linux-x86_64.rpm.sha256
             dist/nexushub-darwin-arm64.tar.gz
             dist/nexushub-darwin-arm64.tar.gz.sig
             dist/nexushub-darwin-arm64.tar.gz.sha256

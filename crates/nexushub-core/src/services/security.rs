@@ -5,7 +5,7 @@ use crate::{
     config::{SecurityConfig, DEFAULT_TURNSTILE_SITE_KEY},
     db::SecuritySettings,
     platform::PlatformPaths,
-    services::system::{require_capability, Capability},
+    services::system::{require_capability_for_surface, Capability, HostSurface},
 };
 
 pub const MIN_SESSION_TTL_SECONDS: u64 = 300;
@@ -125,7 +125,25 @@ pub fn security_view_with_capability(
     stored_expected_hostname: Option<String>,
     stored_expected_action: Option<String>,
 ) -> anyhow::Result<SecurityView> {
-    require_capability(platform, Capability::SecuritySettings)?;
+    security_view_with_surface(
+        platform,
+        HostSurface::default_for_platform(platform),
+        settings,
+        config,
+        stored_expected_hostname,
+        stored_expected_action,
+    )
+}
+
+pub fn security_view_with_surface(
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    settings: SecuritySettings,
+    config: &SecurityConfig,
+    stored_expected_hostname: Option<String>,
+    stored_expected_action: Option<String>,
+) -> anyhow::Result<SecurityView> {
+    require_capability_for_surface(platform, host_surface, Capability::SecuritySettings)?;
     Ok(security_view(
         settings,
         config,
@@ -164,7 +182,27 @@ pub fn public_security_view_with_capability(
     admin_configured: bool,
     base_url: Option<String>,
 ) -> anyhow::Result<PublicSecurityViewFacadePlan> {
-    require_capability(platform, Capability::WebAuth)?;
+    public_security_view_with_surface(
+        platform,
+        HostSurface::default_for_platform(platform),
+        settings,
+        config,
+        stored_turnstile_action,
+        admin_configured,
+        base_url,
+    )
+}
+
+pub fn public_security_view_with_surface(
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    settings: SecuritySettings,
+    config: &SecurityConfig,
+    stored_turnstile_action: Option<String>,
+    admin_configured: bool,
+    base_url: Option<String>,
+) -> anyhow::Result<PublicSecurityViewFacadePlan> {
+    require_capability_for_surface(platform, host_surface, Capability::WebAuth)?;
     Ok(PublicSecurityViewFacadePlan {
         required_capability: Capability::WebAuth,
         public: public_security_view(
@@ -231,7 +269,15 @@ pub fn plan_security_patch_with_capability(
     platform: &PlatformPaths,
     patch: SecurityPatch,
 ) -> anyhow::Result<SecurityPatchFacadePlan> {
-    require_capability(platform, Capability::SecuritySettings)?;
+    plan_security_patch_with_surface(platform, HostSurface::default_for_platform(platform), patch)
+}
+
+pub fn plan_security_patch_with_surface(
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    patch: SecurityPatch,
+) -> anyhow::Result<SecurityPatchFacadePlan> {
+    require_capability_for_surface(platform, host_surface, Capability::SecuritySettings)?;
     Ok(SecurityPatchFacadePlan {
         required_capability: Capability::SecuritySettings,
         patch: plan_security_patch(patch)?,
@@ -258,7 +304,21 @@ pub fn plan_password_change_with_capability(
     request: PasswordChangeRequest,
     current_password_matches: bool,
 ) -> anyhow::Result<PasswordChangeFacadePlan> {
-    require_capability(platform, Capability::AdminPassword)?;
+    plan_password_change_with_surface(
+        platform,
+        HostSurface::default_for_platform(platform),
+        request,
+        current_password_matches,
+    )
+}
+
+pub fn plan_password_change_with_surface(
+    platform: &PlatformPaths,
+    host_surface: HostSurface,
+    request: PasswordChangeRequest,
+    current_password_matches: bool,
+) -> anyhow::Result<PasswordChangeFacadePlan> {
+    require_capability_for_surface(platform, host_surface, Capability::AdminPassword)?;
     Ok(PasswordChangeFacadePlan {
         required_capability: Capability::AdminPassword,
         change: plan_password_change(request, current_password_matches)?,
@@ -280,13 +340,14 @@ fn non_empty_owned(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        plan_security_patch_with_capability, security_view_with_capability, SecurityPatch,
+        plan_security_patch_with_capability, public_security_view_with_surface,
+        security_view_with_capability, security_view_with_surface, SecurityPatch,
     };
     use crate::{
         config::{Config, DEFAULT_TURNSTILE_SITE_KEY},
         db::SecuritySettings,
         platform::{PlatformKind, PlatformPaths},
-        services::system::Capability,
+        services::system::{Capability, HostSurface},
     };
 
     #[test]
@@ -336,5 +397,44 @@ mod tests {
         assert!(err
             .to_string()
             .contains("security_settings is unavailable on macos"));
+    }
+
+    #[test]
+    fn desktop_lan_webui_allows_public_login_view_but_not_security_admin_view() {
+        let config = Config::for_platform_kind(PlatformKind::Macos);
+        let platform = PlatformPaths::for_kind(PlatformKind::Macos);
+        let settings = SecuritySettings {
+            turnstile_enabled: false,
+            turnstile_required: false,
+            turnstile_site_key: None,
+            turnstile_secret_configured: false,
+            session_ttl_seconds: 86400,
+        };
+
+        let public = public_security_view_with_surface(
+            &platform,
+            HostSurface::DesktopLanWebui,
+            settings.clone(),
+            &config.security,
+            None,
+            true,
+            None,
+        )
+        .expect("desktop LAN WebUI should expose login metadata");
+        assert_eq!(public.required_capability, Capability::WebAuth);
+        assert!(!public.public.turnstile_enabled);
+
+        let err = security_view_with_surface(
+            &platform,
+            HostSurface::DesktopLanWebui,
+            settings,
+            &config.security,
+            None,
+            None,
+        )
+        .expect_err("desktop LAN WebUI must not expose security admin settings");
+        assert!(err
+            .to_string()
+            .contains("security_settings is unavailable on macos desktop_lan_webui"));
     }
 }

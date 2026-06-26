@@ -34,9 +34,10 @@ pub fn desktop_update_status_with_state(
     } else {
         None
     };
-    Ok(updates::update_status_with_recent_check_job(
+    Ok(updates::update_status_with_recent_check_job_for_surface(
         &config,
         state.platform(),
+        state.host_surface(),
         latest_version,
         last_error,
         recent_check_job.as_ref(),
@@ -143,7 +144,12 @@ fn native_update_job_plan_for_action(
     platform: &PlatformPaths,
     action: UpdateAction,
 ) -> Result<NativeUpdateJobPlan> {
-    let plan = updates::plan_update_action(config, platform, action)?;
+    let plan = updates::plan_update_action_for_surface(
+        config,
+        platform,
+        nexushub_core::services::system::HostSurface::DesktopEmbeddedTauri,
+        action,
+    )?;
     let _native = plan
         .native
         .ok_or_else(|| anyhow::anyhow!("update action did not produce a native updater spec"))?;

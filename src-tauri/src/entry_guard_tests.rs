@@ -40,7 +40,15 @@ mod tests {
     #[test]
     fn tauri_commands_stay_in_domain_modules() {
         let lib_source = include_str!("lib.rs");
-        for domain in ["threads", "jobs", "settings", "system", "probe", "updates"] {
+        for domain in [
+            "threads",
+            "jobs",
+            "settings",
+            "system",
+            "probe",
+            "updates",
+            "desktop_webui",
+        ] {
             assert!(
                 lib_source.contains(&format!("commands::{domain}::")),
                 "Tauri invoke handler must register {domain} commands through commands/{domain}.rs"
@@ -67,7 +75,7 @@ mod tests {
 
         for required in [
             "resources::sync_nexushubd_helper_from_resource(&resource_dir)",
-            "resources::prepare_macos_webui_assets_from_resource(&resource_dir)",
+            "resources::prepare_desktop_webui_assets_from_resource(&resource_dir)",
             "desktop_boot::reveal_main_window(&window)",
             "desktop_boot::schedule_delayed_main_window_reveal(&window)",
             "desktop_boot::schedule_desktop_boot_probe(&window)",
@@ -80,7 +88,7 @@ mod tests {
         for forbidden in [
             "fn sync_nexushubd_helper_file",
             "fn sync_directory",
-            "fn migrate_macos_webui_dir_config",
+            "fn migrate_desktop_webui_dir_config",
             "fn reveal_main_window",
             "fn fit_main_window_to_work_area",
             "fn schedule_delayed_main_window_reveal",
@@ -95,7 +103,7 @@ mod tests {
         assert!(
             resources_source.contains("fn sync_nexushubd_helper_file")
                 && resources_source.contains("fn sync_directory")
-                && resources_source.contains("fn migrate_macos_webui_dir_config"),
+                && resources_source.contains("fn migrate_desktop_webui_dir_config"),
             "resources.rs must own helper and WebUI resource sync implementation"
         );
         assert!(
@@ -212,6 +220,12 @@ mod tests {
             command_path("jobs", "getJob"),
             command_path("updates", "updatesCheck"),
             command_path("updates", "updatesInstall"),
+            command_path("desktop_webui", "getDesktopWebUiSettings"),
+            command_path("desktop_webui", "saveDesktopWebUiSettings"),
+            command_path("desktop_webui", "getDesktopWebUiStatus"),
+            command_path("desktop_webui", "startDesktopWebUi"),
+            command_path("desktop_webui", "stopDesktopWebUi"),
+            command_path("desktop_webui", "resetDesktopWebUiPassword"),
         ] {
             assert!(
                 commands.contains(&typed),

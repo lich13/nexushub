@@ -24,7 +24,7 @@ export function useBootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
 }
 
 export function useRuntimeCapabilities(
-  status?: Pick<SystemStatus, "capabilities"> | null,
+  status?: Pick<SystemStatus, "capabilities" | "host_surface"> | null,
   fallback: RuntimeCapabilityMatrix = bootstrapRuntimeCapabilities(),
 ): RuntimeCapabilityMatrix {
   return useMemo(

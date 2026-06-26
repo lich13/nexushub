@@ -168,6 +168,8 @@ export type FollowUpQueueState = {
   items: FollowUpQueueItem[];
 };
 
+export type HostSurface = "linux_server_webui" | "desktop_embedded_tauri" | "desktop_lan_webui";
+
 export type SystemCapabilities = {
   threads: boolean;
   jobs: boolean;
@@ -189,9 +191,12 @@ export type SystemCapabilities = {
   thread_cleanup?: boolean;
   probe_log_maintenance?: boolean;
   thread_archive_actions?: boolean;
+  desktop_webui_control?: boolean;
 };
 
 export type SystemStatus = {
+  platform?: "linux" | "macos" | "windows";
+  host_surface?: HostSurface;
   host_label: string;
   hostname?: string | null;
   public_endpoint?: string | null;
@@ -244,6 +249,41 @@ export type SecuritySettings = {
   session_ttl_seconds: number;
   turnstile_expected_hostname?: string | null;
   turnstile_expected_action?: string | null;
+};
+
+export type DesktopWebUiSettings = {
+  enabled: boolean;
+  listen: string;
+  username: string;
+  sessionTtlSeconds: number;
+  cookieSecure: boolean;
+  publicBaseUrl?: string | null;
+  turnstileEnabled: boolean;
+  passwordConfigured: boolean;
+};
+
+export type DesktopWebUiSettingsPatch = {
+  enabled: boolean;
+  listen: string;
+  username: string;
+  sessionTtlSeconds: number;
+  cookieSecure: boolean;
+  publicBaseUrl?: string | null;
+};
+
+export type DesktopWebUiPasswordReset = {
+  username: string;
+  password: string;
+};
+
+export type DesktopWebUiStatus = {
+  configured: boolean;
+  enabled: boolean;
+  running: boolean;
+  pid?: number | null;
+  listen: string;
+  url: string;
+  message?: string | null;
 };
 
 export type JobRecord = {
