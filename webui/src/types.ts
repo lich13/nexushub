@@ -14,6 +14,7 @@ export type PublicSettings = {
   turnstile_site_key: string;
   turnstile_action?: string | null;
   admin_configured: boolean;
+  base_url?: string | null;
 };
 
 export type ThreadSummary = {

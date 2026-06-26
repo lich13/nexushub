@@ -1322,6 +1322,62 @@ describe("archive delete API compatibility", () => {
     });
   });
 
+  test("normalizes public Turnstile settings from the shared camelCase facade", async () => {
+    const { getPublicSettings } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      requiredCapability: "web_auth",
+      public: {
+        siteName: "NexusHub",
+        turnstileEnabled: true,
+        turnstileRequired: false,
+        turnstileSiteKey: "0x4AAAAAADPfCPB_O-N3j6ON",
+        turnstileAction: "login",
+        adminConfigured: true,
+        baseUrl: "https://661313.xyz/nexushub/"
+      }
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPublicSettings()).resolves.toMatchObject({
+      site_name: "NexusHub",
+      turnstile_enabled: true,
+      turnstile_required: false,
+      turnstile_site_key: "0x4AAAAAADPfCPB_O-N3j6ON",
+      turnstile_action: "login",
+      admin_configured: true
+    });
+  });
+
+  test("normalizes saved security settings from the shared camelCase view", async () => {
+    const { saveSecurity } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      turnstileEnabled: true,
+      turnstileRequired: false,
+      turnstileSiteKey: "site-key",
+      turnstileSecretConfigured: true,
+      sessionTtlSeconds: 31536000,
+      turnstileExpectedHostname: "661313.xyz",
+      turnstileExpectedAction: "login"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(saveSecurity({ turnstile_site_key: "site-key" }, "csrf-token")).resolves.toMatchObject({
+      turnstile_enabled: true,
+      turnstile_required: false,
+      turnstile_site_key: "site-key",
+      turnstile_secret_configured: true,
+      session_ttl_seconds: 31536000,
+      turnstile_expected_hostname: "661313.xyz",
+      turnstile_expected_action: "login"
+    });
+  });
+
   test("login uses the scoped API base configured for the Linux /nexushub/ package", async () => {
     vi.stubEnv("BASE_URL", "/nexushub/");
     vi.stubEnv("VITE_API_BASE", "/nexushub");
