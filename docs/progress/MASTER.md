@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-26
-> **Mode**: DEEP_REFACTOR_GOAL_4_FRONTEND_SHARING_COMPLETE
+> **Mode**: DEEP_REFACTOR_GOAL_5_RELEASE_ACCEPTANCE_IN_PROGRESS
 
 ## References
 
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: Goal 5 - dual-end release acceptance, not started<br>
-**Active Task**: Goal 4 completed on branch/worktree `deep-refactor-goal1`: `App.tsx` is reduced to the app shell plus conversation/security/provider surfaces, shared panels/jobs/ops/probe workspaces are split under `webui/src/components/`, and rendered WebUI smoke verified the Codex shell plus the extracted Probe workspace.
-**Blockers**: No local code gate blocker. Live Linux WebUI and macOS Tauri App behavior verification for this refactor branch remains part of Goal 5 after the release/deploy/App build chain.
+**Active Phase**: Goal 5 - dual-end release acceptance, in progress<br>
+**Active Task**: `v0.1.135` local gates, GitHub CI, GitHub Release assets, Tencent Cloud deployment, and macOS Tauri App DMG acceptance are complete. Linux WebUI public unauthenticated smoke is complete; authenticated Browser-plugin WebUI behavior verification remains pending because the in-app Browser has no current login session and is stopped at the NexusHub login page.
+**Blockers**: Authenticated Linux WebUI Browser-plugin checks need the user to log in manually in the Browser page first. Do not enter or request the admin password, do not bypass Turnstile/CAPTCHA, and continue from `/nexushub/` after the user confirms the Browser is logged in.
 
 ## Deep Refactor Goal Tracker
 
@@ -46,7 +46,7 @@
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.
 - [x] Goal 3: backend entry slimming - `api.rs` now delegates auth/Probe/security/cleanup/Goal/job/system/upload/login domains to submodules, Tauri thread DTOs live in `services/threads/types.rs`, and fresh Rust/Tauri gates pass while preserving public behavior.
 - [x] Goal 4: frontend sharing and App slimming - `Panel/Metric`, `JobList`, `OpsWorkspace`, and `ProbeWorkspace` now live in domain component modules, `App.tsx` dropped to 2900 lines, and components stay behind query/domain/runtime boundaries with capability-driven host differences.
-- [ ] Goal 5: dual-end release acceptance - local gates, GitHub CI/Release, Tencent Cloud deployment, Browser plugin WebUI acceptance, and Computer Use macOS App acceptance.
+- [ ] Goal 5: dual-end release acceptance - local gates, GitHub CI/Release assets, Tencent Cloud deployment, Linux public smoke, and Computer Use macOS App acceptance are complete; authenticated Browser plugin WebUI acceptance is pending user login.
 
 ## Governance Status
 
@@ -145,6 +145,7 @@ adaptive:
 | 2026-06-26 | deep refactor Goal 2 shared contract closure slice 1 | M | P/U/R pass locally | 0 | Tauri Goal/settings/upload/cleanup/thread/Probe action services and Linux security/cleanup adapters now enter shared contracts through `NexusHubUseCases`. Fresh checks passed: `cargo fmt --all -- --check`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, `cargo test --workspace`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml`, `cargo clippy --workspace --all-targets -- -D warnings`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`, `git diff --check`. Live dual-end behavior verification is deferred to Goal 5 release/deploy/App acceptance. |
 | 2026-06-26 | deep refactor Goal 3 backend entry slimming | M | S/P/R pass locally | 0 | Split Linux HTTP entry handlers into `api/probe.rs`, `api/security.rs`, `api/uploads.rs`, `api/web_auth.rs`, `api/system.rs`, `api/jobs.rs`, `api/cleanup.rs`, and `api/goals.rs`; split Tauri thread DTOs into `src-tauri/src/services/threads/types.rs`; kept cleanup dry-run plus confirmation plus `expectedCount`, Web auth/Turnstile, Linux-only capabilities, shared `NexusHubUseCases`, and typed Tauri command boundaries guarded by static tests. Fresh checks passed: `cargo fmt --all -- --check`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, `cargo test --workspace`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml`, `cargo clippy --workspace --all-targets -- -D warnings`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`. Live dual-end behavior verification is deferred to Goal 5 release/deploy/App acceptance. |
 | 2026-06-26 | deep refactor Goal 4 frontend sharing and App slimming | M | S/P/E/R pass locally | 0 | Split WebUI shared panels and workspaces into `webui/src/components/common/Panel.tsx`, `webui/src/components/jobs/JobList.tsx`, `webui/src/components/ops/OpsWorkspace.tsx`, and `webui/src/components/probe/ProbeWorkspace.tsx`; `App.tsx` is now 2900 lines and keeps Probe/Ops behavior behind query/action hooks, domain view-model helpers, and capability props. Fresh checks passed: `cargo fmt --all -- --check`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, `corepack pnpm@11.0.8 --dir webui test` (10 files, 221 tests), `corepack pnpm@11.0.8 --dir webui build`, `cargo test --workspace`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml`, `cargo clippy --workspace --all-targets -- -D warnings`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`, and `git diff --check`. Browser plugin smoke at `http://127.0.0.1:5174/` verified title `NexusHub`, nonblank Codex shell, no framework overlay, empty warn/error console, and Probe nav click rendering 总览/需回复/Hook/Bark/日志库/最近事件/设置. |
+| 2026-06-26 | v0.1.135 deep refactor release/deploy partial closure | L | P/R pass except WebUI auth pending | 0 | Committed `dbf8d7f`, pushed `main` and tag `v0.1.135`; fresh local gates passed (`cargo fmt`, Tauri fmt, WebUI typecheck/test/build, Rust workspace/Tauri tests, workspace/Tauri Clippy, `scripts/test-install-script.sh`, `git diff --check`). GitHub CI run `28226441354` passed, Release run `28226443283` passed, and assets were verified by sha256: Linux tarball, macOS tarball, macOS updater `.sig`, DMG, and `latest.json`. Tencent Cloud deploy installed exact `nexushubd 0.1.135`; service active, loopback `healthz` OK, public `/nexushub/` HTTP 200, retired `/codex-cloud-panel/`, old Probe/Sentinel REST paths, and root `/api/v1/models` HTTP 404 without NexusHub ownership markers. Official DMG installed to `/Applications/NexusHub.app`; bundle/helper versions are `0.1.135`; Computer Use verified visible non-fullscreen maximized window, Codex/Claude Code/Probe/Ops surfaces, Probe macOS snapshot, update no-op state, cleanup dry-run gating, and no visible Web login/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage. Browser plugin public smoke verified the online login page is nonblank with title `NexusHub`, no framework overlay, and empty warn/error console, but authenticated Probe/Ops/cleanup checks remain pending user login in Browser. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -161,7 +162,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.134
+git ls-remote --tags origin refs/tags/v0.1.135
 ```
 
 ## Next Steps
@@ -173,12 +174,12 @@ git ls-remote --tags origin refs/tags/v0.1.134
 5. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 6. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.134 Acceptance Matrix
+## v0.1.135 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
-| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.134`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
-| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.134-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.134`, verify the process owns one visible non-fullscreen window that fills the main monitor work area, verify nonblank UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, and Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
+| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.135`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history. Authenticated Browser-plugin checks are pending user login. |
+| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.135-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.135`, verify the process owns one visible non-fullscreen window that fills the main monitor work area, verify nonblank UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, and Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
 
 ## Session Log
 
@@ -224,3 +225,4 @@ git ls-remote --tags origin refs/tags/v0.1.134
 | 2026-06-26 | v0.1.132-compat-backfill-cancelled | Restored the compatibility behavior, pushed `v0.1.132`, then cancelled the Release run after the macOS Tauri CI fmt job exposed a narrower-formatting failure. This version has no published Release assets and was not deployed. |
 | 2026-06-26 | v0.1.133-compat-backfill-release-closure | Keeps the explicit Tauri window creation path, restores flat Tauri Goal invoke ABI compatibility, and deploys Linux successfully; official DMG acceptance later found the window still opened at about `1281x821`, so the release is superseded by `v0.1.134`. |
 | 2026-06-26 | v0.1.134-macos-maximized-window-release-closure | Adds a monitor work-area fallback and delayed main-thread reveal replay for the explicit Tauri window path, preserving visible-window protection while restoring the v0.1.128 maximized-window startup behavior. |
+| 2026-06-26 | v0.1.135-deep-refactor-release-acceptance | Released and deployed the deep refactor branch. Local gates, GitHub CI/Release, release asset sha256 verification, Tencent Cloud public smoke, and macOS DMG Computer Use acceptance passed. Authenticated Browser-plugin WebUI behavior checks remain pending because the Browser is at the NexusHub login page without an existing session. |
