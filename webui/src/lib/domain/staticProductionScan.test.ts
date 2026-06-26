@@ -96,11 +96,17 @@ describe("production business source scan", () => {
 
   test("App is only the shell/composition layer for auth, composer, and conversation orchestration", () => {
     const source = productionComponentSources["../../App.tsx"];
+    const chatWorkspace = productionComponentSources["../../components/chat/ChatWorkspace.tsx"];
+    const conversation = productionComponentSources["../../components/chat/Conversation.tsx"];
 
     expect(source).toContain("WebAuthGate");
-    expect(source).toContain("useConversationController");
-    expect(source).toContain("SlashCommandTextarea");
-    expect(source).toContain("useComposerAttachments");
+    expect(source).toContain("ChatWorkspace");
+    expect(source).not.toContain("useConversationController");
+    expect(source).not.toContain("SlashCommandTextarea");
+    expect(source).not.toContain("useComposerAttachments");
+    expect(chatWorkspace).toContain("useConversationController");
+    expect(conversation).toContain("SlashCommandTextarea");
+    expect(conversation).toContain("useComposerAttachments");
     expect(source).not.toMatch(/\bfunction\s+(LoginScreen|ensureTurnstileScript|SlashCommandTextarea|useComposerAttachments)\b/);
     expect(source).not.toContain("useThreadRealtimeSubscription(");
     expect(source).not.toContain("useThreadCacheActions(");

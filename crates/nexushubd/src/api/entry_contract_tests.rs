@@ -50,6 +50,7 @@ fn api_entry_delegates_transport_dispatch_and_payload_to_submodules() {
             "mod probe;",
             "mod security;",
             "mod system;",
+            "mod threads;",
             "mod uploads;",
             "mod web_auth;",
         ],
@@ -113,6 +114,25 @@ fn api_entry_delegates_transport_dispatch_and_payload_to_submodules() {
             "async fn codex_goal_clear",
             "async fn codex_goal_pause",
             "async fn codex_goal_resume",
+            "async fn list_threads",
+            "async fn thread_detail",
+            "async fn thread_blocks",
+            "async fn create_thread",
+            "async fn send_message",
+            "async fn steer_thread",
+            "async fn list_followups",
+            "async fn enqueue_followup",
+            "async fn cancel_followup",
+            "async fn stop_thread",
+            "async fn archive_thread",
+            "async fn restore_thread",
+            "async fn rename_thread",
+            "async fn fork_thread",
+            "async fn plan_accept",
+            "async fn plan_revise",
+            "async fn answer_approval",
+            "async fn answer_elicitation",
+            "async fn thread_events",
         ],
         "api.rs should delegate transport/dispatch/payload concerns",
     );
@@ -134,20 +154,22 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
     let cleanup_production = production_section(&cleanup_api);
     let goals_api = src("api/goals.rs");
     let goals_production = production_section(&goals_api);
+    let threads_api = src("api/threads.rs");
+    let threads_production = production_section(&threads_api);
     let combined_production = format!(
-        "{production}\n{probe_production}\n{security_production}\n{system_production}\n{jobs_production}\n{cleanup_production}\n{goals_production}"
+        "{production}\n{probe_production}\n{security_production}\n{system_production}\n{jobs_production}\n{cleanup_production}\n{goals_production}\n{threads_production}"
     );
     let adapter = src("linux_adapter.rs");
 
     assert_present(
-        production,
+        threads_production,
         &[
             "NexusHubUseCases::new",
             "linux_adapter::list_threads_read_model",
             "linux_adapter::window_thread_detail_read_model",
             "linux_adapter::thread_blocks_read_model",
         ],
-        "api.rs should call the core/linux adapter boundary",
+        "api/threads.rs should call the core/linux adapter boundary",
     );
     assert_present(
         cleanup_production,
@@ -217,11 +239,14 @@ fn api_entry_does_not_reimplement_domain_or_linux_execution_boundaries() {
 fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_state() {
     let api = src("api.rs");
     let production = production_section(&api);
+    let threads_api = src("api/threads.rs");
+    let threads_production = production_section(&threads_api);
     let goals_api = src("api/goals.rs");
     let goals_production = production_section(&goals_api);
+    let handler_production = format!("{production}\n{threads_production}");
 
     assert_present(
-        production,
+        threads_production,
         &[
             "NexusHubUseCases::new(&platform)",
             "linux_adapter::start_thread_command_execution_plan",
@@ -229,7 +254,7 @@ fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_s
             "linux_adapter::resolve_thread_stop_plan",
             "linux_adapter::start_codex_resume_action",
         ],
-        "api.rs should stay at auth/payload/core-plan/adapter-call level",
+        "api/threads.rs should stay at auth/payload/core-plan/adapter-call level",
     );
     assert_present(
         goals_production,
@@ -242,7 +267,7 @@ fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_s
     );
 
     assert_absent(
-        production,
+        &handler_production,
         &[
             "job_service::build_codex_job_spec(",
             "job_service::enqueue_planned_followup(",
@@ -261,7 +286,7 @@ fn api_entry_does_not_orchestrate_thread_job_goal_followup_or_cleanup_business_s
             "state.db.record_audit(\n        Some(&auth.admin_id),\n        \"archives.",
             "state.db.record_audit(\n        Some(&auth.admin_id),\n        \"hidden_threads.",
         ],
-        "api.rs must not own thread/job/read-model/follow-up/cleanup business orchestration",
+        "api.rs and api/threads.rs must not own thread/job/read-model/follow-up/cleanup business orchestration",
     );
 }
 

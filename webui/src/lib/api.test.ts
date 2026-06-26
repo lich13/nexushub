@@ -78,7 +78,7 @@ const domainApiProductionSources = productionSources.filter(
 );
 const queryProductionSources = productionSources.filter((file) => file.path.startsWith("lib/query/"));
 const productionComponentSources = productionSources.filter(
-  (file) => file.path === "App.tsx" || file.path === "main.tsx",
+  (file) => file.path === "App.tsx" || file.path === "main.tsx" || file.path.startsWith("components/") || file.path.startsWith("hooks/"),
 );
 const appComponentSources = productionSources.filter((file) => file.path === "App.tsx");
 const nonRuntimeProductionSources = productionSources.filter((file) => file.path !== "lib/runtime.ts");
@@ -1853,6 +1853,13 @@ describe("archive delete API compatibility", () => {
 
   test("components do not import transport or own query cache state", () => {
     expect(appComponentSources.map((file) => file.path)).toEqual(["App.tsx"]);
+    expect(productionComponentSources.map((file) => file.path)).toEqual(expect.arrayContaining([
+      "App.tsx",
+      "components/chat/ChatWorkspace.tsx",
+      "components/chat/Conversation.tsx",
+      "components/security/SecurityWorkspace.tsx",
+      "main.tsx"
+    ]));
 
     for (const token of [
       'from "./lib/api/transport"',
@@ -1939,7 +1946,13 @@ describe("archive delete API compatibility", () => {
     expect(apiTransportSources.map((file) => file.path)).toEqual(["lib/api/transport.ts"]);
     expect(queryProductionSources.length).toBeGreaterThan(0);
     expect(domainApiProductionSources.length).toBeGreaterThan(0);
-    expect(productionComponentSources.map((file) => file.path).sort()).toEqual(["App.tsx", "main.tsx"]);
+    expect(productionComponentSources.map((file) => file.path).sort()).toEqual(expect.arrayContaining([
+      "App.tsx",
+      "components/chat/ChatWorkspace.tsx",
+      "components/chat/Conversation.tsx",
+      "components/security/SecurityWorkspace.tsx",
+      "main.tsx"
+    ]));
 
     const runtimeOnlyTokens = [
       '"/api/',

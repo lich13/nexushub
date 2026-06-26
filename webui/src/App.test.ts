@@ -2,10 +2,13 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
 import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
+import chatWorkspaceSource from "./components/chat/ChatWorkspace.tsx?raw";
 import composerControlsSource from "./components/composer/ComposerControls.tsx?raw";
+import conversationSource from "./components/chat/Conversation.tsx?raw";
 import jobListSource from "./components/jobs/JobList.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
+import securityWorkspaceSource from "./components/security/SecurityWorkspace.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -169,17 +172,15 @@ async function loadThreadQuery(): Promise<ThreadQueryExports> {
 }
 
 function extractThreadListSource(): string {
-  const source = appSource;
+  const source = chatWorkspaceSource;
   const start = source.indexOf("function ThreadList(");
-  const end = source.indexOf("function useCodexRunOptions", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return source.slice(start);
 }
 
 function extractThreadInspectorSource(): string {
-  const source = appSource;
+  const source = conversationSource;
   const start = source.indexOf("function ThreadInspectorPanels(");
   const end = source.indexOf("function ThreadGoalPanel(", start);
 
@@ -205,9 +206,24 @@ function extractFunctionSource(name: string): string {
         ? jobListSource
         : name === "ProbeWorkspace"
           ? probeWorkspaceSource
-    : name === "WebAuthGate" || name === "LoginScreen"
-      ? authGateSource
-      : appSource;
+          : name === "ChatWorkspace" || name === "ThreadList"
+            ? chatWorkspaceSource
+            : [
+              "Conversation",
+              "EmptyConversation",
+              "ThreadGoalPanel",
+              "ThreadInspectorPanels",
+              "RunConfigControls",
+              "MessageBlockView",
+              "CurrentActionCard",
+              "StatusChip"
+            ].includes(name)
+              ? conversationSource
+              : name === "SecurityWorkspace"
+                ? securityWorkspaceSource
+                : name === "WebAuthGate" || name === "LoginScreen"
+                  ? authGateSource
+                  : appSource;
   const start = source.indexOf(`function ${name}`);
 
   expect(start).toBeGreaterThanOrEqual(0);
@@ -411,7 +427,8 @@ describe("conversation helpers", () => {
 
     expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
     expect(typeof threadQuery.useThreadRealtimeSubscription).toBe("function");
-    expect(appSource).toContain("useConversationController");
+    expect(appSource).not.toContain("useConversationController");
+    expect(chatWorkspaceSource).toContain("useConversationController");
     expect(conversationControllerSource).toContain("useThreadRealtimeSubscription");
     expect(appSource).not.toContain("subscribeThreadEvents");
     expect(appSource).not.toMatch(/export function (opsWorkspacePanelTitles|opsWorkspaceVisibleCopy|desktopRuntimeVisibleCopy|canShowForkAction|approvalActionMode|preservePreviousQueryData|slashCommandsForRuntime|failureCategoryLabel|jobFailureAnalysisView|jobOutputView)\b/);

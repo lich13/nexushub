@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import appSource from "../../App.tsx?raw";
 import authGateSource from "../../components/auth/WebAuthGate.tsx?raw";
+import securityWorkspaceSource from "../../components/security/SecurityWorkspace.tsx?raw";
 import {
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy
@@ -40,7 +41,7 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
 };
 
 function extractFunctionSource(name: string): string {
-  const source = name === "LoginScreen" ? authGateSource : appSource;
+  const source = name === "LoginScreen" ? authGateSource : name === "SecurityWorkspace" ? securityWorkspaceSource : appSource;
   const start = source.indexOf(`function ${name}`);
   expect(start).toBeGreaterThanOrEqual(0);
 

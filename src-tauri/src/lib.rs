@@ -1,259 +1,20 @@
 mod commands;
+mod desktop_boot;
 // 业务命令入口按领域放在 commands/*；overview 仅保留桌面状态、首页汇总和启动初始化。
 #[allow(dead_code)]
 mod overview;
+mod resources;
 mod services;
 
-use std::{
-    io::Write,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tauri::{
-    Manager, PhysicalPosition, PhysicalSize, Runtime, Size, WebviewWindow, WebviewWindowBuilder,
-};
+use tauri::{Manager, WebviewWindowBuilder};
 
 pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
 pub use services::probe::desktop_probe_status_with_state;
 pub use services::updates::desktop_update_status_with_state;
 
-const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
-const NEXUSHUBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
-const WEBUI_RESOURCE_NAME: &str = "webui";
-const MAIN_WINDOW_LABEL: &str = "main";
-const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
-window.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
-"#;
-const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
-(function () {
-  var root = document.getElementById("root");
-  var bodyText = (document.body && document.body.innerText ? document.body.innerText : "").replace(/\s+/g, " ").trim();
-  return {
-    readyState: document.readyState,
-    title: document.title,
-    desktopRuntime: window.__NEXUSHUB_DESKTOP_RUNTIME__ === true,
-    bootMounted: Boolean(window.__NEXUSHUB_BOOT__ && window.__NEXUSHUB_BOOT__.mounted),
-    rootChildren: root ? root.children.length : -1,
-    rootClass: root && root.firstElementChild ? root.firstElementChild.className : "",
-    bodyTextLength: bodyText.length,
-    hasMainShell: Boolean(document.querySelector(".app-shell")),
-    hasDesktopNav: bodyText.indexOf("Codex") >= 0 && bodyText.indexOf("探针") >= 0 && bodyText.indexOf("运维") >= 0,
-    hasWebLoginGate: Boolean(document.querySelector(".login-shell")),
-    hasVisibleLinuxHostCopy: Boolean(document.querySelector(".security-workspace, .turnstile-box"))
-  };
-})()
-"#;
-
-fn sync_nexushubd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
-    let source = resource_dir.join(NEXUSHUBD_RESOURCE_NAME);
-    if !source.is_file() {
-        return Ok(());
-    }
-    if is_nexushubd_helper_placeholder(&source).map_err(|err| err.to_string())? {
-        return Ok(());
-    }
-    let platform = nexushub_core::platform::PlatformPaths::current();
-    let target = platform.daemon_binary();
-    sync_nexushubd_helper_file(&source, &target).map_err(|err| err.to_string())
-}
-
-fn prepare_macos_webui_assets_from_resource(resource_dir: &Path) -> Result<(), String> {
-    let source = resource_dir.join(WEBUI_RESOURCE_NAME);
-    if !source.join("index.html").is_file() {
-        return Ok(());
-    }
-
-    let platform = nexushub_core::platform::PlatformPaths::current();
-    sync_directory(&source, &platform.webui_dir).map_err(|err| err.to_string())?;
-    remove_legacy_webui_dir(&platform).map_err(|err| err.to_string())?;
-    migrate_macos_webui_dir_config(&platform).map_err(|err| err.to_string())
-}
-
-fn remove_legacy_webui_dir(
-    platform: &nexushub_core::platform::PlatformPaths,
-) -> std::io::Result<()> {
-    let legacy = platform.data_dir.join("webui");
-    if legacy != platform.webui_dir && legacy.is_dir() {
-        std::fs::remove_dir_all(legacy)?;
-    }
-    Ok(())
-}
-
-fn migrate_macos_webui_dir_config(
-    platform: &nexushub_core::platform::PlatformPaths,
-) -> anyhow::Result<()> {
-    let config_path = &platform.config_file;
-    if !config_path.is_file() {
-        return Ok(());
-    }
-    let text = std::fs::read_to_string(config_path)?;
-    let mut value = text.parse::<toml::Value>()?;
-    let Some(paths) = value.get_mut("paths").and_then(toml::Value::as_table_mut) else {
-        return Ok(());
-    };
-    let data_dir = paths
-        .get("data_dir")
-        .and_then(toml::Value::as_str)
-        .map(Path::new);
-    if data_dir != Some(platform.data_dir.as_path()) {
-        return Ok(());
-    }
-    let webui_dir = paths
-        .get("webui_dir")
-        .and_then(toml::Value::as_str)
-        .map(Path::new);
-    if webui_dir == Some(platform.webui_dir.as_path()) {
-        return Ok(());
-    }
-    paths.insert(
-        "webui_dir".to_string(),
-        toml::Value::String(platform.webui_dir.display().to_string()),
-    );
-    std::fs::write(config_path, toml::to_string_pretty(&value)?)?;
-    Ok(())
-}
-
-fn is_nexushubd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
-    let bytes = std::fs::read(path)?;
-    Ok(bytes.starts_with(NEXUSHUBD_HELPER_PLACEHOLDER))
-}
-
-fn sync_nexushubd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
-    let should_copy = match (std::fs::metadata(source), std::fs::metadata(target)) {
-        (Ok(source_meta), Ok(target_meta)) => {
-            source_meta.len() != target_meta.len()
-                || source_meta.modified().ok() != target_meta.modified().ok()
-        }
-        (Ok(_), Err(_)) => true,
-        (Err(err), _) => return Err(err),
-    };
-    if !should_copy {
-        ensure_executable(target)?;
-        return Ok(());
-    }
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::copy(source, target)?;
-    ensure_executable(target)
-}
-
-fn sync_directory(source: &Path, target: &Path) -> std::io::Result<()> {
-    if target.exists() {
-        std::fs::remove_dir_all(target)?;
-    }
-    copy_directory_recursive(source, target)
-}
-
-fn copy_directory_recursive(source: &Path, target: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_directory_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            std::fs::copy(source_path, target_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn reveal_main_window<R: Runtime>(window: &WebviewWindow<R>) {
-    let _ = window.show();
-    let _ = window.unminimize();
-    let _ = window.maximize();
-    fit_main_window_to_work_area(window);
-    let _ = window.set_focus();
-}
-
-fn fit_main_window_to_work_area<R: Runtime>(window: &WebviewWindow<R>) {
-    let monitor = match window.current_monitor() {
-        Ok(Some(monitor)) => Some(monitor),
-        _ => window.primary_monitor().ok().flatten(),
-    };
-    let Some(monitor) = monitor else {
-        return;
-    };
-    let work_area = monitor.work_area();
-    if work_area.size.width == 0 || work_area.size.height == 0 {
-        return;
-    }
-    let _ = window.set_position(PhysicalPosition::new(
-        work_area.position.x,
-        work_area.position.y,
-    ));
-    let _ = window.set_size(Size::Physical(PhysicalSize::new(
-        work_area.size.width,
-        work_area.size.height,
-    )));
-}
-
-fn schedule_delayed_main_window_reveal<R: Runtime>(window: &WebviewWindow<R>) {
-    let delayed_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        let main_thread_window = delayed_window.clone();
-        let _ = delayed_window.run_on_main_thread(move || {
-            reveal_main_window(&main_thread_window);
-        });
-    });
-}
-
-fn append_desktop_app_log(message: &str) {
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
-    let paths = nexus_paths_for_home(home);
-    if std::fs::create_dir_all(&paths.log_dir).is_err() {
-        return;
-    }
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.app_log_file)
-    else {
-        return;
-    };
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let _ = writeln!(file, "{timestamp} {message}");
-}
-
-fn schedule_desktop_boot_probe<R: tauri::Runtime>(window: &WebviewWindow<R>) {
-    let probe_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        if let Err(err) = probe_window.eval_with_callback(DESKTOP_BOOT_PROBE_SCRIPT, |payload| {
-            append_desktop_app_log(&format!("desktop_boot_probe {payload}"));
-        }) {
-            append_desktop_app_log(&format!("desktop_boot_probe_error {err}"));
-        }
-    });
-}
-
-#[cfg(unix)]
-fn ensure_executable(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(path)?;
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(permissions.mode() | 0o755);
-    std::fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn ensure_executable(_path: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
 pub fn run() {
     tauri::Builder::default()
-        .append_invoke_initialization_script(DESKTOP_RUNTIME_MARKER_SCRIPT)
+        .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -312,8 +73,8 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
-                sync_nexushubd_helper_from_resource(&resource_dir)?;
-                prepare_macos_webui_assets_from_resource(&resource_dir)?;
+                resources::sync_nexushubd_helper_from_resource(&resource_dir)?;
+                resources::prepare_macos_webui_assets_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             app.manage(state);
@@ -322,23 +83,23 @@ pub fn run() {
                 .app
                 .windows
                 .iter()
-                .find(|window| window.label == MAIN_WINDOW_LABEL)
+                .find(|window| window.label == desktop_boot::MAIN_WINDOW_LABEL)
                 .ok_or_else(|| "main Tauri window config not found".to_string())?;
             let window = WebviewWindowBuilder::from_config(app.handle(), main_window_config)
                 .map_err(|err| err.to_string())?
                 .build()
                 .map_err(|err| err.to_string())?;
-            reveal_main_window(&window);
-            schedule_delayed_main_window_reveal(&window);
-            schedule_desktop_boot_probe(&window);
+            desktop_boot::reveal_main_window(&window);
+            desktop_boot::schedule_delayed_main_window_reveal(&window);
+            desktop_boot::schedule_desktop_boot_probe(&window);
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build NexusHub desktop app")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Ready) {
-                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                    reveal_main_window(&window);
+                if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {
+                    desktop_boot::reveal_main_window(&window);
                 }
             }
         });
@@ -346,8 +107,6 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     fn production_lib_source() -> &'static str {
         include_str!("lib.rs")
             .split("\n#[cfg(test)]")
@@ -386,94 +145,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_nexushubd_helper_file_copies_and_marks_executable() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushubd");
-        let target = temp
-            .path()
-            .join("Application Support/NexusHub/bin/nexushubd");
-        std::fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
-
-        sync_nexushubd_helper_file(&source, &target).unwrap();
-
-        assert_eq!(std::fs::read(&target).unwrap(), b"#!/bin/sh\nexit 0\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
-            assert_ne!(mode & 0o111, 0, "helper must be executable");
-        }
-    }
-
-    #[test]
-    fn helper_placeholder_detection_prevents_dev_resource_sync() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushubd");
-        std::fs::write(&source, b"NEXUSHUB_HELPER_PLACEHOLDER\nnot a binary\n").unwrap();
-
-        assert!(is_nexushubd_helper_placeholder(&source).unwrap());
-    }
-
-    #[test]
-    fn sync_directory_replaces_stale_webui_assets() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("resource-webui");
-        let target = temp.path().join("desktop-assets");
-        std::fs::create_dir_all(source.join("assets")).unwrap();
-        std::fs::create_dir_all(target.join("assets")).unwrap();
-        std::fs::write(
-            source.join("index.html"),
-            "<script src=\"/assets/new.js\"></script>",
-        )
-        .unwrap();
-        std::fs::write(source.join("assets/new.js"), "new").unwrap();
-        std::fs::write(target.join("assets/old.js"), "old").unwrap();
-
-        sync_directory(&source, &target).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(target.join("index.html")).unwrap(),
-            "<script src=\"/assets/new.js\"></script>"
-        );
-        assert_eq!(
-            std::fs::read_to_string(target.join("assets/new.js")).unwrap(),
-            "new"
-        );
-        assert!(!target.join("assets/old.js").exists());
-    }
-
-    #[test]
-    fn migrate_macos_webui_dir_config_moves_legacy_webui_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let platform = nexushub_core::platform::PlatformPaths::for_kind_with_home(
-            nexushub_core::platform::PlatformKind::Macos,
-            temp.path(),
-        );
-        std::fs::create_dir_all(&platform.data_dir).unwrap();
-        let legacy_webui = platform.data_dir.join("webui");
-        let config = format!(
-            r#"
-[paths]
-data_dir = "{}"
-db_path = "{}"
-webui_dir = "{}"
-log_dir = "{}"
-"#,
-            platform.data_dir.display(),
-            platform.data_dir.join("nexushub.sqlite").display(),
-            legacy_webui.display(),
-            platform.log_dir.display()
-        );
-        std::fs::write(&platform.config_file, config).unwrap();
-
-        migrate_macos_webui_dir_config(&platform).unwrap();
-
-        let migrated = std::fs::read_to_string(&platform.config_file).unwrap();
-        assert!(migrated.contains(&format!("webui_dir = \"{}\"", platform.webui_dir.display())));
-        assert!(!migrated.contains(&format!("webui_dir = \"{}\"", legacy_webui.display())));
-    }
-
-    #[test]
     fn tauri_commands_stay_in_domain_modules() {
         let lib_source = include_str!("lib.rs");
         for domain in ["threads", "jobs", "settings", "system", "probe", "updates"] {
@@ -493,6 +164,53 @@ log_dir = "{}"
                 "desktop command wrappers must live in src-tauri/src/commands/*, not lib.rs"
             );
         }
+    }
+
+    #[test]
+    fn tauri_entry_delegates_resources_and_boot_to_modules() {
+        let lib_source = production_lib_source();
+        let resources_source = include_str!("resources.rs");
+        let boot_source = include_str!("desktop_boot.rs");
+
+        for required in [
+            "resources::sync_nexushubd_helper_from_resource(&resource_dir)",
+            "resources::prepare_macos_webui_assets_from_resource(&resource_dir)",
+            "desktop_boot::reveal_main_window(&window)",
+            "desktop_boot::schedule_delayed_main_window_reveal(&window)",
+            "desktop_boot::schedule_desktop_boot_probe(&window)",
+        ] {
+            assert!(
+                lib_source.contains(required),
+                "lib.rs must compose startup helpers through thin modules: {required}"
+            );
+        }
+        for forbidden in [
+            "fn sync_nexushubd_helper_file",
+            "fn sync_directory",
+            "fn migrate_macos_webui_dir_config",
+            "fn reveal_main_window",
+            "fn fit_main_window_to_work_area",
+            "fn schedule_delayed_main_window_reveal",
+            "fn schedule_desktop_boot_probe",
+            "const DESKTOP_BOOT_PROBE_SCRIPT",
+        ] {
+            assert!(
+                !lib_source.contains(forbidden),
+                "lib.rs must not own resource or boot helper implementation: {forbidden}"
+            );
+        }
+        assert!(
+            resources_source.contains("fn sync_nexushubd_helper_file")
+                && resources_source.contains("fn sync_directory")
+                && resources_source.contains("fn migrate_macos_webui_dir_config"),
+            "resources.rs must own helper and WebUI resource sync implementation"
+        );
+        assert!(
+            boot_source.contains("fn fit_main_window_to_work_area")
+                && boot_source.contains("pub(crate) fn reveal_main_window")
+                && boot_source.contains("pub(crate) fn schedule_desktop_boot_probe"),
+            "desktop_boot.rs must own window reveal and boot probe implementation"
+        );
     }
 
     #[test]
@@ -1512,21 +1230,24 @@ log_dir = "{}"
 
     #[test]
     fn tauri_shell_injects_desktop_runtime_marker_before_webui_bootstrap() {
-        let source = production_lib_source();
+        let lib_source = production_lib_source();
+        let boot_source = include_str!("desktop_boot.rs");
 
         assert!(
-            source.contains("__NEXUSHUB_DESKTOP_RUNTIME__"),
+            boot_source.contains("__NEXUSHUB_DESKTOP_RUNTIME__"),
             "Tauri must inject a desktop runtime marker before the WebUI bootstraps so macOS does not render the Web login gate"
         );
         assert!(
-            source.contains(".append_invoke_initialization_script("),
+            lib_source.contains(".append_invoke_initialization_script(")
+                && lib_source.contains("desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT"),
             "Tauri must register the marker through an initialization script that runs before the bundled WebUI"
         );
     }
 
     #[test]
     fn macos_shell_creates_and_reveals_main_window_explicitly() {
-        let source = production_lib_source();
+        let lib_source = production_lib_source();
+        let boot_source = include_str!("desktop_boot.rs");
         let config = include_str!("../tauri.conf.json");
 
         for required in [
@@ -1547,23 +1268,23 @@ log_dir = "{}"
             "Tauri must not rely on implicit tauri.conf window creation for the macOS shell"
         );
         assert!(
-            source.contains("WebviewWindowBuilder::from_config"),
+            lib_source.contains("WebviewWindowBuilder::from_config"),
             "Tauri must explicitly build the main WebView window after desktop resources are prepared"
         );
         assert!(
-            source.contains("RunEvent::Ready"),
+            lib_source.contains("RunEvent::Ready"),
             "Tauri must re-show and focus the main window once the event loop is ready"
         );
-        let show_index = source
+        let show_index = boot_source
             .find("window.show()")
             .expect("reveal_main_window must show the main window");
-        let unminimize_index = source
+        let unminimize_index = boot_source
             .find("window.unminimize()")
             .expect("reveal_main_window must unminimize the main window before maximizing it");
-        let maximize_index = source
+        let maximize_index = boot_source
             .find("window.maximize()")
             .expect("reveal_main_window must maximize the main window");
-        let focus_index = source
+        let focus_index = boot_source
             .find("window.set_focus()")
             .expect("reveal_main_window must focus the main window");
         assert!(
@@ -1581,7 +1302,7 @@ log_dir = "{}"
             "window.set_size(Size::Physical(PhysicalSize::new(",
         ] {
             assert!(
-                source.contains(required),
+                boot_source.contains(required),
                 "explicit macOS window creation must fall back to the monitor work area when native maximize does not resize the window: {required}"
             );
         }
@@ -1589,23 +1310,27 @@ log_dir = "{}"
             "fn schedule_delayed_main_window_reveal",
             "std::time::Duration::from_millis",
             "run_on_main_thread",
-            "schedule_delayed_main_window_reveal(&window)",
         ] {
             assert!(
-                source.contains(required),
+                boot_source.contains(required),
                 "explicit macOS window creation must replay reveal after the event loop has settled: {required}"
             );
         }
         assert!(
-            source.contains("desktop_boot_probe"),
+            lib_source.contains("desktop_boot::schedule_delayed_main_window_reveal(&window)")
+                && lib_source.contains("desktop_boot::schedule_desktop_boot_probe(&window)"),
+            "Tauri setup must schedule delayed reveal and boot probe through the desktop boot module"
+        );
+        assert!(
+            boot_source.contains("desktop_boot_probe"),
             "Tauri must leave a low-detail boot probe for macOS App acceptance"
         );
         assert!(
-            !source.contains("bodyTextSample"),
+            !boot_source.contains("bodyTextSample"),
             "desktop boot probe must not log visible thread or workspace text"
         );
         assert!(
-            !source.contains(r#"bodyText.indexOf("Turnstile")"#),
+            !boot_source.contains(r#"bodyText.indexOf("Turnstile")"#),
             "desktop boot probe must not classify session text as Web login UI"
         );
     }
