@@ -286,11 +286,26 @@ mod tests {
         let overview = build_desktop_overview().unwrap();
 
         assert_eq!(overview.product_name, "NexusHub");
-        assert!(overview
-            .paths
-            .app_support_dir
-            .ends_with("Library/Application Support/NexusHub"));
-        assert!(overview.paths.log_dir.ends_with("Library/Logs/NexusHub"));
+        #[cfg(target_os = "macos")]
+        {
+            assert!(overview
+                .paths
+                .app_support_dir
+                .ends_with("Library/Application Support/NexusHub"));
+            assert!(overview.paths.log_dir.ends_with("Library/Logs/NexusHub"));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(overview
+                .paths
+                .app_support_dir
+                .ends_with(".local/share/NexusHub"));
+            assert!(overview
+                .paths
+                .log_dir
+                .ends_with(".local/state/NexusHub/logs"));
+            assert!(!overview.paths.app_support_dir.starts_with("/opt/nexushub"));
+        }
     }
 
     #[test]
