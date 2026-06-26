@@ -9,8 +9,6 @@ mod thread_rows;
 mod types;
 
 pub use mutations::{db_integrity, set_thread_archived, set_thread_title};
-#[cfg(test)]
-pub(crate) use paths::is_valid_codex_home;
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,
@@ -1428,7 +1426,7 @@ mod tests {
     fn codex_paths_rejects_network_volume_paths() {
         let paths = CodexPaths::new("/Volumes/share/.codex");
         assert!(!paths.contains_path(Path::new("/Volumes/share/.codex/sessions/a.jsonl")));
-        assert!(!super::is_valid_codex_home(Path::new(
+        assert!(!super::paths::is_valid_codex_home(Path::new(
             "/Volumes/share/.codex"
         )));
         assert!(super::is_macos_network_volume_path(Path::new(
