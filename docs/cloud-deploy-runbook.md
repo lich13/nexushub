@@ -58,7 +58,7 @@ host_label = "43.155.235.227"
 
 Omit `codex.home` unless a custom home is required. NexusHub auto-discovers the Codex home and reads `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; systemd write access is intentionally limited to `/root/.codex`, `/home/ubuntu/.codex`, and `/opt/nexushub`. If a different Codex home is discovered, treat it as a warning and add that path deliberately.
 
-Nginx should proxy `/nexushub/` to `127.0.0.1:15742` and `/nexushub/api/` to the daemon-local `/api/` routes. Do not proxy the host-level `/api/` namespace to NexusHub because Sub2API and other host services own it. Do not expose Codex control sockets, `/v1`, `/responses`, or metrics publicly. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
+Nginx should proxy `/nexushub/` to `127.0.0.1:15742` and `/nexushub/api/` to the daemon-local `/api/` routes. Do not proxy the host-level `/api/` namespace to NexusHub because Sub2API and other host services own it. NexusHub must not expose Codex control sockets, arbitrary shell, `/nexushub/v1`, `/nexushub/responses`, or `/nexushub/metrics`; host-root `/v1`, `/responses`, and `/metrics` can belong to non-NexusHub gateway services and should be audited as separate ownership. Retired `/codex-cloud-panel/` and Sentinel compatibility paths such as `/api/sentinel/status` should stay unavailable from the public panel surface.
 
 Initialize or rotate login password with a 12+ char secret:
 
@@ -100,6 +100,7 @@ Then log in through Chrome 插件验收 and verify:
 - retired local maintenance routes stay unavailable from the WebUI and HTTP API.
 
 Expected retired path results: `/codex-cloud-panel/` and `/api/sentinel/status` return `404`. The root `/api/v1/...` namespace must not return NexusHub's `{"error":"not found"}` response; it should continue to be handled by Sub2API.
+NexusHub-scoped sensitive paths such as `/nexushub/v1`, `/nexushub/responses`, and `/nexushub/metrics` must return `404` or another non-NexusHub unavailable response. If host-root `/v1`, `/responses`, or `/metrics` returns content, confirm the owning gateway service before changing it.
 
 ## macOS ARM64 Boundary
 

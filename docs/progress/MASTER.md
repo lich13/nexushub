@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-26
-> **Mode**: DEEP_REFACTOR_GOAL_5_RELEASE_ACCEPTANCE_IN_PROGRESS
+> **Mode**: DEEP_REFACTOR_GOAL_5_RELEASE_ACCEPTANCE_COMPLETE
 
 ## References
 
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: Goal 5 - dual-end release acceptance, in progress<br>
-**Active Task**: `v0.1.136` release candidate fixes the Linux WebUI login blocker by normalizing shared camelCase auth/security facades into the WebUI snake_case view model, so Turnstile renders and saved security fields remain visible. Fresh local gates are complete; GitHub CI/Release, Tencent Cloud deployment, and authenticated Browser-plugin WebUI behavior verification remain pending for `v0.1.136`.
-**Blockers**: No implementation blocker is currently known. After `v0.1.136` deployment, authenticated Linux WebUI Browser-plugin checks must verify Turnstile login, Probe/Ops/cleanup behavior, and sensitive route boundaries. Do not enter or request the admin password, do not bypass Turnstile/CAPTCHA, and do not clear server-side login/rate-limit state without explicit authorization.
+**Active Phase**: Goal 5 - dual-end release acceptance, complete<br>
+**Active Task**: `v0.1.136` fixes the Linux WebUI login blocker by normalizing shared camelCase auth/security facades into the WebUI snake_case view model, so Turnstile renders, login succeeds, and saved security fields remain visible after reload. Fresh local gates, GitHub CI/Release, Tencent Cloud deployment, authenticated Browser-plugin WebUI checks, and macOS Tauri App Computer Use checks are complete for `v0.1.136`.
+**Blockers**: None for the deep-refactor plan. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces.
 
 ## Deep Refactor Goal Tracker
 
@@ -46,7 +46,7 @@
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.
 - [x] Goal 3: backend entry slimming - `api.rs` now delegates auth/Probe/security/cleanup/Goal/job/system/upload/login domains to submodules, Tauri thread DTOs live in `services/threads/types.rs`, and fresh Rust/Tauri gates pass while preserving public behavior.
 - [x] Goal 4: frontend sharing and App slimming - `Panel/Metric`, `JobList`, `OpsWorkspace`, and `ProbeWorkspace` now live in domain component modules, `App.tsx` dropped to 2900 lines, and components stay behind query/domain/runtime boundaries with capability-driven host differences.
-- [ ] Goal 5: dual-end release acceptance - `v0.1.136` local gates are complete for the Turnstile/WebUI settings fix; GitHub CI/Release, Tencent Cloud deployment, Browser-plugin WebUI acceptance, and final dual-end completion audit remain pending.
+- [x] Goal 5: dual-end release acceptance - `v0.1.136` local gates, GitHub CI/Release, Tencent Cloud deployment, authenticated Browser-plugin WebUI acceptance, macOS Tauri App Computer Use acceptance, cleanup/sensitive-boundary checks, and final completion audit completed on 2026-06-26.
 
 ## Governance Status
 
@@ -60,7 +60,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.134_MACOS_MAXIMIZED_WINDOW_RELEASE_CLOSURE
+  mode: V0.1.136_DEEP_REFACTOR_RELEASE_ACCEPTANCE_COMPLETE
   strategy: "cc-switch style single shared use-case layer with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
@@ -93,7 +93,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-25"
+  last_updated: "2026-06-26"
 ```
 
 ## Task Telemetry Log
@@ -146,6 +146,7 @@ adaptive:
 | 2026-06-26 | deep refactor Goal 3 backend entry slimming | M | S/P/R pass locally | 0 | Split Linux HTTP entry handlers into `api/probe.rs`, `api/security.rs`, `api/uploads.rs`, `api/web_auth.rs`, `api/system.rs`, `api/jobs.rs`, `api/cleanup.rs`, and `api/goals.rs`; split Tauri thread DTOs into `src-tauri/src/services/threads/types.rs`; kept cleanup dry-run plus confirmation plus `expectedCount`, Web auth/Turnstile, Linux-only capabilities, shared `NexusHubUseCases`, and typed Tauri command boundaries guarded by static tests. Fresh checks passed: `cargo fmt --all -- --check`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, `cargo test --workspace`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml`, `cargo clippy --workspace --all-targets -- -D warnings`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`. Live dual-end behavior verification is deferred to Goal 5 release/deploy/App acceptance. |
 | 2026-06-26 | deep refactor Goal 4 frontend sharing and App slimming | M | S/P/E/R pass locally | 0 | Split WebUI shared panels and workspaces into `webui/src/components/common/Panel.tsx`, `webui/src/components/jobs/JobList.tsx`, `webui/src/components/ops/OpsWorkspace.tsx`, and `webui/src/components/probe/ProbeWorkspace.tsx`; `App.tsx` is now 2900 lines and keeps Probe/Ops behavior behind query/action hooks, domain view-model helpers, and capability props. Fresh checks passed: `cargo fmt --all -- --check`, `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check`, `corepack pnpm@11.0.8 --dir webui test` (10 files, 221 tests), `corepack pnpm@11.0.8 --dir webui build`, `cargo test --workspace`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml`, `cargo clippy --workspace --all-targets -- -D warnings`, `TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`, and `git diff --check`. Browser plugin smoke at `http://127.0.0.1:5174/` verified title `NexusHub`, nonblank Codex shell, no framework overlay, empty warn/error console, and Probe nav click rendering 总览/需回复/Hook/Bark/日志库/最近事件/设置. |
 | 2026-06-26 | v0.1.135 deep refactor release/deploy partial closure | L | P/R pass except WebUI auth pending | 0 | Committed `dbf8d7f`, pushed `main` and tag `v0.1.135`; fresh local gates passed (`cargo fmt`, Tauri fmt, WebUI typecheck/test/build, Rust workspace/Tauri tests, workspace/Tauri Clippy, `scripts/test-install-script.sh`, `git diff --check`). GitHub CI run `28226441354` passed, Release run `28226443283` passed, and assets were verified by sha256: Linux tarball, macOS tarball, macOS updater `.sig`, DMG, and `latest.json`. Tencent Cloud deploy installed exact `nexushubd 0.1.135`; service active, loopback `healthz` OK, public `/nexushub/` HTTP 200, retired `/codex-cloud-panel/`, old Probe/Sentinel REST paths, and root `/api/v1/models` HTTP 404 without NexusHub ownership markers. Official DMG installed to `/Applications/NexusHub.app`; bundle/helper versions are `0.1.135`; Computer Use verified visible non-fullscreen maximized window, Codex/Claude Code/Probe/Ops surfaces, Probe macOS snapshot, update no-op state, cleanup dry-run gating, and no visible Web login/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage. Browser plugin public smoke verified the online login page is nonblank with title `NexusHub`, no framework overlay, and empty warn/error console, but authenticated Probe/Ops/cleanup checks remain pending user login in Browser. |
+| 2026-06-26 | v0.1.136 Turnstile release acceptance closure | M | S/P/R pass | 0 | Published `8b74e5b` as `v0.1.136`; GitHub CI run `28228774138` and Release run `28228776493` passed, and Release assets include `latest.json`, macOS DMG/tarball/signature, and Linux tarball with sha256 verification. Tencent Cloud runs exact `nexushubd 0.1.136`, service `nexushub` is active, loopback `healthz` is OK, and public `/nexushub/` returns `200`. Browser-plugin authenticated WebUI acceptance verified title `NexusHub`, nonblank shell, empty warn/error console, Turnstile login success, Probe 总览/需回复/Hook/Bark/日志库/最近事件/设置, Ops `Current 0.1.136` and `Latest v0.1.136`, cleanup execute disabled before dry-run, Turnstile/session settings no-op save plus reload persistence, and NexusHub-scoped sensitive paths `404`. Installed official `NexusHub-0.1.136-darwin-arm64.dmg`; `/Applications/NexusHub.app` and bundled `nexushubd` are `0.1.136`; Computer Use verified visible non-fullscreen Tauri window at `tauri://localhost`, Codex/Claude Code/Probe/Ops surfaces, macOS Probe managed/normal, update idle with Install disabled, dry-run-gated cleanup, and no Web login/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -167,19 +168,19 @@ git ls-remote --tags origin refs/tags/v0.1.136
 
 ## Next Steps
 
-1. Continue Goal 5 from the current `deep-refactor-goal1` worktree by publishing `v0.1.136`, waiting for GitHub CI/Release, deploying to Tencent Cloud, and rerunning Browser plugin WebUI acceptance from `/nexushub/`.
-2. Keep `origin` pointed at `https://github.com/lich13/nexushub`.
-3. For every future release, wait for CI and Release workflows, verify release assets, deploy to `43.155.235.227`, smoke `https://661313.xyz/nexushub/`, and keep Probe canonical on `/api/rpc/probe.status` while old REST Probe paths `404`.
-4. For macOS ARM64, verify the Tauri App with `open -a NexusHub` and `~/Library/Logs/NexusHub`; do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry.
-5. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
-6. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
+1. Keep `origin` pointed at `https://github.com/lich13/nexushub`.
+2. For every future release, wait for CI and Release workflows, verify release assets, deploy to `43.155.235.227`, smoke `https://661313.xyz/nexushub/`, and keep Probe canonical on `/api/rpc/probe.status` while old REST Probe paths `404`.
+3. For macOS ARM64, install the official DMG, verify `/Applications/NexusHub.app` and the bundled `nexushubd` exact version, then verify the visible Tauri App with Computer Use; do not add a browser WebUI, LaunchAgent Web service, or Cloudflare Tunnel entry.
+4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
+5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
+6. Treat host-root `/v1`, `/responses`, and `/metrics` as non-NexusHub ownership if they are served by other gateway services; NexusHub acceptance checks must verify `/nexushub/v1`, `/nexushub/responses`, and `/nexushub/metrics` stay unavailable.
 
-## v0.1.135 Acceptance Matrix
+## v0.1.136 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
-| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.135`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history. Authenticated Browser-plugin checks are pending user login. |
-| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.135-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.135`, verify the process owns one visible non-fullscreen window that fills the main monitor work area, verify nonblank UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, and Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
+| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.136`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe UI/RPC works after authenticated Browser login, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, NexusHub-scoped `/nexushub/v1`, `/nexushub/responses`, and `/nexushub/metrics` stay unavailable, cleanup execute is disabled before dry-run and requires `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` shows Current `0.1.136` and Latest `v0.1.136`, security Turnstile/session settings save and persist after reload. |
+| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, bundled `/Applications/NexusHub.app/Contents/Resources/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.136-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.136`, verify the process owns one visible non-fullscreen window, verify nonblank `tauri://localhost` UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Probe macOS managed/normal, update idle with Install disabled, cleanup dry-run gating, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, and `latest.json`. |
 
 ## Session Log
 
@@ -228,3 +229,4 @@ git ls-remote --tags origin refs/tags/v0.1.136
 | 2026-06-26 | v0.1.135-deep-refactor-release-acceptance | Released and deployed the deep refactor branch. Local gates, GitHub CI/Release, release asset sha256 verification, Tencent Cloud public smoke, and macOS DMG Computer Use acceptance passed. Authenticated Browser-plugin WebUI behavior checks remain pending because the Browser is at the NexusHub login page without an existing session. |
 | 2026-06-26 | v0.1.135-browser-auth-continuation | Continuation check reverified the current worktree is clean, Tencent Cloud runs exact `nexushubd 0.1.135`, service `nexushub` is active, loopback `healthz` is OK, and Browser remains at `https://661313.xyz/nexushub/` with title `NexusHub`, login form visible, empty warn/error console, and `turnstile token is empty`. Authenticated Probe/Ops/cleanup checks still require manual Browser login first. |
 | 2026-06-26 | v0.1.136-turnstile-facade-normalization | Root cause found: Linux auth/security RPC responses use shared camelCase facades, while WebUI auth/security components read snake_case fields. This prevented the login page from rendering Turnstile and made saved security values appear unsaved. `v0.1.136` normalizes public auth settings and security get/save responses at the frontend API boundary. Fresh local gates passed: Rust/Tauri fmt, WebUI 223 tests, WebUI build, Rust workspace tests, Tauri tests, workspace/Tauri Clippy, install-script tests, and `git diff --check`. |
+| 2026-06-26 | v0.1.136-dual-end-acceptance-closure | Completed the final deep-refactor acceptance: CI/Release succeeded, Linux asset deployed to Tencent Cloud, authenticated Browser-plugin WebUI verified Turnstile login, Probe/Ops/cleanup/security-save behavior, NexusHub-scoped sensitive routes stayed unavailable, and Computer Use verified the installed macOS Tauri App plus helper at `0.1.136` with no Linux WebUI leakage. |
