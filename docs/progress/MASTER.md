@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-26
-> **Mode**: V0.1.138_IDEAL_REFACTOR_FINALIZATION
+> **Mode**: V0.1.138_IDEAL_REFACTOR_CLOSED
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.138` final ideal-state completion in progress<br>
-**Active Task**: `v0.1.138` final structural/documentation backfill has passed fresh local gates: Linux thread read-model and event normalization moved into core service modules, Codex read-model internals split under `crates/nexushub-core/src/codex/*`, Tauri static guard tests moved out of `src-tauri/src/lib.rs`, and WebUI conversation/composer pure view-model helpers moved into `webui/src/lib/domain/*`. GitHub CI/Release, Tencent Cloud, Browser-plugin Linux WebUI, Computer Use macOS Tauri, and final cleanup evidence must still be added before this task is closed.
+**Active Phase**: `v0.1.138` final ideal-state completion closed<br>
+**Active Task**: `v0.1.138` final structural/documentation backfill, release acceptance, dual-end verification, and cleanup are complete. Fresh local gates passed before release; GitHub CI `28244293738`, Release `28244296776`, and cleanup docs CI `28246594740` passed; Tencent Cloud runs exact `nexushubd 0.1.138`; public `/nexushub/` returns `200`; Browser-plugin Linux WebUI acceptance and Computer Use macOS Tauri acceptance passed; local/cloud temporary artifacts and backup shells were cleaned while preserving production data, config, WebUI, the installed macOS App, and active systemd runtime directories.
 **Blockers**: None for the deep-refactor plan. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Deep Refactor Goal Tracker
@@ -47,8 +47,8 @@
 - [x] Goal 3: backend entry slimming - `api.rs` now delegates auth/Probe/security/cleanup/Goal/job/system/upload/login domains to submodules, Tauri thread DTOs live in `services/threads/types.rs`, and fresh Rust/Tauri gates pass while preserving public behavior.
 - [x] Goal 4: frontend sharing and App slimming - `Panel/Metric`, `JobList`, `OpsWorkspace`, `ProbeWorkspace`, chat/security workspaces, and conversation/composer view-model helpers now live outside `App.tsx`; components stay behind query/domain/runtime boundaries with capability-driven host differences.
 - [x] Goal 5: dual-end release acceptance - `v0.1.136` and `v0.1.137` local gates, GitHub CI/Release, Tencent Cloud deployment, authenticated Browser-plugin WebUI acceptance, macOS Tauri App Computer Use acceptance, cleanup/sensitive-boundary checks, and completion audit completed on 2026-06-26.
-- [ ] Goal 6: `v0.1.138` final release acceptance - full local gates, GitHub CI/Release, Tencent Cloud deployment, Browser-plugin Linux WebUI acceptance, Computer Use macOS Tauri acceptance, and release asset verification are required before closure.
-- [ ] Goal 7: `v0.1.138` final cleanup - local worktree/build/temp artifacts and Tencent Cloud release temp/backups must be dry-run audited, cleaned, and reverified after deployment.
+- [x] Goal 6: `v0.1.138` final release acceptance - full local gates, GitHub CI/Release, Tencent Cloud deployment, Browser-plugin Linux WebUI acceptance, Computer Use macOS Tauri acceptance, and release asset verification completed on 2026-06-26.
+- [x] Goal 7: `v0.1.138` final cleanup - local worktree/build/temp artifacts and Tencent Cloud release temp/backups were dry-run audited, cleaned, and reverified after deployment on 2026-06-26.
 
 ## Governance Status
 
@@ -62,7 +62,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.138_IDEAL_REFACTOR_FINALIZATION
+  mode: V0.1.138_IDEAL_REFACTOR_CLOSED
   strategy: "cc-switch style single shared use-case layer with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
