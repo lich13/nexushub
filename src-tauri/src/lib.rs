@@ -9,7 +9,9 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    Manager, PhysicalPosition, PhysicalSize, Runtime, Size, WebviewWindow, WebviewWindowBuilder,
+};
 
 pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
 pub use services::probe::desktop_probe_status_with_state;
@@ -159,11 +161,45 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> std::io::Result<()>
     Ok(())
 }
 
-fn reveal_main_window<R: tauri::Runtime>(window: &WebviewWindow<R>) {
+fn reveal_main_window<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.maximize();
+    fit_main_window_to_work_area(window);
     let _ = window.set_focus();
+}
+
+fn fit_main_window_to_work_area<R: Runtime>(window: &WebviewWindow<R>) {
+    let monitor = match window.current_monitor() {
+        Ok(Some(monitor)) => Some(monitor),
+        _ => window.primary_monitor().ok().flatten(),
+    };
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let work_area = monitor.work_area();
+    if work_area.size.width == 0 || work_area.size.height == 0 {
+        return;
+    }
+    let _ = window.set_position(PhysicalPosition::new(
+        work_area.position.x,
+        work_area.position.y,
+    ));
+    let _ = window.set_size(Size::Physical(PhysicalSize::new(
+        work_area.size.width,
+        work_area.size.height,
+    )));
+}
+
+fn schedule_delayed_main_window_reveal<R: Runtime>(window: &WebviewWindow<R>) {
+    let delayed_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let main_thread_window = delayed_window.clone();
+        let _ = delayed_window.run_on_main_thread(move || {
+            reveal_main_window(&main_thread_window);
+        });
+    });
 }
 
 fn append_desktop_app_log(message: &str) {
@@ -293,6 +329,7 @@ pub fn run() {
                 .build()
                 .map_err(|err| err.to_string())?;
             reveal_main_window(&window);
+            schedule_delayed_main_window_reveal(&window);
             schedule_desktop_boot_probe(&window);
             Ok(())
         })
@@ -1454,6 +1491,30 @@ log_dir = "{}"
                 && maximize_index < focus_index,
             "reveal_main_window must preserve show -> unminimize -> maximize -> set_focus startup order"
         );
+        for required in [
+            "fn fit_main_window_to_work_area",
+            "window.current_monitor()",
+            "window.primary_monitor()",
+            "monitor.work_area()",
+            "window.set_position(PhysicalPosition::new(",
+            "window.set_size(Size::Physical(PhysicalSize::new(",
+        ] {
+            assert!(
+                source.contains(required),
+                "explicit macOS window creation must fall back to the monitor work area when native maximize does not resize the window: {required}"
+            );
+        }
+        for required in [
+            "fn schedule_delayed_main_window_reveal",
+            "std::time::Duration::from_millis",
+            "run_on_main_thread",
+            "schedule_delayed_main_window_reveal(&window)",
+        ] {
+            assert!(
+                source.contains(required),
+                "explicit macOS window creation must replay reveal after the event loop has settled: {required}"
+            );
+        }
         assert!(
             source.contains("desktop_boot_probe"),
             "Tauri must leave a low-detail boot probe for macOS App acceptance"

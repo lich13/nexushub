@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-06-26
-> **Mode**: V0.1.133_COMPAT_BACKFILL_RELEASE_CLOSURE
+> **Mode**: V0.1.134_MACOS_MAXIMIZED_WINDOW_RELEASE_CLOSURE
 
 ## References
 
@@ -36,9 +36,9 @@
 
 ## Current Status
 
-**Active Phase**: v0.1.133 v0.1.128 compatibility backfill and release closure<br>
-**Active Task**: `v0.1.133` follows the `v0.1.131` explicit-window fix, keeps `create:false` and manual Tauri window creation, restores the v0.1.128 default maximized-window reveal contract with `show -> unminimize -> maximize -> set_focus`, and restores the v0.1.128 flat Tauri Goal invoke ABI while keeping Goal business semantics in core services.
-**Blockers**: Release/deploy/macOS App acceptance remains pending until the `v0.1.133` GitHub Release workflow, official assets, Tencent Cloud deployment, and official DMG cold-start checks pass.
+**Active Phase**: v0.1.134 macOS maximized-window acceptance closure<br>
+**Active Task**: `v0.1.134` keeps the `v0.1.131` explicit-window fix and the `v0.1.133` v0.1.128 compatibility backfill, then fixes the official macOS DMG cold-start regression where the main window stayed at the base `1280x820` size instead of the v0.1.128 default maximized window.
+**Blockers**: Release/deploy/macOS App acceptance remains pending until the `v0.1.134` GitHub Release workflow, official assets, Tencent Cloud deployment, and official DMG cold-start checks pass.
 
 ## Governance Status
 
@@ -52,7 +52,7 @@
 
 ```yaml
 adaptive:
-  mode: V0.1.133_COMPAT_BACKFILL_RELEASE_CLOSURE
+  mode: V0.1.134_MACOS_MAXIMIZED_WINDOW_RELEASE_CLOSURE
   strategy: "cc-switch style single shared use-case layer with thin Linux WebUI and macOS Tauri adapters; legacy REST and retired compatibility command entry points are hard-deleted"
   phases:
     phase_1:
@@ -132,7 +132,8 @@ adaptive:
 | 2026-06-25 | v0.1.130 macOS Tauri bootstrap acceptance fix | S | P/R pass for release/deploy; App cold-start failed | 0 | Bumped workspace/package/Tauri versions to `0.1.130`; injected the desktop runtime marker before WebUI bootstrap and completed GitHub Release plus Tencent Cloud deployment, but official DMG cold-start acceptance still found a live macOS process with `windows=0` and a black screen, so this version is not final acceptance. |
 | 2026-06-25 | v0.1.131 macOS Tauri explicit window acceptance fix | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.131`; disables implicit Tauri config window creation, explicitly builds the main WebView window after resource preparation, re-shows/focuses it on `RunEvent::Ready`, adds a visible WebUI boot guard and a low-detail `desktop_boot_probe` acceptance log, and adds guard tests for the macOS shell cold-start path while preserving the shared core/Tauri/WebUI architecture and `CLAUDE.md` absence. |
 | 2026-06-26 | v0.1.132 compatibility backfill attempt | S | P/R failed; Release cancelled | 1 | Restored the v0.1.128 default maximized-window reveal contract and flat Tauri Goal invoke ABI, but the pushed tag failed the macOS Tauri CI `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` job. The Release run was cancelled before publication; no `v0.1.132` assets were deployed. |
-| 2026-06-26 | v0.1.133 v0.1.128 compatibility backfill | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.133`; preserves the explicit Tauri window creation path from `v0.1.131`, restores the v0.1.128 default maximized-window reveal contract with `unminimize`, restores flat Tauri Goal invoke parameters for the shared WebUI, and keeps Goal service semantics in core DTOs. |
+| 2026-06-26 | v0.1.133 v0.1.128 compatibility backfill | S | P/R failed; superseded | 1 | Bumped workspace/package/Tauri versions to `0.1.133`; preserved the explicit Tauri window creation path from `v0.1.131`, restored the v0.1.128 flat Goal ABI, and deployed Linux successfully, but official DMG cold-start acceptance still measured the main window at about `1281x821` instead of the maximized work area, so `v0.1.133` is superseded. |
+| 2026-06-26 | v0.1.134 macOS maximized-window closure | S | P/R pending | 0 | Bumps workspace/package/Tauri versions to `0.1.134`; keeps explicit Tauri window creation, adds a monitor work-area fallback plus delayed main-thread reveal replay, and adds hard tests for the fallback so cold-start windows restore the v0.1.128 maximized-window behavior without entering macOS fullscreen Space. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -149,7 +150,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.133
+git ls-remote --tags origin refs/tags/v0.1.134
 ```
 
 ## Next Steps
@@ -160,12 +161,12 @@ git ls-remote --tags origin refs/tags/v0.1.133
 4. Keep Cloudflare Turnstile login verification intact; do not confuse it with the removed Cloudflare Tunnel ingress docs.
 5. Keep the retired legacy `/codex-cloud-panel/` path returning `404`; NexusHub is the public Linux WebUI surface under `/nexushub/`.
 
-## v0.1.133 Acceptance Matrix
+## v0.1.134 Acceptance Matrix
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
-| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.133`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
-| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.133-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.133`, verify the process owns at least one visible window, verify nonblank UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, and Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
+| Tencent Cloud Linux | `https://661313.xyz/nexushub/` | systemd `nexushub` | `/opt/nexushub` with packaged `webui` | `systemctl is-active`, exact `nexushubd 0.1.134`, loopback `healthz`, public HTTPS `/nexushub/` returns `200`, canonical Probe RPC `/api/rpc/probe.status`, old REST Probe paths `404`, retired `/codex-cloud-panel/` `404`, root `/api/v1/models` not handled by NexusHub, cleanup execute rejects missing/stale `expectedCount`, Linux tarball `.sha256`, shared `NexusHub 更新` status, update job history |
+| macOS ARM64 | Tauri App bundle wrapping shared `webui` | native app process | `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/bin/nexushubd`, `~/Library/Logs/NexusHub` | Install the official `NexusHub-0.1.134-darwin-arm64.dmg`, kill stale `nexushub` processes, cold-start `/Applications/NexusHub.app`, verify App/helper `0.1.134`, verify the process owns one visible non-fullscreen window that fills the main monitor work area, verify nonblank UI with Codex/Claude Code/Probe/Ops, no Web login/Turnstile/systemd/Nginx/admin password/public endpoint/Linux prune, shared typed Probe/Update commands, Codex/Probe/Goal/cleanup smoke, helper sync check, DMG/tarball `.sha256`, signed updater `.sig`, `latest.json`, and Tauri updater `Check` keeps no-update state explicit and leaves install disabled when no update is available |
 
 ## Session Log
 
@@ -209,4 +210,5 @@ git ls-remote --tags origin refs/tags/v0.1.133
 | 2026-06-25 | v0.1.130-macos-bootstrap-acceptance-fix | Injected `__NEXUSHUB_DESKTOP_RUNTIME__` through Tauri initialization before WebUI bootstrap and reran release/deploy; later official DMG cold-start acceptance found the process could remain alive with zero visible windows, so `v0.1.130` is superseded. |
 | 2026-06-25 | v0.1.131-macos-window-acceptance-fix | Disables implicit Tauri config window creation, explicitly builds the main WebView window after bundled resources are prepared, re-shows/focuses it on `RunEvent::Ready`, adds the WebUI boot guard and low-detail WebView boot probe, and reruns the release/deploy/App acceptance chain from `v0.1.131`. |
 | 2026-06-26 | v0.1.132-compat-backfill-cancelled | Restored the compatibility behavior, pushed `v0.1.132`, then cancelled the Release run after the macOS Tauri CI fmt job exposed a narrower-formatting failure. This version has no published Release assets and was not deployed. |
-| 2026-06-26 | v0.1.133-compat-backfill-release-closure | Keeps the explicit Tauri window creation path but restores v0.1.128 maximized-window reveal behavior with `unminimize`, restores flat Tauri Goal invoke ABI compatibility, and reruns the release/deploy/App acceptance chain from `v0.1.133`. |
+| 2026-06-26 | v0.1.133-compat-backfill-release-closure | Keeps the explicit Tauri window creation path, restores flat Tauri Goal invoke ABI compatibility, and deploys Linux successfully; official DMG acceptance later found the window still opened at about `1281x821`, so the release is superseded by `v0.1.134`. |
+| 2026-06-26 | v0.1.134-macos-maximized-window-release-closure | Adds a monitor work-area fallback and delayed main-thread reveal replay for the explicit Tauri window path, preserving visible-window protection while restoring the v0.1.128 maximized-window startup behavior. |
