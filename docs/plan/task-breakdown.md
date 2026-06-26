@@ -12,7 +12,7 @@
 - **S (Single Purpose)**: New provider modules must own one provider-specific concern. Do not add unrelated logic to `api.rs`, `codex.rs`, or `App.tsx` without a follow-up split plan.
 - **U (Unidirectional Flow)**: Preserve API -> core -> provider/service flow. UI code calls typed API helpers rather than raw fetches from components.
 - **P (Ports over Implementation)**: Provider work must expose serializable structs and stable route contracts before control actions are added.
-- **E (Environment-Agnostic)**: Linux production paths belong in config/defaults; macOS and Windows support remains preview until service installers are verified.
+- **E (Environment-Agnostic)**: Linux production paths belong in config/defaults; macOS Tauri is a release acceptance target; Windows support remains planned until service installers are verified.
 - **R (Replaceable Parts)**: Codex, Claude Code, built-in Probe, and future providers must remain independently replaceable behind registry/API boundaries.
 
 ## Testing and Governance Constraints
@@ -87,9 +87,9 @@
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
-| 4.1 | Extend navigation for Claude, Probe, plugins, ops previews | P0 | M | 3.1 | A | S, R | WebUI tests, typecheck/build | None | Desktop and mobile nav can reach all preview pages |
+| 4.1 | Extend navigation for Claude, Probe, plugins, and ops workspaces | P0 | M | 3.1 | A | S, R | WebUI tests, typecheck/build | None | Desktop and mobile nav can reach all shared workspace pages |
 | 4.2 | Keep Codex chat non-regressed | P0 | L | 4.1 | A | U, R | Existing WebUI tests and Chrome 插件验收 for logged-in flows | None | Thread list, detail, SSE, Plan/Questions, upload, stop/follow-up remain available |
-| 4.3 | Add preview pages for files/Git/terminal as disabled/planned entries | P2 | S | 4.1 | B | P, R | Typecheck/build | None | UI shows planned provider tooling without exposing shell jobs |
+| 4.3 | Add planned provider tooling entries without enabling shell jobs | P2 | S | 4.1 | B | P, R | Typecheck/build | None | UI shows planned provider tooling without exposing shell jobs |
 
 ### Parallel Lanes
 
@@ -98,24 +98,24 @@
 | A | 4.1, 4.2 | L | High | `webui/src/App.tsx` |
 | B | 4.3 | S | Medium | `webui/src/App.tsx` |
 
-## Phase 5: Three-Platform Service Model
+## Phase 5: Cross-Platform Service Model
 
-**Goal**: Keep Linux real and document macOS/Windows preview path support.
+**Goal**: Keep Linux WebUI and macOS Tauri as verified release targets while keeping Windows planned until its service installer exists.
 **Prerequisite**: Phase 3.
 **S.U.P.E.R Focus**: E, R
 
 | # | Task | Priority | Effort | Depends On | Lane | S.U.P.E.R | Test Expectation | Memory Impact | Acceptance Criteria |
 |:--|:--|:--|:--|:--|:--|:--|:--|:--|:--|
-| 5.1 | Implement `PlatformPaths` for Linux/macOS/Windows | P0 | S | 3.1 | A | E, R | Rust platform tests | None | Paths match `/opt/nexushub`, `~/Library/Application Support/NexusHub`, and `%ProgramData%\\NexusHub` |
+| 5.1 | Implement `PlatformPaths` for Linux/macOS/Windows | P0 | S | 3.1 | A | E, R | Rust platform tests | None | Paths match `/opt/nexushub`, `~/Library/Application Support/NexusHub`, and planned `%ProgramData%\\NexusHub` |
 | 5.2 | Harden Linux install/update migration | P0 | M | 5.1 | A | E, R | `bash scripts/test-install-script.sh` | None | Legacy paths migrate to `/opt/nexushub` and fixed wrappers are installed |
-| 5.3 | Mark Windows/macOS packaging as preview until verified | P1 | S | 5.1 | B | E | Docs-only; README review | None | Docs do not overclaim unverified DMG/ZIP/service installers |
+| 5.3 | Keep macOS Tauri and Windows packaging claims accurate | P1 | S | 5.1 | B | E | Docs-only; README review | None | macOS Tauri App acceptance is required for releases; Windows ZIP/service installers remain planned |
 
 ### Parallel Lanes
 
 | Lane | Tasks | Combined Effort | Merge Risk | Key Files |
 |:--|:--|:--|:--|:--|
 | A | 5.1, 5.2 | M | Medium | `platform.rs`, deploy scripts |
-| B | 5.3 | S | Low | `README.md`, docs |
+| B | 5.3 | S | Low | `README.md`, docs, release acceptance matrix |
 
 ## Phase 6: Verification and Release Readiness
 

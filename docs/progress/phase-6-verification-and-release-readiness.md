@@ -4,9 +4,8 @@
 **Status**: Complete
 
 > Historical snapshot: this phase file records the original `v0.1.43` Linux
-> release readiness milestone. Current release/deploy acceptance is tracked in
-> `docs/progress/MASTER.md` under the latest `v0.1.126` cc-switch
-> release/deploy guard closure matrix.
+> release readiness milestone. Current dual-end release/deploy acceptance is
+> tracked in `docs/progress/MASTER.md` under the latest acceptance matrix.
 
 ## Tasks
 

@@ -1,6 +1,6 @@
-# Phase 5: Three-Platform Service Model
+# Phase 5: Cross-Platform Service Model
 
-**Goal**: Keep Linux real and document macOS/Windows preview path support.  
+**Goal**: Keep Linux WebUI and macOS Tauri as verified release targets while keeping Windows planned until its service installer exists.
 **Status**: Complete
 
 ## Tasks
@@ -21,21 +21,20 @@
   - Acceptance: Legacy paths migrate to `/opt/nexushub` and fixed wrappers are installed.
   - Notes: Completed in prior pass; full verification still reruns script test.
 
-- [x] **Task 5.3**: Mark Windows/macOS packaging as preview until verified
+- [x] **Task 5.3**: Keep macOS Tauri and Windows packaging claims accurate
   - Priority: P1
   - Effort: S
   - Test Expectation: Docs-only; README review.
   - Memory Impact: None.
-  - Acceptance: Docs do not overclaim unverified DMG/ZIP/service installers.
-  - Notes: README marks Windows packaging as preview/planned.
+  - Acceptance: macOS Tauri App acceptance is required for releases; Windows ZIP/service installers remain planned.
+  - Notes: macOS Tauri App has official DMG release acceptance; Windows remains planned.
 
 ## Phase Notes
 
-Linux systemd is the only verified deployment service in this local handoff.
+Linux systemd and macOS Tauri App are the verified release targets. Windows Service remains planned.
 
 ## Phase Completion Checklist
 
 - [x] All tasks above are checked off
 - [x] MASTER.md phase count updated
 - [x] MASTER.md "Current Status" updated to next phase
-

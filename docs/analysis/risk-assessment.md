@@ -4,19 +4,19 @@
 
 | Principle | Status | Key Findings | Transformation Priority |
 |:--|:--|:--|:--|
-| **S** Single Purpose | red | `api.rs`, `codex.rs`, and `App.tsx` carry many responsibilities. | High |
-| **U** Unidirectional Flow | yellow | Backend mostly flows API -> core, but UI and API orchestration are broad. | Medium |
-| **P** Ports over Implementation | yellow | New provider registry exists, but many Codex contracts are still route-specific rather than provider-port contracts. | High |
-| **E** Environment-Agnostic | yellow | Linux paths are production-ready; macOS/Windows are path previews; deploy scripts assume systemd/Nginx. | Medium |
-| **R** Replaceable Parts | yellow | Codex cannot yet be swapped independently because parsing, control, and UI state are intertwined. | High |
+| **S** Single Purpose | yellow | `api.rs`, `codex.rs`, `src-tauri/src/lib.rs`, and `App.tsx` now delegate most behavior to submodules, services, and domain components; `Conversation.tsx` remains the largest UI surface. | Medium |
+| **U** Unidirectional Flow | green | Linux RPC and macOS Tauri commands enter shared core use-case/read-model services; frontend components consume query/domain/runtime boundaries. | Medium |
+| **P** Ports over Implementation | yellow | Shared DTOs, dot commands, capability policy, and typed Tauri commands are in place; future providers still need provider-specific control ports. | Medium |
+| **E** Environment-Agnostic | yellow | Linux and macOS are production acceptance targets; Windows Service remains planned. Linux systemd/Nginx assumptions stay isolated to deploy scripts and capability policy. | Medium |
+| **R** Replaceable Parts | yellow | Codex parsing is split into internal modules and adapters are thinner, but provider replacement still depends on Codex-specific read-model tests. | Medium |
 
-**Overall Health**: 0/5 fully healthy - Refactoring Needed. The project is shippable as a conservative Linux/Codex-first V1, but the provider architecture needs gradual boundary hardening before broad multi-CLI control.
+**Overall Health**: shared Linux/macOS architecture is in the intended shape for the current Codex-focused product. Remaining risk is mainly around future provider expansion and keeping release acceptance discipline fresh.
 
 ### S.U.P.E.R Violation Hotspots
 
-- `crates/nexushubd/src/api.rs`: routing, business logic, auth gates, fallback behavior, uploads, jobs, and provider endpoints in one file.
-- `crates/nexushub-core/src/codex.rs`: DB access, rollout parsing, message normalization, status detection, and config/model behavior in one file.
-- `webui/src/App.tsx`: navigation, thread state, chat rendering, provider preview pages, settings, and operations pages in one component tree.
+- `webui/src/components/chat/Conversation.tsx`: still large because it composes message stream, current action cards, run config, inspector panels, and composer wiring.
+- `crates/nexushub-core/src/codex.rs`: now delegates path/session/thread/rollout/mutation details, but remains the public Codex facade and compatibility anchor.
+- `crates/nexushubd/src/api.rs`: now mostly router/helper composition; new behavior should still land in `api/*` adapters plus core services rather than growing the entry file.
 - `deploy/nexushub/install.sh` and `deploy/nexushub/update.sh`: production-critical script logic with embedded Python migrations and path assumptions.
 
 ## Risk Matrix
@@ -28,7 +28,7 @@
 | App-server exposure | Secret/local control plane exposed | Low | Critical | Only proxy `/nexushub/`; never expose socket, `/v1`, `/responses`, or metrics |
 | Archive/hidden-thread delete mistake | Data loss | Medium | High | Preserve dry-run and integrity checks; require button confirmation |
 | Config/path migration drift | Broken cloud install/update | Medium | High | Keep install script tests and legacy path fixtures |
-| macOS/Windows overclaim | Unsupported packages appear production-ready | Medium | Medium | Mark as preview/planned until service installers and artifacts are verified |
+| Windows overclaim | Unsupported Windows service packages appear production-ready | Medium | Medium | Keep Windows marked planned until service installers and artifacts are verified |
 | Claude Code writes too early | User config/tool permission risk | Medium | High | V1 read-only only; explicit future task required for writes |
 | Probe hidden control drift | User loses visible Codex control | Medium | High | Observation/notification first; no hidden desktop recovery in V1 |
 
@@ -40,17 +40,17 @@ Deployment safety is the second core risk. `/opt/nexushub` is now the canonical 
 
 ## Technical Debt
 
-- Large files make targeted reviews harder.
+- `Conversation.tsx` can be split further into message stream, inspector, current-action, and run-config components.
 - Provider abstractions are present but not yet deep enough to support full Claude/Cursor/Gemini control.
-- Platform paths exist for macOS and Windows, but installers and release assets are not production-grade.
-- WebUI provider pages are preview surfaces rather than full workspace parity.
+- Windows platform paths exist, but service installers and release assets are not production-grade.
+- Provider pages are controlled/read-only surfaces rather than full workspace parity.
 
 ## Testing Risks
 
-- No end-to-end browser test currently proves the provider navigation and mobile layout in a real browser.
-- Live bridge behavior is hard to test without the cloud app-server.
-- macOS launchd and Windows Service flows need future dry-run tests.
-- Linux release/deploy validation has been run for `v0.1.43` on `43.155.235.227` under `/nexushub/`; keep repeating that verification for every release.
+- Browser-plugin acceptance must keep covering Linux login, Turnstile, security save/reload, Probe, Ops, cleanup dry-run gating, and scoped sensitive-path `404`.
+- Computer Use acceptance must keep covering official macOS DMG install, visible non-fullscreen Tauri window, App/helper exact version, and absence of Web auth/Linux-only surfaces.
+- Windows Service flows need future dry-run tests before any production claim.
+- `docs/progress/MASTER.md` is the current release/deploy evidence source; old `v0.1.43` phase notes are historical snapshots only.
 
 ## Project Governance Risks
 

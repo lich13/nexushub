@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::{
     db::{PanelDb, ThreadGoal, ThreadGoalUpdate},
@@ -464,6 +465,56 @@ pub fn goal_enabled(goal: &ThreadGoal) -> bool {
             goal.status.as_str(),
             "active" | "running" | "complete" | "completed" | "blocked" | "paused"
         )
+}
+
+pub fn normalize_goal_response_value(value: &Value) -> Value {
+    let goal = value.get("goal").unwrap_or(value);
+    if goal.is_null() {
+        return serde_json::to_value(goal_empty("idle")).unwrap_or(Value::Null);
+    }
+    let status = goal_status_from_value(goal).unwrap_or_else(|| "active".to_string());
+    json!({
+        "enabled": goal_enabled_from_value(goal, &status),
+        "objective": goal.get("objective").and_then(Value::as_str),
+        "token_budget": goal.get("tokenBudget").or_else(|| goal.get("token_budget")).and_then(Value::as_u64),
+        "status": status,
+        "raw": value,
+    })
+}
+
+fn goal_status_from_value(goal: &Value) -> Option<String> {
+    goal.get("status")
+        .and_then(|value| {
+            value.as_str().or_else(|| {
+                value
+                    .get("type")
+                    .or_else(|| value.get("status"))
+                    .or_else(|| value.get("state"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn goal_enabled_from_value(goal: &Value, status: &str) -> bool {
+    if matches!(status, "idle" | "missing_thread" | "cleared") {
+        return false;
+    }
+    let objective = goal
+        .get("objective")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    objective
+        || goal
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(matches!(
+                status,
+                "active" | "running" | "complete" | "completed" | "blocked" | "paused"
+            ))
 }
 
 pub fn goal_get_response_with_capability(
