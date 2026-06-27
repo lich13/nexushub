@@ -154,6 +154,7 @@ install_payload() {
     [[ -f "${root}/deploy/nexushub-codex-update" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
     [[ -f "${root}/deploy/nexushub-codex-prune" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
   fi
+  trap - RETURN
 }
 
 install_codex_wrappers() {

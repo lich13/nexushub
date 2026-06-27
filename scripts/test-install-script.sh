@@ -125,6 +125,8 @@ if "location ^~ /api/" in nginx:
     raise SystemExit("nginx.conf must not proxy root /api/ because Sub2API owns that namespace")
 if "/v1" in nginx and "return 404" not in nginx:
     raise SystemExit("nginx.conf must keep sensitive /v1 paths unavailable")
+if 'trap \'rm -rf "${tmp}"\' RETURN' in install and "trap - RETURN" not in install:
+    raise SystemExit("install.sh RETURN trap must be cleared before local tmp leaves scope")
 
 for doc_name, doc in {"README.md": readme, "docs/cloud-deploy-runbook.md": runbook}.items():
     for stale in [
