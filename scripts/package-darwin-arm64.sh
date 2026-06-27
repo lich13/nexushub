@@ -36,7 +36,7 @@ cleanup() {
 trap cleanup EXIT
 
 cargo_package_version() {
-  cargo pkgid --package nexushubd --manifest-path "${ROOT}/Cargo.toml" |
+  cargo pkgid --package nexushub-webd --manifest-path "${ROOT}/Cargo.toml" |
     awk -F# '{print $NF}'
 }
 
@@ -110,10 +110,10 @@ assert_app_only_archive() {
 
 assert_app_bundle_resources() {
   local app_bundle="$1"
-  local helper="${app_bundle}/Contents/Resources/nexushubd"
+  local helper="${app_bundle}/Contents/Resources/nexushub-webd"
   local bundled_webui="${app_bundle}/Contents/Resources/webui"
 
-  [[ -x "${helper}" ]] || die "app bundle missing executable nexushubd helper"
+  [[ -x "${helper}" ]] || die "app bundle missing executable nexushub-webd helper"
   local helper_kind
   helper_kind="$(file "${helper}")"
   [[ "${helper_kind}" == *"Mach-O 64-bit executable arm64"* ]] ||
@@ -174,7 +174,7 @@ fi
 
 mkdir -p "${DIST}"
 mkdir -p "${TAURI_DIR}/resources"
-HELPER_RESOURCE="${TAURI_DIR}/resources/nexushubd"
+HELPER_RESOURCE="${TAURI_DIR}/resources/nexushub-webd"
 HELPER_RESOURCE_BACKUP="$(mktemp)"
 if [[ -f "${HELPER_RESOURCE}" ]]; then
   cp -p "${HELPER_RESOURCE}" "${HELPER_RESOURCE_BACKUP}"
@@ -192,10 +192,10 @@ fi
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
 
 if [[ "${SKIP_HELPER_BUILD:-0}" != "1" ]]; then
-  cargo build --release --package nexushubd
+  cargo build --release --package nexushub-webd
 fi
 
-HELPER_BINARY="${ROOT}/target/release/nexushubd"
+HELPER_BINARY="${ROOT}/target/release/nexushub-webd"
 [[ -x "${HELPER_BINARY}" ]] || die "missing helper binary: ${HELPER_BINARY}"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"

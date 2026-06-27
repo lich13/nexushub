@@ -619,7 +619,7 @@ fn linux_probe_actions_execute_shared_core_job_command() {
     );
     assert!(
         adapter_source.contains("patch_probe_config_toml"),
-        "Linux adapter is the only nexushubd module that applies Probe settings TOML patches"
+        "Linux adapter is the only nexushub-webd module that applies Probe settings TOML patches"
     );
     assert!(
         adapter_source.contains("ProbeUseCases::new"),

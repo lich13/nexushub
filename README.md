@@ -1,8 +1,8 @@
 # NexusHub
 
-`nexushub` is a Rust + React operations console for Codex local state with one shared `webui` frontend packaged for three host surfaces: Linux server WebUI, desktop embedded Tauri, and desktop LAN WebUI. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS and Linux desktop the supported entry is the Tauri App. The Tauri App can optionally start a default-off, independently authenticated LAN WebUI service from the bundled `nexushubd` helper.
+`nexushub` is a Rust + React operations console for Codex local state with one shared `webui` frontend packaged for three host surfaces: Linux server WebUI, desktop embedded Tauri, and desktop LAN WebUI. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS and Linux desktop the supported entry is the Tauri App. The Tauri App can optionally start a default-off, independently authenticated LAN WebUI service from the bundled `nexushub-webd` helper.
 
-The Tauri apps follow the CC Switch native packaging model: Tauri wraps the main `webui` interface directly. macOS produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, `nexushub-darwin-arm64.tar.gz`, signed updater metadata `nexushub-darwin-arm64.tar.gz.sig`, and `latest.json` platform `darwin-aarch64`. Linux desktop produces `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, `.rpm`, and AppImage updater signature for `latest.json` platform `linux-x86_64`. The Linux server release chain still builds the same `webui` into `/opt/nexushub/webui/` and publishes the hosted browser entry at `https://661313.xyz/nexushub/`.
+The Tauri apps follow the CC Switch native packaging model: Tauri wraps the main `webui` interface directly. macOS produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, `nexushub-darwin-arm64.tar.gz`, signed updater metadata `nexushub-darwin-arm64.tar.gz.sig`, and `latest.json` platform `darwin-aarch64`. Linux desktop produces `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, `.rpm`, and AppImage updater signature for `latest.json` platform `linux-x86_64`. The Linux server release chain builds the same `webui` into `/usr/share/nexushub-webd/webui/`, publishes `nexushub-webd-linux-x86_64.tar.gz`, and serves the hosted browser entry at `https://661313.xyz/nexushub/`.
 
 Current scope:
 
@@ -12,7 +12,7 @@ Current scope:
 - Thread read model from the resolved Codex home, Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`.
 - Running / reply-needed / recoverable / archived status cards.
 - Archive delete dry-run and button-confirmed execute path with integrity checks.
-- Shared update status and update jobs: Linux server uses `/usr/local/bin/nexushub-update` through fixed systemd-health-checked jobs; macOS and Linux Tauri use the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json`.
+- Shared update status and update jobs: Linux server uses `/usr/local/bin/nexushub-webd-update` through fixed systemd-health-checked jobs; macOS and Linux Tauri use the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json`.
 - Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
 - Plan Mode, model, reasoning, and a compact Codex APP-style permission menu for the conversation workspace.
 - Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
@@ -29,23 +29,24 @@ Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode
 Linux production layout:
 
 ```text
-/opt/nexushub/bin/nexushubd
-/opt/nexushub/config.toml
-/opt/nexushub/env
-/opt/nexushub/nexushub.sqlite
-/opt/nexushub/logs/
-/opt/nexushub/webui/
+/usr/local/bin/nexushub-webd
+/etc/systemd/system/nexushub-webd.service
+/usr/share/nexushub-webd/webui/
+/etc/nexushub-webd/config.toml
+/etc/nexushub-webd/env
+/var/lib/nexushub-webd/nexushub.sqlite
+/var/log/nexushub-webd/
 ```
 
 The daemon listens on `127.0.0.1:15742`. Nginx should proxy public HTTPS traffic to that loopback port.
-`/opt/nexushub/env` must contain `NEXUSHUB_SECRET_KEY`. The installer preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
+`/etc/nexushub-webd/env` must contain `NEXUSHUB_SECRET_KEY`. During migration the installer copies the old `/opt/nexushub` config, env, and SQLite files once, then normalizes runtime paths to the new layout. It preserves an existing NexusHub key first; otherwise it imports `/etc/codex-cloud-panel/env` `CODEX_CLOUD_PANEL_SECRET_KEY`, then `/etc/cc-switch-lite/env` `CC_SWITCH_LITE_SECRET_KEY`, and only generates a new key when no legacy key exists. This keeps existing encrypted Turnstile settings readable during migration.
 
 macOS ARM64 Tauri App layout:
 
 ```text
 ~/Library/Application Support/NexusHub/config.toml
 ~/Library/Application Support/NexusHub/nexushub.sqlite
-~/Library/Application Support/NexusHub/bin/nexushubd
+~/Library/Application Support/NexusHub/bin/nexushub-webd
 ~/Library/Application Support/NexusHub/desktop-assets/
 ~/Library/Logs/NexusHub/
 ```
@@ -55,12 +56,12 @@ Linux desktop Tauri App layout:
 ```text
 ~/.config/NexusHub/config.toml
 ~/.local/share/NexusHub/nexushub.sqlite
-~/.local/share/NexusHub/bin/nexushubd
+~/.local/share/NexusHub/bin/nexushub-webd
 ~/.local/share/NexusHub/desktop-assets/
 ~/.local/state/NexusHub/logs/
 ```
 
-On desktop, open NexusHub from the installed Tauri App bundle. The App bundle carries the local `nexushubd` helper and syncs it into the desktop data directory on launch so Probe Bark tests, Hook installation, and optional LAN WebUI use the same controlled helper path. Do not document or ship a LaunchAgent Web service or Cloudflare Tunnel entry for desktop platforms.
+On desktop, open NexusHub from the installed Tauri App bundle. The App bundle carries the local `nexushub-webd` helper and syncs it into the desktop data directory on launch so Probe Bark tests, Hook installation, and optional LAN WebUI use the same controlled helper path. Do not document or ship a LaunchAgent Web service or Cloudflare Tunnel entry for desktop platforms.
 
 Desktop LAN WebUI is controlled only from embedded Tauri:
 
@@ -86,7 +87,7 @@ workspace = "/home/ubuntu/codex-workspace"
 host_label = "43.155.235.227"
 ```
 
-`codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/opt/nexushub`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
+`codex.home` is optional. When omitted, NexusHub auto-discovers the Codex home from the local state layout, normally `/root/.codex` or `/home/ubuntu/.codex`. NexusHub depends on Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`; it does not require `codex-app-server-root.service`, `app_server_socket`, or bridge settings in default config. The systemd unit grants write access only to those two Codex homes plus `/etc/nexushub-webd`, `/var/lib/nexushub-webd`, and `/var/log/nexushub-webd`; any other discovered Codex home should be treated as a warning and granted explicitly rather than broadening `ReadWritePaths`.
 
 The public site exposes `/nexushub/` for the Linux WebUI and `/nexushub/api/` for NexusHub API requests through Nginx. The host-level `/api/` namespace is reserved for other services and must not be claimed by NexusHub. Do not publish any Codex control sockets, `/v1`, `/responses`, or metrics endpoints. Legacy `/codex-cloud-panel/` and `/api/sentinel/status` paths should remain unavailable from the public panel surface.
 
@@ -96,7 +97,7 @@ The public site exposes `/nexushub/` for the Linux WebUI and `/nexushub/api/` fo
 
 Probe routes are canonical RPC commands under the daemon-local `/api/rpc/probe.*` namespace, for example `/api/rpc/probe.status`, `/api/rpc/probe.settings.get`, and `/api/rpc/probe.logsDb.status`. Through the Linux `/nexushub/api/` proxy these remain RPC routes such as `/nexushub/api/rpc/probe.status`; old REST Probe paths return `404`, including `/api/probe/*` and `/nexushub/api/probe/*`. `/api/sentinel/*` compatibility aliases are not part of the packaged runtime. Codex `logs_2.sqlite` maintenance runs automatically in the background; compaction uses the existing DB in place after health gates instead of creating a new backup. The WebUI only displays status and metrics while settings and Bark tests use fixed, auditable actions.
 
-The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushubd probe hook-stop`.
+The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushub-webd probe hook-stop`.
 
 ## Local Build
 
@@ -107,15 +108,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui install
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
-bash scripts/package-linux.sh
+bash scripts/package-webd-linux-x86_64.sh
 bash scripts/package-darwin-arm64.sh
 bash scripts/package-linux-tauri-x86_64.sh
 ```
 
-`scripts/package-linux.sh` intentionally refuses to produce the Linux release asset on non-Linux hosts. Use the GitHub Actions release workflow for the canonical Linux x86_64 tarball.
+`scripts/package-webd-linux-x86_64.sh` intentionally refuses to produce the Linux server release asset on non-Linux x86_64 hosts. It writes `dist/nexushub-webd-linux-x86_64.tar.gz` and `.sha256`. `scripts/package-linux.sh` is only a deprecated compatibility shim to the webd package script; new automation should call the webd script directly.
 `scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/nexushub-darwin-arm64.tar.gz.sig`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files in signed release builds. The release workflow publishes `latest.json` for `darwin-aarch64`.
 `scripts/package-linux-tauri-x86_64.sh` intentionally refuses to produce Linux desktop Tauri assets on non-Linux x86_64 hosts. It writes `dist/NexusHub-<version>-Linux-x86_64.AppImage`, `.AppImage.sig` in signed release builds, `.deb`, `.rpm`, and matching `.sha256` files. The release workflow publishes the AppImage in `latest.json` for `linux-x86_64`.
-The desktop packaging scripts build the release `nexushubd` helper, inject it into the Tauri resources for packaging, and restore the tracked `src-tauri/resources/nexushubd` placeholder before exit.
+The desktop packaging scripts build the release `nexushub-webd` helper, inject it into the Tauri resources for packaging, and restore the tracked `src-tauri/resources/nexushub-webd` placeholder before exit.
 `ALLOW_HOST_MISMATCH=1` is only for local smoke archives and is not a canonical release path.
 
 ## Server Install
@@ -123,20 +124,20 @@ The desktop packaging scripts build the release `nexushubd` helper, inject it in
 Tencent Cloud Linux remains the canonical hosted deployment:
 
 ```bash
-sudo deploy/nexushub/install.sh \
-  --archive ./dist/nexushub-linux-x86_64.tar.gz \
+sudo deploy/nexushub-webd/install.sh \
+  --archive ./dist/nexushub-webd-linux-x86_64.tar.gz \
   --domain 661313.xyz \
   --path-prefix /nexushub/
 
 sudo NEXUSHUB_ADMIN_PASSWORD='<strong-password>' \
-  /opt/nexushub/bin/nexushubd admin init --username admin
+  /usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml admin init --username admin
 ```
 
 Password must be at least 12 chars. To rotate it later:
 
 ```bash
 sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' \
-  /opt/nexushub/bin/nexushubd admin reset-password --username admin
+  /usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml admin reset-password --username admin
 ```
 
 Turnstile is configured after login in `安全 / Security`. The cloud defaults match cc-switch-lite semantics: 365-day sessions, Site Key `0x4AAAAAADPfCPB_O-N3j6ON`, action `login`, expected hostname `661313.xyz`, token replay protection, and enabled login verification. The `required` switch is a fail-closed guard when Turnstile is not enabled. Secret values are encrypted at rest, write-only, and never returned by the API.
@@ -147,7 +148,7 @@ After installing the DMG, validate the Tauri App directly:
 
 ```bash
 open -a NexusHub
-"$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
+"$HOME/Library/Application Support/NexusHub/bin/nexushub-webd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
@@ -170,12 +171,12 @@ Tencent Cloud remains a headless Linux server WebUI deployment; it does not need
 ## Update
 
 ```bash
-sudo /usr/local/bin/nexushub-update --repo lich13/nexushub --version latest
+sudo /usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest
 ```
 
 Use the shared update entry for updates and cleanup:
 
-- Linux `NexusHub 更新` runs `/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest`; its prune action removes old `/opt/nexushub/backups/release-updates` backups while keeping the latest three.
+- Linux `NexusHub 更新` runs `/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest`; its prune action removes old `/var/lib/nexushub-webd/backups/release-updates` backups while keeping the latest three.
 - macOS and Linux Tauri `NexusHub 更新` check the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json` and install only after user confirmation and signature verification.
 - Archive cleanup is split into archived-thread cleanup and hidden-thread cleanup, each with a dry-run and confirmation step.
 
@@ -186,18 +187,18 @@ The configured commands run fixed wrappers only, redact sensitive output, and at
 Tencent Cloud Linux:
 
 ```bash
-sudo systemctl is-active nexushub
+sudo systemctl is-active nexushub-webd
 curl -fsS http://127.0.0.1:15742/healthz
 curl -fsS https://661313.xyz/nexushub/
-sudo /opt/nexushub/bin/nexushubd doctor
-shasum -a 256 -c dist/nexushub-linux-x86_64.tar.gz.sha256
+sudo /usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml doctor
+shasum -a 256 -c dist/nexushub-webd-linux-x86_64.tar.gz.sha256
 ```
 
 macOS ARM64:
 
 ```bash
 open -a NexusHub
-"$HOME/Library/Application Support/NexusHub/bin/nexushubd" --version
+"$HOME/Library/Application Support/NexusHub/bin/nexushub-webd" --version
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 shasum -a 256 -c dist/nexushub-darwin-arm64.tar.gz.sha256
 test -s dist/nexushub-darwin-arm64.tar.gz.sig

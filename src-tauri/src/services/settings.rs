@@ -243,7 +243,7 @@ pub(crate) fn probe_fixed_shell_job_with_state(
         return Ok(unavailable_action(
             command,
             &format!(
-                "Probe action requires local nexushubd binary; plan is available but job cannot start: {}",
+                "Probe action requires local nexushub-webd binary; plan is available but job cannot start: {}",
                 binary.display()
             ),
         )

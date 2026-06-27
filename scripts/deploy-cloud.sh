@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 HOST="${1:-43.155.235.227}"
-ARCHIVE="${2:-dist/nexushub-linux-x86_64.tar.gz}"
+ARCHIVE="${2:-dist/nexushub-webd-linux-x86_64.tar.gz}"
 DOMAIN="${NEXUSHUB_DOMAIN:-661313.xyz}"
 PATH_PREFIX="${NEXUSHUB_PATH_PREFIX:-/nexushub/}"
 EXPECTED_VERSION="${NEXUSHUB_EXPECTED_VERSION:-}"
@@ -26,13 +26,13 @@ PY
 )"
 fi
 
-REMOTE_ARCHIVE="/tmp/nexushub-linux-x86_64.tar.gz"
+REMOTE_ARCHIVE="/tmp/nexushub-webd-linux-x86_64.tar.gz"
 scp "${ARCHIVE}" "${HOST}:${REMOTE_ARCHIVE}"
-tar -C deploy -czf /tmp/nexushub-deploy.tar.gz nexushub
-scp /tmp/nexushub-deploy.tar.gz "${HOST}:/tmp/nexushub-deploy.tar.gz"
-ssh "${HOST}" "rm -rf /tmp/nexushub-deploy && mkdir -p /tmp/nexushub-deploy && tar -xzf /tmp/nexushub-deploy.tar.gz -C /tmp/nexushub-deploy"
-ssh "${HOST}" "sudo -n bash /tmp/nexushub-deploy/nexushub/install.sh --archive ${REMOTE_ARCHIVE} --domain ${DOMAIN} --path-prefix ${PATH_PREFIX}"
-ssh "${HOST}" "sudo -n systemctl is-active --quiet nexushub && test \"\$(sudo -n /opt/nexushub/bin/nexushubd --version)\" = \"nexushubd ${EXPECTED_VERSION}\" && curl -fsS http://127.0.0.1:15742/healthz >/dev/null"
+tar -C deploy -czf /tmp/nexushub-webd-deploy.tar.gz nexushub-webd
+scp /tmp/nexushub-webd-deploy.tar.gz "${HOST}:/tmp/nexushub-webd-deploy.tar.gz"
+ssh "${HOST}" "rm -rf /tmp/nexushub-webd-deploy && mkdir -p /tmp/nexushub-webd-deploy && tar -xzf /tmp/nexushub-webd-deploy.tar.gz -C /tmp/nexushub-webd-deploy"
+ssh "${HOST}" "sudo -n bash /tmp/nexushub-webd-deploy/nexushub-webd/install.sh --archive ${REMOTE_ARCHIVE} --domain ${DOMAIN} --path-prefix ${PATH_PREFIX}"
+ssh "${HOST}" "sudo -n systemctl is-active --quiet nexushub-webd && test \"\$(sudo -n /usr/local/bin/nexushub-webd --version)\" = \"nexushub-webd ${EXPECTED_VERSION}\" && curl -fsS http://127.0.0.1:15742/healthz >/dev/null"
 
 PUBLIC_BASE="https://${DOMAIN%/}${PATH_PREFIX}"
 PUBLIC_BASE="${PUBLIC_BASE%/}/"

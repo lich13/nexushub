@@ -431,7 +431,7 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
     if plan.platform != PlatformKind::Linux {
         anyhow::bail!("only Linux WebUI can start server update jobs");
     }
-    let exclusive_group = plan.exclusive.then(|| "nexushub-update".to_string());
+    let exclusive_group = plan.exclusive.then(|| "nexushub-webd-update".to_string());
     match plan.action {
         UpdateAction::Check => Ok(LinuxUpdateJobSpec {
             kind: "nexushub_update_check".to_string(),
@@ -663,8 +663,8 @@ mod tests {
             .linux_job
             .expect("Linux update action should create a shell job spec");
         assert_eq!(job.kind, "nexushub_update_install");
-        assert_eq!(job.exclusive_group.as_deref(), Some("nexushub-update"));
-        assert!(job.command.contains("nexushub-update"));
+        assert_eq!(job.exclusive_group.as_deref(), Some("nexushub-webd-update"));
+        assert!(job.command.contains("nexushub-webd-update"));
     }
 
     #[test]

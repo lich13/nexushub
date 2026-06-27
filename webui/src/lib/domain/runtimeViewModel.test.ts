@@ -146,7 +146,7 @@ describe("runtime view-model helpers", () => {
         public_endpoint: "https://661313.xyz/nexushub/",
         state_db_integrity: "ok",
         codex_home: "/root/.codex",
-        state_db: "/opt/nexushub/panel.sqlite",
+        state_db: "/var/lib/nexushub-webd/nexushub.sqlite",
         hidden_thread_count: 0
       },
       updateStatus: {
@@ -157,7 +157,7 @@ describe("runtime view-model helpers", () => {
         method: "linux_systemd_job",
         state: "idle",
         failure_category: "systemd_failure",
-        recommended_action: "/usr/local/bin/nexushub-update",
+        recommended_action: "/usr/local/bin/nexushub-webd-update",
         capabilities: ["prune_backups"]
       },
       archivePlan: null,

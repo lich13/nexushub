@@ -15,6 +15,12 @@ pub enum HostSurface {
 }
 
 impl HostSurface {
+    pub const ALL: &'static [HostSurface] = &[
+        HostSurface::LinuxServerWebui,
+        HostSurface::DesktopEmbeddedTauri,
+        HostSurface::DesktopLanWebui,
+    ];
+
     pub fn default_for_platform(platform: &PlatformPaths) -> Self {
         match platform.kind {
             PlatformKind::Linux => Self::LinuxServerWebui,

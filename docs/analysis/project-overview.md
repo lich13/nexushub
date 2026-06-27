@@ -8,7 +8,7 @@ Build `NexusHub` as a new repo based on `codex-cloud-panel`, keep Codex local-st
 
 ```mermaid
 flowchart TD
-    LinuxBrowser[Linux WebUI React/Vite] --> API[nexushubd Axum RPC/API]
+    LinuxBrowser[Linux WebUI React/Vite] --> API[nexushub-webd Axum RPC/API]
     MacTauri[macOS Tauri App] --> TauriCommands[typed Tauri invoke commands]
     API --> UseCases[shared use-case and read-model services]
     TauriCommands --> UseCases
@@ -33,12 +33,12 @@ The daemon listens on `127.0.0.1:15742` and is intended to be exposed only throu
 | Frontend | React 18, Vite, TanStack Query, lucide-react | Same visual shell with provider pages |
 | Build Tool | Cargo, pnpm 11.0.8, Vite | Same |
 | Database | NexusHub SQLite plus official Codex DB reads | Same; no Codex schema mutation |
-| Deployment | Linux systemd under `/opt/nexushub`, Nginx `/nexushub/`; macOS Tauri App | Linux WebUI plus macOS native app; Windows Service remains planned |
+| Deployment | Linux systemd `nexushub-webd` under `/usr/local/bin`, `/usr/share/nexushub-webd`, `/etc/nexushub-webd`, `/var/lib/nexushub-webd`, and `/var/log/nexushub-webd`; Nginx `/nexushub/`; macOS/Linux Tauri App | Linux server WebUI plus macOS/Linux native apps; Windows Service remains planned |
 
 ## Entry Points
 
-- Backend CLI and daemon: `crates/nexushubd/src/main.rs`
-- Backend API router and adapters: `crates/nexushubd/src/api.rs`, `crates/nexushubd/src/api/*`
+- Backend CLI and daemon: `crates/nexushub-webd/src/main.rs`
+- Backend API router and adapters: `crates/nexushub-webd/src/api.rs`, `crates/nexushub-webd/src/api/*`
 - Core library exports and Codex read model: `crates/nexushub-core/src/lib.rs`, `crates/nexushub-core/src/codex.rs`, `crates/nexushub-core/src/codex/*`
 - Provider registry: `crates/nexushub-core/src/providers.rs`
 - Claude Code preview: `crates/nexushub-core/src/claude_code.rs`
@@ -47,7 +47,7 @@ The daemon listens on `127.0.0.1:15742` and is intended to be exposed only throu
 - WebUI shell and domain components: `webui/src/App.tsx`, `webui/src/components/*`, `webui/src/lib/domain/*`
 - macOS Tauri runtime entry: `src-tauri/src/lib.rs`, `src-tauri/src/commands/*`, `src-tauri/src/services/*`
 - WebUI API client/tests: `webui/src/lib/api.ts`, `webui/src/lib/api.test.ts`
-- Linux install/update: `deploy/nexushub/install.sh`, `deploy/nexushub/update.sh`
+- Linux install/update: `deploy/nexushub-webd/install.sh`, `deploy/nexushub-webd/update.sh`
 
 ## Build & Run
 
@@ -60,11 +60,11 @@ corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
 ```
 
-Canonical Linux packaging is `bash scripts/package-linux.sh` on Linux x86_64. macOS packaging targets the native Tauri App entry, not a browser WebUI or LaunchAgent Web service. Both fronts share contracts through core use-case/read-model services, with Linux differences expressed by RPC adapters and macOS differences expressed by typed Tauri commands plus capability policy.
+Canonical Linux server packaging is `bash scripts/package-webd-linux-x86_64.sh` on Linux x86_64. `scripts/package-linux.sh` is only a deprecated shim. macOS/Linux desktop packaging targets native Tauri App entries, not a LaunchAgent Web service or Tencent Cloud GUI. All host surfaces share contracts through `contracts/nexushub-contract.json`, core use-case/read-model services, WebUI query/domain/runtime helpers, and thin Linux RPC or Tauri invoke adapters.
 
 ## Testing Baseline
 
-Rust has unit and integration tests in `nexushub-core`, `nexushubd`, Tauri command/service coverage, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers, capability rendering, message-store behavior, and a TypeScript/Vite build. The active release acceptance matrix is maintained in `docs/progress/MASTER.md`; current acceptance requires both Tencent Cloud Linux WebUI checks and official macOS Tauri DMG checks for each release. Windows Service packaging remains planned.
+Rust has unit and integration tests in `nexushub-core`, `nexushub-webd`, Tauri command/service coverage, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers, capability rendering, contract registry parity, message-store behavior, and a TypeScript/Vite build. The active release acceptance matrix is maintained in `docs/progress/MASTER.md`; current acceptance requires Tencent Cloud Linux WebUI checks, official macOS Tauri DMG checks, and Linux Tauri release asset/`xvfb` smoke checks for each release. Windows Service packaging remains planned.
 
 ## Project Governance Baseline
 

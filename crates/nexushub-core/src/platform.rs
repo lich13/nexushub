@@ -68,13 +68,13 @@ impl PlatformPaths {
         match kind {
             PlatformKind::Linux => Self {
                 kind,
-                data_dir: PathBuf::from("/opt/nexushub"),
-                config_file: PathBuf::from("/opt/nexushub/config.toml"),
-                webui_dir: PathBuf::from("/opt/nexushub/webui"),
-                log_dir: PathBuf::from("/opt/nexushub/logs"),
-                service_name: "nexushub".to_string(),
+                data_dir: PathBuf::from("/var/lib/nexushub-webd"),
+                config_file: PathBuf::from("/etc/nexushub-webd/config.toml"),
+                webui_dir: PathBuf::from("/usr/share/nexushub-webd/webui"),
+                log_dir: PathBuf::from("/var/log/nexushub-webd"),
+                service_name: "nexushub-webd".to_string(),
                 service_kind: "systemd".to_string(),
-                service_file: Some(PathBuf::from("/etc/systemd/system/nexushub.service")),
+                service_file: Some(PathBuf::from("/etc/systemd/system/nexushub-webd.service")),
             },
             PlatformKind::Macos => Self {
                 kind,
@@ -131,9 +131,12 @@ impl PlatformPaths {
 
     pub fn daemon_binary(&self) -> PathBuf {
         let binary = match self.kind {
-            PlatformKind::Windows => "nexushubd.exe",
-            PlatformKind::Linux | PlatformKind::Macos => "nexushubd",
+            PlatformKind::Windows => "nexushub-webd.exe",
+            PlatformKind::Linux | PlatformKind::Macos => "nexushub-webd",
         };
+        if self.kind == PlatformKind::Linux && self.service_kind == "systemd" {
+            return PathBuf::from("/usr/local/bin").join(binary);
+        }
         self.data_dir.join("bin").join(binary)
     }
 }

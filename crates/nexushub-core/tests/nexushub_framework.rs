@@ -27,7 +27,7 @@ fn default_config_uses_nexushub_runtime_names() {
     assert_eq!(config.paths.log_dir, platform.log_dir);
     assert_eq!(
         config.update.panel_update_command,
-        "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
     );
 }
 
@@ -35,13 +35,22 @@ fn default_config_uses_nexushub_runtime_names() {
 fn linux_default_config_values_stay_cloud_compatible() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
 
-    assert_eq!(config.paths.data_dir, PathBuf::from("/opt/nexushub"));
+    assert_eq!(
+        config.paths.data_dir,
+        PathBuf::from("/var/lib/nexushub-webd")
+    );
     assert_eq!(
         config.paths.db_path,
-        PathBuf::from("/opt/nexushub/nexushub.sqlite")
+        PathBuf::from("/var/lib/nexushub-webd/nexushub.sqlite")
     );
-    assert_eq!(config.paths.webui_dir, PathBuf::from("/opt/nexushub/webui"));
-    assert_eq!(config.paths.log_dir, PathBuf::from("/opt/nexushub/logs"));
+    assert_eq!(
+        config.paths.webui_dir,
+        PathBuf::from("/usr/share/nexushub-webd/webui")
+    );
+    assert_eq!(
+        config.paths.log_dir,
+        PathBuf::from("/var/log/nexushub-webd")
+    );
     assert_eq!(
         config.codex.workspace,
         PathBuf::from("/home/ubuntu/codex-workspace")
@@ -52,7 +61,7 @@ fn linux_default_config_values_stay_cloud_compatible() {
     );
     assert_eq!(
         config.update.panel_precheck_command,
-        "/usr/local/bin/nexushub-update --precheck"
+        "/usr/local/bin/nexushub-webd-update --precheck"
     );
 }
 
@@ -107,7 +116,27 @@ fn platform_paths_cover_linux_macos_and_windows() {
 
     assert_eq!(
         PlatformPaths::for_kind(PlatformKind::Linux).data_dir,
-        PathBuf::from("/opt/nexushub")
+        PathBuf::from("/var/lib/nexushub-webd")
+    );
+    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
+    assert_eq!(
+        linux.config_file,
+        PathBuf::from("/etc/nexushub-webd/config.toml")
+    );
+    assert_eq!(
+        linux.webui_dir,
+        PathBuf::from("/usr/share/nexushub-webd/webui")
+    );
+    assert_eq!(linux.log_dir, PathBuf::from("/var/log/nexushub-webd"));
+    assert_eq!(linux.service_name, "nexushub-webd");
+    assert_eq!(linux.service_kind, "systemd");
+    assert_eq!(
+        linux.service_file,
+        Some(PathBuf::from("/etc/systemd/system/nexushub-webd.service"))
+    );
+    assert_eq!(
+        linux.daemon_binary(),
+        PathBuf::from("/usr/local/bin/nexushub-webd")
     );
     let macos = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
     assert_eq!(
@@ -127,8 +156,17 @@ fn platform_paths_cover_linux_macos_and_windows() {
     assert_eq!(macos.service_name, "NexusHub.app");
     assert_eq!(macos.service_kind, "tauri");
     assert_eq!(
+        macos.daemon_binary(),
+        mac_home.join("Library/Application Support/NexusHub/bin/nexushub-webd")
+    );
+    assert_eq!(
         PlatformPaths::for_kind(PlatformKind::Windows).data_dir,
         PathBuf::from(r"%ProgramData%\NexusHub")
+    );
+    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
+    assert_eq!(
+        windows.daemon_binary(),
+        windows.data_dir.join("bin").join("nexushub-webd.exe")
     );
     fs::remove_dir_all(mac_home).unwrap();
 }
@@ -254,14 +292,14 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     assert!(status.enabled);
     assert!(status.available);
     assert_eq!(status.flavor, "builtin");
-    assert_eq!(status.service_name, "nexushub");
+    assert_eq!(status.service_name, "nexushub-webd");
     assert!(status.binary_path.is_none());
     assert_eq!(status.lifecycle_status, "managed");
     assert_eq!(status.doctor_status, "ready");
     assert_eq!(status.logs_db_status, "ok");
     assert_eq!(
         status.config_path,
-        PathBuf::from("/opt/nexushub/config.toml")
+        PathBuf::from("/etc/nexushub-webd/config.toml")
     );
     assert_eq!(status.recent_event_count, 0);
     fs::remove_dir_all(root).unwrap();
@@ -345,9 +383,8 @@ fn probe_action_plans_use_nexushub_commands_and_confirmation_ids() {
         .iter()
         .find(|step| step.contains("probe hook-stop"))
         .expect("hook command step");
-    assert!(
-        hook_command_step.contains("nexushubd --config /opt/nexushub/config.toml probe hook-stop")
-    );
+    assert!(hook_command_step
+        .contains("nexushub-webd --config /etc/nexushub-webd/config.toml probe hook-stop"));
     assert!(!hook_plan
         .steps
         .iter()
@@ -368,7 +405,7 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
 
     let lifecycle = runtime.lifecycle_status();
     assert_eq!(lifecycle.status, "managed");
-    assert_eq!(lifecycle.service_name, "nexushub");
+    assert_eq!(lifecycle.service_name, "nexushub-webd");
     assert_eq!(lifecycle.service_kind, "systemd");
     assert!(lifecycle.hooks_enabled);
     assert!(lifecycle.notifications_enabled);
@@ -383,7 +420,7 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
 
     let hook = runtime.hook_status();
     assert_eq!(hook.status, "managed");
-    assert!(hook.hook_command.contains("/opt/nexushub/bin/nexushubd"));
+    assert!(hook.hook_command.contains("/usr/local/bin/nexushub-webd"));
     assert!(hook.supported_events.contains(&"hook-stop".to_string()));
     assert!(hook
         .supported_events

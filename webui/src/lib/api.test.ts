@@ -520,7 +520,7 @@ describe("archive delete API compatibility", () => {
       channel: "stable",
       method: "linux_systemd_job",
       state: "idle",
-      recommended_action: "/usr/local/bin/nexushub-update",
+      recommended_action: "/usr/local/bin/nexushub-webd-update",
       capabilities: ["job_history"]
     }), {
       status: 200,
@@ -573,11 +573,11 @@ describe("archive delete API compatibility", () => {
       },
       "/api/rpc/system.platform": {
         kind: "linux",
-        data_dir: "/opt/nexushub",
-        config_file: "/opt/nexushub/config.toml",
-        webui_dir: "/opt/nexushub/webui",
-        log_dir: "/opt/nexushub/logs",
-        service_name: "nexushub",
+        data_dir: "/var/lib/nexushub-webd",
+        config_file: "/etc/nexushub-webd/config.toml",
+        webui_dir: "/usr/share/nexushub-webd/webui",
+        log_dir: "/var/log/nexushub-webd",
+        service_name: "nexushub-webd",
         service_kind: "systemd"
       },
       "/api/rpc/probe.status": {
@@ -585,7 +585,7 @@ describe("archive delete API compatibility", () => {
         enabled: true,
         platform: "linux",
         service_kind: "systemd",
-        service_name: "nexushub",
+        service_name: "nexushub-webd",
         flavor: "builtin",
         available: true,
         hook_status: "managed",
@@ -598,7 +598,7 @@ describe("archive delete API compatibility", () => {
         running_threads: [],
         reply_needed_threads: [],
         recoverable_threads: [],
-        config_path: "/opt/nexushub/config.toml"
+        config_path: "/etc/nexushub-webd/config.toml"
       },
       "/api/rpc/probe.settings.get": {
         codex: {
@@ -619,8 +619,8 @@ describe("archive delete API compatibility", () => {
 
     await expect(listProviders()).resolves.toMatchObject([{ id: "codex", status: "ready" }]);
     await expect(getClaudeCodeOverview()).resolves.toMatchObject({ available: true, data: { settings_exists: true } });
-    await expect(getPlatformOverview()).resolves.toMatchObject({ kind: "linux", data_dir: "/opt/nexushub" });
-    await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "builtin", service_name: "nexushub" } });
+    await expect(getPlatformOverview()).resolves.toMatchObject({ kind: "linux", data_dir: "/var/lib/nexushub-webd" });
+    await expect(getProbeStatus()).resolves.toMatchObject({ available: true, data: { hook_status: "managed", flavor: "builtin", service_name: "nexushub-webd" } });
     await expect(getProbeSettings()).resolves.toMatchObject({ available: true, data: { probe: { poll_seconds: 15 } } });
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
       "/api/rpc/system.providers",
@@ -650,7 +650,7 @@ describe("archive delete API compatibility", () => {
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
-      data: { flavor: "builtin", service_kind: "systemd", service_name: "nexushub" }
+      data: { flavor: "builtin", service_kind: "systemd", service_name: "nexushub-webd" }
     });
   });
 
@@ -932,7 +932,7 @@ describe("archive delete API compatibility", () => {
       available: true,
       platform: "linux",
       service_kind: "systemd",
-      service_name: "nexushub",
+      service_name: "nexushub-webd",
       flavor: "builtin",
       hook_status: "managed",
       bark_status: "configured",
@@ -944,7 +944,7 @@ describe("archive delete API compatibility", () => {
       running_threads: [],
       reply_needed_threads: [],
       recoverable_threads: [],
-      config_path: "/opt/nexushub/config.toml",
+      config_path: "/etc/nexushub-webd/config.toml",
       codex_home: "/root/.codex",
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
@@ -1085,7 +1085,7 @@ describe("archive delete API compatibility", () => {
       configured_codex_home: null,
       resolved_codex_home: "/home/codex/.codex",
       codex_home_source: "auto",
-      panel_db: "/opt/nexushub/nexushub.sqlite"
+      panel_db: "/var/lib/nexushub-webd/nexushub.sqlite"
     };
     const logsDb: ProbeLogsDbStatus = {
       path: "/home/codex/.codex/logs_2.sqlite",

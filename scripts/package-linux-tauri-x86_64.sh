@@ -36,7 +36,7 @@ cleanup() {
 trap cleanup EXIT
 
 cargo_package_version() {
-  cargo pkgid --package nexushubd --manifest-path "${ROOT}/Cargo.toml" |
+  cargo pkgid --package nexushub-webd --manifest-path "${ROOT}/Cargo.toml" |
     awk -F# '{print $NF}'
 }
 
@@ -65,7 +65,7 @@ find_tauri_artifact() {
 
 assert_desktop_binary() {
   local binary="${TAURI_TARGET_DIR}/release/nexushub"
-  local helper="${TAURI_TARGET_DIR}/release/nexushubd"
+  local helper="${TAURI_TARGET_DIR}/release/nexushub-webd"
   [[ -x "${binary}" ]] || die "desktop build did not produce executable ${binary}"
   if [[ -x "${helper}" ]] && cmp -s "${binary}" "${helper}"; then
     die "desktop binary unexpectedly matches server helper at ${helper}"
@@ -78,9 +78,9 @@ assert_bundle_resources() {
   local webui_count
 
   [[ -d "${bundle_root}" ]] || die "missing Linux Tauri bundle directory: ${bundle_root}"
-  helper_count="$(find "${bundle_root}" -type f -name "nexushubd" -print 2>/dev/null | wc -l | tr -d ' ')"
+  helper_count="$(find "${bundle_root}" -type f -name "nexushub-webd" -print 2>/dev/null | wc -l | tr -d ' ')"
   webui_count="$(find "${bundle_root}" -type f -path "*/webui/index.html" -print 2>/dev/null | wc -l | tr -d ' ')"
-  [[ "${helper_count}" -gt 0 ]] || die "Linux Tauri bundle missing nexushubd resource"
+  [[ "${helper_count}" -gt 0 ]] || die "Linux Tauri bundle missing nexushub-webd resource"
   [[ "${webui_count}" -gt 0 ]] || die "Linux Tauri bundle missing webui/index.html resource"
 }
 
@@ -141,7 +141,7 @@ fi
 
 mkdir -p "${DIST}"
 mkdir -p "${TAURI_DIR}/resources"
-HELPER_RESOURCE="${TAURI_DIR}/resources/nexushubd"
+HELPER_RESOURCE="${TAURI_DIR}/resources/nexushub-webd"
 HELPER_RESOURCE_BACKUP="$(mktemp)"
 if [[ -f "${HELPER_RESOURCE}" ]]; then
   cp -p "${HELPER_RESOURCE}" "${HELPER_RESOURCE_BACKUP}"
@@ -159,10 +159,10 @@ fi
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
 
 if [[ "${SKIP_HELPER_BUILD:-0}" != "1" ]]; then
-  cargo build --release --package nexushubd
+  cargo build --release --package nexushub-webd
 fi
 
-HELPER_BINARY="${ROOT}/target/release/nexushubd"
+HELPER_BINARY="${ROOT}/target/release/nexushub-webd"
 [[ -x "${HELPER_BINARY}" ]] || die "missing helper binary: ${HELPER_BINARY}"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"

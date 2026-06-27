@@ -141,16 +141,19 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
 #[test]
 fn linux_update_job_specs_are_planned_in_core_service() {
     let mut config = Config::for_platform_kind(PlatformKind::Linux);
-    config.update.panel_precheck_command = "nexushub-update --precheck".to_string();
-    config.update.panel_update_command = "nexushub-update --install".to_string();
+    config.update.panel_precheck_command = "nexushub-webd-update --precheck".to_string();
+    config.update.panel_update_command = "nexushub-webd-update --install".to_string();
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let precheck =
         linux_update_job_spec(&config, update_action_plan(&platform, UpdateAction::Check)).unwrap();
     assert_eq!(precheck.kind, "nexushub_update_check");
     assert_eq!(precheck.title, "NexusHub update precheck");
-    assert_eq!(precheck.command, "nexushub-update --precheck");
-    assert_eq!(precheck.exclusive_group.as_deref(), Some("nexushub-update"));
+    assert_eq!(precheck.command, "nexushub-webd-update --precheck");
+    assert_eq!(
+        precheck.exclusive_group.as_deref(),
+        Some("nexushub-webd-update")
+    );
 
     let install = linux_update_job_spec(
         &config,
@@ -158,7 +161,7 @@ fn linux_update_job_specs_are_planned_in_core_service() {
     )
     .unwrap();
     assert_eq!(install.kind, "nexushub_update_install");
-    assert_eq!(install.command, "nexushub-update --install");
+    assert_eq!(install.command, "nexushub-webd-update --install");
 
     let prune =
         linux_update_job_spec(&config, update_action_plan(&platform, UpdateAction::Prune)).unwrap();

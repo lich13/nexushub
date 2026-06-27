@@ -139,7 +139,7 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
       config_file: `${linuxDemoRoot}/config.toml`,
       webui_dir: `${linuxDemoRoot}/webui`,
       log_dir: `${linuxDemoRoot}/logs`,
-      service_name: "nexushub",
+      service_name: "nexushub-webd",
       service_kind: "systemd"
     },
     system: {

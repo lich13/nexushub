@@ -29,6 +29,17 @@ mod tests {
         format!("commands::{module}::{name}")
     }
 
+    fn contract_actions() -> Vec<serde_json::Value> {
+        let raw = include_str!("../../contracts/nexushub-contract.json");
+        let value: serde_json::Value =
+            serde_json::from_str(raw).expect("contract registry must be valid JSON");
+        value
+            .get("actions")
+            .and_then(serde_json::Value::as_array)
+            .expect("contract actions must be an array")
+            .clone()
+    }
+
     fn retired_compat_path(module: &str, stem: &str) -> String {
         command_path(module, &format!("{stem}_{}", "command"))
     }
@@ -74,7 +85,7 @@ mod tests {
         let boot_source = include_str!("desktop_boot.rs");
 
         for required in [
-            "resources::sync_nexushubd_helper_from_resource(&resource_dir)",
+            "resources::sync_nexushub_webd_helper_from_resource(&resource_dir)",
             "resources::prepare_desktop_webui_assets_from_resource(&resource_dir)",
             "desktop_boot::reveal_main_window(&window)",
             "desktop_boot::schedule_delayed_main_window_reveal(&window)",
@@ -86,7 +97,7 @@ mod tests {
             );
         }
         for forbidden in [
-            "fn sync_nexushubd_helper_file",
+            "fn sync_nexushub_webd_helper_file",
             "fn sync_directory",
             "fn migrate_desktop_webui_dir_config",
             "fn reveal_main_window",
@@ -101,7 +112,7 @@ mod tests {
             );
         }
         assert!(
-            resources_source.contains("fn sync_nexushubd_helper_file")
+            resources_source.contains("fn sync_nexushub_webd_helper_file")
                 && resources_source.contains("fn sync_directory")
                 && resources_source.contains("fn migrate_desktop_webui_dir_config"),
             "resources.rs must own helper and WebUI resource sync implementation"
@@ -160,6 +171,28 @@ mod tests {
                 "unused desktop compatibility command must not be registered: {retired}"
             );
         }
+    }
+
+    #[test]
+    fn tauri_invoke_handler_matches_contract_registry() {
+        let registered = registered_invoke_command_paths()
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = contract_actions()
+            .into_iter()
+            .filter_map(|action| {
+                action
+                    .get("tauriCommand")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            registered, expected,
+            "Tauri invoke registration must be declared by contracts/nexushub-contract.json"
+        );
     }
 
     #[test]

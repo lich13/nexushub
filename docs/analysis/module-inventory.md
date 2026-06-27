@@ -32,7 +32,7 @@
 - **S.U.P.E.R Assessment**: Improved single-purpose and unidirectional flow, but still the compatibility anchor for current Codex behavior.
 
 ### `api`
-- **Path**: `crates/nexushubd/src/api.rs`, `crates/nexushubd/src/api/*`
+- **Path**: `crates/nexushub-webd/src/api.rs`, `crates/nexushub-webd/src/api/*`
 - **Responsibility**: Compose Axum routes, public response helpers, RPC dispatch, auth/CSRF gates, and thin adapters for cleanup, goals, jobs, Probe, security, system, threads, uploads, and Web auth.
 - **Transformation Notes**: Keep `/api/rpc/:command` stable; place business contracts in core services and adapter-specific effects in submodules.
 - **S.U.P.E.R Assessment**: Entry file is no longer the business owner, but router growth and static guards must stay monitored.
@@ -44,7 +44,7 @@
 - **S.U.P.E.R Assessment**: `App.tsx` is no longer the largest hotspot; conversation composition remains medium risk.
 
 ### Deploy
-- **Path**: `deploy/nexushub/`, `scripts/`, `.github/workflows/`
-- **Responsibility**: Linux package/install/update, Nginx snippet, systemd unit, CI/release assets.
-- **Transformation Notes**: Linux WebUI and macOS Tauri are release acceptance targets. Windows remains planned until service installers and artifacts are verified.
+- **Path**: `deploy/nexushub-webd/`, `deploy/desktop/`, `scripts/`, `.github/workflows/`
+- **Responsibility**: Linux `nexushub-webd` package/install/update, Nginx snippet, systemd unit, Tauri desktop packaging, CI/release assets.
+- **Transformation Notes**: Linux server WebUI, macOS Tauri, and Linux Tauri are release acceptance targets. Windows remains planned until service installers and artifacts are verified.
 - **S.U.P.E.R Assessment**: Environment assumptions are explicit but platform-specific. Keep path migration tests for old codex-cloud-panel installs.

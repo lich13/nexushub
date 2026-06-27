@@ -51,7 +51,7 @@ static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::cons
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "nexushubd",
+    name = "nexushub-webd",
     version,
     about = "Headless Web panel for local Codex state and controlled jobs"
 )]
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "nexushubd=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "nexushub-webd=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();

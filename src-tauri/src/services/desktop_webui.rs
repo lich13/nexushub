@@ -77,7 +77,7 @@ pub(crate) fn start(state: &DesktopState) -> Result<DesktopWebuiStatus> {
     ensure_port_available(plan.listen)?;
     let helper = state.platform().daemon_binary();
     if !helper.is_file() {
-        anyhow::bail!("nexushubd helper not found: {}", helper.display());
+        anyhow::bail!("nexushub-webd helper not found: {}", helper.display());
     }
     fs::create_dir_all(&state.platform().log_dir)?;
     let log = File::create(log_file(state)?)?;

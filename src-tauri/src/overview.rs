@@ -519,10 +519,12 @@ mod tests {
         let command = plan.job.unwrap().command;
 
         assert!(
-            command.contains("'/Users/example/Library/Application Support/NexusHub/bin/nexushubd'"),
+            command.contains(
+                "'/Users/example/Library/Application Support/NexusHub/bin/nexushub-webd'"
+            ),
             "{command}"
         );
-        assert!(!command.contains("/opt/nexushub/bin/nexushubd"));
+        assert!(!command.contains("/opt/nexushub/bin/nexushub-webd"));
     }
 
     #[test]
@@ -532,7 +534,7 @@ mod tests {
         assert!(config
             .update
             .panel_update_command
-            .contains("nexushub-update"));
+            .contains("nexushub-webd-update"));
         assert!(!config.update.panel_precheck_command.contains("systemctl"));
         assert!(!config
             .update

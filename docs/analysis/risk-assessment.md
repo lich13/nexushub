@@ -16,8 +16,8 @@
 
 - `webui/src/components/chat/Conversation.tsx`: still large because it composes message stream, current action cards, run config, inspector panels, and composer wiring.
 - `crates/nexushub-core/src/codex.rs`: now delegates path/session/thread/rollout/mutation details, but remains the public Codex facade and compatibility anchor.
-- `crates/nexushubd/src/api.rs`: now mostly router/helper composition; new behavior should still land in `api/*` adapters plus core services rather than growing the entry file.
-- `deploy/nexushub/install.sh` and `deploy/nexushub/update.sh`: production-critical script logic with embedded Python migrations and path assumptions.
+- `crates/nexushub-webd/src/api.rs`: now mostly router/helper composition; new behavior should still land in `api/*` adapters plus core services rather than growing the entry file.
+- `deploy/nexushub-webd/install.sh` and `deploy/nexushub-webd/update.sh`: production-critical script logic with embedded Python migrations and path assumptions.
 
 ## Risk Matrix
 
@@ -36,7 +36,7 @@
 
 Codex compatibility is the core product risk. The current Codex chain depends on official DB reads, `session_index.jsonl`, rollout parsing, and `logs_2.sqlite` activity. New provider work must wrap this local read model rather than replacing it or reintroducing a root app-server dependency.
 
-Deployment safety is the second core risk. `/opt/nexushub` is now the canonical Linux layout, while install/update scripts intentionally keep legacy `codex-cloud-panel` replacement tables. Those legacy strings are compatibility inputs, not stale branding.
+Deployment safety is the second core risk. The canonical Linux layout is now `nexushub-webd` with `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd`, `/var/lib/nexushub-webd`, and `/var/log/nexushub-webd`. Install/update scripts intentionally keep old `/opt/nexushub` and `codex-cloud-panel` values only as migration inputs, not as current runtime paths.
 
 ## Technical Debt
 

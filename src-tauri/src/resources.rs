@@ -1,20 +1,20 @@
 use std::path::Path;
 
-const NEXUSHUBD_RESOURCE_NAME: &str = "nexushubd";
-const NEXUSHUBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
+const NEXUSHUB_WEBD_RESOURCE_NAME: &str = "nexushub-webd";
+const NEXUSHUB_WEBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
 const WEBUI_RESOURCE_NAME: &str = "webui";
 
-pub(crate) fn sync_nexushubd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
-    let source = resource_dir.join(NEXUSHUBD_RESOURCE_NAME);
+pub(crate) fn sync_nexushub_webd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
+    let source = resource_dir.join(NEXUSHUB_WEBD_RESOURCE_NAME);
     if !source.is_file() {
         return Ok(());
     }
-    if is_nexushubd_helper_placeholder(&source).map_err(|err| err.to_string())? {
+    if is_nexushub_webd_helper_placeholder(&source).map_err(|err| err.to_string())? {
         return Ok(());
     }
     let platform = nexushub_core::platform::PlatformPaths::desktop_current();
     let target = platform.daemon_binary();
-    sync_nexushubd_helper_file(&source, &target).map_err(|err| err.to_string())
+    sync_nexushub_webd_helper_file(&source, &target).map_err(|err| err.to_string())
 }
 
 pub(crate) fn prepare_desktop_webui_assets_from_resource(
@@ -75,12 +75,12 @@ fn migrate_desktop_webui_dir_config(
     Ok(())
 }
 
-fn is_nexushubd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
+fn is_nexushub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
     let bytes = std::fs::read(path)?;
-    Ok(bytes.starts_with(NEXUSHUBD_HELPER_PLACEHOLDER))
+    Ok(bytes.starts_with(NEXUSHUB_WEBD_HELPER_PLACEHOLDER))
 }
 
-fn sync_nexushubd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
+fn sync_nexushub_webd_helper_file(source: &Path, target: &Path) -> std::io::Result<()> {
     let should_copy = match (std::fs::metadata(source), std::fs::metadata(target)) {
         (Ok(source_meta), Ok(target_meta)) => {
             source_meta.len() != target_meta.len()
@@ -143,15 +143,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sync_nexushubd_helper_file_copies_and_marks_executable() {
+    fn sync_nexushub_webd_helper_file_copies_and_marks_executable() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushubd");
+        let source = temp.path().join("nexushub-webd");
         let target = temp
             .path()
-            .join("Application Support/NexusHub/bin/nexushubd");
+            .join("Application Support/NexusHub/bin/nexushub-webd");
         std::fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
 
-        sync_nexushubd_helper_file(&source, &target).unwrap();
+        sync_nexushub_webd_helper_file(&source, &target).unwrap();
 
         assert_eq!(std::fs::read(&target).unwrap(), b"#!/bin/sh\nexit 0\n");
         #[cfg(unix)]
@@ -165,10 +165,10 @@ mod tests {
     #[test]
     fn helper_placeholder_detection_prevents_dev_resource_sync() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("nexushubd");
+        let source = temp.path().join("nexushub-webd");
         std::fs::write(&source, b"NEXUSHUB_HELPER_PLACEHOLDER\nnot a binary\n").unwrap();
 
-        assert!(is_nexushubd_helper_placeholder(&source).unwrap());
+        assert!(is_nexushub_webd_helper_placeholder(&source).unwrap());
     }
 
     #[test]

@@ -100,7 +100,7 @@ export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-web"): UpdateS
     method: "linux_systemd_job",
     state: "idle",
     failure_category: null,
-    recommended_action: "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest",
+    recommended_action: "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest",
     capabilities: ["check", "confirm_install", "job_history", "sha256_verification", "systemd_health_check", "rollback", "prune_backups"]
   };
 }
@@ -427,7 +427,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Raw reply event",
           message: "Probe 事件已记录",
           dedupe_key: "reply-needed:019e95a0-demo:turn-plan-demo",
-          source: "nexushubd probe passive-scan",
+          source: "nexushub-webd probe passive-scan",
           payload: {
             event_type: "reply-needed",
             thread_title: "Plan Mode 修复",
@@ -440,7 +440,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 324,
             body_source: "proposed_plan",
             body_truncated: false,
-            source: "nexushubd probe passive-scan",
+            source: "nexushub-webd probe passive-scan",
             bark: { title: "等待回复：Plan Mode 修复", sent: false, skipped: true, reason: "dedupe", http_status: 200, dedupe_hit: true, chunk_count: 1, request_count: 0 },
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
@@ -454,7 +454,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Completion",
           message: "Thread completed",
           dedupe_key: "completion:019e5281-demo:turn-done",
-          source: "nexushubd probe hook-stop",
+          source: "nexushub-webd probe hook-stop",
           payload: {
             event_type: "completion",
             thread_title: "检查仓库状态",
@@ -466,7 +466,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 128,
             body_source: "task_complete.last_agent_message",
             body_truncated: false,
-            source: "nexushubd probe hook-stop",
+            source: "nexushub-webd probe hook-stop",
             bark: { title: "线程正常完成：检查仓库状态", sent: true, skipped: false, http_status: 200, dedupe_hit: false, chunk_count: 1, request_count: 1 },
             dedupe: { claimed: true, duplicate: false, status: "claimed" }
           },
@@ -480,7 +480,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           title: "Codex Stop Hook",
           message: "Stop Hook event recorded by NexusHub Probe",
           dedupe_key: "hook-stop:019e95a0-demo:turn-demo",
-          source: "nexushubd probe hook-stop",
+          source: "nexushub-webd probe hook-stop",
           payload: {
             event_type: "hook-stop",
             thread_title: "Plan Mode 修复",
@@ -492,7 +492,7 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
             body_length: 212,
             body_source: "default",
             body_truncated: false,
-            source: "nexushubd probe hook-stop",
+            source: "nexushub-webd probe hook-stop",
             bark: { title: "探针事件：Plan Mode 修复", skipped: true, reason: "notifications-disabled", dedupe_hit: false, chunk_count: 0, request_count: 0 },
             dedupe: { claimed: false, duplicate: true, status: "duplicate" }
           },

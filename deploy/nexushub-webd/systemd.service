@@ -1,0 +1,24 @@
+[Unit]
+Description=NexusHub WebUI daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/nexushub-webd/env
+ExecStart=/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml serve --surface linux-server-webui
+Restart=always
+RestartSec=5
+WorkingDirectory=/var/lib/nexushub-webd
+StandardOutput=append:/var/log/nexushub-webd/webd.log
+StandardError=append:/var/log/nexushub-webd/webd.log
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/root/.codex /home/ubuntu/.codex /etc/nexushub-webd /var/lib/nexushub-webd /var/log/nexushub-webd
+
+[Install]
+WantedBy=multi-user.target

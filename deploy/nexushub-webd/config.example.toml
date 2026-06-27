@@ -25,8 +25,6 @@ group = "NexusHub"
 notify_completion = true
 notify_reply_needed = true
 notify_recoverable = true
-# sound is unset by default.
-# url is unset by default.
 
 [probe.observability]
 hook_event_max_lines = 500
@@ -57,15 +55,15 @@ turnstile_expected_hostname = "661313.xyz"
 turnstile_expected_action = "login"
 
 [paths]
-data_dir = "/opt/nexushub"
-db_path = "/opt/nexushub/nexushub.sqlite"
-webui_dir = "/opt/nexushub/webui"
-log_dir = "/opt/nexushub/logs"
+data_dir = "/var/lib/nexushub-webd"
+db_path = "/var/lib/nexushub-webd/nexushub.sqlite"
+webui_dir = "/usr/share/nexushub-webd/webui"
+log_dir = "/var/log/nexushub-webd"
 
 [update]
 precheck_command = "/usr/local/bin/nexushub-codex-precheck"
 update_command = "/usr/local/bin/nexushub-codex-update"
 prune_command = "/usr/local/bin/nexushub-codex-prune"
 doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
-panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
-panel_precheck_command = "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"
+panel_update_command = "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
+panel_precheck_command = "test -x /usr/local/bin/nexushub-webd-update && systemctl is-active nexushub-webd && curl -fsS http://127.0.0.1:15742/healthz"

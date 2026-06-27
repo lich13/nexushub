@@ -825,7 +825,9 @@ fn new_core_facade_sources_do_not_import_host_runtime_surfaces() {
             "axum",
             "tauri::",
             "tauri_plugin",
-            "nexushubd",
+            "nexushub_webd::",
+            "crate::api",
+            "crate::linux_adapter",
             "src-tauri",
             "HeaderMap",
         ] {

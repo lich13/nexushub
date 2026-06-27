@@ -53,7 +53,7 @@ pub fn panel_update_command(configured: &str) -> String {
 }
 
 pub fn default_panel_update_command() -> String {
-    "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest".to_string()
+    "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string()
 }
 
 pub fn panel_prune_command() -> String {
@@ -61,7 +61,7 @@ pub fn panel_prune_command() -> String {
 from pathlib import Path
 import shutil
 
-root = Path("/opt/nexushub/backups/release-updates")
+root = Path("/var/lib/nexushub-webd/backups/release-updates")
 if not root.exists():
     print("no release update backups")
     raise SystemExit(0)
@@ -331,7 +331,7 @@ mod tests {
     fn panel_prune_command_keeps_recent_release_update_backups() {
         let command = panel_prune_command();
 
-        assert!(command.contains("/opt/nexushub/backups/release-updates"));
+        assert!(command.contains("/var/lib/nexushub-webd/backups/release-updates"));
         assert!(command.contains("backups[:-3]"));
         assert!(command.contains("shutil.rmtree"));
     }

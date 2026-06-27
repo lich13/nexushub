@@ -629,7 +629,7 @@ fn auth_public_settings_and_admin_password_facades_are_linux_only() {
 fn core_services_do_not_import_host_frameworks_or_process_runners() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
-    for forbidden_dependency in ["axum", "tauri", "nexushubd", "src-tauri"] {
+    for forbidden_dependency in ["axum", "tauri", "nexushub-webd", "src-tauri"] {
         assert!(
             !manifest.contains(forbidden_dependency),
             "nexushub-core must not declare adapter/runtime dependency {forbidden_dependency}"

@@ -218,7 +218,7 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
     let default_command = &default_plan.job.as_ref().unwrap().command;
     assert_eq!(
         default_command,
-        "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe bark-test"
+        "/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml probe bark-test"
     );
 
     let custom_config = std::path::Path::new("/tmp/nexushub custom/config.toml");
@@ -233,13 +233,15 @@ fn probe_fixed_job_command_is_core_generated_and_can_use_config_path_override() 
 
     assert_eq!(
         override_job.command,
-        "/opt/nexushub/bin/nexushubd --config '/tmp/nexushub custom/config.toml' probe bark-test"
+        "/usr/local/bin/nexushub-webd --config '/tmp/nexushub custom/config.toml' probe bark-test"
     );
     assert_eq!(
         override_job.args,
         vec!["probe".to_string(), "bark-test".to_string()]
     );
-    assert!(!override_job.command.contains("/opt/nexushub/config.toml"));
+    assert!(!override_job
+        .command
+        .contains("/etc/nexushub-webd/config.toml"));
 }
 
 #[test]

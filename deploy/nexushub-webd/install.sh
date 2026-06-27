@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_NAME="nexushub"
-SERVICE_NAME="nexushub"
-BIN_NAME="nexushubd"
-INSTALL_DIR="/opt/${APP_NAME}"
-INSTALL_BIN="${INSTALL_DIR}/bin/${BIN_NAME}"
-CONFIG_DIR="${INSTALL_DIR}"
+APP_NAME="nexushub-webd"
+BIN_NAME="nexushub-webd"
+SERVICE_NAME="nexushub-webd"
+INSTALL_BIN="/usr/local/bin/${BIN_NAME}"
+SHARE_DIR="/usr/share/${APP_NAME}"
+WEBUI_DIR="${SHARE_DIR}/webui"
+CONFIG_DIR="/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 ENV_FILE="${CONFIG_DIR}/env"
-DATA_DIR="${INSTALL_DIR}"
+DATA_DIR="/var/lib/${APP_NAME}"
+LOG_DIR="/var/log/${APP_NAME}"
 BACKUP_DIR="${DATA_DIR}/backups"
 NGINX_BACKUP_DIR="${BACKUP_DIR}/nginx"
-LOG_DIR="${INSTALL_DIR}/logs"
-WEBUI_DIR="${INSTALL_DIR}/webui"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 UPDATE_BIN="/usr/local/bin/${APP_NAME}-update"
-CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-precheck"
-CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-update"
-CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/${APP_NAME}-codex-prune"
-NGINX_SNIPPET="/etc/nginx/snippets/${APP_NAME}.conf"
+CODEX_PRECHECK_WRAPPER_BIN="/usr/local/bin/nexushub-codex-precheck"
+CODEX_UPDATE_WRAPPER_BIN="/usr/local/bin/nexushub-codex-update"
+CODEX_PRUNE_WRAPPER_BIN="/usr/local/bin/nexushub-codex-prune"
+NGINX_SNIPPET="/etc/nginx/snippets/nexushub.conf"
+LEGACY_DIR="/opt/nexushub"
+LEGACY_SERVICE="nexushub"
 
 ARCHIVE_PATH=""
 BINARY_PATH=""
@@ -28,13 +30,16 @@ PATH_PREFIX="/nexushub/"
 INSTALL_NGINX=0
 FORCE_CONFIG=0
 ENABLE_SERVICE=1
+CHECK_ONLY=0
 
 usage() {
   cat <<'USAGE'
-Install NexusHub.
+Install NexusHub WebUI daemon.
 
 Usage:
-  sudo install.sh --archive ./nexushub-linux-x86_64.tar.gz --domain 661313.xyz --path-prefix /nexushub/
+  sudo install.sh --archive ./nexushub-webd-linux-x86_64.tar.gz --domain 661313.xyz --path-prefix /nexushub/
+  sudo install.sh --binary ./target/release/nexushub-webd
+  install.sh --check
 
 Options:
   --archive PATH       Install release tarball.
@@ -43,12 +48,33 @@ Options:
   --path-prefix PATH   Public path prefix. Default: /nexushub/
   --force-config       Replace existing config.toml.
   --no-enable          Do not enable/start service.
+  --check              Validate archive layout when run from extracted deploy/.
   -h, --help           Show help.
 USAGE
 }
 
 log() { printf '[%s] %s\n' "${APP_NAME}" "$*"; }
 die() { printf '[%s] ERROR: %s\n' "${APP_NAME}" "$*" >&2; exit 1; }
+
+script_dir() {
+  cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P
+}
+
+archive_root_from_deploy() {
+  cd -- "$(script_dir)/.." >/dev/null 2>&1 && pwd -P
+}
+
+check_layout() {
+  local root
+  root="$(archive_root_from_deploy)"
+  [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing executable bin/${BIN_NAME}"
+  [[ -f "${root}/webui/index.html" ]] || die "archive missing webui/index.html"
+  [[ -f "${root}/deploy/install.sh" ]] || die "archive missing deploy/install.sh"
+  [[ -f "${root}/deploy/update.sh" ]] || die "archive missing deploy/update.sh"
+  [[ -f "${root}/deploy/systemd.service" ]] || die "archive missing deploy/systemd.service"
+  "${root}/bin/${BIN_NAME}" --version | grep -Eq '^nexushub-webd [0-9]+\.[0-9]+\.[0-9]+'
+  echo "nexushub-webd archive layout ok"
+}
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -59,10 +85,14 @@ parse_args() {
       --path-prefix) PATH_PREFIX="${2:-}"; shift 2 ;;
       --force-config) FORCE_CONFIG=1; shift ;;
       --no-enable) ENABLE_SERVICE=0; shift ;;
+      --check) CHECK_ONLY=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
   done
+  if [[ "${CHECK_ONLY}" -eq 1 ]]; then
+    return
+  fi
   [[ -n "${ARCHIVE_PATH}" || -n "${BINARY_PATH}" ]] || die "pass --archive or --binary"
   [[ "${PATH_PREFIX}" == /*/ ]] || die "--path-prefix must look like /name/"
 }
@@ -76,8 +106,25 @@ require_command() {
 }
 
 install_dirs() {
-  install -d -m 0755 -o root -g root "${INSTALL_DIR}/bin" "$(dirname "${WEBUI_DIR}")" "${WEBUI_DIR}"
-  install -d -m 0750 -o root -g root "${CONFIG_DIR}" "${DATA_DIR}" "${BACKUP_DIR}" "${NGINX_BACKUP_DIR}" "${LOG_DIR}"
+  install -d -m 0755 -o root -g root /usr/local/bin "${SHARE_DIR}" "${WEBUI_DIR}" "${CONFIG_DIR}"
+  install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}" "${NGINX_BACKUP_DIR}"
+}
+
+copy_legacy_runtime_once() {
+  if [[ -f "${LEGACY_DIR}/config.toml" && ! -f "${CONFIG_FILE}" ]]; then
+    install -m 0640 -o root -g root "${LEGACY_DIR}/config.toml" "${CONFIG_FILE}"
+  fi
+  if [[ -f "${LEGACY_DIR}/env" && ! -f "${ENV_FILE}" ]]; then
+    install -m 0640 -o root -g root "${LEGACY_DIR}/env" "${ENV_FILE}"
+  fi
+  if [[ -f "${LEGACY_DIR}/nexushub.sqlite" && ! -f "${DATA_DIR}/nexushub.sqlite" ]]; then
+    install -m 0640 -o root -g root "${LEGACY_DIR}/nexushub.sqlite" "${DATA_DIR}/nexushub.sqlite"
+  fi
+  for suffix in -wal -shm; do
+    if [[ -f "${LEGACY_DIR}/nexushub.sqlite${suffix}" && ! -f "${DATA_DIR}/nexushub.sqlite${suffix}" ]]; then
+      install -m 0640 -o root -g root "${LEGACY_DIR}/nexushub.sqlite${suffix}" "${DATA_DIR}/nexushub.sqlite${suffix}"
+    fi
+  done
 }
 
 install_payload() {
@@ -87,40 +134,34 @@ install_payload() {
     return
   fi
   [[ -f "${ARCHIVE_PATH}" ]] || die "archive not found: ${ARCHIVE_PATH}"
-  local tmp
+  local tmp root
   tmp="$(mktemp -d)"
+  trap 'rm -rf "${tmp}"' RETURN
   tar -xzf "${ARCHIVE_PATH}" -C "${tmp}"
-  local root="${tmp}/${APP_NAME}"
+  root="$(find "${tmp}" -maxdepth 1 -type d -name 'nexushub-webd-linux-*' | head -n 1)"
+  [[ -n "${root}" ]] || die "archive root nexushub-webd-linux-* not found"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing bin/${BIN_NAME}"
+  [[ -f "${root}/webui/index.html" ]] || die "archive missing webui/index.html"
+
   install -m 0755 -o root -g root "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}"
-  if [[ -d "${root}/webui" ]]; then
-    rm -rf "${WEBUI_DIR}"
-    install -d -m 0755 -o root -g root "${WEBUI_DIR}"
-    cp -a "${root}/webui/." "${WEBUI_DIR}/"
-    chown -R root:root "${WEBUI_DIR}"
-  fi
+  find "${WEBUI_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  cp -a "${root}/webui/." "${WEBUI_DIR}/"
+  chown -R root:root "${WEBUI_DIR}"
+
   if [[ -d "${root}/deploy" ]]; then
-    if [[ -f "${root}/deploy/update.sh" ]]; then
-      install -m 0755 -o root -g root "${root}/deploy/update.sh" "${UPDATE_BIN}"
-    fi
-    if [[ -f "${root}/deploy/${APP_NAME}-codex-precheck" ]]; then
-      install -m 0755 -o root -g root "${root}/deploy/${APP_NAME}-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
-    fi
-    if [[ -f "${root}/deploy/${APP_NAME}-codex-update" ]]; then
-      install -m 0755 -o root -g root "${root}/deploy/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
-    fi
-    if [[ -f "${root}/deploy/${APP_NAME}-codex-prune" ]]; then
-      install -m 0755 -o root -g root "${root}/deploy/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
-    fi
+    [[ -f "${root}/deploy/update.sh" ]] && install -m 0755 -o root -g root "${root}/deploy/update.sh" "${UPDATE_BIN}"
+    [[ -f "${root}/deploy/nexushub-codex-precheck" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
+    [[ -f "${root}/deploy/nexushub-codex-update" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
+    [[ -f "${root}/deploy/nexushub-codex-prune" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
   fi
 }
 
 install_codex_wrappers() {
   local source_dir
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-  install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
-  install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
-  install -m 0755 -o root -g root "${source_dir}/${APP_NAME}-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
+  source_dir="$(script_dir)"
+  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
+  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
+  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
 }
 
 install_codex_home_write_paths() {
@@ -133,18 +174,15 @@ install_codex_home_write_paths() {
     ubuntu_group="$(id -gn ubuntu 2>/dev/null || printf 'ubuntu')"
   fi
 
-  if [[ ! -d /home ]]; then
-    install -d -m 0755 -o root -g root /home
-  fi
-  if [[ ! -d /home/ubuntu ]]; then
-    install -d -m 0755 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu
-  fi
+  [[ -d /home ]] || install -d -m 0755 -o root -g root /home
+  [[ -d /home/ubuntu ]] || install -d -m 0755 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu
   install -d -m 0700 -o "${ubuntu_owner}" -g "${ubuntu_group}" /home/ubuntu/.codex
 }
 
 install_config() {
   local source_dir
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+  source_dir="$(script_dir)"
+  copy_legacy_runtime_once
   if [[ ! -f "${CONFIG_FILE}" || "${FORCE_CONFIG}" -eq 1 ]]; then
     install -m 0640 -o root -g root "${source_dir}/config.example.toml" "${CONFIG_FILE}"
     if [[ -n "${DOMAIN}" ]]; then
@@ -183,13 +221,14 @@ ensure_secret_key() {
   }
 
   local secret=""
-  if [[ -f /etc/codex-cloud-panel/env ]]; then
+  if [[ -f "${LEGACY_DIR}/env" ]]; then
+    secret="$(read_legacy_secret NEXUSHUB_SECRET_KEY "${LEGACY_DIR}/env")"
+  fi
+  if [[ -z "${secret}" && -f /etc/codex-cloud-panel/env ]]; then
     secret="$(read_legacy_secret CODEX_CLOUD_PANEL_SECRET_KEY /etc/codex-cloud-panel/env)"
   fi
-  if [[ -f /etc/cc-switch-lite/env ]]; then
-    if [[ -z "${secret}" ]]; then
-      secret="$(read_legacy_secret CC_SWITCH_LITE_SECRET_KEY /etc/cc-switch-lite/env)"
-    fi
+  if [[ -z "${secret}" && -f /etc/cc-switch-lite/env ]]; then
+    secret="$(read_legacy_secret CC_SWITCH_LITE_SECRET_KEY /etc/cc-switch-lite/env)"
   fi
   if [[ -z "${secret}" ]]; then
     secret="$(python3 - <<'PY'
@@ -216,9 +255,7 @@ text = path.read_text()
 lines = text.splitlines()
 
 def is_legacy_codex_precheck(key, value):
-    if key != "precheck_command":
-        return False
-    return all(
+    return key == "precheck_command" and all(
         needle in value
         for needle in (
             "codex --version",
@@ -287,12 +324,7 @@ def remove_section_keys(section, keys):
         filtered.append(line)
     lines = filtered
 
-ensure_section(
-    "codex",
-    {
-        "host_label": '"43.155.235.227"',
-    },
-)
+ensure_section("codex", {"host_label": '"43.155.235.227"'})
 remove_section_keys(
     "codex",
     {
@@ -303,17 +335,7 @@ remove_section_keys(
         "bridge_timeout_seconds",
     },
 )
-ensure_section(
-    "server",
-    {
-        "listen": '"127.0.0.1:15742"',
-    },
-    {
-        "listen": {
-            '"127.0.0.1:15732"',
-        },
-    },
-)
+ensure_section("server", {"listen": '"127.0.0.1:15742"'}, {"listen": {'"127.0.0.1:15732"'}})
 ensure_section(
     "security",
     {
@@ -326,29 +348,21 @@ ensure_section(
 ensure_section(
     "paths",
     {
-        "data_dir": '"/opt/nexushub"',
-        "db_path": '"/opt/nexushub/nexushub.sqlite"',
-        "webui_dir": '"/opt/nexushub/webui"',
-        "log_dir": '"/opt/nexushub/logs"',
+        "data_dir": '"/var/lib/nexushub-webd"',
+        "db_path": '"/var/lib/nexushub-webd/nexushub.sqlite"',
+        "webui_dir": '"/usr/share/nexushub-webd/webui"',
+        "log_dir": '"/var/log/nexushub-webd"',
     },
     {
-        "data_dir": {
-            '"/var/lib/codex-cloud-panel"',
-            '"/opt/codex-cloud-panel"',
-        },
+        "data_dir": {'"/var/lib/codex-cloud-panel"', '"/opt/codex-cloud-panel"', '"/opt/nexushub"'},
         "db_path": {
             '"/var/lib/codex-cloud-panel/panel.sqlite"',
             '"/var/lib/codex-cloud-panel/codex-cloud-panel.sqlite"',
             '"/opt/codex-cloud-panel/codex-cloud-panel.sqlite"',
+            '"/opt/nexushub/nexushub.sqlite"',
         },
-        "webui_dir": {
-            '"/usr/share/codex-cloud-panel/webui"',
-            '"/opt/codex-cloud-panel/webui"',
-        },
-        "log_dir": {
-            '"/var/log/codex-cloud-panel"',
-            '"/opt/codex-cloud-panel/logs"',
-        },
+        "webui_dir": {'"/usr/share/codex-cloud-panel/webui"', '"/opt/codex-cloud-panel/webui"', '"/opt/nexushub/webui"'},
+        "log_dir": {'"/var/log/codex-cloud-panel"', '"/opt/codex-cloud-panel/logs"', '"/opt/nexushub/logs"'},
     },
 )
 ensure_section(
@@ -357,8 +371,8 @@ ensure_section(
         "precheck_command": '"/usr/local/bin/nexushub-codex-precheck"',
         "update_command": '"/usr/local/bin/nexushub-codex-update"',
         "prune_command": '"/usr/local/bin/nexushub-codex-prune"',
-        "panel_update_command": '"/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"',
-        "panel_precheck_command": '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"',
+        "panel_update_command": '"/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"',
+        "panel_precheck_command": '"test -x /usr/local/bin/nexushub-webd-update && systemctl is-active nexushub-webd && curl -fsS http://127.0.0.1:15742/healthz"',
     },
     {
         "update_command": {
@@ -369,32 +383,19 @@ ensure_section(
             '"sudo -n /home/ubuntu/codex-admin/bin/codex-cloud-prune"',
             '"/home/ubuntu/codex-admin/bin/codex-cloud-prune"',
         },
+        "panel_update_command": {
+            '"/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"',
+        },
         "panel_precheck_command": {
+            '"/usr/local/bin/nexushub-update --precheck"',
+            '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15742/healthz"',
             '"test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz"',
         },
     },
 )
-
-ensure_section(
-    "probe",
-    {
-        "enabled": "true",
-        "poll_seconds": "15",
-        "recent_limit": "50",
-    },
-)
-ensure_section(
-    "probe.hooks",
-    {
-        "manage_stop_hook": "true",
-    },
-)
-remove_section_keys(
-    "probe.hooks",
-    {
-        "reload_app_server_after_install",
-    },
-)
+ensure_section("probe", {"enabled": "true", "poll_seconds": "15", "recent_limit": "50"})
+ensure_section("probe.hooks", {"manage_stop_hook": "true"})
+remove_section_keys("probe.hooks", {"reload_app_server_after_install"})
 ensure_section(
     "probe.notifications",
     {
@@ -408,16 +409,8 @@ ensure_section(
 )
 ensure_section(
     "probe.observability",
-    {
-        "hook_event_max_lines": "500",
-        "hook_cooldown_max_lines": "1000",
-        "log_max_bytes": "5242880",
-    },
-    {
-        "hook_event_max_lines": {"120"},
-        "hook_cooldown_max_lines": {"80"},
-        "log_max_bytes": {"262144"},
-    },
+    {"hook_event_max_lines": "500", "hook_cooldown_max_lines": "1000", "log_max_bytes": "5242880"},
+    {"hook_event_max_lines": {"120"}, "hook_cooldown_max_lines": {"80"}, "log_max_bytes": {"262144"}},
 )
 ensure_section(
     "probe.logs_db",
@@ -453,19 +446,22 @@ ensure_section(
 
 legacy_host = '"' + "-".join(["tencent", "wanka"]) + '"'
 lines = [line.replace(legacy_host, '"43.155.235.227"') for line in lines]
-
 path.write_text("\n".join(lines) + "\n")
 PY
 }
 
 install_systemd() {
   local source_dir
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+  source_dir="$(script_dir)"
+  if systemctl list-unit-files "${LEGACY_SERVICE}.service" >/dev/null 2>&1; then
+    systemctl stop "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
+    systemctl disable "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
+  fi
   install -m 0644 -o root -g root "${source_dir}/systemd.service" "${SYSTEMD_UNIT}"
   systemctl daemon-reload
   if [[ "${ENABLE_SERVICE}" -eq 1 ]]; then
-    systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}"
+    systemctl enable "${SERVICE_NAME}.service"
+    systemctl restart "${SERVICE_NAME}.service"
   fi
 }
 
@@ -473,9 +469,9 @@ install_nginx() {
   [[ "${INSTALL_NGINX}" -eq 1 ]] || return 0
   require_command nginx
   local source_dir snippet target
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+  source_dir="$(script_dir)"
   snippet="$(mktemp)"
-  sed "s#/nexushub/#${PATH_PREFIX}#g" "${source_dir}/nginx-location.conf" > "${snippet}"
+  sed "s#/nexushub/#${PATH_PREFIX}#g" "${source_dir}/nginx.conf" > "${snippet}"
   install -m 0644 -o root -g root "${snippet}" "${NGINX_SNIPPET}"
   target="$(grep -Rsl "server_name .*${DOMAIN}" /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | head -n 1 || true)"
   if [[ -n "${target}" ]] && ! grep -Fq "${NGINX_SNIPPET}" "${target}"; then
@@ -483,6 +479,7 @@ install_nginx() {
     python3 - "$target" "$NGINX_SNIPPET" <<'PY'
 from pathlib import Path
 import sys
+
 path = Path(sys.argv[1])
 snippet = sys.argv[2]
 text = path.read_text()
@@ -499,6 +496,10 @@ PY
 
 main() {
   parse_args "$@"
+  if [[ "${CHECK_ONLY}" -eq 1 ]]; then
+    check_layout
+    return
+  fi
   require_root
   require_command tar
   install_dirs

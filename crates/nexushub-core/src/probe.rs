@@ -304,7 +304,7 @@ impl ProbeRuntime {
                     "restart_required_after_install": false,
                 }),
                 requires_confirmation: true,
-                command: "nexushubd probe hooks-install".to_string(),
+                command: "nexushub-webd probe hooks-install".to_string(),
             }),
             ProbeActionPlanKind::LogsDbMaintain => Ok(ProbeActionPlan {
                 plan_id: format!("probe-logs-db-{suffix}"),
@@ -337,7 +337,7 @@ impl ProbeRuntime {
                     "would_call_legacy_sentinel_cli": false,
                 }),
                 requires_confirmation: true,
-                command: "nexushubd probe logs-db-maintain".to_string(),
+                command: "nexushub-webd probe logs-db-maintain".to_string(),
             }),
         }
     }
@@ -379,7 +379,7 @@ impl ProbeRuntime {
                 "would_call_legacy_sentinel_cli": false
             }),
             requires_confirmation: false,
-            command: "nexushubd probe bark-test".to_string(),
+            command: "nexushub-webd probe bark-test".to_string(),
         }
     }
 
@@ -475,9 +475,9 @@ impl ProbeRuntime {
             probe_bark_body_chunks(&bark.body, PROBE_BARK_BODY_CHUNK_BYTES).len();
         let source = input.source_override.clone().unwrap_or_else(|| {
             if notify_completion {
-                "nexushubd probe notify-completion".to_string()
+                "nexushub-webd probe notify-completion".to_string()
             } else {
-                "nexushubd probe hook-stop".to_string()
+                "nexushub-webd probe hook-stop".to_string()
             }
         });
         let payload = json!({
@@ -965,7 +965,7 @@ impl ProbeEventInput {
     pub fn with_passive_scan_source(mut self) -> Self {
         self.scan_source = Some("passive-scan".to_string());
         self.ttl_seconds = Some(PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS);
-        self.source_override = Some("nexushubd probe passive-scan".to_string());
+        self.source_override = Some("nexushub-webd probe passive-scan".to_string());
         self
     }
 
@@ -2873,7 +2873,7 @@ Authorization: Bearer secret-token";
 
         assert_eq!(passive.kind, "reply-needed");
         assert_eq!(passive.ttl_seconds, 6 * 60 * 60);
-        assert_eq!(passive.source, "nexushubd probe passive-scan");
+        assert_eq!(passive.source, "nexushub-webd probe passive-scan");
         assert_eq!(passive.payload["scan_source"], "passive-scan");
         assert_eq!(passive.payload["dedupe_ttl_seconds"], 6 * 60 * 60);
 

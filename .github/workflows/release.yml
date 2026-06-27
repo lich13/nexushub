@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -17,6 +21,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-guard-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-guard-
       - name: Guard tag and package versions
         shell: bash
         run: |
@@ -59,7 +80,8 @@ jobs:
       - run: corepack pnpm@11.0.8 --dir webui build
       - run: bash scripts/test-install-script.sh
 
-  linux:
+  linux-x86_64:
+    name: Linux x86_64 desktop and webd assets
     runs-on: ubuntu-24.04
     needs: guard
     steps:
@@ -71,26 +93,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: bash scripts/package-linux.sh
-      - uses: actions/upload-artifact@v4
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@v4
         with:
-          name: nexushub-linux-x86_64
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+      - uses: actions/cache@v4
+        with:
           path: |
-            dist/nexushub-linux-x86_64.tar.gz
-            dist/nexushub-linux-x86_64.tar.gz.sha256
-
-  linux-tauri-x86_64:
-    runs-on: ubuntu-24.04
-    needs: guard
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.0.8
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-linux-x86_64-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-linux-x86_64-
       - name: Install Linux Tauri deps
         shell: bash
         run: |
@@ -118,12 +138,14 @@ jobs:
             || sudo apt-get install -y --no-install-recommends libfuse2t64 \
             || true
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
-      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: bash scripts/package-linux-tauri-x86_64.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - run: SKIP_WEBUI_INSTALL=1 bash scripts/package-webd-linux-x86_64.sh
       - name: Smoke Linux Tauri AppImage with xvfb
         shell: bash
         run: |
@@ -144,8 +166,10 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: nexushub-linux-tauri-x86_64
+          name: nexushub-linux-x86_64-assets
           path: |
+            dist/nexushub-webd-linux-x86_64.tar.gz
+            dist/nexushub-webd-linux-x86_64.tar.gz.sha256
             dist/NexusHub-*-Linux-x86_64.AppImage
             dist/NexusHub-*-Linux-x86_64.AppImage.sig
             dist/NexusHub-*-Linux-x86_64.AppImage.sha256
@@ -166,8 +190,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
-      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushubd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-darwin-arm64-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-darwin-arm64-
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
+      - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: bash scripts/package-darwin-arm64.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -185,8 +227,7 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     needs:
-      - linux
-      - linux-tauri-x86_64
+      - linux-x86_64
       - macos-darwin-arm64
     permissions:
       contents: write
@@ -234,8 +275,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/nexushub-linux-x86_64.tar.gz
-            dist/nexushub-linux-x86_64.tar.gz.sha256
+            dist/nexushub-webd-linux-x86_64.tar.gz
+            dist/nexushub-webd-linux-x86_64.tar.gz.sha256
             dist/NexusHub-*-Linux-x86_64.AppImage
             dist/NexusHub-*-Linux-x86_64.AppImage.sig
             dist/NexusHub-*-Linux-x86_64.AppImage.sha256

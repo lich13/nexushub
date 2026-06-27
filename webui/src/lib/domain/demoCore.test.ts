@@ -158,7 +158,7 @@ describe("demo fixture builder", () => {
     expect(buildDemoPlatformOverview("linux-web")).toMatchObject({
       kind: "linux",
       service_kind: "systemd",
-      service_name: "nexushub"
+      service_name: "nexushub-webd"
     });
     expect(buildDemoSecurity("linux-web")).toMatchObject({
       turnstile_expected_hostname: "demo.nexushub.local",

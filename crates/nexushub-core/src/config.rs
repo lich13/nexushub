@@ -482,7 +482,7 @@ fn default_prune_command() -> String {
 }
 
 fn default_panel_update_command() -> String {
-    "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest".to_string()
+    "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string()
 }
 
 fn default_panel_precheck_command() -> String {
@@ -491,7 +491,7 @@ fn default_panel_precheck_command() -> String {
 
 fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
     match platform.kind {
-        PlatformKind::Linux => "/usr/local/bin/nexushub-update --precheck".to_string(),
+        PlatformKind::Linux => "/usr/local/bin/nexushub-webd-update --precheck".to_string(),
         PlatformKind::Macos => format!(
             "test -d {}",
             shell_quote(&platform.data_dir.display().to_string())
@@ -1191,7 +1191,7 @@ mod tests {
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         assert_eq!(
             config.update.panel_precheck_command,
-            "/usr/local/bin/nexushub-update --precheck"
+            "/usr/local/bin/nexushub-webd-update --precheck"
         );
         assert_eq!(config.codex.home.to_string_lossy(), "auto");
     }
@@ -1239,12 +1239,12 @@ mod tests {
         assert!(config
             .update
             .doctor_command
-            .contains("/home/alice/.local/share/NexusHub/bin/nexushubd"));
-        assert!(!config.paths.data_dir.starts_with("/opt/nexushub"));
+            .contains("/home/alice/.local/share/NexusHub/bin/nexushub-webd"));
+        assert!(!config.paths.data_dir.starts_with("/var/lib/nexushub-webd"));
         assert!(!config
             .update
             .panel_precheck_command
-            .contains("/usr/local/bin/nexushub-update"));
+            .contains("/usr/local/bin/nexushub-webd-update"));
         assert!(!config.codex.workspace.starts_with("/home/ubuntu"));
     }
 
@@ -1431,18 +1431,18 @@ session_ttl_seconds = 31536000
 login_rate_limit_per_minute = 8
 
 [paths]
-data_dir = "/opt/nexushub"
-db_path = "/opt/nexushub/nexushub.sqlite"
-webui_dir = "/opt/nexushub/webui"
-log_dir = "/opt/nexushub/logs"
+data_dir = "/var/lib/nexushub-webd"
+db_path = "/var/lib/nexushub-webd/nexushub.sqlite"
+webui_dir = "/usr/share/nexushub-webd/webui"
+log_dir = "/var/log/nexushub-webd"
 
 [update]
 precheck_command = "/usr/local/bin/nexushub-codex-precheck"
 update_command = "/usr/local/bin/nexushub-codex-update"
 prune_command = "/usr/local/bin/nexushub-codex-prune"
 doctor_command = "/home/ubuntu/codex-admin/bin/codex-cloud-doctor"
-panel_update_command = "/usr/local/bin/nexushub-update --repo lich13/nexushub --version latest"
-panel_precheck_command = "/usr/local/bin/nexushub-update --precheck"
+panel_update_command = "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
+panel_precheck_command = "/usr/local/bin/nexushub-webd-update --precheck"
 "#;
         let config: Config = toml::from_str(input).unwrap();
 

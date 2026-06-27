@@ -1439,7 +1439,7 @@ describe("conversation helpers", () => {
       thread_id: "thread-a",
       title: "Codex Stop Hook",
       message: "done",
-      source: "nexushubd probe hook-stop",
+      source: "nexushub-webd probe hook-stop",
       payload: {
         session_id: "session-a",
         transcript_path: "/tmp/transcript.jsonl",
@@ -1476,7 +1476,7 @@ describe("conversation helpers", () => {
         body_summary: "Plan Mode 等待用户确认",
         body_sha256: "abc123",
         body_length: 324,
-        source: "nexushubd probe passive-scan",
+        source: "nexushub-webd probe passive-scan",
         bark: { sent: true, skipped: false, http_status: 200, dedupe_hit: false },
         dedupe: { claimed: true, duplicate: false, status: "claimed" },
         device_key: "secret-device-key"
@@ -1498,7 +1498,7 @@ describe("conversation helpers", () => {
     const card = app.probeEventCard?.({
       id: "event-fallback",
       kind: "hook-stop",
-      source: "nexushubd probe hook-stop",
+      source: "nexushub-webd probe hook-stop",
       payload: { session_id: "session-a" },
       created_at: "2026-06-16T00:00:00Z"
     });
@@ -1506,7 +1506,7 @@ describe("conversation helpers", () => {
     expect(card?.headline).toBe("hook-stop");
     expect(card?.summary).toContain("Probe 事件已记录");
     expect(card?.details).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: "来源", value: "nexushubd probe hook-stop" })
+      expect.objectContaining({ label: "来源", value: "nexushub-webd probe hook-stop" })
     ]));
   });
 

@@ -79,7 +79,7 @@ pub fn run() {
         ])
         .setup(|app| {
             if let Ok(resource_dir) = app.path().resource_dir() {
-                resources::sync_nexushubd_helper_from_resource(&resource_dir)?;
+                resources::sync_nexushub_webd_helper_from_resource(&resource_dir)?;
                 resources::prepare_desktop_webui_assets_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
