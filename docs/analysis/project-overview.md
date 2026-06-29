@@ -62,9 +62,13 @@ bash scripts/test-install-script.sh
 
 Canonical Linux server packaging is `bash scripts/package-webd-linux-x86_64.sh` on Linux x86_64. `scripts/package-linux.sh` is only a deprecated shim. macOS/Linux desktop packaging targets native Tauri App entries, not a LaunchAgent Web service or Tencent Cloud GUI. All host surfaces share contracts through `contracts/nexushub-contract.json`, core use-case/read-model services, WebUI query/domain/runtime helpers, and thin Linux RPC or Tauri invoke adapters.
 
+`lich13/cc-switch` is a reference, not a source to copy blindly. GitHub `cc-switch main` is primarily a Tauri desktop release architecture with a broader OS matrix, while local or experimental cc-switch `webd` branches are useful only as FHS/headless packaging references. NexusHub keeps the stricter shared core/use-case/contract/adapter split and does not replace it with a monolithic string dispatcher.
+
 ## Testing Baseline
 
 Rust has unit and integration tests in `nexushub-core`, `nexushub-webd`, Tauri command/service coverage, and script validation through `scripts/test-install-script.sh`. WebUI has Vitest tests for API helpers, capability rendering, contract registry parity, message-store behavior, and a TypeScript/Vite build. The active release acceptance matrix is maintained in `docs/progress/MASTER.md`; current acceptance requires Tencent Cloud Linux WebUI checks, official macOS Tauri DMG checks, and Linux Tauri release asset/`xvfb` smoke checks for each release. Windows Service packaging remains planned.
+
+Current Linux release assets are intentionally split by duty: `nexushub-webd-linux-x86_64.tar.gz` for the Tencent Cloud headless WebUI daemon and `NexusHub-*-Linux-x86_64.AppImage/.deb/.rpm` for Linux Tauri desktop. Windows and Linux arm64 remain outside the current acceptance target unless a future Goal explicitly adds those release lines.
 
 ## Project Governance Baseline
 

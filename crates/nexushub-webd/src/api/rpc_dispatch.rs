@@ -429,7 +429,9 @@ mod tests {
     use nexushub_core::{
         config::Config,
         db::{NewSession, PanelDb},
+        services::commands as rpc_commands,
     };
+    use std::collections::BTreeSet;
     use tower::ServiceExt;
 
     fn authenticated_test_state() -> (AppState, String, String) {
@@ -577,5 +579,49 @@ mod tests {
             !source.contains("/api/rpc/threadEvents/:id"),
             "RPC dispatcher should keep thread event transport out of business command dispatch"
         );
+    }
+
+    #[test]
+    fn rpc_dispatch_match_arms_cover_contract_linux_rpc_actions() {
+        let source = include_str!("rpc_dispatch.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("rpc dispatcher source must include production section");
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/nexushub-contract.json"))
+                .expect("contract registry must be valid JSON");
+        let command_source = include_str!("../../../nexushub-core/src/services/commands.rs");
+        let contract_linux_rpc = contract
+            .get("actions")
+            .and_then(serde_json::Value::as_array)
+            .expect("contract actions must be an array")
+            .iter()
+            .filter_map(|action| action.get("linuxRpc").and_then(serde_json::Value::as_str))
+            .collect::<BTreeSet<_>>();
+        let allowed_rpc = rpc_commands::ALLOWED_RPC_COMMANDS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            contract_linux_rpc, allowed_rpc,
+            "contract registry Linux RPC names must match the core allowlist"
+        );
+        for command in rpc_commands::ALLOWED_RPC_COMMANDS {
+            let const_name = command_source
+                .lines()
+                .filter_map(|line| line.strip_prefix("pub const "))
+                .find_map(|line| {
+                    let (name, rest) = line.split_once(": &str = ")?;
+                    let value = rest.trim().trim_end_matches(';').trim_matches('"');
+                    (value == *command).then_some(name)
+                })
+                .unwrap_or_else(|| panic!("core command constant missing for {command}"));
+            let match_arm = format!("rpc_commands::{const_name} =>");
+            assert!(
+                source.contains(&match_arm),
+                "RPC dispatcher must have a match arm for contract Linux RPC {command}: {match_arm}"
+            );
+        }
     }
 }

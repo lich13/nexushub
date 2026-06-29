@@ -181,6 +181,17 @@ describe("runtime view-model helpers", () => {
     expect(view.hiddenCleanup.stage).toEqual({ label: "扫描中", tone: "warning" });
   });
 
+  test("host policy uses host surface instead of incidental update flags", () => {
+    expect(failureCategoryLabel("systemd_failure", {
+      ...linuxWebCapabilities,
+      updateServiceLabels: false
+    })).toBe("systemd 失败");
+    expect(failureCategoryLabel("systemd_failure", {
+      ...macosTauriCapabilities,
+      updateServiceLabels: true
+    })).toBe("服务失败");
+  });
+
   test("derives thread message controller inputs without exposing store/cache internals to components", () => {
     const selectedThreadSummary = {
       id: "thread-a",

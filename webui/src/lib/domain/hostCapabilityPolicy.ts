@@ -19,7 +19,7 @@ const genericFailureLabels: Record<string, string> = {
 };
 
 export function hostCapabilityPolicy(capabilities: RuntimeCapabilityMatrix): HostCapabilityPolicy {
-  return capabilities.updateServiceLabels
+  return capabilities.hostSurface === "linux_server_webui"
     ? {
       showLinuxWebCapabilities: true,
       copyRedactionEnabled: false,

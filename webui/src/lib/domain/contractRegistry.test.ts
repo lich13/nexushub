@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
+  contractHostSurfaces,
+  contractVisual,
+  contractCapabilitiesByHostSurface,
+  sharedContractActions
+} from "./contractRegistry";
+import {
   desktopLanForbiddenVisualSurfaces,
   desktopTauriOnlyVisualSurfaces,
   linuxWebOnlyVisualSurfaces,
@@ -71,6 +77,35 @@ function apiCommandLiterals(): Set<string> {
 }
 
 describe("contract registry", () => {
+  test("exports registry-derived host surfaces, visual copy, and capabilities without test-only file reads", () => {
+    expect(contractHostSurfaces).toEqual(contract().hostSurfaces);
+    expect(contractVisual.navigation).toEqual(contract().visual.navigation);
+    expect(contractVisual.corePanelTitles).toEqual(contract().visual.corePanelTitles);
+    expect(contractVisual.actionLabels).toEqual(contract().visual.actionLabels);
+    expect(contractVisual.disabledStates).toEqual(contract().visual.disabledStates);
+    expect(contractVisual.forbidden.desktopLanWebui).toEqual(contract().visual.forbidden.desktopLanWebui);
+    expect(contractCapabilitiesByHostSurface.desktop_embedded_tauri).toEqual(
+      contract().capabilitiesByHostSurface.desktop_embedded_tauri
+    );
+    expect(sharedContractActions.map((action) => action.id)).toEqual(
+      contract().actions.filter((action) => action.scope === "shared").map((action) => action.id)
+    );
+  });
+
+  test("shared and host-only action declarations are complete enough to prevent one-sided adapters", () => {
+    for (const action of contract().actions) {
+      if (action.scope === "shared") {
+        expect(action.coreUseCase, `${action.id} coreUseCase`).toBeTruthy();
+        expect(action.linuxRpc, `${action.id} linuxRpc`).toBeTruthy();
+        expect(action.tauriCommand, `${action.id} tauriCommand`).toBeTruthy();
+        expect(action.webuiWrapper, `${action.id} webuiWrapper`).toBeTruthy();
+      }
+      if (action.scope === "host_only") {
+        expect(action.hostOnlyReason, `${action.id} hostOnlyReason`).toBeTruthy();
+      }
+    }
+  });
+
   test("declares the shared visual vocabulary used by both WebUI and Tauri shells", () => {
     const visual = contract().visual;
     expect(visual.navigation).toEqual([...sharedNavigationLabels]);

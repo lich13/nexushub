@@ -14,6 +14,15 @@ optionally expose a Tauri-controlled desktop LAN WebUI, but they do not add a
 LaunchAgent, systemd user service, Cloudflare Tunnel, or Tencent Cloud GUI
 requirement.
 
+Release assets intentionally keep separate Linux responsibilities. The cloud
+deployment uses only `nexushub-webd-linux-x86_64.tar.gz` and its `.sha256`; Linux
+Tauri desktop assets are `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`,
+`.rpm`, signatures, and checksums. The Linux Tauri job normally takes longer
+than the headless webd package because it installs WebKit/GTK dependencies,
+builds Tauri bundles, packages AppImage/deb/rpm, signs the updater asset, and
+runs `xvfb` smoke. Do not deploy the AppImage to Tencent Cloud and do not put
+the headless webd tarball into `latest.json`.
+
 ## Build Release Artifact
 
 ```bash

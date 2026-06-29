@@ -94,9 +94,6 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     THREADS_FORK,
     THREADS_FOLLOWUPS_LIST,
     THREADS_FOLLOWUPS_ENQUEUE,
-    THREADS_FOLLOWUPS_CLAIM,
-    THREADS_FOLLOWUPS_SUBMIT,
-    THREADS_FOLLOWUPS_ERROR,
     THREADS_FOLLOWUPS_CANCEL,
     THREADS_PLAN_ACCEPT,
     THREADS_PLAN_REVISE,
@@ -130,6 +127,12 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
 ];
 
 pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_UPLOAD_FILES, TRANSPORT_THREAD_EVENTS];
+
+pub const INTERNAL_COMMANDS: &[&str] = &[
+    THREADS_FOLLOWUPS_CLAIM,
+    THREADS_FOLLOWUPS_SUBMIT,
+    THREADS_FOLLOWUPS_ERROR,
+];
 
 pub const DECLARED_COMMANDS: &[&str] = &[
     AUTH_PUBLIC_SETTINGS,
@@ -270,6 +273,7 @@ pub const RETIRED_COMMANDS: &[&str] = &[
 pub enum CommandKind {
     Rpc,
     Transport,
+    Internal,
     Retired,
     Unknown,
 }
@@ -279,6 +283,8 @@ pub fn classify_command(command: &str) -> CommandKind {
         CommandKind::Rpc
     } else if ALLOWED_TRANSPORT_COMMANDS.contains(&command) {
         CommandKind::Transport
+    } else if INTERNAL_COMMANDS.contains(&command) {
+        CommandKind::Internal
     } else if RETIRED_COMMANDS.contains(&command) {
         CommandKind::Retired
     } else {
@@ -294,6 +300,10 @@ pub fn is_allowed_transport_command(command: &str) -> bool {
     ALLOWED_TRANSPORT_COMMANDS.contains(&command)
 }
 
+pub fn is_internal_command(command: &str) -> bool {
+    INTERNAL_COMMANDS.contains(&command)
+}
+
 pub fn is_retired_command(command: &str) -> bool {
     RETIRED_COMMANDS.contains(&command)
 }
@@ -302,7 +312,7 @@ pub fn is_retired_command(command: &str) -> bool {
 mod tests {
     use super::{
         classify_command, CommandKind, ALLOWED_RPC_COMMANDS, ALLOWED_TRANSPORT_COMMANDS,
-        DECLARED_COMMANDS, RETIRED_COMMANDS,
+        DECLARED_COMMANDS, INTERNAL_COMMANDS, RETIRED_COMMANDS,
     };
     use std::collections::HashSet;
 
@@ -338,6 +348,10 @@ mod tests {
                 "business RPC command must not also be a transport command: {command}"
             );
             assert!(
+                !INTERNAL_COMMANDS.contains(command),
+                "business RPC command must not also be an internal command: {command}"
+            );
+            assert!(
                 !RETIRED_COMMANDS.contains(command),
                 "business RPC command must not also be retired: {command}"
             );
@@ -356,6 +370,22 @@ mod tests {
             assert_eq!(classify_command(command), CommandKind::Transport);
         }
 
+        for command in INTERNAL_COMMANDS {
+            assert!(
+                !ALLOWED_RPC_COMMANDS.contains(command),
+                "internal command must not also be an allowed RPC command: {command}"
+            );
+            assert!(
+                !ALLOWED_TRANSPORT_COMMANDS.contains(command),
+                "internal command must not also be a transport command: {command}"
+            );
+            assert!(
+                !RETIRED_COMMANDS.contains(command),
+                "internal command must not also be retired: {command}"
+            );
+            assert_eq!(classify_command(command), CommandKind::Internal);
+        }
+
         for command in RETIRED_COMMANDS {
             assert!(
                 !ALLOWED_RPC_COMMANDS.contains(command),
@@ -364,6 +394,10 @@ mod tests {
             assert!(
                 !ALLOWED_TRANSPORT_COMMANDS.contains(command),
                 "retired command must not remain in transport set: {command}"
+            );
+            assert!(
+                !INTERNAL_COMMANDS.contains(command),
+                "retired command must not remain in internal set: {command}"
             );
             assert_eq!(classify_command(command), CommandKind::Retired);
         }

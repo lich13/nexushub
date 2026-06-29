@@ -373,12 +373,45 @@ for needle in [
     "dist/nexushub-webd-linux-x86_64.tar.gz",
     "dist/nexushub-webd-linux-x86_64.tar.gz.sha256",
     "dist/NexusHub-*-Linux-x86_64.AppImage",
+    "dist/NexusHub-*-Linux-x86_64.AppImage.sig",
+    "dist/NexusHub-*-Linux-x86_64.AppImage.sha256",
     "dist/NexusHub-*-Linux-x86_64.deb",
+    "dist/NexusHub-*-Linux-x86_64.deb.sha256",
     "dist/NexusHub-*-Linux-x86_64.rpm",
+    "dist/NexusHub-*-Linux-x86_64.rpm.sha256",
     "dist/latest.json",
 ]:
     if needle not in release:
         raise SystemExit(f"release workflow missing asset: {needle}")
+linux_job = re.search(r"\n  linux-x86_64:\n(?P<body>.*?)\n  macos-darwin-arm64:", release, re.S)
+if not linux_job:
+    raise SystemExit("release workflow must keep a single linux-x86_64 job for desktop and webd assets")
+linux_job_body = linux_job.group("body")
+for needle in [
+    "bash scripts/package-linux-tauri-x86_64.sh",
+    "SKIP_WEBUI_INSTALL=1 bash scripts/package-webd-linux-x86_64.sh",
+    "Smoke Linux Tauri AppImage with xvfb",
+]:
+    if needle not in linux_job_body:
+        raise SystemExit(f"linux-x86_64 release job missing {needle}")
+latest_json_match = re.search(
+    r"- name: Generate updater latest\.json(?P<body>.*?)- uses: softprops/action-gh-release@v2",
+    release,
+    re.S,
+)
+if not latest_json_match:
+    raise SystemExit("release workflow missing Generate updater latest.json step")
+latest_json_block = latest_json_match.group("body")
+for needle in [
+    '"darwin-aarch64"',
+    '"linux-x86_64"',
+    "linux_appimage",
+    "NexusHub-${version}-Linux-x86_64.AppImage",
+]:
+    if needle not in latest_json_block:
+        raise SystemExit(f"latest.json generation missing Tauri updater marker: {needle}")
+if "nexushub-webd-linux-x86_64.tar.gz" in latest_json_block:
+    raise SystemExit("latest.json must not use the headless webd tarball as a Tauri updater asset")
 if "dist/nexushub-linux-x86_64.tar.gz" in release:
     raise SystemExit("release workflow must not upload removed nexushub-linux_x86_64 server tarball")
 if "nexushub-linux_x86_64" in release:

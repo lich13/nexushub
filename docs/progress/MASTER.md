@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-27
-> **Mode**: V0.1.142_CC_SWITCH_WEBD_FINAL_ACCEPTED
+> **Last Updated**: 2026-06-29
+> **Mode**: V0.1.143_CC_SWITCH_PARITY_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.142` cc-switch webd final accepted<br>
-**Active Task**: Goal 11 is closed. `v0.1.141` completed the cc-switch-style rename/FHS/contract/CI/Release alignment but was not final-accepted because the official installer returned non-zero with `tmp: unbound variable` during live Tencent Cloud deployment. `v0.1.142` fixed the installer `RETURN` trap, passed fresh local gates, published successful GitHub CI `28276645726` and Release `28276646646`, deployed exact `nexushub-webd 0.1.142` to Tencent Cloud, completed Browser-plugin Linux WebUI and Computer Use macOS Tauri acceptance, verified desktop LAN WebUI default-off state, and cleaned local/cloud temporary files.
+**Active Phase**: `v0.1.143` cc-switch parity guard in progress<br>
+**Active Task**: Goal 12 is active. Fresh baseline confirmed on 2026-06-29: local `main = origin/main = 8896bd14dc556e37e232b8d22321ac420ccfd1ce`, `v0.1.142` Release is published with macOS DMG/updater, Linux Tauri AppImage/deb/rpm, and `nexushub-webd-linux-x86_64.tar.gz` assets, Tencent Cloud runs exact `nexushub-webd 0.1.142`, public `/nexushub/` returns `200`, and macOS App/helper are `0.1.142`. Local `v0.1.143` parity changes and fresh release gates are now passing; release, Tencent Cloud deployment, Browser-plugin acceptance, Computer Use acceptance, and final cleanup remain.
 **Blockers**: None for the deep-refactor plan. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.142` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and the `v0.1.140` final-accepted record describe their own past checkpoints and must not be read as the active target. `v0.1.141` CI/Release succeeded but is not final-accepted because the official headless installer returned non-zero during live deployment. `v0.1.142` is the current final accepted checkpoint for the cc-switch-style `nexushub-webd` architecture, Tencent Cloud FHS migration, Linux Tauri asset line, macOS Tauri App, desktop LAN WebUI default-off boundary, and local/cloud cleanup.
+Rows before `v0.1.143` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.142` is the current rollback checkpoint; `v0.1.143` is the active target for contract-registry single-source parity, cc-switch architecture reference clarification, release asset boundary guards, dual-end acceptance, and final cleanup.
 
 ## Deep Refactor Goal Tracker
 
@@ -57,6 +57,7 @@ Rows before `v0.1.142` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 9: `v0.1.139` final accepted复核 - local source, GitHub CI/Release, Tencent Cloud production, Browser-plugin Linux WebUI, Computer Use macOS Tauri, sensitive-path guards,防回归 rules, and local/cloud cleanup state were fresh reverified on 2026-06-27; no `v0.1.140` fix release is required.
 - [x] Goal 10: `v0.1.140` dual Tauri + WebUI closure - shared host surfaces, default-off desktop LAN WebUI with independent password auth, Linux Tauri AppImage/deb/rpm release assets, Browser-plugin Tencent Cloud acceptance, Computer Use macOS acceptance, CI `xvfb` Linux Tauri smoke, Release publication, Tencent Cloud deployment, LAN WebUI acceptance, and final local/cloud cleanup completed on 2026-06-27.
 - [x] Goal 11: `v0.1.142` cc-switch webd alignment acceptance - `v0.1.141` completed the structural rename, FHS packaging/deploy scripts, contract registry, CI/Release matrix/cache, and asset closure, but live deployment found an installer `RETURN` trap regression. `v0.1.142` fixed that installer path, passed fresh local gates, GitHub CI/Release, Tencent Cloud redeploy, Browser-plugin Linux WebUI acceptance, Computer Use macOS Tauri acceptance, desktop LAN WebUI default-off verification, sensitive-path guards, and final local/cloud cleanup.
+- [ ] Goal 12: `v0.1.143` cc-switch parity guard closure - active. Scope is contract-registry single-source guard strengthening, Tauri/Linux RPC/WebUI wrapper parity, release asset boundary documentation, version/release, dual-end acceptance, and final local/cloud cleanup. It does not add Windows or Linux arm64 release lines and does not change `/api/rpc/:command` wire shape.
 
 ## Governance Status
 
@@ -70,7 +71,7 @@ Rows before `v0.1.142` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.142_CC_SWITCH_WEBD_FINAL_ACCEPTED
+  mode: V0.1.143_CC_SWITCH_PARITY_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -103,7 +104,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-26"
+  last_updated: "2026-06-29"
 ```
 
 ## Task Telemetry Log
@@ -173,6 +174,7 @@ adaptive:
 | 2026-06-27 | v0.1.141 Goal 6 version/docs local release gate | M | S/P/R pass locally | 0 | Bumped workspace/package/Tauri versions and lockfiles to `0.1.141`; removed the old current-source Linux server `deploy/nexushub` layout, moved macOS packaging notes to `deploy/desktop/macos`, updated README, cloud runbook, AGENTS, and current analysis docs for `nexushub-webd`, FHS runtime paths, `nexushub-webd-linux-x86_64.tar.gz`, and the shared `contracts/nexushub-contract.json` workflow. `scripts/test-install-script.sh` now guards the new docs, webd update CLI `--repo`/`--version`/`--precheck`, and absence of stale server asset names. Fresh final local gates passed: workspace/Tauri fmt, `cargo test --workspace`, Tauri tests with `resources/nexushub-webd`, workspace/Tauri Clippy, WebUI typecheck, WebUI 230 tests, WebUI build, `scripts/test-install-script.sh`, `ALLOW_HOST_MISMATCH=1 scripts/package-webd-linux-x86_64.sh --check`, `nexushub-webd --version` reporting `0.1.141`, and `git diff --check`. |
 | 2026-06-27 | v0.1.141 release deploy blocker and v0.1.142 installer fix | M | S/P/R pass locally | 1 | GitHub CI `28275816103` and Release `28275820908` passed for `v0.1.141`; Release assets included `latest.json`, macOS DMG/updater assets, Linux Tauri AppImage/deb/rpm assets, and `nexushub-webd-linux-x86_64.tar.gz` plus `.sha256`, with no old `nexushub-linux-x86_64.tar.gz`. Live Tencent Cloud deployment installed and started `nexushub-webd 0.1.141`, disabled old `nexushub`, and loopback `/healthz` returned OK, but `scripts/deploy-cloud.sh` failed because official `install.sh` exited with `tmp: unbound variable` after a function-local `RETURN` trap fired outside `install_payload()` scope. `v0.1.141` is not final-accepted. `v0.1.142` bumps versions and adds `trap - RETURN` plus a static guard requiring installer `RETURN` traps to be cleared before local temp variables leave scope. Fresh local gates passed: workspace/Tauri fmt, `cargo test --workspace`, Tauri tests with `resources/nexushub-webd`, workspace/Tauri Clippy, WebUI typecheck, WebUI 230 tests, WebUI build, `scripts/test-install-script.sh`, `ALLOW_HOST_MISMATCH=1 SKIP_WEBUI_INSTALL=1 bash scripts/package-webd-linux-x86_64.sh --check`, and `git diff --check`. |
 | 2026-06-27 | v0.1.142 cc-switch webd final acceptance and cleanup | M | S/P/E/R pass | 0 | GitHub CI `28276645726` and Release `28276646646` succeeded for commit `3bc27b5`; Release `v0.1.142` contains `latest.json`, macOS DMG/updater assets, Linux Tauri AppImage/deb/rpm assets, and `nexushub-webd-linux-x86_64.tar.gz` plus `.sha256`, with no old `nexushub-linux-x86_64.tar.gz`. Tencent Cloud runs exact `nexushub-webd 0.1.142`, `nexushub-webd` is active, old `nexushub` is inactive, loopback `/healthz` is OK, and public `/nexushub/` returns `200`. Browser-plugin Linux WebUI verified login state, security Turnstile/session persistence, Probe `systemd:nexushub-webd · 43.155.235.227`, Ops `Current 0.1.142` / `Latest v0.1.142` / `Update idle`, Public endpoint/Precheck/Update/Prune, no desktop WebUI control leakage, and cleanup delete buttons disabled after dry-run/scan gating. Scoped sensitive/retired paths `/nexushub/v1`, `/nexushub/responses`, `/nexushub/metrics`, `/nexushub/api/probe/status`, `/nexushub/api/sentinel/status`, `/nexushub/api/v1/models`, and `/codex-cloud-panel/` returned `404`. Official macOS DMG installed App/helper `0.1.142`; Computer Use verified visible non-fullscreen `tauri://localhost`, shared Codex/Claude Code/Probe/Ops, `WebUI 服务`, no Linux-only leakage, LAN WebUI independent login/CSRF/capability isolation, and LAN WebUI restored off (`127.0.0.1:15743` closed). Final cleanup removed local ignored artifacts, old worktree/branch, old `/opt/nexushub`, old `nexushub.service`, old `nexushub-update`, and deploy/unpack temp files; local `git clean -fdX -n` is empty, only main worktree remains, local `/tmp`/`Downloads` have no NexusHub temp artifacts, and cloud `/tmp`/`/var/tmp` retain only active `systemd-private-...nexushub-webd.service...` runtime dirs. |
+| 2026-06-29 | v0.1.143 cc-switch parity local release gate | M | S/P/R pass locally | 0 | Bumped workspace/package/Tauri versions and lockfiles to `0.1.143`; made WebUI visual/capability tests derive from `contracts/nexushub-contract.json`; added runtime importable contract registry helpers; strengthened Linux RPC dispatcher parity against contract Linux RPC names; moved follow-up worker lifecycle `claim/submit/error` commands out of public RPC and into explicit core-internal classification; updated README, cloud runbook, project overview, AGENTS, install-script guards, and the `v0.1.143` acceptance matrix. Fresh local gates passed: workspace/Tauri fmt, `cargo test --workspace`, Tauri tests with `resources/nexushub-webd`, workspace/Tauri Clippy, Tauri Clippy, WebUI typecheck, WebUI 233 tests, WebUI build, `scripts/test-install-script.sh`, `ALLOW_HOST_MISMATCH=1 SKIP_WEBUI_INSTALL=1 bash scripts/package-webd-linux-x86_64.sh --check`, and `git diff --check`. |
 | 2026-06-13 | 4.1-4.3 | M | S/P/R pass | 0 | WebUI preview navigation added in prior pass |
 | 2026-06-13 | 5.1-5.3 | M | E/R pass | 0 | Platform paths and Linux migration verified in prior pass |
 | 2026-06-13 | 2.1, 2.3 | M | U/P/R pass | 0 | Full Rust workspace tests passed; bridge/state read model preserved |
@@ -189,7 +191,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/test-install-script.sh
-git ls-remote --tags origin refs/tags/v0.1.141
+git ls-remote --tags origin refs/tags/v0.1.143
 ```
 
 ## Next Steps
@@ -245,6 +247,16 @@ git ls-remote --tags origin refs/tags/v0.1.141
 | Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd` | exact `nexushub-webd 0.1.142`, service active, loopback `/healthz` OK, public `/nexushub/` returns `200`, Browser-plugin WebUI verifies login/Turnstile/security save-reload/Probe/Ops/cleanup dry-run gating, Linux-only server surfaces remain visible where expected, desktop LAN WebUI controls remain hidden, old REST and scoped sensitive paths return `404`, old `/opt/nexushub` runtime is removed after successful acceptance, official `nexushub-webd-linux-x86_64.tar.gz` and `.sha256` are present in Release. |
 | macOS ARM64 Tauri | official `NexusHub-0.1.142-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/desktop-assets`, `~/Library/Logs/NexusHub` | install official DMG, verify App/helper `0.1.142`, Computer Use verifies visible non-fullscreen `tauri://localhost` UI, shared Codex/Claude Code/Probe/Ops layout and update card, desktop `WebUI 服务` settings visible, no Linux server Web auth/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage, configure/start LAN WebUI with independent password, verify local login/CSRF/shared pages, then restore default off. |
 | Linux x86_64 Tauri | `NexusHub-0.1.142-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | CI builds AppImage/deb/rpm, AppImage has `.sig` and `.sha256`, `.deb`/`.rpm` have `.sha256`, `latest.json` includes `linux-x86_64`, `xvfb` smoke starts the AppImage or times out only after a successful window process start, and Linux desktop uses user-scoped Tauri paths rather than server FHS paths. |
+
+## v0.1.143 Acceptance Matrix
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` plus isolated worktree `cc-switch-parity-v0.1.143` during implementation | none | tracked source only after cleanup | versions are `0.1.143`; `contracts/nexushub-contract.json` is the single parity registry for shared actions, host surfaces, capability/visual rules, Linux RPC exposure, Tauri invoke exposure, and WebUI wrappers; worker lifecycle follow-up commands remain core-internal and out of public `/api/rpc/:command`; full Rust/Tauri/WebUI/install-script/package gates pass fresh; `git diff --check`; final `git clean -fdX -n` empty after cleanup. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd` | exact `nexushub-webd 0.1.143`, service active, loopback `/healthz` OK, public `/nexushub/` returns `200`, Browser-plugin WebUI verifies login/Turnstile/security save-reload/Probe/Ops/cleanup dry-run gating, Linux server Web auth/security/public endpoint/systemd/Nginx/update prune surfaces remain visible, desktop LAN WebUI controls remain hidden, old REST and scoped sensitive paths return `404`, official `nexushub-webd-linux-x86_64.tar.gz` and `.sha256` are present in Release, and the old `nexushub-linux-x86_64.tar.gz` headless asset is absent. |
+| macOS ARM64 Tauri | official `NexusHub-0.1.143-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/desktop-assets`, `~/Library/Logs/NexusHub` | install official DMG, verify App/helper `0.1.143`, Computer Use verifies visible non-fullscreen `tauri://localhost` UI, shared Codex/Claude Code/Probe/Ops layout and update card, desktop `WebUI 服务` settings visible, no Linux server Web auth/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage, configure/start LAN WebUI with independent password, verify local login/CSRF/shared pages and capability isolation, then restore default off. |
+| Linux x86_64 Tauri | `NexusHub-0.1.143-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | CI builds AppImage/deb/rpm, AppImage has `.sig` and `.sha256`, `.deb`/`.rpm` have `.sha256`, `latest.json` includes `linux-x86_64`, `latest.json` does not reference the headless webd tarball, `xvfb` smoke starts the AppImage or times out only after a successful window process start, and Linux desktop uses user-scoped Tauri paths rather than server FHS paths. |
+| Desktop LAN WebUI | `http://127.0.0.1:15743/` or configured LAN address after embedded Tauri starts it | managed helper `nexushub-webd serve --surface desktop-lan-webui` | desktop data/config paths only | default disabled, requires configured independent password, Turnstile disabled by default, password not in plaintext config/logs/docs, login/session/CSRF work, shared Codex/Claude Code/Probe/Ops pages render, browser clients cannot remotely start/stop the service and do not see Linux server systemd/Nginx/public endpoint/prune/security admin surfaces. |
 
 ## Session Log
 

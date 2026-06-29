@@ -4,6 +4,8 @@
 
 The Tauri apps follow the CC Switch native packaging model: Tauri wraps the main `webui` interface directly. macOS produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, `nexushub-darwin-arm64.tar.gz`, signed updater metadata `nexushub-darwin-arm64.tar.gz.sig`, and `latest.json` platform `darwin-aarch64`. Linux desktop produces `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, `.rpm`, and AppImage updater signature for `latest.json` platform `linux-x86_64`. The Linux server release chain builds the same `webui` into `/usr/share/nexushub-webd/webui/`, publishes `nexushub-webd-linux-x86_64.tar.gz`, and serves the hosted browser entry at `https://661313.xyz/nexushub/`.
 
+The two Linux release lines are intentional. `nexushub-webd-linux-x86_64.tar.gz` is the headless Tencent Cloud WebUI/systemd package; `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, and `.rpm` are the Linux Tauri desktop packages. The Linux Tauri release job is expected to take longer because it installs WebKit/GTK dependencies, builds the Tauri bundle, produces AppImage/deb/rpm, signs the AppImage when release secrets are present, and runs an `xvfb` smoke test. The headless webd tarball is not a Tauri updater asset and must not appear in `latest.json`.
+
 Current scope:
 
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
