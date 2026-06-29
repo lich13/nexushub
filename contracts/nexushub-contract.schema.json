@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json",
+  "title": "NexusHub Contract Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "hostSurfaces",
+    "capabilities",
+    "capabilitiesByHostSurface",
+    "visual",
+    "actions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "hostSurfaces": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "capabilitiesByHostSurface": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/nonEmptyString" },
+        "uniqueItems": true
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "navigation",
+        "corePanelTitles",
+        "actionLabels",
+        "disabledStates",
+        "linuxWebOnly",
+        "desktopTauriOnly",
+        "forbidden"
+      ],
+      "properties": {
+        "navigation": { "$ref": "#/$defs/stringList" },
+        "corePanelTitles": { "$ref": "#/$defs/stringList" },
+        "actionLabels": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "disabledStates": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "linuxWebOnly": { "$ref": "#/$defs/stringList" },
+        "desktopTauriOnly": { "$ref": "#/$defs/stringList" },
+        "forbidden": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["desktopEmbeddedTauri", "desktopLanWebui"],
+          "properties": {
+            "desktopEmbeddedTauri": { "$ref": "#/$defs/stringList" },
+            "desktopLanWebui": { "$ref": "#/$defs/stringList" }
+          }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/action" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "scope", "coreUseCase"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": {
+          "type": "string",
+          "enum": ["rpc", "transport"]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["shared", "host_only", "transport"]
+        },
+        "coreUseCase": { "$ref": "#/$defs/nonEmptyString" },
+        "linuxRpc": { "$ref": "#/$defs/nonEmptyString" },
+        "tauriCommand": { "$ref": "#/$defs/nonEmptyString" },
+        "webuiWrapper": { "$ref": "#/$defs/nonEmptyString" },
+        "hostOnlyReason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}

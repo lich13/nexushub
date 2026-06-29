@@ -49,6 +49,11 @@ function contract(): NexusHubContract {
   return JSON.parse(readFileSync(fileURLToPath(url), "utf8")) as NexusHubContract;
 }
 
+function repositoryFile(path: string): string {
+  const url = new URL(`../../../../${path}`, import.meta.url);
+  return readFileSync(fileURLToPath(url), "utf8");
+}
+
 const apiSources = import.meta.glob([
   "../api/**/*.ts",
   "!../api/**/*.test.ts"
@@ -77,6 +82,45 @@ function apiCommandLiterals(): Set<string> {
 }
 
 describe("contract registry", () => {
+  test("has a schema and architecture audit that describe the supported parity boundary", () => {
+    const schema = JSON.parse(repositoryFile("contracts/nexushub-contract.schema.json")) as {
+      $id?: string;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    expect(schema.$id).toBe("https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json");
+    expect(schema.required).toEqual([
+      "schemaVersion",
+      "hostSurfaces",
+      "capabilities",
+      "capabilitiesByHostSurface",
+      "visual",
+      "actions"
+    ]);
+    expect(Object.keys(schema.properties ?? {})).toEqual([
+      "schemaVersion",
+      "hostSurfaces",
+      "capabilities",
+      "capabilitiesByHostSurface",
+      "visual",
+      "actions"
+    ]);
+
+    const audit = repositoryFile("docs/analysis/cc-switch-architecture-parity.md");
+    for (const required of [
+      "cc-switch origin/main",
+      "cc-switch feat/webd",
+      "NexusHub v0.1.144",
+      "Windows desktop",
+      "Linux arm64",
+      "nexushub-webd-linux-x86_64.tar.gz",
+      "NexusHub-*-Linux-x86_64.AppImage",
+      "contracts/nexushub-contract.json"
+    ]) {
+      expect(audit, `audit missing ${required}`).toContain(required);
+    }
+  });
+
   test("exports registry-derived host surfaces, visual copy, and capabilities without test-only file reads", () => {
     expect(contractHostSurfaces).toEqual(contract().hostSurfaces);
     expect(contractVisual.navigation).toEqual(contract().visual.navigation);

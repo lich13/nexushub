@@ -6,6 +6,8 @@ The Tauri apps follow the CC Switch native packaging model: Tauri wraps the main
 
 The two Linux release lines are intentional. `nexushub-webd-linux-x86_64.tar.gz` is the headless Tencent Cloud WebUI/systemd package; `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, and `.rpm` are the Linux Tauri desktop packages. The Linux Tauri release job is expected to take longer because it installs WebKit/GTK dependencies, builds the Tauri bundle, produces AppImage/deb/rpm, signs the AppImage when release secrets are present, and runs an `xvfb` smoke test. The headless webd tarball is not a Tauri updater asset and must not appear in `latest.json`.
 
+Architecture parity with `cc-switch` is intentionally scoped. `cc-switch origin/main` is the desktop Tauri release reference and includes Windows plus Linux arm64; local `cc-switch feat/webd` branches are separate headless/FHS references. NexusHub keeps the accepted macOS + Tencent Cloud Linux target in this release, with Windows desktop and Linux arm64 recorded as P2 until they have explicit CI, Release, updater, and acceptance coverage.
+
 Current scope:
 
 - Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.

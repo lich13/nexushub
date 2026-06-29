@@ -21,6 +21,9 @@ ENV_EXAMPLE="${ROOT}/deploy/nexushub-webd/env.example"
 README="${ROOT}/README.md"
 CLOUD_RUNBOOK="${ROOT}/docs/cloud-deploy-runbook.md"
 AGENTS="${ROOT}/AGENTS.md"
+CC_SWITCH_AUDIT="${ROOT}/docs/analysis/cc-switch-architecture-parity.md"
+CONTRACT_REGISTRY="${ROOT}/contracts/nexushub-contract.json"
+CONTRACT_SCHEMA="${ROOT}/contracts/nexushub-contract.schema.json"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-prune"
@@ -41,6 +44,9 @@ for path in \
   "${README}" \
   "${CLOUD_RUNBOOK}" \
   "${AGENTS}" \
+  "${CC_SWITCH_AUDIT}" \
+  "${CONTRACT_REGISTRY}" \
+  "${CONTRACT_SCHEMA}" \
   "${CODEX_PRECHECK_WRAPPER}" \
   "${CODEX_UPDATE_WRAPPER}" \
   "${CODEX_PRUNE_WRAPPER}"; do
@@ -150,6 +156,90 @@ if "contract registry" not in agents or "contracts/nexushub-contract.json" not i
     raise SystemExit("AGENTS.md must document the shared contract registry workflow")
 
 print("v0.1.141 webd deploy layout: ok")
+PY
+
+python3 - "${CONTRACT_REGISTRY}" "${CONTRACT_SCHEMA}" "${CC_SWITCH_AUDIT}" "${README}" "${CLOUD_RUNBOOK}" "${AGENTS}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+registry_path, schema_path, audit_path, readme_path, runbook_path, agents_path = [Path(arg) for arg in sys.argv[1:]]
+registry = json.loads(registry_path.read_text())
+schema = json.loads(schema_path.read_text())
+audit = audit_path.read_text()
+readme = readme_path.read_text()
+runbook = runbook_path.read_text()
+agents = agents_path.read_text()
+
+required_top_level = [
+    "schemaVersion",
+    "hostSurfaces",
+    "capabilities",
+    "capabilitiesByHostSurface",
+    "visual",
+    "actions",
+]
+if schema.get("$id") != "https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json":
+    raise SystemExit("contract schema must have the canonical GitHub $id")
+if schema.get("required") != required_top_level:
+    raise SystemExit("contract schema required keys must match the registry top-level shape")
+if list(schema.get("properties", {}).keys()) != required_top_level:
+    raise SystemExit("contract schema properties must stay in the canonical order")
+
+host_surfaces = registry.get("hostSurfaces", [])
+if host_surfaces != ["linux_server_webui", "desktop_embedded_tauri", "desktop_lan_webui"]:
+    raise SystemExit("contract registry host surfaces drifted from the accepted three-surface model")
+for surface in host_surfaces:
+    if surface not in registry.get("capabilitiesByHostSurface", {}):
+        raise SystemExit(f"contract registry missing capability matrix for {surface}")
+for action in registry.get("actions", []):
+    action_id = action.get("id")
+    if action.get("scope") == "shared":
+        for key in ["coreUseCase", "linuxRpc", "tauriCommand", "webuiWrapper"]:
+            if not action.get(key):
+                raise SystemExit(f"shared contract action {action_id} missing {key}")
+    if action.get("scope") == "host_only" and not action.get("hostOnlyReason"):
+        raise SystemExit(f"host-only contract action {action_id} missing hostOnlyReason")
+
+for needle in [
+    "cc-switch origin/main",
+    "cc-switch feat/webd",
+    "NexusHub v0.1.144",
+    "Windows desktop",
+    "Linux arm64",
+    "nexushub-webd-linux-x86_64.tar.gz",
+    "NexusHub-*-Linux-x86_64.AppImage",
+    "contracts/nexushub-contract.json",
+]:
+    if needle not in audit:
+        raise SystemExit(f"cc-switch architecture audit missing {needle}")
+
+for doc_name, doc in {
+    "README.md": readme,
+    "docs/cloud-deploy-runbook.md": runbook,
+}.items():
+    for needle in [
+        "nexushub-webd-linux-x86_64.tar.gz",
+        "NexusHub-<version>-Linux-x86_64.AppImage",
+        "latest.json",
+        "WebKit/GTK",
+        "xvfb",
+    ]:
+        if needle not in doc:
+            raise SystemExit(f"{doc_name} missing Linux asset/build-time boundary: {needle}")
+    if "headless webd tarball into `latest.json`" not in doc and "headless webd tarball is not a Tauri updater asset" not in doc:
+        raise SystemExit(f"{doc_name} must say the headless webd tarball is not a latest.json asset")
+for needle in [
+    "contract registry",
+    "contracts/nexushub-contract.json",
+    "contracts/nexushub-contract.schema.json",
+    "Windows",
+    "Linux arm64",
+]:
+    if needle not in agents:
+        raise SystemExit(f"AGENTS.md missing v0.1.144 governance marker: {needle}")
+
+print("contract schema and cc-switch architecture audit guards: ok")
 PY
 
 python3 - "${INSTALL_SH}" <<'PY'

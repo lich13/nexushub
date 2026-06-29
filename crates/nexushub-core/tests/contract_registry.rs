@@ -16,6 +16,16 @@ fn contract() -> Value {
     serde_json::from_str(&text).expect("contract registry must be valid JSON")
 }
 
+fn contract_schema() -> Value {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../contracts/nexushub-contract.schema.json"
+    );
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("contract schema must exist at {path}: {err}"));
+    serde_json::from_str(&text).expect("contract schema must be valid JSON")
+}
+
 fn string_set(value: &Value, key: &str) -> BTreeSet<String> {
     value
         .get(key)
@@ -63,6 +73,52 @@ fn action_set(contract: &Value, predicate: impl Fn(&Value) -> bool) -> BTreeSet<
                 .to_string()
         })
         .collect()
+}
+
+#[test]
+fn contract_schema_locks_registry_top_level_shape() {
+    let schema = contract_schema();
+    let required = string_set(&schema, "required");
+    let expected = [
+        "schemaVersion",
+        "hostSurfaces",
+        "capabilities",
+        "capabilitiesByHostSurface",
+        "visual",
+        "actions",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+    assert_eq!(required, expected);
+
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("contract schema properties must be an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(properties, expected);
+
+    let action_required = schema
+        .pointer("/$defs/action/required")
+        .and_then(Value::as_array)
+        .expect("contract schema must define required action fields")
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .expect("required action field must be a string")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        action_required,
+        ["id", "kind", "scope", "coreUseCase"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+    );
 }
 
 #[test]

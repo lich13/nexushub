@@ -23,6 +23,11 @@ builds Tauri bundles, packages AppImage/deb/rpm, signs the updater asset, and
 runs `xvfb` smoke. Do not deploy the AppImage to Tencent Cloud and do not put
 the headless webd tarball into `latest.json`.
 
+For `cc-switch` comparison, keep the reference boundary explicit: `cc-switch
+origin/main` has a wider desktop matrix, including Windows and Linux arm64,
+while local `cc-switch feat/webd` branches are separate headless/FHS references.
+NexusHub server deployment remains Tencent Cloud Linux x86_64 in this runbook.
+
 ## Build Release Artifact
 
 ```bash
