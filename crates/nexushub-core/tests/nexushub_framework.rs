@@ -399,7 +399,27 @@ fn probe_action_plans_use_nexushub_commands_and_confirmation_ids() {
 
 #[test]
 fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries() {
+    let root = temp_dir("nexushub-probe-hook-managed");
+    let codex_home = root.join(".codex");
+    fs::create_dir_all(&codex_home).unwrap();
+    fs::write(
+        codex_home.join("hooks.json"),
+        json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "*",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml probe hook-stop"
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
     let mut config = Config::default();
+    config.codex.home = codex_home;
     config.probe.notifications.enabled = true;
     let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
 
@@ -442,6 +462,7 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
         diagnostics.effective_constants["hidden_desktop_control"],
         false
     );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

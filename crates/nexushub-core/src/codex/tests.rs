@@ -1193,6 +1193,21 @@ fn list_threads_preserves_db_rollout_path_when_session_index_misses_thread() {
 }
 
 #[test]
+fn list_threads_hides_db_rows_with_missing_rollout_path() {
+    let root = unique_temp_dir("missing-rollout-path");
+    fs::create_dir_all(&root).unwrap();
+    let missing_rollout = root.join("sessions/2026/06/25/missing-rollout.jsonl");
+    write_thread_db(&root, "dangling-thread", &missing_rollout, 1, 0);
+
+    let rows = list_threads(&CodexPaths::new(&root), None, None, 10).unwrap();
+    let detail = thread_detail(&CodexPaths::new(&root), "dangling-thread").unwrap();
+
+    assert!(!rows.iter().any(|thread| thread.id == "dangling-thread"));
+    assert!(detail.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn list_threads_does_not_read_rollout_outside_codex_home() {
     let root = unique_temp_dir("external-rollout-path");
     let external = unique_temp_dir("external-rollout-content");

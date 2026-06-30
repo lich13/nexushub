@@ -643,6 +643,8 @@ export function probeStateLabel(value?: string | null): string {
   if (!value) return "未知";
   const labels: Record<string, string> = {
     managed: "已管理",
+    stale: "需修复",
+    missing: "未安装",
     disabled: "已停用",
     configured: "已配置",
     not_configured: "未配置",

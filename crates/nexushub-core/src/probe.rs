@@ -115,6 +115,7 @@ impl ProbeRuntime {
         let resolved = self.resolved_codex_paths();
         let logs_db_status = self.logs_db_status();
         let aggregation = aggregate_probe_status(&self.config);
+        let hook_status = self.hook_status();
         Ok(ProbeStatus {
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
@@ -124,12 +125,7 @@ impl ProbeRuntime {
             service_kind: self.paths.service_kind.clone(),
             service_name: self.paths.service_name.clone(),
             binary_path: None,
-            hook_status: if self.config.probe.hooks.manage_stop_hook {
-                "managed"
-            } else {
-                "disabled"
-            }
-            .to_string(),
+            hook_status: hook_status.hook_status,
             bark_status: if self.config.probe.notifications.enabled {
                 "configured"
             } else {
@@ -213,20 +209,29 @@ impl ProbeRuntime {
 
     pub fn hook_status(&self) -> ProbeHookStatus {
         let hook_command = self.hook_command();
+        let audit = audit_stop_hooks(
+            &self.resolved_codex_paths().home.join("hooks.json"),
+            &hook_command,
+        );
+        let status = if !self.config.probe.hooks.manage_stop_hook {
+            "disabled"
+        } else if audit.stale_command_count > 0 || audit.empty_group_count > 0 {
+            "stale"
+        } else if audit.expected_installed {
+            "managed"
+        } else {
+            "missing"
+        }
+        .to_string();
         ProbeHookStatus {
-            status: if self.config.probe.hooks.manage_stop_hook {
-                "managed".to_string()
-            } else {
-                "disabled".to_string()
-            },
-            hook_status: if self.config.probe.hooks.manage_stop_hook {
-                "managed".to_string()
-            } else {
-                "disabled".to_string()
-            },
-            installed: self.config.probe.hooks.manage_stop_hook,
-            managed: self.config.probe.hooks.manage_stop_hook,
+            status: status.clone(),
+            hook_status: status.clone(),
+            installed: audit.expected_installed,
+            managed: status == "managed",
             hook_command,
+            actual_commands: audit.actual_commands,
+            stale_command_count: audit.stale_command_count,
+            empty_group_count: audit.empty_group_count,
             restart_required_after_install: false,
             supported_events: vec!["hook-stop".to_string(), "notify-completion".to_string()],
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
@@ -653,6 +658,63 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct StopHookAudit {
+    expected_installed: bool,
+    actual_commands: Vec<String>,
+    stale_command_count: usize,
+    empty_group_count: usize,
+}
+
+fn audit_stop_hooks(path: &Path, expected_command: &str) -> StopHookAudit {
+    let Ok(text) = fs::read_to_string(path) else {
+        return StopHookAudit::default();
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&text) else {
+        return StopHookAudit::default();
+    };
+    let Some(groups) = root
+        .get("hooks")
+        .and_then(|hooks| hooks.get("Stop"))
+        .and_then(Value::as_array)
+    else {
+        return StopHookAudit::default();
+    };
+    let mut audit = StopHookAudit::default();
+    for group in groups {
+        let hooks = group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if hooks.is_empty() {
+            audit.empty_group_count += 1;
+        }
+        for hook in hooks {
+            let Some(command) = hook.get("command").and_then(Value::as_str) else {
+                continue;
+            };
+            audit.actual_commands.push(command.to_string());
+            if command == expected_command {
+                audit.expected_installed = true;
+            } else if is_nexushub_managed_hook_command(command) {
+                audit.stale_command_count += 1;
+            }
+        }
+    }
+    audit
+}
+
+fn is_nexushub_managed_hook_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    lowered.contains("probe hook-stop")
+        && (lowered.contains("nexushubd")
+            || lowered.contains("nexushub-webd")
+            || lowered.contains("/opt/nexushub")
+            || lowered.contains("application support/nexushub")
+            || lowered.contains("codex-sentinel"))
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbeActionPlanKind {
@@ -751,6 +813,9 @@ pub struct ProbeHookStatus {
     pub installed: bool,
     pub managed: bool,
     pub hook_command: String,
+    pub actual_commands: Vec<String>,
+    pub stale_command_count: usize,
+    pub empty_group_count: usize,
     pub restart_required_after_install: bool,
     pub supported_events: Vec<String>,
     pub dedupe_namespace: String,
@@ -2062,6 +2127,47 @@ fn dedupe_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_status_reports_stale_when_hooks_json_contains_old_nexushub_command() {
+        let root = unique_temp_dir("nexushub-probe-hook-status-stale");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(
+            codex_home.join("hooks.json"),
+            json!({
+                "hooks": {
+                    "Stop": [
+                        {"hooks": []},
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-stop"
+                            }]
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.hooks.manage_stop_hook = true;
+
+        let status =
+            ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux)).hook_status();
+
+        assert_eq!(status.hook_status, "stale");
+        assert_eq!(status.stale_command_count, 1);
+        assert_eq!(status.empty_group_count, 1);
+        assert!(status
+            .actual_commands
+            .iter()
+            .any(|command| command.contains("nexushubd")));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn status_aggregates_running_threads_from_codex_home() {

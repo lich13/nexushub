@@ -576,16 +576,15 @@ fn notify_completion_context(
             .map(|thread| thread.title.clone())
             .filter(|title| !title.trim().is_empty())
     });
-    let (message, body_source) = if let Some(message) = explicit_message {
+    let transcript_message = if let Some(path) = resolved_transcript_path.as_deref() {
+        rollout_completion_last_agent_message_with_source(Path::new(path), turn_id.as_deref())?
+    } else {
+        None
+    };
+    let (message, body_source) = if let Some((message, source)) = transcript_message {
+        (Some(message), Some(source))
+    } else if let Some(message) = explicit_message {
         (Some(message), Some("stdin.last_agent_message".to_string()))
-    } else if let Some(path) = resolved_transcript_path.as_deref() {
-        match rollout_completion_last_agent_message_with_source(
-            Path::new(path),
-            turn_id.as_deref(),
-        )? {
-            Some((message, source)) => (Some(message), Some(source)),
-            None => (None, None),
-        }
     } else if let Some(message) = resolved_thread
         .as_ref()
         .and_then(|thread| thread.latest_message.clone())
@@ -765,11 +764,45 @@ fn ensure_codex_hooks_feature(text: &str) -> Result<String> {
     let features = features
         .as_table_mut()
         .context("Codex config features must be a table")?;
-    if matches!(features.get("hooks"), Some(toml::Value::Boolean(true))) {
+    let mut changed = false;
+    if !matches!(features.get("hooks"), Some(toml::Value::Boolean(true))) {
+        features.insert("hooks".to_string(), toml::Value::Boolean(true));
+        changed = true;
+    }
+    changed |= prune_codex_stop_hook_state(root);
+    if !changed {
         return Ok(text.to_string());
     }
-    features.insert("hooks".to_string(), toml::Value::Boolean(true));
     toml::to_string_pretty(&value).context("serialize Codex config.toml")
+}
+
+fn prune_codex_stop_hook_state(root: &mut toml::map::Map<String, toml::Value>) -> bool {
+    let Some(hooks) = root.get_mut("hooks").and_then(toml::Value::as_table_mut) else {
+        return false;
+    };
+    let Some(state) = hooks.get_mut("state").and_then(toml::Value::as_table_mut) else {
+        return false;
+    };
+    let stale_keys = state
+        .keys()
+        .filter(|key| is_codex_stop_hook_state_key(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if stale_keys.is_empty() {
+        return false;
+    }
+    for key in stale_keys {
+        state.remove(&key);
+    }
+    if state.is_empty() {
+        hooks.remove("state");
+    }
+    true
+}
+
+fn is_codex_stop_hook_state_key(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    lowered.contains("hooks.json:stop:")
 }
 
 fn read_hooks_json(path: &Path) -> Result<Value> {
@@ -792,13 +825,16 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
+    let mut changed = false;
     if !root.is_object() {
         *root = json!({"hooks": {}});
+        changed = true;
     }
     let object = root.as_object_mut().expect("object initialized");
     let hooks = object.entry("hooks").or_insert_with(|| json!({}));
     if !hooks.is_object() {
         *hooks = json!({});
+        changed = true;
     }
     let hooks_object = hooks.as_object_mut().expect("hooks object initialized");
     let stop = hooks_object
@@ -806,25 +842,51 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
         .or_insert_with(|| Value::Array(Vec::new()));
     if !stop.is_array() {
         *stop = Value::Array(Vec::new());
+        changed = true;
     }
     let groups = stop.as_array_mut().expect("stop array initialized");
+    let mut expected_installed = false;
     for group in groups.iter_mut() {
-        let Some(items) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        if items.iter().any(|item| {
-            item.get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| command == hook_command)
-        }) {
-            return false;
+        if !group.is_object() {
+            *group = json!({"matcher": "*", "hooks": []});
+            changed = true;
         }
+        let group_object = group.as_object_mut().expect("group object initialized");
+        let hooks = group_object
+            .entry("hooks")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !hooks.is_array() {
+            *hooks = Value::Array(Vec::new());
+            changed = true;
+        }
+        let items = hooks.as_array_mut().expect("group hooks array initialized");
+        let before = items.len();
         items.retain(|item| {
-            !item
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| command.contains("codex-sentinel"))
+            let Some(command) = item.get("command").and_then(Value::as_str) else {
+                return true;
+            };
+            if command == hook_command {
+                expected_installed = true;
+                return true;
+            }
+            !is_nexushub_managed_hook_command(command)
         });
+        if items.len() != before {
+            changed = true;
+        }
+    }
+    let before_groups = groups.len();
+    groups.retain(|group| {
+        group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    });
+    if groups.len() != before_groups {
+        changed = true;
+    }
+    if expected_installed {
+        return changed;
     }
     groups.push(json!({
         "matcher": "*",
@@ -834,6 +896,16 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
         }]
     }));
     true
+}
+
+fn is_nexushub_managed_hook_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    lowered.contains("probe hook-stop")
+        && (lowered.contains("nexushubd")
+            || lowered.contains("nexushub-webd")
+            || lowered.contains("/opt/nexushub")
+            || lowered.contains("application support/nexushub")
+            || lowered.contains("codex-sentinel"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1968,6 +2040,90 @@ hooks = false
     }
 
     #[tokio::test]
+    async fn install_probe_hooks_replaces_stale_nexushub_hooks_and_hook_state() {
+        let dir = temp_test_dir("nexushub-hooks-replace-stale");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(
+            codex_home.join("hooks.json"),
+            serde_json::to_vec_pretty(&json!({
+                "hooks": {
+                    "Stop": [
+                        {"hooks": []},
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-stop"
+                            }]
+                        },
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/usr/local/bin/third-party-hook"
+                            }]
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            codex_home.join("config.toml"),
+            r#"
+model = "gpt-5"
+
+[features]
+hooks = true
+
+[hooks.state."/tmp/.codex/hooks.json:stop:0:0"]
+last_error = "old empty group"
+
+[hooks.state."/tmp/.codex/hooks.json:stop:1:0"]
+last_error = "old nexushub hook"
+"#,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.probe.hooks.reload_app_server_after_install = false;
+
+        let result = install_probe_hooks(&config, false).await.unwrap();
+
+        assert_eq!(result["hooks_json_changed"], true);
+        assert_eq!(result["codex_config_changed"], true);
+        let hooks_json: Value =
+            serde_json::from_slice(&fs::read(codex_home.join("hooks.json")).unwrap()).unwrap();
+        let stop = hooks_json["hooks"]["Stop"].as_array().unwrap();
+        let commands = stop
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .filter_map(|hook| hook["command"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains("probe hook-stop"))
+                .count(),
+            1
+        );
+        assert!(commands
+            .iter()
+            .any(|command| command.contains("nexushub-webd")));
+        assert!(!commands.iter().any(|command| command.contains("nexushubd")));
+        assert!(commands.contains(&"/usr/local/bin/third-party-hook"));
+        assert!(stop.iter().all(|group| group["hooks"]
+            .as_array()
+            .is_some_and(|hooks| !hooks.is_empty())));
+        let codex_config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+        assert!(!codex_config.contains("[hooks.state."));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn hook_stop_records_probe_event_but_returns_codex_stop_json_and_redacted_bark_state() {
         let mut config = Config::default();
         config.probe.notifications.enabled = true;
@@ -2377,6 +2533,45 @@ hooks = false
         );
         assert!(stored[0].payload["bark"].get("body").is_none());
 
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_prefers_transcript_final_message_over_stale_stdin_message() {
+        let config = Config::default();
+        let dir = temp_test_dir("nexushub-notify-completion-stale-stdin");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":"上一条 assistant fallback"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":"最后一条 final message"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+                "last_assistant_message": "上一条旧消息"
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert!(event.bark_body.contains("最后一条 final message"));
+        assert!(!event.bark_body.contains("上一条旧消息"));
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

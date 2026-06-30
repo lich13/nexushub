@@ -468,6 +468,10 @@ export type ProbeStatus = {
   service_name: string;
   flavor?: string | null;
   hook_status: string;
+  hook_command?: string | null;
+  actual_commands?: string[] | null;
+  stale_command_count?: number | null;
+  empty_group_count?: number | null;
   bark_status: string;
   logs_db_status: string;
   recent_event_count: number;

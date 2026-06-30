@@ -13,6 +13,7 @@ import {
   opsUpdateActionView,
   opsWorkspacePanelTitles,
   opsWorkspaceViewModel,
+  probeStateLabel,
   threadMessageControllerView
 } from "./runtimeViewModel";
 
@@ -51,6 +52,13 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   forkAction: false,
   approvalActions: false
 };
+
+describe("probeStateLabel", () => {
+  test("labels stale and missing hook states for repair workflows", () => {
+    expect(probeStateLabel("stale")).toBe("需修复");
+    expect(probeStateLabel("missing")).toBe("未安装");
+  });
+});
 
 function archivePlan(): ArchiveDeletePlan {
   return {

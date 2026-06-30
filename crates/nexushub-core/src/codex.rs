@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashSet;
+use std::{collections::HashSet, fs, path::Path};
 
 mod mutations;
 mod paths;
@@ -48,17 +48,26 @@ pub fn list_threads(
 ) -> Result<Vec<ThreadSummary>> {
     let mut rows = read_thread_rows(paths)?;
     let session_index = read_session_index(paths).unwrap_or_default();
-    let mut hidden_subagents = HashSet::new();
+    let mut hidden_threads = HashSet::new();
     for row in &mut rows {
         let index_entry = session_index.get(&row.summary.id);
         if row.summary.rollout_path.is_none() {
             row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
         }
+        let missing_rollout = row
+            .summary
+            .rollout_path
+            .as_deref()
+            .is_some_and(|path| missing_rollout_inside_codex_home(paths, path));
         row.summary.rollout_path = row
             .summary
             .rollout_path
             .take()
             .filter(|path| paths.contains_path(path));
+        if missing_rollout {
+            hidden_threads.insert(row.summary.id.clone());
+            continue;
+        }
         if should_repair_thread_title_from_local_metadata(
             row.db_title.as_deref(),
             row.first_user_message.as_deref(),
@@ -74,11 +83,11 @@ pub fn list_threads(
                 .unwrap_or_else(|| "未命名线程".to_string());
         }
         if enrich_thread_from_rollout(&mut row.summary).unwrap_or(false) {
-            hidden_subagents.insert(row.summary.id.clone());
+            hidden_threads.insert(row.summary.id.clone());
         }
     }
     let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
-    rows.retain(|row| !hidden_subagents.contains(&row.id));
+    rows.retain(|row| !hidden_threads.contains(&row.id));
 
     let needle = q
         .map(|v| v.trim().to_ascii_lowercase())
@@ -110,6 +119,33 @@ pub fn list_threads(
     rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     rows.truncate(limit.max(1));
     Ok(rows)
+}
+
+fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
+    if path.as_os_str().is_empty()
+        || path.exists()
+        || is_macos_network_volume_path(&paths.home)
+        || is_macos_network_volume_path(path)
+    {
+        return false;
+    }
+    let Ok(home) = fs::canonicalize(&paths.home) else {
+        return false;
+    };
+    let mut ancestor = path.parent();
+    while let Some(candidate) = ancestor {
+        if candidate.as_os_str().is_empty() {
+            return false;
+        }
+        if candidate.exists() {
+            let Ok(existing) = fs::canonicalize(candidate) else {
+                return false;
+            };
+            return existing.starts_with(home);
+        }
+        ancestor = candidate.parent();
+    }
+    false
 }
 
 pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {

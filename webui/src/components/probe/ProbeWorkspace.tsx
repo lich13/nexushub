@@ -475,14 +475,21 @@ function ProbeHookCard({
   busy?: boolean;
   onInstall: () => void;
 }) {
-  const managed = status?.hook_status === "managed";
+  const hookStatus = status?.hook_status;
+  const managed = hookStatus === "managed";
+  const needsRepair = hookStatus === "stale" || hookStatus === "missing";
   const configured = managed || draft?.hooks.manage_stop_hook === true;
+  const actualCommandCount = status?.actual_commands?.length ?? 0;
+  const staleCommandCount = status?.stale_command_count ?? 0;
+  const emptyGroupCount = status?.empty_group_count ?? 0;
+  const actualSummary = `${actualCommandCount} 条${staleCommandCount > 0 ? ` · 旧 ${staleCommandCount}` : ""}${emptyGroupCount > 0 ? ` · 空 ${emptyGroupCount}` : ""}`;
   return (
     <div className="probe-card-stack">
-      <Metric label="Stop Hook" value={probeStateLabel(status?.hook_status)} tone={managed ? "success" : "warning"} />
+      <Metric label="Stop Hook" value={probeStateLabel(hookStatus)} tone={managed ? "success" : "warning"} />
       <Metric label="管理开关" value={configured ? "已开启" : "已关闭"} tone={configured ? "success" : "warning"} />
-      <Metric label="动作" value="固定 Hook 安装 job" />
-      <button className="secondary-button" disabled={busy} onClick={onInstall}><TerminalSquare size={17} />安装 Hook</button>
+      <Metric label="实际命令" value={actualSummary} tone={needsRepair ? "warning" : "success"} />
+      <Metric label="动作" value={needsRepair ? "重新安装 Hook" : "固定 Hook 安装 job"} />
+      <button className="secondary-button" disabled={busy} onClick={onInstall}><TerminalSquare size={17} />{needsRepair ? "重新安装 Hook" : "安装 Hook"}</button>
     </div>
   );
 }
