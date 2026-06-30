@@ -126,6 +126,10 @@ impl ProbeRuntime {
             service_name: self.paths.service_name.clone(),
             binary_path: None,
             hook_status: hook_status.hook_status,
+            hook_command: hook_status.hook_command,
+            actual_commands: hook_status.actual_commands,
+            stale_command_count: hook_status.stale_command_count,
+            empty_group_count: hook_status.empty_group_count,
             bark_status: if self.config.probe.notifications.enabled {
                 "configured"
             } else {
@@ -761,6 +765,10 @@ pub struct ProbeStatus {
     pub service_name: String,
     pub binary_path: Option<PathBuf>,
     pub hook_status: String,
+    pub hook_command: String,
+    pub actual_commands: Vec<String>,
+    pub stale_command_count: usize,
+    pub empty_group_count: usize,
     pub bark_status: String,
     pub hooks_enabled: bool,
     pub hook_stop_enabled: bool,
@@ -2166,6 +2174,48 @@ mod tests {
             .actual_commands
             .iter()
             .any(|command| command.contains("nexushubd")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_includes_stop_hook_audit_fields_for_ui() {
+        let root = unique_temp_dir("nexushub-probe-status-hook-audit");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(
+            codex_home.join("hooks.json"),
+            json!({
+                "hooks": {
+                    "Stop": [
+                        {"hooks": []},
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-stop"
+                            }]
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.hooks.manage_stop_hook = true;
+
+        let status = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux))
+            .status()
+            .await
+            .unwrap();
+
+        assert_eq!(status.hook_status, "stale");
+        assert_eq!(status.stale_command_count, 1);
+        assert_eq!(status.empty_group_count, 1);
+        assert_eq!(status.actual_commands.len(), 1);
+        assert!(status.hook_command.contains("nexushub-webd"));
+        assert!(status.actual_commands[0].contains("nexushubd"));
         fs::remove_dir_all(root).unwrap();
     }
 
