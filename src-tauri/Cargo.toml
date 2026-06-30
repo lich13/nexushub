@@ -1,6 +1,6 @@
 [package]
 name = "nexushub-desktop"
-version = "0.1.148"
+version = "0.1.149"
 description = "NexusHub macOS desktop console"
 authors = ["NexusHub contributors"]
 license = "MIT"

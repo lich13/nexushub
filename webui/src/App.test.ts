@@ -475,6 +475,16 @@ describe("conversation helpers", () => {
     expect(opsSource).not.toContain("cleanupStageLabel({");
   });
 
+  test("OpsWorkspace surfaces cleanup mutation errors instead of leaving confirm buttons silent", () => {
+    const opsSource = extractFunctionSource("OpsWorkspace");
+
+    expect(opsSource).toContain("archiveCleanupError");
+    expect(opsSource).toContain("hiddenCleanupError");
+    expect(opsSource).toContain("executeDelete.error");
+    expect(opsSource).toContain("executeHiddenDelete.error");
+    expect(opsSource).toContain("cleanup-error");
+  });
+
   test("thread query realtime helper owns subscription side effects", async () => {
     const threadQuery = await loadThreadQuery();
     expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");

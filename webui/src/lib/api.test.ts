@@ -1650,7 +1650,7 @@ describe("archive delete API compatibility", () => {
     vi.stubGlobal("fetch", fetchMock);
     globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
       expect(command).toBe("cleanup.archiveExecute");
-      expect(args).toEqual({ confirmed: true, expectedCount: 0 });
+      expect(args).toEqual({ request: { confirmed: true, expectedCount: 0 } });
       return {
         before: {},
         deleted_threads: 0,
@@ -1700,13 +1700,13 @@ describe("archive delete API compatibility", () => {
           expect(args).toBeUndefined();
           return { total_threads: 1, active_threads: 1, archived_threads: 0, session_index_lines: 1, rollout_files: 1, archived_ids: [], integrity: "ok" };
         case "cleanup.archiveExecute":
-          expect(args).toEqual({ confirmed: true, expectedCount: 0 });
+          expect(args).toEqual({ request: { confirmed: true, expectedCount: 0 } });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_archived_threads: 0, after_integrity: "ok" };
         case "cleanup.hiddenDryRun":
           expect(args).toBeUndefined();
           return { total_threads: 1, visible_threads: 1, hidden_threads: 0, archived_threads: 0, session_index_lines: 1, rollout_files: 1, hidden_ids: [], hidden_source_counts: {}, integrity: "ok" };
         case "cleanup.hiddenExecute":
-          expect(args).toEqual({ confirmed: true, expectedCount: 0 });
+          expect(args).toEqual({ request: { confirmed: true, expectedCount: 0 } });
           return { deleted_threads: 0, before: {}, after_total_threads: 1, after_visible_threads: 1, after_hidden_threads: 0, after_integrity: "ok" };
         case "probe.settings.get":
           expect(args).toBeUndefined();
@@ -1799,9 +1799,9 @@ describe("archive delete API compatibility", () => {
       ["threads.list", { status: "all", q: "needle", limit: 120 }],
       ["threads.detail", { id: "thread-a", options: {} }],
       ["cleanup.archiveDryRun", undefined],
-      ["cleanup.archiveExecute", { confirmed: true, expectedCount: 0 }],
+      ["cleanup.archiveExecute", { request: { confirmed: true, expectedCount: 0 } }],
       ["cleanup.hiddenDryRun", undefined],
-      ["cleanup.hiddenExecute", { confirmed: true, expectedCount: 0 }],
+      ["cleanup.hiddenExecute", { request: { confirmed: true, expectedCount: 0 } }],
       ["probe.settings.get", undefined],
       ["probe.settings.save", expect.objectContaining({ settings: expect.objectContaining({ probe: expect.objectContaining({ enabled: false }) }) })],
       ["probe.barkTest", undefined],

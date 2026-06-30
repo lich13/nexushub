@@ -6,7 +6,7 @@ import type {
   JobRecord,
   OptionalResult
 } from "../../types";
-import { callCommand } from "./transport";
+import { callCommand, currentRuntimeContext } from "./transport";
 import { normalizeOptionalResult, USE_DEMO } from "./shared";
 import {
   demoArchiveDeletePlan,
@@ -29,11 +29,16 @@ export async function startArchiveDelete(request: {
   expectedCount: number;
 }): Promise<ArchiveDeleteResult> {
   if (USE_DEMO) return demoArchiveDeleteResult();
-  return callCommand<ArchiveDeleteResult>("cleanup.archiveExecute", {
+  const confirmation = {
     confirmed: true,
-    expectedCount: request.expectedCount,
-    csrfToken: request.csrfToken
-  });
+    expectedCount: request.expectedCount
+  };
+  return callCommand<ArchiveDeleteResult>(
+    "cleanup.archiveExecute",
+    currentRuntimeContext().kind === "desktop"
+      ? { request: confirmation, csrfToken: request.csrfToken }
+      : { ...confirmation, csrfToken: request.csrfToken }
+  );
 }
 
 export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
@@ -50,11 +55,16 @@ export async function startHiddenThreadDelete(request: {
   if (USE_DEMO) {
     return demoHiddenThreadDeleteResult();
   }
-  return callCommand<HiddenThreadDeleteResult>("cleanup.hiddenExecute", {
+  const confirmation = {
     confirmed: true,
-    expectedCount: request.expectedCount,
-    csrfToken: request.csrfToken
-  });
+    expectedCount: request.expectedCount
+  };
+  return callCommand<HiddenThreadDeleteResult>(
+    "cleanup.hiddenExecute",
+    currentRuntimeContext().kind === "desktop"
+      ? { request: confirmation, csrfToken: request.csrfToken }
+      : { ...confirmation, csrfToken: request.csrfToken }
+  );
 }
 
 export async function listJobs(): Promise<JobRecord[]> {

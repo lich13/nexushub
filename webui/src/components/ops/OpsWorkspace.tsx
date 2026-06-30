@@ -62,6 +62,16 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
   const executeDelete = opsActions.archiveExecute;
   const hiddenDryRun = opsActions.hiddenDryRun;
   const executeHiddenDelete = opsActions.hiddenExecute;
+  const archiveCleanupError = executeDelete.error
+    ? cleanupErrorMessage("归档清理失败", executeDelete.error)
+    : dryRun.error
+      ? cleanupErrorMessage("归档扫描失败", dryRun.error)
+      : null;
+  const hiddenCleanupError = executeHiddenDelete.error
+    ? cleanupErrorMessage("隐藏线程清理失败", executeHiddenDelete.error)
+    : hiddenDryRun.error
+      ? cleanupErrorMessage("隐藏线程扫描失败", hiddenDryRun.error)
+      : null;
   const opsView = opsWorkspaceView({
     status: status.data,
     update: update.data,
@@ -111,8 +121,9 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           <Metric label="session index" value={plan ? String(plan.session_index_lines) : "dry-run 未执行"} />
           <Metric label="rollout 文件" value={plan ? String(plan.rollout_files) : "dry-run 未执行"} />
         </div>
+        {archiveCleanupError && <div className="form-error cleanup-error">{archiveCleanupError}</div>}
         <div className="button-row ops-action-row cleanup-actions">
-          <button className="secondary-button" disabled={dryRun.isPending || executeDelete.isPending} onClick={() => dryRun.mutate()}><Database size={17} />Dry-run</button>
+          <button className="secondary-button" disabled={dryRun.isPending || executeDelete.isPending} onClick={() => { executeDelete.reset(); dryRun.mutate(); }}><Database size={17} />Dry-run</button>
           {!deleteArmed ? (
             <button className="danger-button soft" disabled={(plan?.archived_threads ?? 0) === 0 || dryRun.isPending || executeDelete.isPending} onClick={() => setDeleteArmed(true)}><Trash2 size={17} />清理归档</button>
           ) : (
@@ -135,8 +146,9 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           <Metric label="integrity" value={opsView.hiddenStats.integrity} tone={opsView.hiddenStats.integrity === "ok" ? "success" : "danger"} />
           <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
         </div>
+        {hiddenCleanupError && <div className="form-error cleanup-error">{hiddenCleanupError}</div>}
         <div className="button-row ops-action-row cleanup-actions">
-          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => hiddenDryRun.mutate()}><Database size={17} />扫描隐藏线程</button>
+          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => { executeHiddenDelete.reset(); hiddenDryRun.mutate(); }}><Database size={17} />扫描隐藏线程</button>
           {!hiddenDeleteArmed ? (
             <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
           ) : (
@@ -153,6 +165,10 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
       </Panel>
     </div>
   );
+}
+
+function cleanupErrorMessage(prefix: string, error: unknown): string {
+  return `${prefix}: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 function UpdateMetrics({ status }: { status?: UpdateStatus }) {
