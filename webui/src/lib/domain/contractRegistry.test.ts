@@ -2,11 +2,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
+  contractDtoCatalog,
   contractHostSurfaces,
   contractVisual,
   contractCapabilitiesByHostSurface,
   sharedContractActions
 } from "./contractRegistry";
+import { contractDtoNameSet, contractDtoNames } from "./contractDtoMap";
 import {
   desktopLanForbiddenVisualSurfaces,
   desktopTauriOnlyVisualSurfaces,
@@ -25,6 +27,10 @@ type ContractAction = {
   linuxRpc?: string;
   tauriCommand?: string;
   webuiWrapper?: string;
+  dtoOwner?: string;
+  requestDto?: string;
+  responseDto?: string;
+  hostOnlyReason?: string;
 };
 
 type NexusHubContract = {
@@ -42,6 +48,7 @@ type NexusHubContract = {
     };
   };
   actions: ContractAction[];
+  dtoCatalog: Record<string, { core: string; webui: string }>;
 };
 
 function contract(): NexusHubContract {
@@ -95,7 +102,8 @@ describe("contract registry", () => {
       "capabilities",
       "capabilitiesByHostSurface",
       "visual",
-      "actions"
+      "actions",
+      "dtoCatalog"
     ]);
     expect(Object.keys(schema.properties ?? {})).toEqual([
       "schemaVersion",
@@ -103,7 +111,8 @@ describe("contract registry", () => {
       "capabilities",
       "capabilitiesByHostSurface",
       "visual",
-      "actions"
+      "actions",
+      "dtoCatalog"
     ]);
 
     const audit = repositoryFile("docs/analysis/cc-switch-architecture-parity.md");
@@ -128,6 +137,7 @@ describe("contract registry", () => {
     expect(contractVisual.actionLabels).toEqual(contract().visual.actionLabels);
     expect(contractVisual.disabledStates).toEqual(contract().visual.disabledStates);
     expect(contractVisual.forbidden.desktopLanWebui).toEqual(contract().visual.forbidden.desktopLanWebui);
+    expect(contractDtoCatalog).toEqual(contract().dtoCatalog);
     expect(contractCapabilitiesByHostSurface.desktop_embedded_tauri).toEqual(
       contract().capabilitiesByHostSurface.desktop_embedded_tauri
     );
@@ -143,9 +153,32 @@ describe("contract registry", () => {
         expect(action.linuxRpc, `${action.id} linuxRpc`).toBeTruthy();
         expect(action.tauriCommand, `${action.id} tauriCommand`).toBeTruthy();
         expect(action.webuiWrapper, `${action.id} webuiWrapper`).toBeTruthy();
+        expect(action.dtoOwner, `${action.id} dtoOwner`).toBeTruthy();
+        expect(action.requestDto, `${action.id} requestDto`).toBeTruthy();
+        expect(action.responseDto, `${action.id} responseDto`).toBeTruthy();
+      }
+      if (action.scope === "transport") {
+        expect(action.webuiWrapper, `${action.id} webuiWrapper`).toBeTruthy();
+        expect(action.dtoOwner, `${action.id} dtoOwner`).toBeTruthy();
+        expect(action.requestDto, `${action.id} requestDto`).toBeTruthy();
+        expect(action.responseDto, `${action.id} responseDto`).toBeTruthy();
       }
       if (action.scope === "host_only") {
         expect(action.hostOnlyReason, `${action.id} hostOnlyReason`).toBeTruthy();
+      }
+    }
+  });
+
+  test("shared and transport DTO declarations resolve through the WebUI DTO marker map", () => {
+    const dtoCatalog = contract().dtoCatalog;
+    expect(new Set(contractDtoNames)).toEqual(new Set(Object.values(dtoCatalog).map((entry) => entry.webui)));
+    for (const action of contract().actions) {
+      if (action.scope !== "shared" && action.scope !== "transport") continue;
+      for (const key of ["requestDto", "responseDto"] as const) {
+        const dtoName = action[key];
+        expect(dtoName, `${action.id} ${key}`).toBeTruthy();
+        expect(dtoCatalog[dtoName ?? ""], `${action.id} ${key} catalog entry`).toBeTruthy();
+        expect(contractDtoNameSet.has(dtoCatalog[dtoName ?? ""].webui), `${action.id} ${key} WebUI DTO marker`).toBe(true);
       }
     }
   });

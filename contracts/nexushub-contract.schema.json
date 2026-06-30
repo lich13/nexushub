@@ -10,7 +10,8 @@
     "capabilities",
     "capabilitiesByHostSurface",
     "visual",
-    "actions"
+    "actions",
+    "dtoCatalog"
   ],
   "properties": {
     "schemaVersion": {
@@ -77,6 +78,11 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/action" }
+    },
+    "dtoCatalog": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/dtoCatalogEntry" }
     }
   },
   "$defs": {
@@ -106,7 +112,19 @@
         "linuxRpc": { "$ref": "#/$defs/nonEmptyString" },
         "tauriCommand": { "$ref": "#/$defs/nonEmptyString" },
         "webuiWrapper": { "$ref": "#/$defs/nonEmptyString" },
+        "dtoOwner": { "$ref": "#/$defs/nonEmptyString" },
+        "requestDto": { "$ref": "#/$defs/nonEmptyString" },
+        "responseDto": { "$ref": "#/$defs/nonEmptyString" },
         "hostOnlyReason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "dtoCatalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["core", "webui"],
+      "properties": {
+        "core": { "$ref": "#/$defs/nonEmptyString" },
+        "webui": { "$ref": "#/$defs/nonEmptyString" }
       }
     }
   }

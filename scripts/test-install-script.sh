@@ -22,8 +22,10 @@ README="${ROOT}/README.md"
 CLOUD_RUNBOOK="${ROOT}/docs/cloud-deploy-runbook.md"
 AGENTS="${ROOT}/AGENTS.md"
 CC_SWITCH_AUDIT="${ROOT}/docs/analysis/cc-switch-architecture-parity.md"
+FEATURE_SYNC_WORKFLOW="${ROOT}/docs/plan/feature-sync-workflow.md"
 CONTRACT_REGISTRY="${ROOT}/contracts/nexushub-contract.json"
 CONTRACT_SCHEMA="${ROOT}/contracts/nexushub-contract.schema.json"
+CONTRACT_CHECKLIST="${ROOT}/scripts/contract-next-action-checklist.mjs"
 CODEX_PRECHECK_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-precheck"
 CODEX_UPDATE_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-update"
 CODEX_PRUNE_WRAPPER="${ROOT}/deploy/nexushub-webd/nexushub-codex-prune"
@@ -45,8 +47,10 @@ for path in \
   "${CLOUD_RUNBOOK}" \
   "${AGENTS}" \
   "${CC_SWITCH_AUDIT}" \
+  "${FEATURE_SYNC_WORKFLOW}" \
   "${CONTRACT_REGISTRY}" \
   "${CONTRACT_SCHEMA}" \
+  "${CONTRACT_CHECKLIST}" \
   "${CODEX_PRECHECK_WRAPPER}" \
   "${CODEX_UPDATE_WRAPPER}" \
   "${CODEX_PRUNE_WRAPPER}"; do
@@ -154,19 +158,22 @@ for doc_name, doc in {"README.md": readme, "docs/cloud-deploy-runbook.md": runbo
             raise SystemExit(f"{doc_name} missing current webd surface: {needle}")
 if "contract registry" not in agents or "contracts/nexushub-contract.json" not in agents:
     raise SystemExit("AGENTS.md must document the shared contract registry workflow")
+if "contract-next-action-checklist" not in agents:
+    raise SystemExit("AGENTS.md must require the contract next-action checklist before new feature work")
 
 print("v0.1.141 webd deploy layout: ok")
 PY
 
-python3 - "${CONTRACT_REGISTRY}" "${CONTRACT_SCHEMA}" "${CC_SWITCH_AUDIT}" "${README}" "${CLOUD_RUNBOOK}" "${AGENTS}" <<'PY'
+python3 - "${CONTRACT_REGISTRY}" "${CONTRACT_SCHEMA}" "${CC_SWITCH_AUDIT}" "${FEATURE_SYNC_WORKFLOW}" "${README}" "${CLOUD_RUNBOOK}" "${AGENTS}" <<'PY'
 from pathlib import Path
 import json
 import sys
 
-registry_path, schema_path, audit_path, readme_path, runbook_path, agents_path = [Path(arg) for arg in sys.argv[1:]]
+registry_path, schema_path, audit_path, workflow_path, readme_path, runbook_path, agents_path = [Path(arg) for arg in sys.argv[1:]]
 registry = json.loads(registry_path.read_text())
 schema = json.loads(schema_path.read_text())
 audit = audit_path.read_text()
+workflow = workflow_path.read_text()
 readme = readme_path.read_text()
 runbook = runbook_path.read_text()
 agents = agents_path.read_text()
@@ -178,6 +185,7 @@ required_top_level = [
     "capabilitiesByHostSurface",
     "visual",
     "actions",
+    "dtoCatalog",
 ]
 if schema.get("$id") != "https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json":
     raise SystemExit("contract schema must have the canonical GitHub $id")
@@ -192,12 +200,27 @@ if host_surfaces != ["linux_server_webui", "desktop_embedded_tauri", "desktop_la
 for surface in host_surfaces:
     if surface not in registry.get("capabilitiesByHostSurface", {}):
         raise SystemExit(f"contract registry missing capability matrix for {surface}")
+dto_catalog = registry.get("dtoCatalog", {})
+if not isinstance(dto_catalog, dict) or not dto_catalog:
+    raise SystemExit("contract registry must declare a non-empty dtoCatalog")
+for dto_name, dto_entry in dto_catalog.items():
+    if not isinstance(dto_entry, dict) or not dto_entry.get("core") or not dto_entry.get("webui"):
+        raise SystemExit(f"contract dtoCatalog entry {dto_name} must declare core and webui names")
 for action in registry.get("actions", []):
     action_id = action.get("id")
     if action.get("scope") == "shared":
-        for key in ["coreUseCase", "linuxRpc", "tauriCommand", "webuiWrapper"]:
+        for key in ["coreUseCase", "linuxRpc", "tauriCommand", "webuiWrapper", "dtoOwner", "requestDto", "responseDto"]:
             if not action.get(key):
                 raise SystemExit(f"shared contract action {action_id} missing {key}")
+    if action.get("scope") == "transport":
+        for key in ["webuiWrapper", "dtoOwner", "requestDto", "responseDto"]:
+            if not action.get(key):
+                raise SystemExit(f"transport contract action {action_id} missing {key}")
+    if action.get("scope") in {"shared", "transport"}:
+        for key in ["requestDto", "responseDto"]:
+            dto_name = action.get(key)
+            if dto_name not in dto_catalog:
+                raise SystemExit(f"contract action {action_id} references unknown {key} {dto_name}")
     if action.get("scope") == "host_only" and not action.get("hostOnlyReason"):
         raise SystemExit(f"host-only contract action {action_id} missing hostOnlyReason")
 
@@ -205,6 +228,7 @@ for needle in [
     "cc-switch origin/main",
     "cc-switch feat/webd",
     "NexusHub v0.1.144",
+    "NexusHub v0.1.145",
     "Windows desktop",
     "Linux arm64",
     "nexushub-webd-linux-x86_64.tar.gz",
@@ -213,6 +237,20 @@ for needle in [
 ]:
     if needle not in audit:
         raise SystemExit(f"cc-switch architecture audit missing {needle}")
+
+for needle in [
+    "contract-next-action-checklist.mjs",
+    "contracts/nexushub-contract.json",
+    "NexusHubUseCases",
+    "contract_dtos.rs",
+    "contractDtoMap.ts",
+    "Linux RPC",
+    "Tauri command",
+    "Browser 插件",
+    "Computer Use",
+]:
+    if needle not in workflow:
+        raise SystemExit(f"feature sync workflow missing {needle}")
 
 for doc_name, doc in {
     "README.md": readme,
@@ -233,6 +271,8 @@ for needle in [
     "contract registry",
     "contracts/nexushub-contract.json",
     "contracts/nexushub-contract.schema.json",
+    "contract-next-action-checklist",
+    "dtoOwner",
     "Windows",
     "Linux arm64",
 ]:
@@ -241,6 +281,21 @@ for needle in [
 
 print("contract schema and cc-switch architecture audit guards: ok")
 PY
+
+checklist_output="$(node "${CONTRACT_CHECKLIST}" threads.send)"
+for needle in \
+  "NexusHub contract-driven next action checklist" \
+  "scope: shared" \
+  "requestDto=ThreadsSendRequest" \
+  "responseDto=ThreadsSendResponse" \
+  "core use-case/DTO" \
+  "Linux RPC" \
+  "Tauri command" \
+  "WebUI wrapper" \
+  "Browser for Linux WebUI" \
+  "Computer Use for macOS Tauri"; do
+  [[ "${checklist_output}" == *"${needle}"* ]] || { echo "contract checklist output missing: ${needle}" >&2; exit 1; }
+done
 
 python3 - "${INSTALL_SH}" <<'PY'
 from pathlib import Path

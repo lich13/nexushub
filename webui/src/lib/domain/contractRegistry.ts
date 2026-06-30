@@ -12,7 +12,15 @@ export type ContractAction = {
   linuxRpc?: string;
   tauriCommand?: string;
   webuiWrapper?: string;
+  dtoOwner?: string;
+  requestDto?: string;
+  responseDto?: string;
   hostOnlyReason?: string;
+};
+
+export type ContractDtoCatalogEntry = {
+  core: string;
+  webui: string;
 };
 
 export type ContractVisual = {
@@ -35,6 +43,7 @@ export type NexusHubContractRegistry = {
   capabilitiesByHostSurface: Record<HostSurface, string[]>;
   visual: ContractVisual;
   actions: ContractAction[];
+  dtoCatalog: Record<string, ContractDtoCatalogEntry>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -49,7 +58,7 @@ function assertContractRegistry(value: unknown): asserts value is NexusHubContra
   if (!isObject(value)) {
     throw new Error("contract registry must be an object");
   }
-  for (const key of ["schemaVersion", "hostSurfaces", "capabilities", "capabilitiesByHostSurface", "visual", "actions"]) {
+  for (const key of ["schemaVersion", "hostSurfaces", "capabilities", "capabilitiesByHostSurface", "visual", "actions", "dtoCatalog"]) {
     if (!(key in value)) {
       throw new Error(`contract registry missing ${key}`);
     }
@@ -88,6 +97,19 @@ function assertContractRegistry(value: unknown): asserts value is NexusHubContra
   if (!Array.isArray(value.actions)) {
     throw new Error("contract registry actions must be an array");
   }
+  if (!isObject(value.dtoCatalog)) {
+    throw new Error("contract registry dtoCatalog must be an object");
+  }
+  for (const [name, entry] of Object.entries(value.dtoCatalog)) {
+    if (!isObject(entry)) {
+      throw new Error(`contract registry dtoCatalog.${name} must be an object`);
+    }
+    for (const key of ["core", "webui"]) {
+      if (typeof entry[key] !== "string" || entry[key].trim().length === 0) {
+        throw new Error(`contract registry dtoCatalog.${name}.${key} must be a non-empty string`);
+      }
+    }
+  }
   for (const action of value.actions) {
     if (!isObject(action)) {
       throw new Error("contract registry action must be an object");
@@ -106,10 +128,23 @@ function assertContractRegistry(value: unknown): asserts value is NexusHubContra
       throw new Error(`contract registry action ${id} must declare coreUseCase`);
     }
     if (action.scope === "shared") {
-      for (const key of ["linuxRpc", "tauriCommand", "webuiWrapper"]) {
+      for (const key of ["linuxRpc", "tauriCommand", "webuiWrapper", "dtoOwner", "requestDto", "responseDto"]) {
         if (typeof action[key] !== "string" || action[key].trim().length === 0) {
           throw new Error(`shared contract action ${id} must declare ${key}`);
         }
+      }
+    }
+    if (action.scope === "transport") {
+      for (const key of ["webuiWrapper", "dtoOwner", "requestDto", "responseDto"]) {
+        if (typeof action[key] !== "string" || action[key].trim().length === 0) {
+          throw new Error(`transport contract action ${id} must declare ${key}`);
+        }
+      }
+    }
+    for (const key of ["requestDto", "responseDto"]) {
+      const dtoName = action[key];
+      if (typeof dtoName === "string" && !(dtoName in value.dtoCatalog)) {
+        throw new Error(`contract registry action ${id} references unknown ${key} ${dtoName}`);
       }
     }
     if (action.scope === "host_only" && (typeof action.hostOnlyReason !== "string" || action.hostOnlyReason.trim().length === 0)) {
@@ -127,5 +162,6 @@ export const contractCapabilities = contractRegistry.capabilities;
 export const contractCapabilitiesByHostSurface = contractRegistry.capabilitiesByHostSurface;
 export const contractVisual = contractRegistry.visual;
 export const contractActions = contractRegistry.actions;
+export const contractDtoCatalog = contractRegistry.dtoCatalog;
 export const sharedContractActions = contractActions.filter((action) => action.scope === "shared");
 export const hostOnlyContractActions = contractActions.filter((action) => action.scope === "host_only");

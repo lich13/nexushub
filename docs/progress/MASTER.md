@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-29
-> **Mode**: V0.1.144_CC_SWITCH_ARCHITECTURE_LOCK_FINAL_ACCEPTED
+> **Last Updated**: 2026-06-30
+> **Mode**: V0.1.145_CONTRACT_SYNC_EFFICIENCY_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.144` cc-switch architecture difference final audit and sync-efficiency lock<br>
-**Active Task**: Goal 13 is final accepted. Fresh local gates, GitHub CI/Release, Release asset boundary checks, Tencent Cloud deployment, Browser-plugin Linux WebUI acceptance, Computer Use macOS Tauri acceptance, desktop LAN WebUI acceptance, and local/cloud cleanup completed on 2026-06-29. `v0.1.144` keeps the accepted macOS + Tencent Cloud Linux target, keeps Windows and Linux arm64 as P2, and does not change `/api/rpc/:command` wire shape.
+**Active Phase**: `v0.1.145` contract-driven sync efficiency final backfill<br>
+**Active Task**: Goal 14 is in progress. `v0.1.144` is the rollback baseline; this stage adds contract-driven next-action checklist output, lightweight DTO/schema drift guards, cc-switch parity documentation updates, release/deploy acceptance, and final cleanup without changing `/api/rpc/:command` wire shape or adding Windows/Linux arm64 release lines.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.144` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.144` is the current final-accepted checkpoint; `v0.1.143` remains the immediate rollback checkpoint.
+Rows before `v0.1.145` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.144` is the current rollback checkpoint while Goal 14 is in progress.
 
 ## Deep Refactor Goal Tracker
 
@@ -59,6 +59,7 @@ Rows before `v0.1.144` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 11: `v0.1.142` cc-switch webd alignment acceptance - `v0.1.141` completed the structural rename, FHS packaging/deploy scripts, contract registry, CI/Release matrix/cache, and asset closure, but live deployment found an installer `RETURN` trap regression. `v0.1.142` fixed that installer path, passed fresh local gates, GitHub CI/Release, Tencent Cloud redeploy, Browser-plugin Linux WebUI acceptance, Computer Use macOS Tauri acceptance, desktop LAN WebUI default-off verification, sensitive-path guards, and final local/cloud cleanup.
 - [x] Goal 12: `v0.1.143` cc-switch parity guard closure - completed on 2026-06-29. Contract-registry single-source guard strengthening, Tauri/Linux RPC/WebUI wrapper parity, release asset boundary documentation, version/release, dual-end acceptance, and final local/cloud cleanup are accepted. It does not add Windows or Linux arm64 release lines and does not change `/api/rpc/:command` wire shape.
 - [x] Goal 13: `v0.1.144` cc-switch architecture lock - completed on 2026-06-29. Contract schema/validator hardening, cc-switch architecture difference audit, Release boundary guard strengthening, version/release, dual-end acceptance, and final cleanup are accepted. It does not add Windows or Linux arm64 release lines and does not change `/api/rpc/:command` wire shape.
+- [ ] Goal 14: `v0.1.145` contract sync efficiency closure - in progress on 2026-06-30. Adds a contract-driven next-action checklist, lightweight DTO/schema drift guards, updated cc-switch parity workflow docs, version/release, dual-end acceptance, and final cleanup. It must not change `/api/rpc/:command` wire shape, restore old REST, expose sensitive surfaces, or add Windows/Linux arm64 release lines.
 
 ## Governance Status
 
@@ -72,7 +73,7 @@ Rows before `v0.1.144` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.144_CC_SWITCH_ARCHITECTURE_LOCK_FINAL_ACCEPTED
+  mode: V0.1.145_CONTRACT_SYNC_EFFICIENCY_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -105,7 +106,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-29"
+  last_updated: "2026-06-30"
 ```
 
 ## Task Telemetry Log
@@ -269,6 +270,16 @@ git ls-remote --tags origin refs/tags/v0.1.144
 | Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd` | exact `nexushub-webd 0.1.144`, service active, loopback `/healthz` OK, public `/nexushub/` returns `200`, Browser-plugin WebUI verifies login/Turnstile/security save-reload/Probe/Ops/cleanup dry-run gating, Linux server Web auth/security/public endpoint/systemd/Nginx/update prune surfaces remain visible, desktop LAN WebUI controls remain hidden, old REST and scoped sensitive paths return `404`, official `nexushub-webd-linux-x86_64.tar.gz` and `.sha256` are present in Release, and the old `nexushub-linux-x86_64.tar.gz` headless asset is absent. |
 | macOS ARM64 Tauri | official `NexusHub-0.1.144-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/desktop-assets`, `~/Library/Logs/NexusHub` | install official DMG, verify App/helper `0.1.144`, Computer Use verifies visible non-fullscreen `tauri://localhost` UI, shared Codex/Claude Code/Probe/Ops layout and update card, desktop `WebUI 服务` settings visible, no Linux server Web auth/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage, configure/start LAN WebUI with independent password, verify local login/CSRF/shared pages and capability isolation, then restore default off. |
 | Linux x86_64 Tauri | `NexusHub-0.1.144-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | CI builds AppImage/deb/rpm, AppImage has `.sig` and `.sha256`, `.deb`/`.rpm` have `.sha256`, `latest.json` includes `linux-x86_64`, `latest.json` does not reference the headless webd tarball, `xvfb` smoke starts the AppImage or times out only after a successful window process start, and Linux desktop uses user-scoped Tauri paths rather than server FHS paths. |
+| Desktop LAN WebUI | `http://127.0.0.1:15743/` or configured LAN address after embedded Tauri starts it | managed helper `nexushub-webd serve --surface desktop-lan-webui` | desktop data/config paths only | default disabled, requires configured independent password, Turnstile disabled by default, password not in plaintext config/logs/docs, login/session/CSRF work, shared Codex/Claude Code/Probe/Ops pages render, browser clients cannot remotely start/stop the service and do not see Linux server systemd/Nginx/public endpoint/prune/security admin surfaces. |
+
+## v0.1.145 Acceptance Matrix
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` plus isolated worktree `contract-sync-efficiency-v0.1.145` during implementation | none | tracked source only after cleanup | versions are `0.1.145`; `scripts/contract-next-action-checklist.mjs` outputs the required contract -> core DTO/use-case -> WebUI query/domain/runtime -> Linux RPC/Tauri invoke -> Browser/Computer Use path; shared/transport actions declare `dtoOwner`, `requestDto`, and `responseDto`; Rust and WebUI DTO marker guards match `contracts/nexushub-contract.json`; full Rust/Tauri/WebUI/install-script/package gates pass fresh; `git diff --check`; final `git clean -fdX -n` empty after cleanup. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd` | exact `nexushub-webd 0.1.145`, service active, loopback `/healthz` OK, public `/nexushub/` returns `200`, Browser-plugin WebUI verifies login/Turnstile/security save-reload/Probe/Ops/cleanup dry-run gating, Linux server Web auth/security/public endpoint/systemd/Nginx/update prune surfaces remain visible, desktop LAN WebUI controls remain hidden, old REST and scoped sensitive paths return `404`, official `nexushub-webd-linux-x86_64.tar.gz` and `.sha256` are present in Release, and the old `nexushub-linux-x86_64.tar.gz` headless asset is absent. |
+| macOS ARM64 Tauri | official `NexusHub-0.1.145-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Application Support/NexusHub/desktop-assets`, `~/Library/Logs/NexusHub` | install official DMG, verify App/helper `0.1.145`, Computer Use verifies visible non-fullscreen `tauri://localhost` UI, shared Codex/Claude Code/Probe/Ops layout and update card, desktop `WebUI 服务` settings visible, no Linux server Web auth/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage, configure/start LAN WebUI with independent password, verify local login/CSRF/shared pages and capability isolation, then restore default off. |
+| Linux x86_64 Tauri | `NexusHub-0.1.145-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | CI builds AppImage/deb/rpm, AppImage has `.sig` and `.sha256`, `.deb`/`.rpm` have `.sha256`, `latest.json` includes `linux-x86_64`, `latest.json` does not reference the headless webd tarball, `xvfb` smoke starts the AppImage or times out only after a successful window process start, and Linux desktop uses user-scoped Tauri paths rather than server FHS paths. |
 | Desktop LAN WebUI | `http://127.0.0.1:15743/` or configured LAN address after embedded Tauri starts it | managed helper `nexushub-webd serve --surface desktop-lan-webui` | desktop data/config paths only | default disabled, requires configured independent password, Turnstile disabled by default, password not in plaintext config/logs/docs, login/session/CSRF work, shared Codex/Claude Code/Probe/Ops pages render, browser clients cannot remotely start/stop the service and do not see Linux server systemd/Nginx/public endpoint/prune/security admin surfaces. |
 
 ## Session Log

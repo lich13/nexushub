@@ -1,6 +1,7 @@
 use nexushub_core::platform::{PlatformKind, PlatformPaths};
 use nexushub_core::services::{
     commands,
+    contract_dtos::{CONTRACT_DTO_NAMES, CONTRACT_DTO_OWNER_NAMES},
     system::{Capability, HostSurface},
 };
 use serde_json::Value;
@@ -86,6 +87,7 @@ fn contract_schema_locks_registry_top_level_shape() {
         "capabilitiesByHostSurface",
         "visual",
         "actions",
+        "dtoCatalog",
     ]
     .into_iter()
     .map(str::to_string)
@@ -224,7 +226,15 @@ fn shared_actions_declare_core_webui_linux_rpc_and_tauri_mappings() {
         }
         match scope {
             "shared" => {
-                for key in ["coreUseCase", "linuxRpc", "tauriCommand", "webuiWrapper"] {
+                for key in [
+                    "coreUseCase",
+                    "linuxRpc",
+                    "tauriCommand",
+                    "webuiWrapper",
+                    "dtoOwner",
+                    "requestDto",
+                    "responseDto",
+                ] {
                     assert!(
                         action
                             .get(key)
@@ -247,8 +257,85 @@ fn shared_actions_declare_core_webui_linux_rpc_and_tauri_mappings() {
             }
             "transport" => {
                 assert_eq!(kind, "transport", "transport scope must use transport kind");
+                for key in ["webuiWrapper", "dtoOwner", "requestDto", "responseDto"] {
+                    assert!(
+                        action
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .map(|value| !value.trim().is_empty())
+                            .unwrap_or(false),
+                        "transport action {id} must declare {key}"
+                    );
+                }
             }
             other => panic!("unsupported action scope {other} for {id}"),
+        }
+    }
+}
+
+#[test]
+fn contract_registry_dto_catalog_matches_core_markers() {
+    let contract = contract();
+    let actions = contract
+        .get("actions")
+        .and_then(Value::as_array)
+        .expect("contract actions must be an array");
+    let dto_catalog = contract
+        .get("dtoCatalog")
+        .and_then(Value::as_object)
+        .expect("contract dtoCatalog must be an object");
+    let core_dtos = CONTRACT_DTO_NAMES
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<BTreeSet<_>>();
+    let contract_dtos = dto_catalog
+        .values()
+        .map(|entry| {
+            entry
+                .get("core")
+                .and_then(Value::as_str)
+                .expect("contract dtoCatalog entry must declare core")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        core_dtos, contract_dtos,
+        "core DTO marker list must match contracts/nexushub-contract.json dtoCatalog"
+    );
+
+    let core_owners = CONTRACT_DTO_OWNER_NAMES
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<BTreeSet<_>>();
+    for action in actions {
+        let id = action
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("contract action id must be a string");
+        let scope = action
+            .get("scope")
+            .and_then(Value::as_str)
+            .expect("contract action scope must be a string");
+        if scope != "shared" && scope != "transport" {
+            continue;
+        }
+        let owner = action
+            .get("dtoOwner")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("contract action {id} must declare dtoOwner"));
+        assert!(
+            core_owners.contains(owner),
+            "contract action {id} uses unknown DTO owner {owner}"
+        );
+        for key in ["requestDto", "responseDto"] {
+            let dto_name = action
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("contract action {id} must declare {key}"));
+            assert!(
+                dto_catalog.contains_key(dto_name),
+                "contract action {id} references unknown DTO {dto_name}"
+            );
         }
     }
 }
