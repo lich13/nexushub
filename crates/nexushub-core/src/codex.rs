@@ -26,9 +26,11 @@ pub(crate) use rollout_events::{
 };
 pub use rollout_events::{
     is_macos_network_volume_path, message_blocks_from_events,
-    rollout_completion_last_agent_message, rollout_completion_last_agent_message_with_source,
-    rollout_has_completed_turn, rollout_hook_stop_message, rollout_hook_stop_message_with_source,
-    rollout_latest_assistant_message, thread_detail_from_summary, window_thread_detail,
+    rollout_completion_last_agent_message, rollout_completion_last_agent_message_selection,
+    rollout_completion_last_agent_message_with_source, rollout_has_completed_turn,
+    rollout_hook_stop_message, rollout_hook_stop_message_selection,
+    rollout_hook_stop_message_with_source, rollout_latest_assistant_message,
+    thread_detail_from_summary, window_thread_detail, RolloutMessageSelection,
 };
 #[cfg(test)]
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};

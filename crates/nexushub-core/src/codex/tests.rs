@@ -1164,6 +1164,74 @@ fn rollout_hook_stop_message_falls_back_to_unscoped_final_response_before_task_c
 }
 
 #[test]
+fn rollout_completion_does_not_fallback_to_old_turn_when_current_turn_has_no_body_yet() {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = env::temp_dir().join(format!(
+        "nexushub-rollout-completion-no-old-turn-fallback-{}-{counter}.jsonl",
+        std::process::id()
+    ));
+    let events = [
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+        json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}),
+    ];
+    fs::write(
+        &path,
+        events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let message =
+        super::rollout_completion_last_agent_message_with_source(&path, Some("turn-live")).unwrap();
+
+    assert!(
+        message.is_none(),
+        "current turn has started, so completion selection must wait instead of using an old turn"
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_completion_associates_unscoped_final_answer_with_current_turn_context() {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = env::temp_dir().join(format!(
+        "nexushub-rollout-completion-unscoped-final-{}-{counter}.jsonl",
+        std::process::id()
+    ));
+    let final_answer = "已接着完成。\n最终答复唯一标记";
+    let events = [
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+        json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":final_answer}],"phase":"final_answer"}}),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":final_answer}}),
+    ];
+    fs::write(
+        &path,
+        events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let (message, source) =
+        super::rollout_completion_last_agent_message_with_source(&path, Some("turn-live"))
+            .unwrap()
+            .unwrap();
+
+    assert_eq!(source, "task_complete.last_agent_message");
+    assert_eq!(message, final_answer);
+    assert!(!message.contains("上一轮完成正文"));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn list_threads_preserves_db_rollout_path_when_session_index_misses_thread() {
     let root = unique_temp_dir("db-rollout-path");
     fs::create_dir_all(&root).unwrap();

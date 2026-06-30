@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Command as StdCommand,
@@ -489,7 +490,7 @@ impl ProbeRuntime {
                 "nexushub-webd probe hook-stop".to_string()
             }
         });
-        let payload = json!({
+        let mut payload = json!({
             "raw_kind": input.event_kind(),
             "turn_id": input.turn_id.clone(),
             "session_id": input.session_id.clone(),
@@ -527,6 +528,16 @@ impl ProbeRuntime {
                 "status": "pending"
             }
         });
+        if let Some(map) = payload.as_object_mut() {
+            for (key, value) in &input.body_selection_diagnostics {
+                map.insert(key.clone(), value.clone());
+            }
+            if let Some(bark) = map.get_mut("bark").and_then(Value::as_object_mut) {
+                for (key, value) in &input.body_selection_diagnostics {
+                    bark.insert(key.clone(), value.clone());
+                }
+            }
+        }
         ProbeBuiltEvent {
             kind: event_kind,
             event_type: event_type.clone(),
@@ -940,6 +951,7 @@ pub struct ProbeEventInput {
     thread_title: Option<String>,
     last_assistant_message: Option<String>,
     body_source: Option<String>,
+    body_selection_diagnostics: BTreeMap<String, Value>,
     scan_source: Option<String>,
     ttl_seconds: Option<i64>,
     source_override: Option<String>,
@@ -968,6 +980,7 @@ impl ProbeEventInput {
             thread_title: None,
             last_assistant_message: last_assistant_message.map(ToString::to_string),
             body_source: last_assistant_message.map(|_| "last_assistant_message".to_string()),
+            body_selection_diagnostics: BTreeMap::new(),
             scan_source: None,
             ttl_seconds: None,
             source_override: None,
@@ -1004,6 +1017,7 @@ impl ProbeEventInput {
                 .filter(|value| !value.is_empty())
                 .map(ToString::to_string)
                 .or_else(|| last_assistant_message.map(|_| "last_assistant_message".to_string())),
+            body_selection_diagnostics: BTreeMap::new(),
             scan_source: None,
             ttl_seconds: None,
             source_override: None,
@@ -1024,6 +1038,11 @@ impl ProbeEventInput {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
+        self
+    }
+
+    pub fn with_body_selection_diagnostics(mut self, diagnostics: BTreeMap<String, Value>) -> Self {
+        self.body_selection_diagnostics = diagnostics;
         self
     }
 

@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
-        list_threads, resolve_codex_paths, rollout_completion_last_agent_message_with_source,
-        rollout_hook_stop_message_with_source,
+        list_threads, resolve_codex_paths, rollout_completion_last_agent_message_selection,
+        rollout_hook_stop_message_selection, RolloutMessageSelection,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -32,10 +32,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use state::AppState;
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, IsTerminal, Read},
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use tokio::{net::TcpListener, time};
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -403,6 +405,24 @@ async fn handle_hook_stop_command(
     kind: String,
 ) -> Result<HookStopResult> {
     let stdin_payload = read_optional_stdin_json()?;
+    let event_input = hook_stop_event_input(
+        config,
+        stdin_payload.as_ref(),
+        thread_id.as_deref(),
+        turn_id.as_deref(),
+        &kind,
+    )?;
+    let event = probe_runtime(config).build_event(event_input);
+    handle_built_probe_event(config, db, event).await
+}
+
+fn hook_stop_event_input(
+    config: &Config,
+    stdin_payload: Option<&Value>,
+    cli_thread_id: Option<&str>,
+    cli_turn_id: Option<&str>,
+    kind: &str,
+) -> Result<ProbeEventInput> {
     let payload_thread_id = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
     });
@@ -421,15 +441,16 @@ async fn handle_hook_stop_command(
     let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
     });
-    let resolved_last_assistant_message = hook_stop_last_assistant_message(
-        payload_transcript_path.as_deref(),
-        payload_turn_id.as_deref(),
-        payload_last_assistant_message.as_deref(),
-    );
-    let event_thread_id = thread_id
+    let event_thread_id = cli_thread_id
+        .map(str::to_string)
         .or(payload_thread_id.clone())
         .or(payload_session_id.clone());
-    let event_turn_id = turn_id.or(payload_turn_id.clone());
+    let event_turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id.clone());
+    let resolved_last_assistant_message = hook_stop_last_assistant_message(
+        payload_transcript_path.as_deref(),
+        event_turn_id.as_deref(),
+        payload_last_assistant_message.as_deref(),
+    )?;
     let thread_title = payload_thread_title.or_else(|| {
         event_thread_id
             .as_deref()
@@ -438,63 +459,209 @@ async fn handle_hook_stop_command(
     let event_kind = stdin_payload
         .as_ref()
         .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
-        .unwrap_or(kind);
-    let event_input = ProbeEventInput::hook_stop_with_context(
+        .unwrap_or_else(|| kind.to_string());
+    Ok(ProbeEventInput::hook_stop_with_context(
         event_thread_id.as_deref(),
         event_turn_id.as_deref(),
         payload_session_id.as_deref(),
         payload_transcript_path.as_deref(),
         resolved_last_assistant_message
             .as_ref()
-            .map(|(message, _)| message.as_str()),
+            .map(|selection| selection.message.as_str()),
         &event_kind,
     )
     .with_body_source(
         resolved_last_assistant_message
             .as_ref()
-            .map(|(_, source)| source.as_str()),
+            .map(|selection| selection.source.as_str()),
     )
-    .with_thread_title(thread_title.as_deref());
-    let event = probe_runtime(config).build_event(event_input);
-    handle_built_probe_event(config, db, event).await
+    .with_body_selection_diagnostics(selection_diagnostics(
+        resolved_last_assistant_message.as_ref(),
+    ))
+    .with_thread_title(thread_title.as_deref()))
 }
 
 fn hook_stop_last_assistant_message(
     transcript_path: Option<&str>,
     turn_id: Option<&str>,
     stdin_message: Option<&str>,
-) -> Option<(String, String)> {
-    transcript_path
-        .map(Path::new)
-        .and_then(|path| {
-            rollout_hook_stop_message_with_source(path, turn_id)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    turn_id?;
-                    rollout_hook_stop_message_with_source(path, None)
-                        .ok()
-                        .flatten()
-                })
-        })
-        .or_else(|| {
-            stdin_message
-                .filter(|message| !is_unreliable_hook_stop_stdin_message(message))
-                .map(|message| {
-                    let source =
-                        if nexushub_core::codex::extract_proposed_plan_text(message).is_some() {
-                            "proposed_plan"
-                        } else {
-                            "last_assistant_message"
-                        };
-                    (message.to_string(), source.to_string())
-                })
-        })
+) -> Result<Option<TranscriptMessageSelection>> {
+    if let Some(path) = transcript_path.map(Path::new) {
+        if let Some(selection) =
+            stable_transcript_selection(path, turn_id, TranscriptSelectionKind::HookStop)?
+        {
+            return Ok(Some(selection));
+        }
+    }
+    Ok(stdin_message
+        .filter(|message| !is_unreliable_hook_stop_stdin_message(message))
+        .map(|message| {
+            let source = if nexushub_core::codex::extract_proposed_plan_text(message).is_some() {
+                "proposed_plan"
+            } else {
+                "last_assistant_message"
+            };
+            TranscriptMessageSelection::from_stdin(message, source)
+        }))
 }
 
 fn is_unreliable_hook_stop_stdin_message(message: &str) -> bool {
     let message = message.trim();
     message.is_empty() || matches!(message, "auto" | "none" | "null" | "summary")
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TranscriptSelectionKind {
+    HookStop,
+    Completion,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptMessageSelection {
+    message: String,
+    source: String,
+    strategy: String,
+    selected_turn_id: Option<String>,
+    selected_line: Option<usize>,
+    candidate_count: usize,
+    transcript_stabilized: bool,
+    transcript_size_before: Option<u64>,
+    transcript_size_after: Option<u64>,
+}
+
+impl TranscriptMessageSelection {
+    fn from_rollout(selection: RolloutMessageSelection, stability: TranscriptStability) -> Self {
+        Self {
+            message: selection.message,
+            source: selection.source,
+            strategy: selection.strategy,
+            selected_turn_id: selection.selected_turn_id,
+            selected_line: selection.selected_line,
+            candidate_count: selection.candidate_count,
+            transcript_stabilized: stability.stabilized,
+            transcript_size_before: stability.size_before,
+            transcript_size_after: stability.size_after,
+        }
+    }
+
+    fn from_stdin(message: &str, source: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            source: source.to_string(),
+            strategy: source.to_string(),
+            selected_turn_id: None,
+            selected_line: None,
+            candidate_count: 1,
+            transcript_stabilized: false,
+            transcript_size_before: None,
+            transcript_size_after: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TranscriptStability {
+    stabilized: bool,
+    size_before: Option<u64>,
+    size_after: Option<u64>,
+}
+
+fn stable_transcript_selection(
+    path: &Path,
+    turn_id: Option<&str>,
+    kind: TranscriptSelectionKind,
+) -> Result<Option<TranscriptMessageSelection>> {
+    let size_before = fs::metadata(path).ok().map(|metadata| metadata.len());
+    let mut last_size = size_before;
+    let mut stable_reads = 0usize;
+    let mut latest_selection = transcript_selection(path, turn_id, kind)?;
+    for _ in 0..8 {
+        std::thread::sleep(Duration::from_millis(50));
+        let current_size = fs::metadata(path).ok().map(|metadata| metadata.len());
+        if current_size == last_size {
+            stable_reads += 1;
+        } else {
+            stable_reads = 0;
+        }
+        last_size = current_size;
+        latest_selection = transcript_selection(path, turn_id, kind)?;
+        if stable_reads >= 2 && latest_selection.is_some() {
+            break;
+        }
+    }
+    let stability = TranscriptStability {
+        stabilized: stable_reads >= 2,
+        size_before,
+        size_after: last_size,
+    };
+    Ok(latest_selection
+        .map(|selection| TranscriptMessageSelection::from_rollout(selection, stability)))
+}
+
+fn transcript_selection(
+    path: &Path,
+    turn_id: Option<&str>,
+    kind: TranscriptSelectionKind,
+) -> Result<Option<RolloutMessageSelection>> {
+    match kind {
+        TranscriptSelectionKind::HookStop => rollout_hook_stop_message_selection(path, turn_id),
+        TranscriptSelectionKind::Completion => {
+            rollout_completion_last_agent_message_selection(path, turn_id)
+        }
+    }
+}
+
+fn selection_diagnostics(
+    selection: Option<&TranscriptMessageSelection>,
+) -> BTreeMap<String, Value> {
+    let mut diagnostics = BTreeMap::new();
+    diagnostics.insert(
+        "body_selection_strategy".to_string(),
+        selection
+            .map(|value| json!(value.strategy))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_selected_turn_id".to_string(),
+        selection
+            .and_then(|value| value.selected_turn_id.as_deref())
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_selected_line".to_string(),
+        selection
+            .and_then(|value| value.selected_line)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_candidate_count".to_string(),
+        selection
+            .map(|value| json!(value.candidate_count))
+            .unwrap_or_else(|| json!(0)),
+    );
+    diagnostics.insert(
+        "transcript_stabilized".to_string(),
+        selection
+            .map(|value| json!(value.transcript_stabilized))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "transcript_size_before".to_string(),
+        selection
+            .and_then(|value| value.transcript_size_before)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "transcript_size_after".to_string(),
+        selection
+            .and_then(|value| value.transcript_size_after)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics
 }
 
 fn read_optional_stdin_json() -> Result<Option<Value>> {
@@ -577,21 +744,37 @@ fn notify_completion_context(
             .filter(|title| !title.trim().is_empty())
     });
     let transcript_message = if let Some(path) = resolved_transcript_path.as_deref() {
-        rollout_completion_last_agent_message_with_source(Path::new(path), turn_id.as_deref())?
+        stable_transcript_selection(
+            Path::new(path),
+            turn_id.as_deref(),
+            TranscriptSelectionKind::Completion,
+        )?
     } else {
         None
     };
-    let (message, body_source) = if let Some((message, source)) = transcript_message {
-        (Some(message), Some(source))
+    let (message, body_source, diagnostics) = if let Some(selection) = transcript_message {
+        (
+            Some(selection.message.clone()),
+            Some(selection.source.clone()),
+            selection_diagnostics(Some(&selection)),
+        )
     } else if let Some(message) = explicit_message {
-        (Some(message), Some("stdin.last_agent_message".to_string()))
+        (
+            Some(message),
+            Some("stdin.last_agent_message".to_string()),
+            selection_diagnostics(None),
+        )
     } else if let Some(message) = resolved_thread
         .as_ref()
         .and_then(|thread| thread.latest_message.clone())
     {
-        (Some(message), Some("thread.latest_message".to_string()))
+        (
+            Some(message),
+            Some("thread.latest_message".to_string()),
+            selection_diagnostics(None),
+        )
     } else {
-        (None, None)
+        (None, None, selection_diagnostics(None))
     };
     if body_source
         .as_deref()
@@ -606,6 +789,7 @@ fn notify_completion_context(
             "reply-needed",
         )
         .with_body_source(body_source.as_deref())
+        .with_body_selection_diagnostics(diagnostics)
         .with_thread_title(thread_title.as_deref()));
     }
     Ok(ProbeEventInput::notify_completion_with_context(
@@ -616,6 +800,7 @@ fn notify_completion_context(
         message.as_deref(),
         body_source.as_deref(),
     )
+    .with_body_selection_diagnostics(diagnostics)
     .with_thread_title(thread_title.as_deref()))
 }
 
@@ -2221,11 +2406,12 @@ last_error = "old nexushub hook"
         )
         .unwrap();
 
-        let (message, source) = hook_stop_last_assistant_message(
+        let selection = hook_stop_last_assistant_message(
             Some(transcript.to_string_lossy().as_ref()),
             Some("turn-transcript"),
             None,
         )
+        .unwrap()
         .unwrap();
         let event = probe_runtime(&config).build_event(
             ProbeEventInput::hook_stop_with_context(
@@ -2233,10 +2419,10 @@ last_error = "old nexushub hook"
                 Some("turn-transcript"),
                 Some("session-transcript"),
                 Some(transcript.to_string_lossy().as_ref()),
-                Some(&message),
+                Some(&selection.message),
                 "hook-stop",
             )
-            .with_body_source(Some(&source)),
+            .with_body_source(Some(&selection.source)),
         );
 
         handle_built_probe_event(&config, &db, event).await.unwrap();
@@ -2294,21 +2480,22 @@ last_error = "old nexushub hook"
         fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
         config.codex.home = codex_home;
 
-        let (message, source) = hook_stop_last_assistant_message(
+        let selection = hook_stop_last_assistant_message(
             Some(transcript.to_string_lossy().as_ref()),
             Some("turn-title"),
             None,
         )
+        .unwrap()
         .unwrap();
         let event_input = ProbeEventInput::hook_stop_with_context(
             Some("thread-title"),
             Some("turn-title"),
             Some("thread-title"),
             Some(transcript.to_string_lossy().as_ref()),
-            Some(&message),
+            Some(&selection.message),
             "hook-stop",
         )
-        .with_body_source(Some(&source))
+        .with_body_source(Some(&selection.source))
         .with_thread_title(
             local_thread_title(&config, "thread-title")
                 .unwrap()
@@ -2576,6 +2763,76 @@ last_error = "old nexushub hook"
     }
 
     #[tokio::test]
+    async fn notify_completion_waits_for_later_final_message_and_records_selection_diagnostics() {
+        let config = Config::default();
+        let dir = temp_test_dir("nexushub-notify-completion-waits-final");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}).to_string(),
+                json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let transcript_for_writer = transcript.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let final_message = "已接着完成。\n最终完成正文唯一标记";
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&transcript_for_writer)
+                .unwrap();
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":final_message}],"phase":"final_answer"}})
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":final_message}})
+            )
+            .unwrap();
+        });
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-live",
+                "turn_id": "turn-live",
+                "transcript_path": transcript,
+                "last_assistant_message": "过早 stdin 正文"
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        writer.join().unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert!(event.bark_body.contains("最终完成正文唯一标记"));
+        assert!(!event.bark_body.contains("过早 stdin 正文"));
+        assert!(!event.bark_body.contains("上一轮完成正文"));
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
+        assert_eq!(event.payload["body_selected_turn_id"], "turn-live");
+        assert!(event.payload["body_selected_line"].as_u64().unwrap() >= 4);
+        assert_eq!(event.payload["transcript_stabilized"], true);
+        assert!(
+            event.payload["transcript_size_after"].as_u64().unwrap()
+                > event.payload["transcript_size_before"].as_u64().unwrap()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn notify_completion_uses_full_raw_assistant_message_when_task_complete_body_is_missing()
     {
         let mut config = Config::default();
@@ -2625,6 +2882,46 @@ last_error = "old nexushub hook"
             .unwrap()
             .contains("助手完整回复末尾唯一标记"));
 
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_cli_turn_id_when_payload_turn_id_is_missing() {
+        let config = Config::default();
+        let dir = temp_test_dir("nexushub-hook-cli-turn-id");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-cli"}}).to_string(),
+                json!({"type":"turn_context","payload":{"turn_id":"turn-cli","summary":"auto","cwd":"/tmp"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-cli","last_agent_message":"CLI turn 最终正文"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let event_input = hook_stop_event_input(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-cli",
+                "transcript_path": transcript,
+                "last_assistant_message": "payload 早期正文"
+            })),
+            Some("thread-cli"),
+            Some("turn-cli"),
+            "hook-stop",
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert!(event.bark_body.contains("CLI turn 最终正文"));
+        assert!(!event.bark_body.contains("上一轮完成正文"));
+        assert!(!event.bark_body.contains("payload 早期正文"));
+        assert_eq!(event.payload["turn_id"], "turn-cli");
+        assert_eq!(event.payload["body_selected_turn_id"], "turn-cli");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2723,11 +3020,12 @@ last_error = "old nexushub hook"
         )
         .unwrap();
 
-        let (resolved_message, resolved_source) = hook_stop_last_assistant_message(
+        let selection = hook_stop_last_assistant_message(
             transcript.to_str(),
             Some("turn-plan"),
             Some("<proposed_plan>\n短摘要\n</proposed_plan>"),
         )
+        .unwrap()
         .unwrap();
         let event = probe_runtime(&config).build_event(
             ProbeEventInput::hook_stop_with_context(
@@ -2735,10 +3033,10 @@ last_error = "old nexushub hook"
                 Some("turn-plan"),
                 Some("thread-plan"),
                 transcript.to_str(),
-                Some(&resolved_message),
+                Some(&selection.message),
                 "hook-stop",
             )
-            .with_body_source(Some(&resolved_source)),
+            .with_body_source(Some(&selection.source)),
         );
 
         assert_eq!(event.kind, "reply-needed");

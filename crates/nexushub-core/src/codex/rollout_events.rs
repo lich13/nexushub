@@ -141,6 +141,18 @@ struct PendingHookStopAction {
     action: PendingAction,
     message: String,
     source: &'static str,
+    turn_id: Option<String>,
+    line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RolloutMessageSelection {
+    pub message: String,
+    pub source: String,
+    pub strategy: String,
+    pub selected_turn_id: Option<String>,
+    pub selected_line: Option<usize>,
+    pub candidate_count: usize,
 }
 
 pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
@@ -357,58 +369,96 @@ pub fn rollout_hook_stop_message_with_source(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<(String, String)>> {
-    let result = rollout_hook_stop_message_with_source_inner(path, turn_id)?;
-    if result.is_some() || turn_id.is_none() {
-        return Ok(result);
-    }
-    rollout_hook_stop_message_with_source_inner(path, None)
+    Ok(rollout_hook_stop_message_selection(path, turn_id)?
+        .map(|selection| (selection.message, selection.source)))
 }
 
-fn rollout_hook_stop_message_with_source_inner(
+pub fn rollout_hook_stop_message_selection(
     path: &Path,
     turn_id: Option<&str>,
-) -> Result<Option<(String, String)>> {
+) -> Result<Option<RolloutMessageSelection>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
+    Ok(select_rollout_message(&text, turn_id, true))
+}
+
+fn select_rollout_message(
+    text: &str,
+    turn_id: Option<&str>,
+    allow_global_fallback: bool,
+) -> Option<RolloutMessageSelection> {
+    let scoped = select_rollout_message_inner(text, turn_id);
+    if scoped.is_some()
+        || turn_id.is_none()
+        || !allow_global_fallback
+        || rollout_has_turn_signal(text, turn_id)
+    {
+        return scoped;
+    }
+    select_rollout_message_inner(text, None).map(|mut selection| {
+        selection.strategy = format!("global_fallback.{}", selection.strategy);
+        selection
+    })
+}
+
+fn select_rollout_message_inner(
+    text: &str,
+    turn_id: Option<&str>,
+) -> Option<RolloutMessageSelection> {
     let mut latest_assistant = None;
     let mut latest_unresolved_action: Option<PendingHookStopAction> = None;
     let mut latest_task_complete = None;
-    for line in text.lines() {
+    let mut candidate_count = 0usize;
+    let mut current_turn_id: Option<String> = None;
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
         if line.trim().is_empty() {
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if let Some(event_turn) = event_turn_id(&value) {
+            current_turn_id = Some(event_turn);
+        }
+        let effective_turn_id = event_turn_id(&value).or_else(|| current_turn_id.clone());
         let matches_turn_scope = turn_id
-            .map(|expected_turn_id| event_turn_id(&value).as_deref() == Some(expected_turn_id))
+            .map(|expected_turn_id| effective_turn_id.as_deref() == Some(expected_turn_id))
             .unwrap_or(true);
         if !matches_turn_scope {
             continue;
         }
+        let mut event_added_candidate = false;
         if let Some(plan) = plan_text_from_event(&value) {
             let (action_turn_id, action_item_id) = plan_marker_for_event(&None, &value)
                 .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
             latest_unresolved_action = Some(PendingHookStopAction {
                 action: PendingAction::Plan {
-                    turn_id: action_turn_id,
+                    turn_id: action_turn_id.clone(),
                     item_id: action_item_id,
                 },
                 message: plan,
                 source: "proposed_plan",
+                turn_id: action_turn_id.or_else(|| effective_turn_id.clone()),
+                line: line_number,
             });
+            event_added_candidate = true;
         }
         if let Some(elicitation) = parse_pending_elicitation(&value) {
+            let elicitation_turn_id = elicitation.turn_id.clone();
             latest_unresolved_action = Some(PendingHookStopAction {
                 action: PendingAction::Elicitation {
-                    turn_id: elicitation.turn_id.clone(),
+                    turn_id: elicitation_turn_id.clone(),
                     item_id: elicitation.item_id.clone(),
                     call_id: event_call_id(&value),
                     elicitation,
                 },
                 message: request_user_input_hook_message(&value),
                 source: "request_user_input",
+                turn_id: elicitation_turn_id.or_else(|| effective_turn_id.clone()),
+                line: line_number,
             });
+            event_added_candidate = true;
         }
         if let Some(message) = parse_raw_message_event(&value) {
             if message.role == "assistant" && !message.text.trim().is_empty() {
@@ -426,6 +476,8 @@ fn rollout_hook_stop_message_with_source_inner(
                         },
                         message: extract_proposed_plan_text(&message.text).unwrap_or(message.text),
                         source: "proposed_plan",
+                        turn_id: effective_turn_id.clone(),
+                        line: line_number,
                     };
                     if should_replace_pending_hook_stop_action(
                         latest_unresolved_action.as_ref(),
@@ -433,8 +485,17 @@ fn rollout_hook_stop_message_with_source_inner(
                     ) {
                         latest_unresolved_action = Some(pending_plan);
                     }
+                    event_added_candidate = true;
                 } else {
-                    latest_assistant = Some((message.text, source.to_string()));
+                    latest_assistant = Some(RolloutMessageSelection {
+                        message: message.text,
+                        source: source.to_string(),
+                        strategy: source.to_string(),
+                        selected_turn_id: effective_turn_id.clone(),
+                        selected_line: Some(line_number),
+                        candidate_count: 0,
+                    });
+                    event_added_candidate = true;
                 }
             }
         }
@@ -445,6 +506,9 @@ fn rollout_hook_stop_message_with_source_inner(
             latest_unresolved_action = None;
         }
         if rollout_event_type(&value) != "task_complete" {
+            if event_added_candidate {
+                candidate_count += 1;
+            }
             continue;
         }
         let payload = value.get("payload").unwrap_or(&value);
@@ -456,14 +520,49 @@ fn rollout_hook_stop_message_with_source_inner(
             .filter(|message| !message.is_empty())
             .map(str::to_string);
         if last_agent_message.is_some() {
-            latest_task_complete = last_agent_message
-                .map(|message| (message, "task_complete.last_agent_message".to_string()));
+            latest_task_complete = last_agent_message.map(|message| RolloutMessageSelection {
+                message,
+                source: "task_complete.last_agent_message".to_string(),
+                strategy: "task_complete.last_agent_message".to_string(),
+                selected_turn_id: effective_turn_id.clone(),
+                selected_line: Some(line_number),
+                candidate_count: 0,
+            });
+            event_added_candidate = true;
+        }
+        if event_added_candidate {
+            candidate_count += 1;
         }
     }
-    Ok(latest_unresolved_action
-        .map(|pending| (pending.message, pending.source.to_string()))
+    let mut selection = latest_unresolved_action
+        .map(|pending| RolloutMessageSelection {
+            message: pending.message,
+            source: pending.source.to_string(),
+            strategy: pending.source.to_string(),
+            selected_turn_id: pending.turn_id,
+            selected_line: Some(pending.line),
+            candidate_count: 0,
+        })
         .or(latest_task_complete)
-        .or(latest_assistant))
+        .or(latest_assistant)?;
+    selection.candidate_count = candidate_count;
+    Some(selection)
+}
+
+fn rollout_has_turn_signal(text: &str, turn_id: Option<&str>) -> bool {
+    let Some(expected_turn_id) = turn_id else {
+        return false;
+    };
+    text.lines().any(|line| {
+        if line.trim().is_empty() {
+            return false;
+        }
+        serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|value| event_turn_id(&value))
+            .as_deref()
+            == Some(expected_turn_id)
+    })
 }
 
 fn should_replace_pending_hook_stop_action(
@@ -504,96 +603,19 @@ pub fn rollout_completion_last_agent_message_with_source(
     path: &Path,
     turn_id: Option<&str>,
 ) -> Result<Option<(String, String)>> {
+    Ok(
+        rollout_completion_last_agent_message_selection(path, turn_id)?
+            .map(|selection| (selection.message, selection.source)),
+    )
+}
+
+pub fn rollout_completion_last_agent_message_selection(
+    path: &Path,
+    turn_id: Option<&str>,
+) -> Result<Option<RolloutMessageSelection>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    let mut latest_unresolved_action: Option<PendingHookStopAction> = None;
-    let mut latest_assistant = None;
-    let mut latest_task_complete = None;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let matches_turn_scope = turn_id
-            .map(|expected_turn_id| event_turn_id(&value).as_deref() == Some(expected_turn_id))
-            .unwrap_or(true);
-        if !matches_turn_scope {
-            continue;
-        }
-        if let Some(plan) = plan_text_from_event(&value) {
-            let (action_turn_id, action_item_id) = plan_marker_for_event(&None, &value)
-                .unwrap_or_else(|| (event_turn_id(&value), event_item_id(&value)));
-            latest_unresolved_action = Some(PendingHookStopAction {
-                action: PendingAction::Plan {
-                    turn_id: action_turn_id,
-                    item_id: action_item_id,
-                },
-                message: plan,
-                source: "proposed_plan",
-            });
-        }
-        if let Some(elicitation) = parse_pending_elicitation(&value) {
-            latest_unresolved_action = Some(PendingHookStopAction {
-                action: PendingAction::Elicitation {
-                    turn_id: elicitation.turn_id.clone(),
-                    item_id: elicitation.item_id.clone(),
-                    call_id: event_call_id(&value),
-                    elicitation,
-                },
-                message: request_user_input_hook_message(&value),
-                source: "request_user_input",
-            });
-        }
-        if let Some(message) = parse_raw_message_event(&value) {
-            if message.role == "assistant" && !message.text.trim().is_empty() {
-                if extract_proposed_plan_text(&message.text).is_some() {
-                    let pending_plan = PendingHookStopAction {
-                        action: PendingAction::Plan {
-                            turn_id: event_turn_id(&value),
-                            item_id: event_item_id(&value),
-                        },
-                        message: extract_proposed_plan_text(&message.text).unwrap_or(message.text),
-                        source: "proposed_plan",
-                    };
-                    if should_replace_pending_hook_stop_action(
-                        latest_unresolved_action.as_ref(),
-                        &pending_plan,
-                    ) {
-                        latest_unresolved_action = Some(pending_plan);
-                    }
-                } else {
-                    latest_assistant = Some((message.text, "last_assistant_message".to_string()));
-                }
-            }
-        }
-        if latest_unresolved_action
-            .as_ref()
-            .is_some_and(|pending| clears_pending_action(&value, Some(&pending.action)))
-        {
-            latest_unresolved_action = None;
-        }
-        if rollout_event_type(&value) != "task_complete" {
-            continue;
-        }
-        let payload = value.get("payload").unwrap_or(&value);
-        let last_agent_message = value
-            .get("last_agent_message")
-            .or_else(|| payload.get("last_agent_message"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|message| !message.is_empty())
-            .map(str::to_string);
-        if last_agent_message.is_some() {
-            latest_task_complete = last_agent_message
-                .map(|message| (message, "task_complete.last_agent_message".to_string()));
-        }
-    }
-    Ok(latest_unresolved_action
-        .map(|pending| (pending.message, pending.source.to_string()))
-        .or(latest_task_complete)
-        .or(latest_assistant))
+    Ok(select_rollout_message(&text, turn_id, false))
 }
 
 pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<bool> {
