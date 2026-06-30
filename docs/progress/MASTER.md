@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-06-30
-> **Mode**: V0.1.145_FINAL_ACCEPTED
+> **Last Updated**: 2026-07-01
+> **Mode**: V0.1.149_FINAL_ACCEPTED
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.145` final accepted<br>
-**Active Task**: Goal 14 completed on 2026-06-30. `v0.1.145` adds contract-driven next-action checklist output, lightweight DTO/schema drift guards, cc-switch parity workflow documentation, release/deploy acceptance, and final cleanup without changing `/api/rpc/:command` wire shape or adding Windows/Linux arm64 release lines.
+**Active Phase**: `v0.1.149` final accepted<br>
+**Active Task**: Goal 18 completed on 2026-07-01. `v0.1.149` ships the macOS desktop cleanup confirmation fix: Tauri cleanup execute payloads are wrapped under `request`, Web RPC cleanup bodies remain unchanged, Ops cleanup errors render visible feedback, and the release was verified through local gates, GitHub Release, Tencent Cloud deployment, macOS DMG installation, confirm-state UI acceptance, regression checks, and final cleanup without changing `/api/rpc/:command` wire shape.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.145` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.145` is the current final accepted checkpoint.
+Rows before `v0.1.149` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.149` is the current final accepted checkpoint.
 
 ## Deep Refactor Goal Tracker
 
@@ -60,6 +60,10 @@ Rows before `v0.1.145` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 12: `v0.1.143` cc-switch parity guard closure - completed on 2026-06-29. Contract-registry single-source guard strengthening, Tauri/Linux RPC/WebUI wrapper parity, release asset boundary documentation, version/release, dual-end acceptance, and final local/cloud cleanup are accepted. It does not add Windows or Linux arm64 release lines and does not change `/api/rpc/:command` wire shape.
 - [x] Goal 13: `v0.1.144` cc-switch architecture lock - completed on 2026-06-29. Contract schema/validator hardening, cc-switch architecture difference audit, Release boundary guard strengthening, version/release, dual-end acceptance, and final cleanup are accepted. It does not add Windows or Linux arm64 release lines and does not change `/api/rpc/:command` wire shape.
 - [x] Goal 14: `v0.1.145` contract sync efficiency closure - completed on 2026-06-30. Added a contract-driven next-action checklist, lightweight DTO/schema drift guards, updated cc-switch parity workflow docs, version/release, dual-end acceptance, and final cleanup. It did not change `/api/rpc/:command` wire shape, restore old REST, expose sensitive surfaces, or add Windows/Linux arm64 release lines.
+- [x] Goal 15: `v0.1.146` bugfix release - completed on 2026-06-30. Repaired dangling Codex thread handling, stale completion notification body selection, and Stop Hook command drift while preserving the sensitive route and RPC boundaries.
+- [x] Goal 16: `v0.1.147` Probe Hook status hotfix - completed on 2026-06-30. Surfaced hook audit fields in Probe status so the Tauri Probe card shows the managed command count consistently with `probe hook-status`.
+- [x] Goal 17: `v0.1.148` completion body race fix - completed on 2026-07-01. Stabilized rollout transcript reads before Probe/Bark body selection, honored CLI `turn_id` precedence, added non-sensitive body-selection diagnostics, and kept pending `proposed_plan`/`request_user_input` precedence.
+- [x] Goal 18: `v0.1.149` cleanup confirm button release acceptance - completed on 2026-07-01. Fixed desktop cleanup execute arg binding, kept Web RPC cleanup wire shape unchanged, verified visible Ops error feedback, published and deployed `v0.1.149`, installed the official macOS DMG, confirmed both cleanup buttons enter confirmation state without executing deletion, rechecked Probe/Bark, dangling thread, Stop Hook, and sensitive-path regressions, then cleaned release temp files.
 
 ## Governance Status
 
@@ -73,7 +77,7 @@ Rows before `v0.1.145` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.145_FINAL_ACCEPTED
+  mode: V0.1.149_FINAL_ACCEPTED
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -314,15 +318,16 @@ git ls-remote --tags origin refs/tags/v0.1.145
 
 | Platform | Entry | Service | Runtime paths | Required checks |
 |:--|:--|:--|:--|:--|
-| Local source | `/Users/gosu/Documents/程序开发/NexusHub` | none | tracked source only after cleanup | versions are `0.1.149`; desktop cleanup execute commands wrap confirmation as Tauri `request` args while Web RPC body remains `{ confirmed, expectedCount }`; Ops cleanup dry-run/execute errors render visible feedback instead of leaving confirm buttons silent; cleanup confirmation still requires `confirmed` and `expectedCount`; full Rust/Tauri/WebUI/install-script/package gates pass fresh; `git diff --check`; final `git clean -fdX -n` has no unexpected ignored artifacts. |
-| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd`, `/root/.codex` | exact `nexushub-webd 0.1.149`, service active, loopback `/healthz` OK, public `/nexushub/` returns `200`, Ops cleanup dry-run gating still prevents execute before confirmation, old REST cleanup paths and scoped sensitive paths `/nexushub/v1`, `/nexushub/responses`, `/nexushub/metrics` return `404`, and Probe/Bark final-body, dangling thread, and Stop Hook fixes from `v0.1.148` do not regress. |
-| macOS ARM64 Tauri | official `NexusHub-0.1.149-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub/bin/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub`, `~/.codex` | install official DMG, verify App, bundled helper, and App Support helper are all `0.1.149`; Computer Use verifies visible non-fullscreen `tauri://localhost` UI and shared Codex/Claude Code/Probe/Ops layout; `确认清理归档` and `确认清理隐藏` no longer fail silently under Tauri arg binding; no Linux server Web auth/Turnstile/systemd/Nginx/public endpoint/Linux prune leakage; desktop LAN WebUI remains default off after acceptance. |
-| Linux x86_64 Tauri | `NexusHub-0.1.149-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | CI builds AppImage/deb/rpm and keeps the headless `nexushub-webd-linux-x86_64.tar.gz` as the server asset; `latest.json` only references Tauri updater platforms; `xvfb` smoke remains the Linux desktop GUI gate. |
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` | none | tracked source only after cleanup | versions are `0.1.149`; commit `01d2c33` fixes desktop cleanup execute commands to wrap confirmation as Tauri `request` args while Web RPC body remains `{ confirmed, expectedCount }`; Ops cleanup dry-run/execute errors render visible feedback instead of leaving confirm buttons silent; cleanup confirmation still requires `confirmed` and `expectedCount`; fresh gates passed: targeted WebUI tests, full WebUI tests/typecheck/build, Rust workspace fmt/test/clippy, Tauri fmt/test/clippy with bundled `nexushub-webd`, install-script test, Linux server package `--check`, and `git diff --check`; final cleanup leaves no unexpected source changes. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/var/log/nexushub-webd`, `/root/.codex` | deployed from `nexushub-webd-linux-x86_64.tar.gz` with expected version `0.1.149`; verified exact `nexushub-webd 0.1.149`, service `active`, loopback `/healthz` `{"ok":true}`, doctor `state_db_integrity=ok`, `host_surface=linux_server_webui`, and public endpoint `https://661313.xyz/nexushub/`; public `/nexushub/` returns `200`; scoped sensitive paths `/nexushub/v1`, `/nexushub/responses`, `/nexushub/metrics` and old REST cleanup paths return `404`; Stop Hook remains managed with one actual command and `stale_command_count=0`; Probe runtime reports `0.1.149`; the `v0.1.148` completion acceptance event still has final-body diagnostics (`body_selection_strategy=task_complete.last_agent_message`, selected turn `cloud-live-v148`, `transcript_stabilized=true`) and Bark `sent`; dangling thread `019efae6-d56a-7c41-90c4-830582c6339b` remains archived with no rollout file found. |
+| macOS ARM64 Tauri | official `NexusHub-0.1.149-darwin-arm64.dmg` | native Tauri App process plus optional managed LAN WebUI helper | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub/bin/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub`, `~/.codex` | installed official DMG after sha256 verification; `CFBundleShortVersionString=0.1.149`, `CFBundleVersion=0.1.149`, bundled helper and App Support helper both report `nexushub-webd 0.1.149`; `desktop_boot_probe` reports `readyState=complete`, `hasDesktopNav=true`, `hasMainShell=true`, and `desktopRuntime=true`; Computer Use verified visible non-fullscreen `tauri://localhost` UI, Ops page `Current 0.1.149` / `Latest 0.1.149`, desktop LAN WebUI `stopped` and disabled; archive cleanup `Dry-run -> 清理归档` displayed `确认清理归档`; hidden cleanup `扫描隐藏线程 -> 清理隐藏线程` displayed `确认清理隐藏`; both final confirmation states were cancelled and no real cleanup deletion was executed. |
+| Linux x86_64 Tauri | `NexusHub-0.1.149-Linux-x86_64.AppImage` plus `.deb`/`.rpm` | native Tauri App smoke in GitHub Actions `xvfb` | `~/.config/NexusHub`, `~/.local/share/NexusHub`, `~/.local/state/NexusHub/logs` | GitHub CI run `28469738703` and Release run `28469746273` both completed with `success` for commit `01d2c33a3af6b168ef6b39722b81bcabe6ed6d8b`; release `v0.1.149` published at `2026-06-30T19:32:57Z` with 15 uploaded assets, including Linux AppImage/deb/rpm plus sha256/sig, Linux server tarball plus sha256, macOS DMG plus sha256, darwin updater tarball plus sha256/sig, and `latest.json`; local downloaded Linux server tarball, macOS DMG, and darwin updater tarball sha256 files all verified `OK`. |
 
 ## Session Log
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-01 | v0.1.149-final-accepted | Closed the supplemental cleanup confirmation release: local gates passed, `main` and tag `v0.1.149` were pushed, GitHub CI/Release succeeded, release assets and sha256 files were verified, Tencent Cloud runs `nexushub-webd 0.1.149` with public/sensitive-path checks passing, official macOS DMG installs `0.1.149` helpers, both cleanup buttons reach visible confirmation state without executing deletion, Probe/Bark final-body selection, dangling thread pruning, and Stop Hook management did not regress, and temporary local/cloud release files were cleaned. |
 | 2026-07-01 | v0.1.149-cleanup-confirm-buttons | Started the supplemental release cycle for macOS desktop cleanup confirm buttons: Tauri cleanup execute payloads must be wrapped under `request`, Web RPC shape must stay unchanged, and Ops cleanup errors must render visible feedback before release/deploy/macOS acceptance. |
 | 2026-06-30 | v0.1.148-completion-body-race-fix | Started the production fix for Probe completion body selection after `v0.1.147` still pushed earlier progress text from `task_complete.last_agent_message`; root cause is Stop hook reading rollout before the final message is flushed plus overly broad stale-turn fallback when `turn_id` context is incomplete. |
 | 2026-06-30 | v0.1.147-hook-status-ui-hotfix | After deploying `v0.1.146`, Computer Use showed the Tauri Probe Hook card as `managed` but with `实际命令 0 条`; root cause was `ProbeRuntime::status()` not copying hook audit fields into `ProbeStatus`, while CLI `probe hook-status` was already correct. |
