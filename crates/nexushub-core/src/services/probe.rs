@@ -709,7 +709,10 @@ pub fn probe_passive_unresolved_action_marker_key(
     if event.kind != "reply-needed" {
         return None;
     }
-    if event.payload.get("scan_source").and_then(Value::as_str) != Some("passive-scan") {
+    if !matches!(
+        event.payload.get("scan_source").and_then(Value::as_str),
+        Some("passive-scan" | "pre-tool-use-hook")
+    ) {
         return None;
     }
     let body_source = event.payload.get("body_source").and_then(Value::as_str)?;
@@ -825,7 +828,7 @@ fn probe_thread_notification_body(
                 return (None, None);
             }
             return (
-                Some(format_pending_elicitation(elicitation)),
+                Some(format_probe_pending_elicitation(elicitation)),
                 Some("request_user_input".to_string()),
             );
         }
@@ -931,7 +934,7 @@ fn thread_rollout_still_request_user_input_needed(thread: &ThreadSummary) -> boo
     reply_needed && has_pending_elicitation && same_turn
 }
 
-fn format_pending_elicitation(elicitation: &codex::PendingElicitation) -> String {
+pub fn format_probe_pending_elicitation(elicitation: &codex::PendingElicitation) -> String {
     let mut lines = Vec::new();
     for (index, question) in elicitation.questions.iter().enumerate() {
         if index > 0 {

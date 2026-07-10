@@ -1623,6 +1623,14 @@ describe("conversation helpers", () => {
     expect(probeSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
   });
 
+  test("probe workspace labels the paired lifecycle hooks as Codex Hook", () => {
+    const probeSource = extractProbeWorkspaceSource();
+
+    expect(probeSource).toContain('<Metric label="Codex Hook"');
+    expect(probeSource).toContain("<span>管理 Codex Hook</span>");
+    expect(probeSource).not.toContain('<Metric label="Stop Hook"');
+  });
+
   test("probe workspace tolerates partial desktop settings DTOs without white-screen assumptions", () => {
     const probeSource = extractProbeWorkspaceSource();
 

@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-07-01
-> **Mode**: V0.1.149_FINAL_ACCEPTED
+> **Last Updated**: 2026-07-10
+> **Mode**: V0.1.150_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.149` final accepted<br>
-**Active Task**: Goal 18 completed on 2026-07-01. `v0.1.149` ships the macOS desktop cleanup confirmation fix: Tauri cleanup execute payloads are wrapped under `request`, Web RPC cleanup bodies remain unchanged, Ops cleanup errors render visible feedback, and the release was verified through local gates, GitHub Release, Tencent Cloud deployment, macOS DMG installation, confirm-state UI acceptance, regression checks, and final cleanup without changing `/api/rpc/:command` wire shape.
+**Active Phase**: `v0.1.150` notification-chain fix and release acceptance<br>
+**Active Task**: Goal 19 is in progress. Suppress suggestion/exclusion-only internal Hook control payloads before dedupe, storage, and Bark delivery; notify `request_user_input` immediately through a fail-open `PreToolUse` Hook; track nested rollout `turn_id` and `call_id`; preserve third-party Hooks and all existing RPC and sensitive-surface boundaries; then complete local gates, GitHub Release, Tencent Cloud deployment, macOS installation, real notification acceptance, bounded historical cleanup, and final evidence collection.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.149` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.149` is the current final accepted checkpoint.
+Rows before `v0.1.149` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.149` remains the current accepted production checkpoint while `v0.1.150` Goal 19 is in progress.
 
 ## Deep Refactor Goal Tracker
 
@@ -64,6 +64,7 @@ Rows before `v0.1.149` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 16: `v0.1.147` Probe Hook status hotfix - completed on 2026-06-30. Surfaced hook audit fields in Probe status so the Tauri Probe card shows the managed command count consistently with `probe hook-status`.
 - [x] Goal 17: `v0.1.148` completion body race fix - completed on 2026-07-01. Stabilized rollout transcript reads before Probe/Bark body selection, honored CLI `turn_id` precedence, added non-sensitive body-selection diagnostics, and kept pending `proposed_plan`/`request_user_input` precedence.
 - [x] Goal 18: `v0.1.149` cleanup confirm button release acceptance - completed on 2026-07-01. Fixed desktop cleanup execute arg binding, kept Web RPC cleanup wire shape unchanged, verified visible Ops error feedback, published and deployed `v0.1.149`, installed the official macOS DMG, confirmed both cleanup buttons enter confirmation state without executing deletion, rechecked Probe/Bark, dangling thread, Stop Hook, and sensitive-path regressions, then cleaned release temp files.
+- [ ] Goal 19: `v0.1.150` notification-chain fix and release acceptance - in progress on 2026-07-10. TDD covers internal control-payload suppression, immediate `request_user_input` notification through `PreToolUse`, paired Hook management, nested rollout turn/call tracking, persistent unresolved-action markers, fail-open/empty-stdout behavior, and bounded Bark timeout; release, deployment, real dual-question acceptance, historical cleanup, and final evidence remain gated on the complete local test matrix.
 
 ## Governance Status
 
@@ -77,7 +78,7 @@ Rows before `v0.1.149` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.149_FINAL_ACCEPTED
+  mode: V0.1.150_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -110,7 +111,7 @@ adaptive:
       thresholds: { annotate: 1, replan: 1, rescope: 2 }
       total_tasks: 2
       completed_tasks: 2
-  last_updated: "2026-06-30"
+  last_updated: "2026-07-10"
 ```
 
 ## Task Telemetry Log

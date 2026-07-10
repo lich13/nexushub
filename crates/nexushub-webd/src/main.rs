@@ -11,7 +11,8 @@ use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
         list_threads, resolve_codex_paths, rollout_completion_last_agent_message_selection,
-        rollout_hook_stop_message_selection, RolloutMessageSelection,
+        rollout_hook_stop_message_selection, PendingElicitation, RolloutMessageSelection,
+        UserInputQuestion,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -128,6 +129,8 @@ enum ProbeCommand {
         #[arg(long, default_value = "hook-stop")]
         kind: String,
     },
+    #[command(hide = true)]
+    HookRequestUserInput,
     HooksInstall {
         #[arg(long)]
         dry_run: bool,
@@ -196,6 +199,21 @@ async fn main() -> Result<()> {
                 AdminCommand::ResetPassword { username, password } => {
                     init_admin(db, &username, &password, true)?
                 }
+            }
+        }
+        Command::Probe {
+            command: ProbeCommand::HookRequestUserInput,
+        } => {
+            if let Err(err) = handle_hook_request_user_input_command(&cli.config).await {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "ok": false,
+                        "error": "probe_hook_request_user_input_failed",
+                    }))?
+                );
+                tracing::warn!("probe hook-request-user-input failed open");
+                tracing::debug!("probe hook-request-user-input diagnostic: {err:#}");
             }
         }
         Command::Probe { command } => {
@@ -283,6 +301,7 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 println!("{}", serde_json::to_string(&codex_stop_continue_output())?);
             }
         },
+        ProbeCommand::HookRequestUserInput => unreachable!("handled before config loading"),
         ProbeCommand::HooksInstall { dry_run } => {
             println!(
                 "{}",
@@ -414,6 +433,107 @@ async fn handle_hook_stop_command(
     )?;
     let event = probe_runtime(config).build_event(event_input);
     handle_built_probe_event(config, db, event).await
+}
+
+async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
+    let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
+    let event_input = hook_request_user_input_event_input(stdin_payload)?;
+    let config = Config::load(config_path)?;
+    let db = open_panel_db(&config)?;
+    let event = probe_runtime(&config).build_event(event_input);
+    record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
+        .await?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct HookRequestUserInputPayload {
+    hook_event_name: String,
+    session_id: String,
+    turn_id: String,
+    tool_name: String,
+    tool_input: HookRequestUserInputToolInput,
+    tool_use_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HookRequestUserInputToolInput {
+    questions: Vec<UserInputQuestion>,
+}
+
+fn hook_request_user_input_event_input(payload: Value) -> Result<ProbeEventInput> {
+    let payload: HookRequestUserInputPayload =
+        serde_json::from_value(payload).context("parse PreToolUse payload")?;
+    anyhow::ensure!(
+        payload.hook_event_name == "PreToolUse",
+        "unexpected hook_event_name"
+    );
+    anyhow::ensure!(
+        payload.tool_name == "request_user_input",
+        "unexpected tool_name"
+    );
+    let session_id = required_hook_field(&payload.session_id, "session_id")?;
+    let turn_id = required_hook_field(&payload.turn_id, "turn_id")?;
+    let tool_use_id = required_hook_field(&payload.tool_use_id, "tool_use_id")?;
+    let questions = normalize_hook_questions(payload.tool_input.questions)?;
+    let elicitation = PendingElicitation {
+        turn_id: Some(turn_id.to_string()),
+        item_id: Some(tool_use_id.to_string()),
+        questions,
+    };
+    let body = probe_service::format_probe_pending_elicitation(&elicitation);
+
+    Ok(ProbeEventInput::hook_stop_with_context(
+        Some(session_id),
+        Some(turn_id),
+        Some(session_id),
+        None,
+        Some(&body),
+        "reply-needed",
+    )
+    .with_body_source(Some("request_user_input"))
+    .with_pre_tool_use_scan_source()
+    .with_call_id(Some(tool_use_id)))
+}
+
+fn required_hook_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
+    let value = value.trim();
+    anyhow::ensure!(!value.is_empty(), "missing {name}");
+    Ok(value)
+}
+
+fn normalize_hook_questions(
+    mut questions: Vec<UserInputQuestion>,
+) -> Result<Vec<UserInputQuestion>> {
+    anyhow::ensure!(
+        !questions.is_empty(),
+        "tool_input.questions must not be empty"
+    );
+    for question in &mut questions {
+        question.id = required_hook_field(&question.id, "question.id")?.to_string();
+        question.question =
+            required_hook_field(&question.question, "question.question")?.to_string();
+        question.header = question
+            .header
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        anyhow::ensure!(
+            !question.options.is_empty(),
+            "question.options must not be empty"
+        );
+        for option in &mut question.options {
+            option.label = required_hook_field(&option.label, "option.label")?.to_string();
+            option.description = option
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+        }
+    }
+    Ok(questions)
 }
 
 fn hook_stop_event_input(
@@ -856,8 +976,20 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
         shell_quote(&platform.daemon_binary().display().to_string()),
         shell_quote(&platform.config_file.display().to_string())
     );
+    let request_user_input_hook_command = format!(
+        "{} --config {} probe hook-request-user-input",
+        shell_quote(&platform.daemon_binary().display().to_string()),
+        shell_quote(&platform.config_file.display().to_string())
+    );
     let mut root = read_hooks_json(&hooks_path)?;
-    let hooks_json_changed = ensure_stop_hook(&mut root, &hook_command);
+    let hooks_json_changed = ensure_probe_hook(&mut root, "Stop", "*", &hook_command, None)
+        | ensure_probe_hook(
+            &mut root,
+            "PreToolUse",
+            "^request_user_input$",
+            &request_user_input_hook_command,
+            Some(5),
+        );
     let config_before = read_optional_text(&codex_config_path)?;
     let codex_config_after = ensure_codex_hooks_feature(&config_before)?;
     let codex_config_changed = codex_config_after != config_before;
@@ -919,6 +1051,7 @@ async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
         "backup_path": if hooks_path.exists() { Some(backup_path) } else { None },
         "codex_config_backup_path": if codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
         "hook_command": hook_command,
+        "request_user_input_hook_command": request_user_input_hook_command,
         "reload_result": Value::Null,
     }))
 }
@@ -954,14 +1087,14 @@ fn ensure_codex_hooks_feature(text: &str) -> Result<String> {
         features.insert("hooks".to_string(), toml::Value::Boolean(true));
         changed = true;
     }
-    changed |= prune_codex_stop_hook_state(root);
+    changed |= prune_codex_hook_state(root);
     if !changed {
         return Ok(text.to_string());
     }
     toml::to_string_pretty(&value).context("serialize Codex config.toml")
 }
 
-fn prune_codex_stop_hook_state(root: &mut toml::map::Map<String, toml::Value>) -> bool {
+fn prune_codex_hook_state(root: &mut toml::map::Map<String, toml::Value>) -> bool {
     let Some(hooks) = root.get_mut("hooks").and_then(toml::Value::as_table_mut) else {
         return false;
     };
@@ -970,7 +1103,7 @@ fn prune_codex_stop_hook_state(root: &mut toml::map::Map<String, toml::Value>) -
     };
     let stale_keys = state
         .keys()
-        .filter(|key| is_codex_stop_hook_state_key(key))
+        .filter(|key| is_codex_hook_state_key(key))
         .cloned()
         .collect::<Vec<_>>();
     if stale_keys.is_empty() {
@@ -985,9 +1118,9 @@ fn prune_codex_stop_hook_state(root: &mut toml::map::Map<String, toml::Value>) -
     true
 }
 
-fn is_codex_stop_hook_state_key(key: &str) -> bool {
+fn is_codex_hook_state_key(key: &str) -> bool {
     let lowered = key.to_ascii_lowercase();
-    lowered.contains("hooks.json:stop:")
+    lowered.contains("hooks.json:stop:") || lowered.contains("hooks.json:pre_tool_use:")
 }
 
 fn read_hooks_json(path: &Path) -> Result<Value> {
@@ -1009,7 +1142,13 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
-fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
+fn ensure_probe_hook(
+    root: &mut Value,
+    event: &str,
+    matcher: &str,
+    hook_command: &str,
+    timeout_seconds: Option<u64>,
+) -> bool {
     let mut changed = false;
     if !root.is_object() {
         *root = json!({"hooks": {}});
@@ -1022,14 +1161,14 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
         changed = true;
     }
     let hooks_object = hooks.as_object_mut().expect("hooks object initialized");
-    let stop = hooks_object
-        .entry("Stop")
+    let event_hooks = hooks_object
+        .entry(event)
         .or_insert_with(|| Value::Array(Vec::new()));
-    if !stop.is_array() {
-        *stop = Value::Array(Vec::new());
+    if !event_hooks.is_array() {
+        *event_hooks = Value::Array(Vec::new());
         changed = true;
     }
-    let groups = stop.as_array_mut().expect("stop array initialized");
+    let groups = event_hooks.as_array_mut().expect("hook array initialized");
     let mut expected_installed = false;
     for group in groups.iter_mut() {
         if !group.is_object() {
@@ -1037,6 +1176,7 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
             changed = true;
         }
         let group_object = group.as_object_mut().expect("group object initialized");
+        let group_matches = group_object.get("matcher").and_then(Value::as_str) == Some(matcher);
         let hooks = group_object
             .entry("hooks")
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -1050,7 +1190,16 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
             let Some(command) = item.get("command").and_then(Value::as_str) else {
                 return true;
             };
-            if command == hook_command {
+            let timeout_matches = match timeout_seconds {
+                Some(timeout) => item.get("timeout").and_then(Value::as_u64) == Some(timeout),
+                None => item.get("timeout").is_none(),
+            };
+            let expected = command == hook_command
+                && item.get("type").and_then(Value::as_str) == Some("command")
+                && group_matches
+                && timeout_matches
+                && item.get("async").is_none();
+            if expected && !expected_installed {
                 expected_installed = true;
                 return true;
             }
@@ -1074,18 +1223,30 @@ fn ensure_stop_hook(root: &mut Value, hook_command: &str) -> bool {
         return changed;
     }
     groups.push(json!({
-        "matcher": "*",
+        "matcher": matcher,
         "hooks": [{
             "type": "command",
-            "command": hook_command
+            "command": hook_command,
+            "timeout": timeout_seconds,
         }]
     }));
+    if timeout_seconds.is_none() {
+        if let Some(hook) = groups
+            .last_mut()
+            .and_then(|group| group.get_mut("hooks"))
+            .and_then(Value::as_array_mut)
+            .and_then(|hooks| hooks.first_mut())
+            .and_then(Value::as_object_mut)
+        {
+            hook.remove("timeout");
+        }
+    }
     true
 }
 
 fn is_nexushub_managed_hook_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
-    lowered.contains("probe hook-stop")
+    (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
         && (lowered.contains("nexushubd")
             || lowered.contains("nexushub-webd")
             || lowered.contains("/opt/nexushub")
@@ -1270,6 +1431,28 @@ async fn record_probe_event_with_bark(
     db: &PanelDb,
     event: nexushub_core::probe::ProbeBuiltEvent,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    record_probe_event_with_bark_timeout(config, db, event, std::time::Duration::from_secs(8)).await
+}
+
+async fn record_probe_event_with_bark_timeout(
+    config: &Config,
+    db: &PanelDb,
+    event: nexushub_core::probe::ProbeBuiltEvent,
+    bark_timeout: std::time::Duration,
+) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    if let Some(reason) = event.suppression_reason.as_deref() {
+        let mut outcome = ProbeEventOutcome::from_claim(&event, false);
+        outcome.duplicate = false;
+        return Ok((
+            outcome,
+            ProbeBarkOutcome::skipped(
+                reason,
+                config.probe.notifications.enabled,
+                probe_service::probe_event_bark_switch_enabled(config, &event.kind),
+                false,
+            ),
+        ));
+    }
     let record_plan = probe_service::probe_event_record_plan(event);
     let event = record_plan.event;
     if passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())? {
@@ -1292,7 +1475,7 @@ async fn record_probe_event_with_bark(
         &event.dedupe_key,
         event.ttl_seconds,
     )?;
-    let bark = handle_probe_event_bark(config, db, &event, claimed).await?;
+    let bark = handle_probe_event_bark(config, db, &event, claimed, bark_timeout).await?;
     let write_plan = probe_service::probe_event_record_write_plan(
         &event,
         claimed,
@@ -1336,6 +1519,7 @@ async fn handle_probe_event_bark(
     db: &PanelDb,
     event: &nexushub_core::probe::ProbeBuiltEvent,
     claimed: bool,
+    timeout: std::time::Duration,
 ) -> Result<ProbeBarkOutcome> {
     let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
     let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
@@ -1357,7 +1541,7 @@ async fn handle_probe_event_bark(
             body: event.bark_body.clone(),
             dedupe_key: event.dedupe_key.clone(),
         },
-        std::time::Duration::from_secs(8),
+        timeout,
     )
     .await
 }
@@ -2058,6 +2242,19 @@ mod tests {
     }
 
     #[test]
+    fn hook_request_user_input_cli_subcommand_is_internal_and_argument_free() {
+        assert!(Cli::try_parse_from(["nexushub-webd", "probe", "hook-request-user-input"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "nexushub-webd",
+            "probe",
+            "hook-request-user-input",
+            "--thread-id",
+            "thread-a"
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn legacy_import_maps_server_bark_observability_and_logs_db_without_plaintext_secret() {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -2215,11 +2412,29 @@ hooks = false
         assert_eq!(result["hooks_json_changed"], true);
         assert_eq!(result["codex_config_changed"], true);
         assert!(result["reload_result"].is_null());
-        let hooks_json = fs::read_to_string(codex_home.join("hooks.json")).unwrap();
-        assert!(hooks_json.contains("probe hook-stop"));
+        let hooks_json: Value =
+            serde_json::from_slice(&fs::read(codex_home.join("hooks.json")).unwrap()).unwrap();
+        assert!(hooks_json.to_string().contains("probe hook-stop"));
+        let pre_tool_use = hooks_json["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool_use.len(), 1);
+        assert_eq!(pre_tool_use[0]["matcher"], "^request_user_input$");
+        let request_hook = &pre_tool_use[0]["hooks"][0];
+        assert!(request_hook["command"]
+            .as_str()
+            .unwrap()
+            .contains("probe hook-request-user-input"));
+        assert_eq!(request_hook["timeout"], 5);
+        assert!(request_hook.get("async").is_none());
         let codex_config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
         assert!(codex_config.contains("[features]"));
         assert!(codex_config.contains("hooks = true"));
+
+        let second = install_probe_hooks(&config, false).await.unwrap();
+        assert_eq!(second["changed"], false);
+        assert_eq!(
+            fs::read(codex_home.join("hooks.json")).unwrap(),
+            serde_json::to_vec_pretty(&hooks_json).unwrap()
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -2249,6 +2464,24 @@ hooks = false
                                 "command": "/usr/local/bin/third-party-hook"
                             }]
                         }
+                    ],
+                    "PreToolUse": [
+                        {
+                            "matcher": "^request_user_input$",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-request-user-input",
+                                "timeout": 9,
+                                "async": true
+                            }]
+                        },
+                        {
+                            "matcher": "^request_user_input$",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/usr/local/bin/third-party-request-hook"
+                            }]
+                        }
                     ]
                 }
             }))
@@ -2268,6 +2501,9 @@ last_error = "old empty group"
 
 [hooks.state."/tmp/.codex/hooks.json:stop:1:0"]
 last_error = "old nexushub hook"
+
+[hooks.state."/tmp/.codex/hooks.json:pre_tool_use:0:0"]
+last_error = "old nexushub request hook"
 "#,
         )
         .unwrap();
@@ -2302,6 +2538,34 @@ last_error = "old nexushub hook"
         assert!(stop.iter().all(|group| group["hooks"]
             .as_array()
             .is_some_and(|hooks| !hooks.is_empty())));
+        let pre_tool_use = hooks_json["hooks"]["PreToolUse"].as_array().unwrap();
+        let request_commands = pre_tool_use
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .filter_map(|hook| hook["command"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            request_commands
+                .iter()
+                .filter(|command| command.contains("probe hook-request-user-input"))
+                .count(),
+            1
+        );
+        assert!(request_commands
+            .iter()
+            .any(|command| command.contains("nexushub-webd")));
+        assert!(request_commands.contains(&"/usr/local/bin/third-party-request-hook"));
+        let managed_request_hook = pre_tool_use
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains("nexushub-webd"))
+            })
+            .unwrap();
+        assert_eq!(managed_request_hook["timeout"], 5);
+        assert!(managed_request_hook.get("async").is_none());
         let codex_config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
         assert!(!codex_config.contains("[hooks.state."));
 
@@ -2341,6 +2605,86 @@ last_error = "old nexushub hook"
         assert_eq!(events[0].kind, "hook-stop");
         assert_eq!(events[0].payload["bark"]["reason"], "device_key_missing");
         assert!(events[0].payload["bark"].get("device_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn probe_control_payload_suppression_skips_dedupe_db_and_bark() {
+        let dir = temp_test_dir("nexushub-control-payload-suppression");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+
+        for (index, body) in [r#"{"suggestions":[]}"#, r#"{"exclude":[]}"#]
+            .into_iter()
+            .enumerate()
+        {
+            let event =
+                probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+                    Some(&format!("thread-control-{index}")),
+                    Some(&format!("turn-control-{index}")),
+                    Some(&format!("thread-control-{index}")),
+                    None,
+                    Some(body),
+                    "hook-stop",
+                ));
+            let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+                .await
+                .unwrap();
+
+            assert!(!outcome.recorded);
+            assert!(!outcome.duplicate);
+            assert!(bark.skipped);
+            assert_eq!(bark.reason.as_deref(), Some("internal_control_payload"));
+            assert_eq!(bark.request_count, 0);
+        }
+
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+
+        let normal_event =
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+                Some("thread-extra-key"),
+                Some("turn-extra-key"),
+                Some("thread-extra-key"),
+                None,
+                Some(r#"{"suggestions":[],"message":"normal JSON"}"#),
+                "hook-stop",
+            ));
+        let (normal_outcome, normal_bark) =
+            record_probe_event_with_bark(&config, &db, normal_event)
+                .await
+                .unwrap();
+        assert!(normal_outcome.recorded);
+        assert!(!normal_outcome.duplicate);
+        assert_eq!(normal_bark.request_count, 1);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -3355,6 +3699,54 @@ last_error = "old nexushub hook"
                 .with_thread_title(Some("问题 TTL 线程"))
                 .with_body_source(Some("request_user_input"))
                 .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pre_tool_use_request_user_input_event_does_not_resend_after_ttl_expires() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-pre-tool-use-input-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = "问题 1：Continue?\n选项 1：继续\n选项 2：停止";
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-pre-tool-question"),
+                    Some("turn-pre-tool-question"),
+                    Some("thread-pre-tool-question"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("PreToolUse 问题"))
+                .with_body_source(Some("request_user_input"))
+                .with_pre_tool_use_scan_source()
+                .with_call_id(Some("call-pre-tool-question")),
             )
         };
 

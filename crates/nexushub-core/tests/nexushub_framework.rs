@@ -412,6 +412,14 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
                         "type": "command",
                         "command": "/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml probe hook-stop"
                     }]
+                }],
+                "PreToolUse": [{
+                    "matcher": "^request_user_input$",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml probe hook-request-user-input",
+                        "timeout": 5
+                    }]
                 }]
             }
         })

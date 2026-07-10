@@ -214,9 +214,23 @@ impl ProbeRuntime {
 
     pub fn hook_status(&self) -> ProbeHookStatus {
         let hook_command = self.hook_command();
-        let audit = audit_stop_hooks(
+        let request_user_input_hook_command = self.request_user_input_hook_command();
+        let audit = audit_probe_hooks(
             &self.resolved_codex_paths().home.join("hooks.json"),
-            &hook_command,
+            &[
+                ExpectedProbeHook {
+                    event: "Stop",
+                    matcher: "*",
+                    command: &hook_command,
+                    timeout_seconds: None,
+                },
+                ExpectedProbeHook {
+                    event: "PreToolUse",
+                    matcher: "^request_user_input$",
+                    command: &request_user_input_hook_command,
+                    timeout_seconds: Some(5),
+                },
+            ],
         );
         let status = if !self.config.probe.hooks.manage_stop_hook {
             "disabled"
@@ -238,7 +252,11 @@ impl ProbeRuntime {
             stale_command_count: audit.stale_command_count,
             empty_group_count: audit.empty_group_count,
             restart_required_after_install: false,
-            supported_events: vec!["hook-stop".to_string(), "notify-completion".to_string()],
+            supported_events: vec![
+                "hook-stop".to_string(),
+                "pre-tool-use-hook".to_string(),
+                "notify-completion".to_string(),
+            ],
             dedupe_namespace: PROBE_EVENT_DEDUPE_NAMESPACE.to_string(),
             dedupe_ttl_seconds: PROBE_EVENT_TTL_SECONDS,
         }
@@ -394,6 +412,11 @@ impl ProbeRuntime {
     }
 
     pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
+        let suppression_reason = matches!(input.kind, ProbeEventInputKind::HookStop)
+            .then(|| input.last_assistant_message.as_deref())
+            .flatten()
+            .filter(|message| is_probe_machine_control_payload(message))
+            .map(|_| "internal_control_payload".to_string());
         let event_type = probe_event_type(&input);
         let event_kind = probe_event_kind(&input, &event_type);
         let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
@@ -493,6 +516,7 @@ impl ProbeRuntime {
         let mut payload = json!({
             "raw_kind": input.event_kind(),
             "turn_id": input.turn_id.clone(),
+            "call_id": input.call_id.clone(),
             "session_id": input.session_id.clone(),
             "transcript_path": input.transcript_path.clone(),
             "last_assistant_message": last_assistant_message.clone(),
@@ -552,12 +576,21 @@ impl ProbeRuntime {
             ttl_seconds,
             source,
             payload,
+            suppression_reason,
         }
     }
 
     fn hook_command(&self) -> String {
         format!(
             "{} --config {} probe hook-stop",
+            shell_quote(&self.paths.daemon_binary().display().to_string()),
+            shell_quote(&self.paths.config_file.display().to_string())
+        )
+    }
+
+    fn request_user_input_hook_command(&self) -> String {
+        format!(
+            "{} --config {} probe hook-request-user-input",
             shell_quote(&self.paths.daemon_binary().display().to_string()),
             shell_quote(&self.paths.config_file.display().to_string())
         )
@@ -674,55 +707,88 @@ fn shell_quote(value: &str) -> String {
 }
 
 #[derive(Debug, Clone, Default)]
-struct StopHookAudit {
+struct ProbeHookAudit {
     expected_installed: bool,
     actual_commands: Vec<String>,
     stale_command_count: usize,
     empty_group_count: usize,
 }
 
-fn audit_stop_hooks(path: &Path, expected_command: &str) -> StopHookAudit {
+struct ExpectedProbeHook<'a> {
+    event: &'a str,
+    matcher: &'a str,
+    command: &'a str,
+    timeout_seconds: Option<u64>,
+}
+
+fn audit_probe_hooks(path: &Path, expected_hooks: &[ExpectedProbeHook<'_>]) -> ProbeHookAudit {
     let Ok(text) = fs::read_to_string(path) else {
-        return StopHookAudit::default();
+        return ProbeHookAudit::default();
     };
     let Ok(root) = serde_json::from_str::<Value>(&text) else {
-        return StopHookAudit::default();
+        return ProbeHookAudit::default();
     };
-    let Some(groups) = root
-        .get("hooks")
-        .and_then(|hooks| hooks.get("Stop"))
-        .and_then(Value::as_array)
-    else {
-        return StopHookAudit::default();
-    };
-    let mut audit = StopHookAudit::default();
-    for group in groups {
-        let hooks = group
+    let mut audit = ProbeHookAudit::default();
+    let mut all_expected_installed = true;
+    for expected in expected_hooks {
+        let groups = root
             .get("hooks")
+            .and_then(|hooks| hooks.get(expected.event))
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        if hooks.is_empty() {
-            audit.empty_group_count += 1;
-        }
-        for hook in hooks {
-            let Some(command) = hook.get("command").and_then(Value::as_str) else {
-                continue;
-            };
-            audit.actual_commands.push(command.to_string());
-            if command == expected_command {
-                audit.expected_installed = true;
-            } else if is_nexushub_managed_hook_command(command) {
-                audit.stale_command_count += 1;
+        let mut valid_count = 0usize;
+        for group in groups {
+            let hooks = group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if hooks.is_empty() {
+                audit.empty_group_count += 1;
+            }
+            for hook in hooks {
+                let Some(command) = hook.get("command").and_then(Value::as_str) else {
+                    continue;
+                };
+                audit.actual_commands.push(command.to_string());
+                if command == expected.command {
+                    if probe_hook_matches_expected(group, hook, expected) {
+                        valid_count += 1;
+                    } else {
+                        audit.stale_command_count += 1;
+                    }
+                } else if is_nexushub_managed_hook_command(command) {
+                    audit.stale_command_count += 1;
+                }
             }
         }
+        if valid_count != 1 {
+            all_expected_installed = false;
+            audit.stale_command_count += valid_count.saturating_sub(1);
+        }
     }
+    audit.expected_installed = all_expected_installed;
     audit
+}
+
+fn probe_hook_matches_expected(
+    group: &Value,
+    hook: &Value,
+    expected: &ExpectedProbeHook<'_>,
+) -> bool {
+    group.get("matcher").and_then(Value::as_str) == Some(expected.matcher)
+        && hook.get("type").and_then(Value::as_str) == Some("command")
+        && match expected.timeout_seconds {
+            Some(timeout) => hook.get("timeout").and_then(Value::as_u64) == Some(timeout),
+            None => hook.get("timeout").is_none(),
+        }
+        && hook.get("async").is_none()
 }
 
 fn is_nexushub_managed_hook_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
-    lowered.contains("probe hook-stop")
+    (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
         && (lowered.contains("nexushubd")
             || lowered.contains("nexushub-webd")
             || lowered.contains("/opt/nexushub")
@@ -955,6 +1021,7 @@ pub struct ProbeEventInput {
     scan_source: Option<String>,
     ttl_seconds: Option<i64>,
     source_override: Option<String>,
+    call_id: Option<String>,
     hook_kind: String,
 }
 
@@ -984,6 +1051,7 @@ impl ProbeEventInput {
             scan_source: None,
             ttl_seconds: None,
             source_override: None,
+            call_id: None,
             hook_kind: if kind.trim().is_empty() {
                 "hook-stop".to_string()
             } else {
@@ -1021,6 +1089,7 @@ impl ProbeEventInput {
             scan_source: None,
             ttl_seconds: None,
             source_override: None,
+            call_id: None,
             hook_kind: "completion".to_string(),
         }
     }
@@ -1058,6 +1127,20 @@ impl ProbeEventInput {
         self.scan_source = Some("passive-scan".to_string());
         self.ttl_seconds = Some(PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS);
         self.source_override = Some("nexushub-webd probe passive-scan".to_string());
+        self
+    }
+
+    pub fn with_pre_tool_use_scan_source(mut self) -> Self {
+        self.scan_source = Some("pre-tool-use-hook".to_string());
+        self.source_override = Some("nexushub-webd probe hook-request-user-input".to_string());
+        self
+    }
+
+    pub fn with_call_id(mut self, call_id: Option<&str>) -> Self {
+        self.call_id = call_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
         self
     }
 
@@ -1146,6 +1229,8 @@ pub struct ProbeBuiltEvent {
     pub ttl_seconds: i64,
     pub source: String,
     pub payload: Value,
+    #[serde(skip)]
+    pub suppression_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2235,6 +2320,56 @@ mod tests {
         assert_eq!(status.actual_commands.len(), 1);
         assert!(status.hook_command.contains("nexushub-webd"));
         assert!(status.actual_commands[0].contains("nexushubd"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn probe_hook_status_requires_stop_and_request_user_input_hooks() {
+        let root = unique_temp_dir("nexushub-probe-hook-status-pair");
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.probe.hooks.manage_stop_hook = true;
+        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+        let stop_command = runtime.hook_status().hook_command;
+        let request_command =
+            stop_command.replace("probe hook-stop", "probe hook-request-user-input");
+
+        fs::write(
+            codex_home.join("hooks.json"),
+            json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "*",
+                        "hooks": [{"type": "command", "command": stop_command}]
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(runtime.hook_status().hook_status, "missing");
+
+        fs::write(
+            codex_home.join("hooks.json"),
+            json!({
+                "hooks": {
+                    "Stop": [{
+                        "matcher": "*",
+                        "hooks": [{"type": "command", "command": stop_command}]
+                    }],
+                    "PreToolUse": [{
+                        "matcher": "^request_user_input$",
+                        "hooks": [{"type": "command", "command": request_command, "timeout": 5}]
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(runtime.hook_status().hook_status, "managed");
+
         fs::remove_dir_all(root).unwrap();
     }
 

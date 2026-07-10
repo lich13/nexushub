@@ -525,6 +525,101 @@ fn request_user_input_survives_task_complete_and_hook_stop_until_answer() {
 }
 
 #[test]
+fn rollout_nested_turn_metadata_tracks_sequential_request_user_input_without_reviving_old_plan() {
+    let first_question = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "id": "fc-first",
+            "name": "request_user_input",
+            "arguments": {
+                "questions": [{
+                    "id": "first",
+                    "question": "First choice?",
+                    "options": [{"label": "A"}, {"label": "B"}]
+                }]
+            },
+            "call_id": "call-first",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-live"}
+        }
+    });
+    let first_answer = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call-first",
+            "output": "{\"answers\":{\"first\":{\"answers\":[\"A\"]}}}",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-live"}
+        }
+    });
+    let second_question = json!({
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "id": "fc-second",
+            "name": "request_user_input",
+            "arguments": {
+                "questions": [{
+                    "id": "second",
+                    "question": "Second choice?",
+                    "options": [{"label": "X"}, {"label": "Y"}]
+                }]
+            },
+            "call_id": "call-second",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-live"}
+        }
+    });
+    let waiting_events = [
+        json!({"type":"response_item","turn_id":"turn-old-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>old plan</proposed_plan>"}]}}),
+        first_question.clone(),
+        first_answer,
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"First answer accepted."}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+        second_question.clone(),
+    ];
+
+    let waiting = scan_fixture(&waiting_events);
+    let pending = waiting
+        .pending_elicitation
+        .expect("second question pending");
+    assert!(waiting.reply_needed);
+    assert_eq!(pending.turn_id.as_deref(), Some("turn-live"));
+    assert_eq!(pending.item_id.as_deref(), Some("call-second"));
+    assert_eq!(pending.questions[0].question, "Second choice?");
+
+    let path = rollout_fixture_path("nested-sequential-request-user-input", &waiting_events);
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-live"))
+        .unwrap()
+        .expect("latest pending question selection");
+    assert_eq!(selection.source, "request_user_input");
+    assert_eq!(selection.selected_turn_id.as_deref(), Some("turn-live"));
+    assert!(selection.message.contains("Second choice?"));
+    assert!(!selection.message.contains("First choice?"));
+    assert!(!selection.message.contains("old plan"));
+    let _ = fs::remove_file(path);
+
+    let answered_events = [
+        waiting_events[0].clone(),
+        first_question,
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-first","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+        second_question,
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-second","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":"Both answers accepted."}}),
+    ];
+    let answered = scan_fixture(&answered_events);
+    assert!(!answered.reply_needed);
+    assert!(answered.pending_elicitation.is_none());
+
+    let path = rollout_fixture_path("answered-sequential-request-user-input", &answered_events);
+    let selection = super::rollout_hook_stop_message_selection(&path, Some("turn-live"))
+        .unwrap()
+        .expect("completed answer selection");
+    assert_eq!(selection.source, "task_complete.last_agent_message");
+    assert_eq!(selection.message, "Both answers accepted.");
+    assert!(!selection.message.contains("old plan"));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn stale_plan_stays_resolved_after_user_tool_assistant_and_turn_completion() {
     let scan = scan_fixture(&[
         json!({"type":"turn.started","turn_id":"turn-plan"}),

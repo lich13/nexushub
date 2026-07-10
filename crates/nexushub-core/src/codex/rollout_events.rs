@@ -840,6 +840,8 @@ fn event_turn_id(value: &Value) -> Option<String> {
         .or_else(|| value.pointer("/payload/event/turnId"))
         .or_else(|| value.pointer("/payload/payload/turn_id"))
         .or_else(|| value.pointer("/payload/payload/turnId"))
+        .or_else(|| value.pointer("/internal_chat_message_metadata_passthrough/turn_id"))
+        .or_else(|| value.pointer("/payload/internal_chat_message_metadata_passthrough/turn_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
 }
@@ -1822,7 +1824,8 @@ fn parse_pending_elicitation(value: &Value) -> Option<PendingElicitation> {
             .or_else(|| value.pointer("/params/turnId"))
             .or_else(|| value.pointer("/params/turn_id"))
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(str::to_string)
+            .or_else(|| event_turn_id(value)),
         item_id: payload
             .get("itemId")
             .or_else(|| payload.get("item_id"))
@@ -1831,7 +1834,8 @@ fn parse_pending_elicitation(value: &Value) -> Option<PendingElicitation> {
             .or_else(|| value.pointer("/params/itemId"))
             .or_else(|| value.pointer("/params/item_id"))
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(str::to_string)
+            .or_else(|| event_call_id(value)),
         questions,
     })
 }
