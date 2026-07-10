@@ -24,6 +24,7 @@ use uuid::Uuid;
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS: i64 = 6 * 60 * 60;
+pub const INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON: &str = "internal_memory_consolidation";
 pub const DEFAULT_LOGS_DB_COMPACT_QUICK_CHECK_TIMEOUT_SECONDS: u64 = 600;
 const PROBE_EVENT_ASSISTANT_MESSAGE_MAX_BYTES: usize = 4096;
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
@@ -411,12 +412,20 @@ impl ProbeRuntime {
         }
     }
 
-    pub fn build_event(&self, input: ProbeEventInput) -> ProbeBuiltEvent {
-        let suppression_reason = matches!(input.kind, ProbeEventInputKind::HookStop)
-            .then(|| input.last_assistant_message.as_deref())
-            .flatten()
-            .filter(|message| is_probe_machine_control_payload(message))
-            .map(|_| "internal_control_payload".to_string());
+    pub fn build_event(&self, mut input: ProbeEventInput) -> ProbeBuiltEvent {
+        let suppression_reason = input.suppression_reason.clone().or_else(|| {
+            matches!(input.kind, ProbeEventInputKind::HookStop)
+                .then(|| input.last_assistant_message.as_deref())
+                .flatten()
+                .filter(|message| is_probe_machine_control_payload(message))
+                .map(|_| "internal_control_payload".to_string())
+        });
+        if suppression_reason.is_some() {
+            input.transcript_path = None;
+            input.last_assistant_message = None;
+            input.body_source = None;
+            input.body_selection_diagnostics.clear();
+        }
         let event_type = probe_event_type(&input);
         let event_kind = probe_event_kind(&input, &event_type);
         let event_thread_id = input.thread_id.clone().or_else(|| input.session_id.clone());
@@ -578,6 +587,26 @@ impl ProbeRuntime {
             payload,
             suppression_reason,
         }
+    }
+
+    pub fn hook_context_suppression_reason(
+        &self,
+        cwd: Option<&str>,
+        transcript_path: Option<&str>,
+    ) -> Option<&'static str> {
+        if transcript_path.is_some_and(|path| !path.trim().is_empty()) {
+            return None;
+        }
+        let cwd = cwd.map(str::trim).filter(|value| !value.is_empty())?;
+        let cwd = Path::new(cwd);
+        if !cwd.is_absolute() {
+            return None;
+        }
+        let memory_root = self.resolved_codex_paths().home.join("memories");
+        let canonical_cwd = fs::canonicalize(cwd).ok()?;
+        let canonical_memory_root = fs::canonicalize(memory_root).ok()?;
+        (canonical_cwd == canonical_memory_root)
+            .then_some(INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON)
     }
 
     fn hook_command(&self) -> String {
@@ -1023,6 +1052,8 @@ pub struct ProbeEventInput {
     source_override: Option<String>,
     call_id: Option<String>,
     hook_kind: String,
+    #[serde(default)]
+    suppression_reason: Option<String>,
 }
 
 impl ProbeEventInput {
@@ -1057,6 +1088,7 @@ impl ProbeEventInput {
             } else {
                 kind.trim().to_string()
             },
+            suppression_reason: None,
         }
     }
 
@@ -1091,6 +1123,7 @@ impl ProbeEventInput {
             source_override: None,
             call_id: None,
             hook_kind: "completion".to_string(),
+            suppression_reason: None,
         }
     }
 
@@ -1138,6 +1171,14 @@ impl ProbeEventInput {
 
     pub fn with_call_id(mut self, call_id: Option<&str>) -> Self {
         self.call_id = call_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        self
+    }
+
+    pub fn with_suppression_reason(mut self, reason: Option<&str>) -> Self {
+        self.suppression_reason = reason
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
@@ -2239,6 +2280,90 @@ fn dedupe_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_hook_context_suppresses_exact_canonical_memory_roots() {
+        for layout in ["Users/gosu/.codex", "root/.codex", "custom/CODEX_HOME"] {
+            let root = unique_temp_dir("nexushub-probe-memory-hook-context");
+            let codex_home = root.join(layout);
+            let memory_root = codex_home.join("memories");
+            let normalized_memory_root = memory_root.join("nested").join("..");
+            fs::create_dir_all(codex_home.join("sessions")).unwrap();
+            fs::create_dir_all(memory_root.join("nested")).unwrap();
+            let mut config = Config::default();
+            config.codex.home = codex_home;
+            let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+            assert_eq!(
+                runtime.hook_context_suppression_reason(normalized_memory_root.to_str(), None),
+                Some(INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON)
+            );
+            assert_eq!(
+                runtime.hook_context_suppression_reason(memory_root.to_str(), Some("   ")),
+                Some(INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON)
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn probe_hook_context_identity_is_exact_and_fails_open() {
+        let root = unique_temp_dir("nexushub-probe-memory-hook-counterexamples");
+        let codex_home = root.join(".codex");
+        let memory_root = codex_home.join("memories");
+        let memory_child = memory_root.join("child");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_child).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+
+        for (cwd, transcript_path) in [
+            (None, None),
+            (Some(""), None),
+            (Some("memories"), None),
+            (workspace.to_str(), None),
+            (memory_child.to_str(), None),
+            (root.join("missing").to_str(), None),
+            (memory_root.to_str(), Some("/tmp/rollout.jsonl")),
+        ] {
+            assert_eq!(
+                runtime.hook_context_suppression_reason(cwd, transcript_path),
+                None,
+                "cwd={cwd:?} transcript_path={transcript_path:?}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn probe_memory_suppression_discards_body_even_if_a_caller_supplies_one() {
+        let config = Config::default();
+        let runtime = ProbeRuntime::new(config, PlatformPaths::for_kind(PlatformKind::Linux));
+        let memory_body = "MEMORY_BODY_MUST_NOT_REACH_SUMMARY_HASH_OR_BARK";
+
+        let event = runtime.build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-memory"),
+                Some("turn-memory"),
+                Some("thread-memory"),
+                None,
+                Some(memory_body),
+                "hook-stop",
+            )
+            .with_suppression_reason(Some(INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON)),
+        );
+
+        assert_eq!(
+            event.suppression_reason.as_deref(),
+            Some(INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON)
+        );
+        assert!(event.payload["last_assistant_message"].is_null());
+        assert!(!event.payload.to_string().contains(memory_body));
+        assert!(!event.bark_body.contains(memory_body));
+    }
 
     #[test]
     fn hook_status_reports_stale_when_hooks_json_contains_old_nexushub_command() {

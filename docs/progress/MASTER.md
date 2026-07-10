@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-07-10
-> **Mode**: V0.1.150_ACCEPTED
+> **Last Updated**: 2026-07-11
+> **Mode**: V0.1.151_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.150` notification-chain fix accepted in production<br>
-**Active Task**: Goal 19 completed on 2026-07-10. Suggestion/exclusion-only internal Hook control payloads stop before dedupe, storage, and Bark delivery; `request_user_input` notifies immediately through a fail-open `PreToolUse` Hook; nested rollout `turn_id` and `call_id`, persistent unresolved-action markers, paired Hook management, bounded Bark timeout, local gates, GitHub Release, Tencent Cloud deployment, official macOS installation, real dual-question notification acceptance, and bounded historical cleanup all passed.
+**Active Phase**: `v0.1.151` memory-consolidation notification suppression and release acceptance<br>
+**Active Task**: Goal 20 is in progress. TDD now identifies internal memory consolidation only when canonical Hook `cwd` exactly equals resolved `<CODEX_HOME>/memories` and transcript is missing, null, or empty; matching Stop and PreToolUse events discard body data and stop before dedupe, storage, and Bark. The complete local gate passed; implementation commit, GitHub Release, Tencent Cloud/macOS deployment, real replay/regression acceptance, and the authorized eight-row historical cleanup remain required before closure.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.150` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.150` is the current accepted production checkpoint.
+Rows before `v0.1.150` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.150` remains the accepted production checkpoint while `v0.1.151` is the active release target.
 
 ## Deep Refactor Goal Tracker
 
@@ -65,6 +65,7 @@ Rows before `v0.1.150` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 17: `v0.1.148` completion body race fix - completed on 2026-07-01. Stabilized rollout transcript reads before Probe/Bark body selection, honored CLI `turn_id` precedence, added non-sensitive body-selection diagnostics, and kept pending `proposed_plan`/`request_user_input` precedence.
 - [x] Goal 18: `v0.1.149` cleanup confirm button release acceptance - completed on 2026-07-01. Fixed desktop cleanup execute arg binding, kept Web RPC cleanup wire shape unchanged, verified visible Ops error feedback, published and deployed `v0.1.149`, installed the official macOS DMG, confirmed both cleanup buttons enter confirmation state without executing deletion, rechecked Probe/Bark, dangling thread, Stop Hook, and sensitive-path regressions, then cleaned release temp files.
 - [x] Goal 19: `v0.1.150` notification-chain fix and release acceptance - completed on 2026-07-10. TDD and the complete local gate cover internal control-payload suppression, immediate `request_user_input` notification through `PreToolUse`, paired Hook management, nested rollout turn/call tracking, persistent unresolved-action markers, fail-open/empty-stdout behavior, and bounded Bark timeout. Commit `06a6d8f` was published and deployed; real dual-question Bark acceptance, historical control-event suppression/replay and bounded cleanup, completion/dangling/Stop Hook regressions, macOS cleanup confirmation states, and scoped sensitive-route checks passed.
+- [ ] Goal 20: `v0.1.151` memory-consolidation notification suppression and release acceptance - in progress on 2026-07-11. The implementation and regression tests cover canonical memory-root identity, custom resolved Codex homes, path normalization, empty-transcript matching, fail-open counterexamples, body disposal, and zero dedupe/storage/Bark. Targeted tests and the complete workspace/Tauri/WebUI/install/package gate passed; implementation commit, release, dual-end deployment, real acceptance, bounded cleanup, evidence recording, and final cleanup are pending.
 
 ## Governance Status
 
@@ -78,7 +79,7 @@ Rows before `v0.1.150` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.150_ACCEPTED
+  mode: V0.1.151_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -333,12 +334,22 @@ git ls-remote --tags origin refs/tags/v0.1.145
 | macOS ARM64 Tauri | official `NexusHub-0.1.150-darwin-arm64.dmg` | native Tauri App plus one-shot Hook helper; desktop LAN WebUI left stopped | `/Applications/NexusHub.app`, bundled helper `/Applications/NexusHub.app/Contents/Resources/nexushub-webd`, `~/Library/Application Support/NexusHub/bin/nexushub-webd`, `~/Library/Application Support/NexusHub`, `~/Library/Logs/NexusHub`, `~/.codex` | App plist, bundled helper, and App Support helper all report `0.1.150`. Local `probe hook-status` is `managed` with exactly two current commands, no stale/empty groups, and two Hook-review trust entries. Real acceptance thread `019f4c74-e7fe-7730-968c-2a20d45879a6` emitted `call_TWu3iz1RBdpYmnFQmC4y1teO` and `call_gbK9qrk48okUfCHwTt1kYz5T` before each question was shown; both records use `scan_source=pre-tool-use-hook`, `body_source=request_user_input`, distinct option-correct bodies, and Bark `sent`. After both answers and more than the 300-second dedupe TTL, the DB still contains exactly two question events and two persistent markers, followed by completion `ee28c6c1-4494-4e9f-9ec8-57c8571c4670` with body `验收完成`. Historical `{"suggestions":[]}` and `{"exclude":[]}` Hook stdin replays both returned `recorded=false`, `duplicate=false`, `reason=internal_control_payload`, and `request_count=0`, with event/dedupe counts unchanged. SQLite online backup passed `integrity_check=ok` with SHA-256 `da1717a42fb9d07127201ab2c8d94b0593605576eedbe45221b98a9b4315a737`; an explicit guarded transaction deleted exactly the original authorized 15 control rows (`15 -> 0`), preserved later row `5181d7a4-b7cf-4b94-bab5-a01d88793606`, kept non-control history `258 -> 258`, and left the main DB `integrity_check=ok` (`274 -> 259` total). Computer Use verified archive `Dry-run -> 清理归档 -> 确认清理归档` and hidden `扫描隐藏线程 -> 清理隐藏线程 -> 确认清理隐藏`; both were cancelled, no real cleanup deletion ran, logs showed no new error, and App/helper processes were closed afterward. |
 | GitHub Release and Linux x86_64 Tauri | [v0.1.150](https://github.com/lich13/nexushub/releases/tag/v0.1.150) | GitHub Actions CI/Release plus Linux `xvfb` smoke | 15 uploaded Release assets | CI run `29096224955` and Release run `29097411711` completed with `success` at `06a6d8fe9b09f3d123e49236d2e1fed21b7fc37f`. Release published at `2026-07-10T14:05:45Z` with 15 expected assets: Linux AppImage/deb/rpm checksums and updater signature, Linux server tarball/checksum, macOS DMG/checksum, darwin updater tarball/checksum/signature, and `latest.json`. Downloaded Linux server tarball, DMG, and darwin updater tarball all passed their published sha256 files. `latest.json` reports `0.1.150`, only `darwin-aarch64` and `linux-x86_64` updater platforms, and non-empty 408/424-byte signatures. |
 
-Final cleanup removed the local Release download directory, the `v0.1.149` App rollback copy, the SQLite online-backup file plus WAL/SHM sidecars, and the mounted DMG. Tencent Cloud release tarballs, deploy wrappers, and unpack directories were removed; `/tmp` and `/var/tmp` retain only the active `nexushub-webd.service` `systemd-private` runtime directories.
+The `v0.1.150` final cleanup removed its local Release download directory, App rollback copy, SQLite online-backup file plus WAL/SHM sidecars, and mounted DMG. Tencent Cloud release tarballs, deploy wrappers, and unpack directories were removed; `/tmp` and `/var/tmp` retained only active `nexushub-webd.service` `systemd-private` runtime directories.
+
+## v0.1.151 Acceptance Matrix (In Progress)
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` | none | tracked source plus temporary gate/release/SQLite acceptance files | TDD red/green covers exact canonical `<CODEX_HOME>/memories` identity with missing/null/empty transcript, macOS/Linux-shaped and custom homes, normalized paths, body disposal, zero dedupe/storage/Bark, empty PreToolUse stdout, and fail-open counterexamples. Version files target `0.1.151`; targeted Probe/rollout/Hook tests and the complete workspace/Tauri fmt/test/Clippy, WebUI install/typecheck/test/build/build:tauri, install-script, Linux package `--check`, and diff gates passed. The implementation commit remains pending. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/var/lib/nexushub-webd/nexushub.sqlite*`, `/root/.codex` | Pending exact-tag deployment, paired Hook audit, canonical memory replay and positive control, scoped route/health checks, and guarded cleanup of the two authorized historical rows. |
+| macOS ARM64 Tauri | official `NexusHub-0.1.151-darwin-arm64.dmg` | native Tauri App plus one-shot Hook helper | `/Applications/NexusHub.app`, bundled helper, App Support helper, `~/.codex`, local Probe DB | Pending official DMG install, three-version checks, paired Hook audit, canonical memory replay, normal completion and sequential request-user-input acceptance, control-payload/completion/dangling/Stop/cleanup regressions, and guarded cleanup of the six authorized historical rows. |
+| GitHub Release and Linux x86_64 Tauri | planned [v0.1.151](https://github.com/lich13/nexushub/releases/tag/v0.1.151) | GitHub Actions CI/Release plus Linux `xvfb` smoke | expected 15 uploaded Release assets | Pending implementation push, successful CI, exact implementation tag, successful Release workflow, 15-asset audit, `latest.json` version/signatures, and published sha256 verification for the Linux server tarball, macOS DMG, and darwin updater tarball. |
 
 ## Session Log
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-11 | v0.1.151-memory-consolidation-suppression | Started Goal 20 after real memory-consolidation completions still produced Bark notifications on `v0.1.150`; the active identity rule is exact canonical resolved memory root plus missing/null/empty transcript, with no body-keyword filtering and fail-open handling for all counterexamples. |
 | 2026-07-10 | v0.1.150-final-accepted | Closed Goal 19: notification-chain implementation and complete local gates passed; commit `06a6d8f`, CI `29096224955`, Release `29097411711`, and 15 assets were verified; Tencent Cloud and official macOS DMG run `0.1.150`; paired Hooks were trusted through Codex review; real sequential questions generated two immediate, option-correct Bark events with distinct `call_id` values and persistent no-repeat markers; control-only payloads were suppressed before dedupe/storage/Bark; the authorized 15 historical control rows were backed up and deleted while one later row was preserved; completion, dangling thread, Stop Hook, cleanup confirmation, public UI, and sensitive-path regressions passed without executing real user cleanup. |
 | 2026-07-01 | v0.1.149-final-accepted | Closed the supplemental cleanup confirmation release: local gates passed, `main` and tag `v0.1.149` were pushed, GitHub CI/Release succeeded, release assets and sha256 files were verified, Tencent Cloud runs `nexushub-webd 0.1.149` with public/sensitive-path checks passing, official macOS DMG installs `0.1.149` helpers, both cleanup buttons reach visible confirmation state without executing deletion, Probe/Bark final-body selection, dangling thread pruning, and Stop Hook management did not regress, and temporary local/cloud release files were cleaned. |
 | 2026-07-01 | v0.1.149-cleanup-confirm-buttons | Started the supplemental release cycle for macOS desktop cleanup confirm buttons: Tauri cleanup execute payloads must be wrapped under `request`, Web RPC shape must stay unchanged, and Ops cleanup errors must render visible feedback before release/deploy/macOS acceptance. |

@@ -437,8 +437,8 @@ async fn handle_hook_stop_command(
 
 async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
     let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
-    let event_input = hook_request_user_input_event_input(stdin_payload)?;
     let config = Config::load(config_path)?;
+    let event_input = hook_request_user_input_event_input(&config, stdin_payload)?;
     let db = open_panel_db(&config)?;
     let event = probe_runtime(&config).build_event(event_input);
     record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
@@ -461,7 +461,32 @@ struct HookRequestUserInputToolInput {
     questions: Vec<UserInputQuestion>,
 }
 
-fn hook_request_user_input_event_input(payload: Value) -> Result<ProbeEventInput> {
+fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Result<ProbeEventInput> {
+    anyhow::ensure!(
+        read_string_field(&payload, &["hook_event_name"]).as_deref() == Some("PreToolUse"),
+        "unexpected hook_event_name"
+    );
+    anyhow::ensure!(
+        read_string_field(&payload, &["tool_name"]).as_deref() == Some("request_user_input"),
+        "unexpected tool_name"
+    );
+    if let Some(reason) = hook_context_suppression_reason(config, &payload) {
+        let session_id = read_string_field(&payload, &["session_id", "sessionId"]);
+        let turn_id = read_string_field(&payload, &["turn_id", "turnId"]);
+        let tool_use_id = read_string_field(&payload, &["tool_use_id", "toolUseId"]);
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            session_id.as_deref(),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            "reply-needed",
+        )
+        .with_body_source(Some("request_user_input"))
+        .with_pre_tool_use_scan_source()
+        .with_call_id(tool_use_id.as_deref())
+        .with_suppression_reason(Some(reason)));
+    }
     let payload: HookRequestUserInputPayload =
         serde_json::from_value(payload).context("parse PreToolUse payload")?;
     anyhow::ensure!(
@@ -566,6 +591,23 @@ fn hook_stop_event_input(
         .or(payload_thread_id.clone())
         .or(payload_session_id.clone());
     let event_turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id.clone());
+    let event_kind = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
+        .unwrap_or_else(|| kind.to_string());
+    if let Some(reason) =
+        stdin_payload.and_then(|payload| hook_context_suppression_reason(config, payload))
+    {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            event_thread_id.as_deref(),
+            event_turn_id.as_deref(),
+            payload_session_id.as_deref(),
+            None,
+            None,
+            &event_kind,
+        )
+        .with_suppression_reason(Some(reason)));
+    }
     let resolved_last_assistant_message = hook_stop_last_assistant_message(
         payload_transcript_path.as_deref(),
         event_turn_id.as_deref(),
@@ -576,10 +618,6 @@ fn hook_stop_event_input(
             .as_deref()
             .and_then(|thread_id| local_thread_title(config, thread_id).ok().flatten())
     });
-    let event_kind = stdin_payload
-        .as_ref()
-        .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
-        .unwrap_or_else(|| kind.to_string());
     Ok(ProbeEventInput::hook_stop_with_context(
         event_thread_id.as_deref(),
         event_turn_id.as_deref(),
@@ -810,6 +848,29 @@ fn read_string_field(value: &Value, keys: &[&str]) -> Option<String> {
             .filter(|text| !text.is_empty())
             .map(str::to_string)
     })
+}
+
+fn hook_context_suppression_reason(config: &Config, payload: &Value) -> Option<&'static str> {
+    let transcript_path = hook_transcript_path_for_identity(payload)?;
+    let cwd = read_string_field(payload, &["cwd"]);
+    probe_runtime(config)
+        .hook_context_suppression_reason(cwd.as_deref(), transcript_path.as_deref())
+}
+
+fn hook_transcript_path_for_identity(payload: &Value) -> Option<Option<String>> {
+    let mut transcript_path = None;
+    for key in ["transcript_path", "transcriptPath"] {
+        let Some(value) = payload.get(key) else {
+            continue;
+        };
+        match value {
+            Value::Null => {}
+            Value::String(path) if path.trim().is_empty() => {}
+            Value::String(path) => transcript_path = Some(path.trim().to_string()),
+            _ => return None,
+        }
+    }
+    Some(transcript_path)
 }
 
 fn notify_completion_context(
@@ -2684,6 +2745,257 @@ last_error = "old nexushub request hook"
             1
         );
 
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_suppresses_internal_memory_consolidation_before_body_dedupe_db_and_bark() {
+        let dir = temp_test_dir("nexushub-memory-hook-stop-suppression");
+        let codex_home = dir.join("custom-codex-home");
+        let memory_root = codex_home.join("memories");
+        let normalized_cwd = memory_root.join("nested").join("..");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(memory_root.join("nested")).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let memory_body = "MEMORY_CONSOLIDATION_BODY_MUST_NOT_BE_READ_OR_STORED";
+
+        let event_input = hook_stop_event_input(
+            &config,
+            Some(&json!({
+                "cwd": normalized_cwd,
+                "hook_event_name": "Stop",
+                "ephemeral": true,
+                "session_id": "019f4d6c-a841-7033-84bd-d05766061c0a",
+                "turn_id": "turn-memory",
+                "transcript_path": null,
+                "last_assistant_message": memory_body,
+            })),
+            None,
+            None,
+            "hook-stop",
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert_eq!(
+            event.suppression_reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert!(event.payload["last_assistant_message"].is_null());
+        assert!(!event.bark_body.contains(memory_body));
+
+        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+        assert_eq!(
+            result.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(!result.outcome.recorded);
+        assert!(!result.outcome.duplicate);
+        assert_eq!(
+            result.bark.reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert_eq!(result.bark.request_count, 0);
+
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hook_stop_memory_identity_is_exact_and_fails_open_for_counterexamples() {
+        let dir = temp_test_dir("nexushub-memory-hook-stop-counterexamples");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        let ordinary_cwd = dir.join("workspace");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        fs::create_dir_all(&ordinary_cwd).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "turn-user",
+                    "last_agent_message": "用户线程完成"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+
+        let payloads = [
+            json!({
+                "cwd": ordinary_cwd,
+                "session_id": "ordinary-empty-transcript",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "正文提及 MEMORY.md、memory_summary.md 和记忆整理"
+            }),
+            json!({
+                "cwd": memory_root,
+                "session_id": "memory-with-transcript",
+                "turn_id": "turn-user",
+                "transcript_path": transcript,
+                "last_assistant_message": "显式用户线程"
+            }),
+            json!({
+                "session_id": "missing-cwd",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "普通用户线程"
+            }),
+            json!({
+                "cwd": dir.join("does-not-exist"),
+                "session_id": "invalid-cwd",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "普通用户线程"
+            }),
+            json!({
+                "cwd": memory_root,
+                "session_id": "invalid-transcript-field",
+                "turn_id": "turn-user",
+                "transcript_path": 42,
+                "last_assistant_message": "普通用户线程"
+            }),
+        ];
+
+        for payload in payloads {
+            let event_input =
+                hook_stop_event_input(&config, Some(&payload), None, None, "hook-stop").unwrap();
+            let event = probe_runtime(&config).build_event(event_input);
+            assert_ne!(
+                event.suppression_reason.as_deref(),
+                Some("internal_memory_consolidation"),
+                "payload should fail open: {payload}"
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hook_request_user_input_memory_context_with_transcript_or_invalid_field_fails_open() {
+        let dir = temp_test_dir("nexushub-memory-pre-tool-use-counterexamples");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+
+        for transcript_path in [json!("/tmp/user-rollout.jsonl"), json!(42)] {
+            let event_input = hook_request_user_input_event_input(
+                &config,
+                json!({
+                    "cwd": memory_root,
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "thread-user-question",
+                    "turn_id": "turn-user-question",
+                    "tool_name": "request_user_input",
+                    "tool_use_id": "call-user-question",
+                    "tool_input": {
+                        "questions": [{
+                            "id": "mode",
+                            "question": "Choose a mode?",
+                            "options": [{"label": "Continue"}]
+                        }]
+                    },
+                    "transcript_path": transcript_path
+                }),
+            )
+            .unwrap();
+            let event = probe_runtime(&config).build_event(event_input);
+            assert_ne!(
+                event.suppression_reason.as_deref(),
+                Some("internal_memory_consolidation")
+            );
+            assert!(event.bark_body.contains("Choose a mode?"));
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_request_user_input_suppresses_memory_context_without_db_dedupe_or_bark() {
+        let dir = temp_test_dir("nexushub-memory-pre-tool-use-suppression");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let event_input = hook_request_user_input_event_input(
+            &config,
+            json!({
+                "cwd": memory_root,
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-memory-question",
+                "turn_id": "turn-memory-question",
+                "tool_name": "request_user_input",
+                "tool_use_id": "call-memory-question",
+                "tool_input": {
+                    "questions": [{
+                        "id": "memory",
+                        "question": "Internal memory question?",
+                        "options": [{"label": "Continue"}]
+                    }]
+                },
+                "transcript_path": null
+            }),
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert_eq!(
+            event.suppression_reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(!outcome.recorded);
+        assert!(!outcome.duplicate);
+        assert_eq!(
+            bark.reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert_eq!(bark.request_count, 0);
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

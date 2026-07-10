@@ -42,6 +42,43 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
 }
 
 #[test]
+fn hook_request_user_input_memory_context_is_suppressed_with_empty_stdout() {
+    let (root, config_path, mut config) = test_config("memory-suppressed");
+    let memory_root = config.codex.home.join("memories");
+    fs::create_dir_all(&memory_root).unwrap();
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.notify_reply_needed = true;
+    config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+    write_config(&config_path, &config);
+    let db =
+        PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap()).unwrap();
+    db.set_secret_setting_bytes("probe_bark_device_key", b"test-device-key")
+        .unwrap();
+    let mut payload = pre_tool_use_payload(None);
+    payload["cwd"] = json!(memory_root);
+    payload["tool_input"] = json!("must not be parsed for internal memory work");
+
+    let output = run_hook(&config_path, payload.to_string().as_bytes());
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert!(db.list_probe_events(10).unwrap().is_empty());
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn hook_request_user_input_invalid_stdin_fails_open_without_stdout_or_recording() {
     let (root, config_path, config) = test_config("invalid");
     write_config(&config_path, &config);
