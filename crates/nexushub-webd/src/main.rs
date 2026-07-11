@@ -487,26 +487,27 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
         .with_call_id(tool_use_id.as_deref())
         .with_suppression_reason(Some(reason)));
     }
-    let payload: HookRequestUserInputPayload =
-        serde_json::from_value(payload).context("parse PreToolUse payload")?;
+    let hook_payload: HookRequestUserInputPayload =
+        serde_json::from_value(payload.clone()).context("parse PreToolUse payload")?;
     anyhow::ensure!(
-        payload.hook_event_name == "PreToolUse",
+        hook_payload.hook_event_name == "PreToolUse",
         "unexpected hook_event_name"
     );
     anyhow::ensure!(
-        payload.tool_name == "request_user_input",
+        hook_payload.tool_name == "request_user_input",
         "unexpected tool_name"
     );
-    let session_id = required_hook_field(&payload.session_id, "session_id")?;
-    let turn_id = required_hook_field(&payload.turn_id, "turn_id")?;
-    let tool_use_id = required_hook_field(&payload.tool_use_id, "tool_use_id")?;
-    let questions = normalize_hook_questions(payload.tool_input.questions)?;
+    let session_id = required_hook_field(&hook_payload.session_id, "session_id")?;
+    let turn_id = required_hook_field(&hook_payload.turn_id, "turn_id")?;
+    let tool_use_id = required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
+    let questions = normalize_hook_questions(hook_payload.tool_input.questions)?;
     let elicitation = PendingElicitation {
         turn_id: Some(turn_id.to_string()),
         item_id: Some(tool_use_id.to_string()),
         questions,
     };
     let body = probe_service::format_probe_pending_elicitation(&elicitation);
+    let thread_title = hook_thread_title(config, Some(&payload), Some(session_id));
 
     Ok(ProbeEventInput::hook_stop_with_context(
         Some(session_id),
@@ -518,7 +519,8 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
     )
     .with_body_source(Some("request_user_input"))
     .with_pre_tool_use_scan_source()
-    .with_call_id(Some(tool_use_id)))
+    .with_call_id(Some(tool_use_id))
+    .with_thread_title(thread_title.as_deref()))
 }
 
 fn required_hook_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
@@ -561,6 +563,18 @@ fn normalize_hook_questions(
     Ok(questions)
 }
 
+fn hook_thread_title(
+    config: &Config,
+    payload: Option<&Value>,
+    thread_id: Option<&str>,
+) -> Option<String> {
+    payload
+        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]))
+        .or_else(|| {
+            thread_id.and_then(|thread_id| local_thread_title(config, thread_id).ok().flatten())
+        })
+}
+
 fn hook_stop_event_input(
     config: &Config,
     stdin_payload: Option<&Value>,
@@ -580,9 +594,6 @@ fn hook_stop_event_input(
     let payload_transcript_path = stdin_payload
         .as_ref()
         .and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
-    let payload_thread_title = stdin_payload
-        .as_ref()
-        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]));
     let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
         read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
     });
@@ -613,11 +624,7 @@ fn hook_stop_event_input(
         event_turn_id.as_deref(),
         payload_last_assistant_message.as_deref(),
     )?;
-    let thread_title = payload_thread_title.or_else(|| {
-        event_thread_id
-            .as_deref()
-            .and_then(|thread_id| local_thread_title(config, thread_id).ok().flatten())
-    });
+    let thread_title = hook_thread_title(config, stdin_payload, event_thread_id.as_deref());
     Ok(ProbeEventInput::hook_stop_with_context(
         event_thread_id.as_deref(),
         event_turn_id.as_deref(),

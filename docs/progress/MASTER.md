@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-07-11
-> **Mode**: V0.1.151_IN_PROGRESS
+> **Mode**: V0.1.152_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.151` accepted production checkpoint<br>
-**Active Task**: None. Goal 20 is complete. Internal memory consolidation is identified only when canonical Hook `cwd` exactly equals resolved `<CODEX_HOME>/memories` and transcript is missing, null, or empty; matching Stop and PreToolUse events discard body data and stop before dedupe, storage, and Bark. Full local gates, GitHub Release, Tencent Cloud/macOS deployment, real replay/regression acceptance, the authorized eight-row historical cleanup, and final temporary/build cleanup all passed.
+**Active Phase**: `v0.1.152` question-notification thread-title fix and release acceptance<br>
+**Active Task**: Goal 21 is in progress. PreToolUse `request_user_input` events now resolve the same current Codex thread title as Stop Hook events, with explicit payload title precedence and fail-open fallback when local state is unavailable. TDD and the complete local workspace/Tauri/WebUI/install/package gate are green; Release, dual-end deployment, real Hook acceptance, final documentation, and cleanup remain required before acceptance.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.151` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.151` is the accepted production checkpoint.
+Rows before `v0.1.152` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.152` is the active release target; `v0.1.151` remains the accepted production checkpoint until Goal 21 closes.
 
 ## Deep Refactor Goal Tracker
 
@@ -66,6 +66,7 @@ Rows before `v0.1.151` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 18: `v0.1.149` cleanup confirm button release acceptance - completed on 2026-07-01. Fixed desktop cleanup execute arg binding, kept Web RPC cleanup wire shape unchanged, verified visible Ops error feedback, published and deployed `v0.1.149`, installed the official macOS DMG, confirmed both cleanup buttons enter confirmation state without executing deletion, rechecked Probe/Bark, dangling thread, Stop Hook, and sensitive-path regressions, then cleaned release temp files.
 - [x] Goal 19: `v0.1.150` notification-chain fix and release acceptance - completed on 2026-07-10. TDD and the complete local gate cover internal control-payload suppression, immediate `request_user_input` notification through `PreToolUse`, paired Hook management, nested rollout turn/call tracking, persistent unresolved-action markers, fail-open/empty-stdout behavior, and bounded Bark timeout. Commit `06a6d8f` was published and deployed; real dual-question Bark acceptance, historical control-event suppression/replay and bounded cleanup, completion/dangling/Stop Hook regressions, macOS cleanup confirmation states, and scoped sensitive-route checks passed.
 - [x] Goal 20: `v0.1.151` memory-consolidation notification suppression and release acceptance - completed on 2026-07-11. TDD and the complete local gate cover canonical memory-root identity, custom resolved Codex homes, path normalization, empty-transcript matching, fail-open counterexamples, body disposal, and zero dedupe/storage/Bark. Commit `ec08c1d` was published as `v0.1.151`; CI/Release, exact-tag Tencent Cloud and official macOS DMG deployment, dual-end memory/control replay, normal completion and sequential question notifications, completion/dangling/Stop/cleanup regressions, authorized `6 + 2` historical cleanup, scoped route checks, and final local/cloud cleanup all passed.
+- [ ] Goal 21: `v0.1.152` question-notification thread-title fix and release acceptance - in progress on 2026-07-11. TDD covers current local title resolution, explicit Hook payload precedence, invalid local-state fail-open behavior, empty stdout, question body/call identity preservation, and existing memory suppression. The complete workspace/Tauri fmt, test, and Clippy gate, WebUI install/typecheck/238 tests/build/build:tauri, install-script tests, Linux package `--check`, and diff check passed; GitHub Release, Tencent Cloud/macOS deployment, real Bark title acceptance, regressions, and final cleanup remain pending.
 
 ## Governance Status
 
@@ -79,7 +80,7 @@ Rows before `v0.1.151` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.151_ACCEPTED
+  mode: V0.1.152_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -351,6 +352,7 @@ The `v0.1.151` final cleanup removed the local Release download, real Hook test 
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-11 | v0.1.152-thread-title-fix-start | Started Goal 21 after a real PreToolUse `request_user_input` event produced `等待回复：未命名线程` while the same thread's later Stop Hook resolved `审计并统一Loon配置逻辑`. TDD now routes explicit or current local Codex titles into immediate question events while preserving fail-open, suppression, call identity, and safety boundaries; the complete local gate passed and release acceptance remains pending. |
 | 2026-07-11 | v0.1.151-final-accepted | Closed Goal 20 after real memory-consolidation completions still produced Bark notifications on `v0.1.150`: exact canonical resolved memory root plus missing/null/empty transcript suppression shipped in `ec08c1d`; full gates, CI/Release, 15 assets, Tencent Cloud and official macOS deployment, dual-end memory/control replay, normal completion and sequential question notifications, completion/dangling/Stop/cleanup regressions, guarded `6 + 2` history cleanup, public/sensitive-path checks, and final local/cloud cleanup all passed. |
 | 2026-07-10 | v0.1.150-final-accepted | Closed Goal 19: notification-chain implementation and complete local gates passed; commit `06a6d8f`, CI `29096224955`, Release `29097411711`, and 15 assets were verified; Tencent Cloud and official macOS DMG run `0.1.150`; paired Hooks were trusted through Codex review; real sequential questions generated two immediate, option-correct Bark events with distinct `call_id` values and persistent no-repeat markers; control-only payloads were suppressed before dedupe/storage/Bark; the authorized 15 historical control rows were backed up and deleted while one later row was preserved; completion, dangling thread, Stop Hook, cleanup confirmation, public UI, and sensitive-path regressions passed without executing real user cleanup. |
 | 2026-07-01 | v0.1.149-final-accepted | Closed the supplemental cleanup confirmation release: local gates passed, `main` and tag `v0.1.149` were pushed, GitHub CI/Release succeeded, release assets and sha256 files were verified, Tencent Cloud runs `nexushub-webd 0.1.149` with public/sensitive-path checks passing, official macOS DMG installs `0.1.149` helpers, both cleanup buttons reach visible confirmation state without executing deletion, Probe/Bark final-body selection, dangling thread pruning, and Stop Hook management did not regress, and temporary local/cloud release files were cleaned. |

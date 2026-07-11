@@ -1,4 +1,5 @@
 use nexushub_core::{config::Config, db::PanelDb, platform::PlatformKind};
+use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{
     fs,
@@ -34,9 +35,114 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
     assert_eq!(events[0].payload["body_source"], "request_user_input");
     assert_eq!(events[0].payload["scan_source"], "pre-tool-use-hook");
     assert!(events[0].payload["transcript_path"].is_null());
+    assert_eq!(events[0].title.as_deref(), Some("需要回复"));
+    assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
     assert!(events[0].payload["body_summary"]
         .as_str()
         .is_some_and(|body| body.contains("Choose a mode?") && body.contains("Safe mode")));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
+    let (root, config_path, config) = test_config("local-title");
+    seed_local_thread_title(
+        &config,
+        "thread-hook",
+        "我想把我本机的 Loon 配置和远程 Mihomo 配置进行逻辑统一，请仔细审计。",
+        "审计并统一Loon配置逻辑",
+    );
+    write_config(&config_path, &config);
+
+    let output = run_hook(
+        &config_path,
+        pre_tool_use_payload(None).to_string().as_bytes(),
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let events = db.list_probe_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].title.as_deref(), Some("审计并统一Loon配置逻辑"));
+    assert_eq!(events[0].payload["thread_title"], "审计并统一Loon配置逻辑");
+    assert_eq!(
+        events[0].payload["bark"]["title"],
+        "等待回复：审计并统一Loon配置逻辑"
+    );
+    assert_eq!(events[0].payload["call_id"], "call-hook");
+    assert!(events[0].payload["body_summary"]
+        .as_str()
+        .is_some_and(|body| body.contains("Choose a mode?") && body.contains("Safe mode")));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_prefers_explicit_payload_thread_title() {
+    let (root, config_path, config) = test_config("explicit-title");
+    seed_local_thread_title(
+        &config,
+        "thread-hook",
+        "Local first message",
+        "Local generated title",
+    );
+    write_config(&config_path, &config);
+    let mut payload = pre_tool_use_payload(None);
+    payload["thread_title"] = json!("Explicit hook title");
+
+    let output = run_hook(&config_path, payload.to_string().as_bytes());
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let events = db.list_probe_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].title.as_deref(), Some("Explicit hook title"));
+    assert_eq!(events[0].payload["thread_title"], "Explicit hook title");
+    assert_eq!(
+        events[0].payload["bark"]["title"],
+        "等待回复：Explicit hook title"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_fails_open_when_local_thread_state_is_invalid() {
+    let (root, config_path, config) = test_config("invalid-local-title-state");
+    fs::write(
+        config.codex.home.join("state_5.sqlite"),
+        b"not a sqlite database",
+    )
+    .unwrap();
+    write_config(&config_path, &config);
+
+    let output = run_hook(
+        &config_path,
+        pre_tool_use_payload(None).to_string().as_bytes(),
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let events = db.list_probe_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].title.as_deref(), Some("需要回复"));
+    assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -222,4 +328,46 @@ fn test_config(name: &str) -> (PathBuf, PathBuf, Config) {
 fn write_config(path: &Path, config: &Config) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, toml::to_string_pretty(config).unwrap()).unwrap();
+}
+
+fn seed_local_thread_title(
+    config: &Config,
+    thread_id: &str,
+    first_user_message: &str,
+    current_title: &str,
+) {
+    let state_db = config.codex.home.join("state_5.sqlite");
+    let conn = Connection::open(state_db).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            first_user_message TEXT,
+            updated_at INTEGER,
+            rollout_path TEXT
+        );
+        "#,
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads(id, title, first_user_message, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4, NULL)",
+        params![
+            thread_id,
+            first_user_message,
+            first_user_message,
+            chrono::Utc::now().timestamp_millis()
+        ],
+    )
+    .unwrap();
+    fs::write(
+        config.codex.home.join("session_index.jsonl"),
+        json!({
+            "id": thread_id,
+            "thread_name": current_title,
+            "updated_at": "2026-07-11T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
 }
