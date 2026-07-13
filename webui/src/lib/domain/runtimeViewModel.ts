@@ -855,7 +855,8 @@ function validGoalTokenBudget(value: string): boolean {
   return !value.trim() || goalTokenBudgetValue(value) !== null;
 }
 
-export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): string {
+export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean, failed = false): string {
+  if (failed) return "读取失败";
   if (!goal) return loading ? "读取中" : "未设置";
   if (goal.available === false) return "未接入";
   switch (goal.status) {
@@ -867,6 +868,10 @@ export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): 
       return "已清除";
     case "blocked":
       return "阻塞";
+    case "usageLimited":
+      return "用量受限";
+    case "budgetLimited":
+      return "预算已用尽";
     case "complete":
     case "completed":
       return "完成";
@@ -881,25 +886,35 @@ export function goalStatusLabel(goal: CodexGoal | undefined, loading: boolean): 
 
 export function goalStatusTone(goal: CodexGoal | undefined): "success" | "warning" | "danger" | undefined {
   if (!goal) return undefined;
-  if (goal.available === false || goal.status === "blocked" || goal.status === "missing_thread") return "danger";
+  if (
+    goal.available === false
+    || goal.status === "blocked"
+    || goal.status === "usageLimited"
+    || goal.status === "budgetLimited"
+    || goal.status === "missing_thread"
+    || goal.status === "unavailable"
+  ) return "danger";
   if (goal.status === "paused" || goal.status === "cleared" || goal.status === "idle") return "warning";
-  return "success";
+  if (["active", "complete", "completed"].includes(goal.status)) return "success";
+  return undefined;
 }
 
 export function goalControlState(
   goal: CodexGoal | undefined,
-  options: { busy?: boolean; objective?: string; tokenBudget?: string } = {}
+  options: { busy?: boolean; objective?: string; tokenBudget?: string; queryReady?: boolean } = {}
 ): { saveDisabled: boolean; clearDisabled: boolean; pauseDisabled: boolean; resumeDisabled: boolean } {
   const unavailable = goal?.available === false;
-  const busy = Boolean(options.busy) || unavailable;
+  const queryReady = options.queryReady ?? Boolean(goal);
+  const busy = Boolean(options.busy) || unavailable || !queryReady;
   const objective = options.objective ?? goal?.objective ?? "";
-  const hasSavedObjective = Boolean(goal?.objective?.trim());
+  const hasGoal = Boolean(goal?.enabled && goal.objective?.trim());
   const status = goal?.status;
+  const resumable = status !== undefined && ["paused", "blocked", "usageLimited", "budgetLimited", "complete"].includes(status);
   return {
     saveDisabled: busy || !objective.trim() || !validGoalTokenBudget(options.tokenBudget ?? ""),
-    clearDisabled: busy || !hasSavedObjective,
-    pauseDisabled: busy || !hasSavedObjective || status === "paused" || status === "cleared" || status === "idle",
-    resumeDisabled: busy || !hasSavedObjective || status === "active"
+    clearDisabled: busy || !hasGoal,
+    pauseDisabled: busy || !hasGoal || status !== "active",
+    resumeDisabled: busy || !hasGoal || !resumable
   };
 }
 

@@ -21,17 +21,22 @@ export function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const currentGoal = goal.data;
+  const queryError = goal.isError
+    ? goal.error instanceof Error ? goal.error.message : "Goal 读取失败"
+    : null;
+
+  useEffect(() => {
+    setDirty(false);
+    setError(null);
+    setObjective("");
+    setTokenBudget("");
+  }, [threadId]);
 
   useEffect(() => {
     if (!currentGoal || dirty) return;
     setObjective(currentGoal.objective ?? "");
     setTokenBudget(currentGoal.token_budget === null || currentGoal.token_budget === undefined ? "" : String(currentGoal.token_budget));
   }, [currentGoal, dirty]);
-
-  useEffect(() => {
-    setDirty(false);
-    setError(null);
-  }, [threadId]);
 
   const afterGoalSuccess = useCallback((next: CodexGoal, message: string) => {
     setDirty(false);
@@ -42,8 +47,11 @@ export function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
   }, [onFeedback]);
 
   const onGoalError = useCallback((err: Error) => {
-    setError(err.message);
-    onFeedback(err.message);
+    const message = err.message.includes("resulting state is unknown")
+      ? "Goal 操作超时，结果未知，已重新查询"
+      : err.message;
+    setError(message);
+    onFeedback(message);
   }, [onFeedback]);
 
   const goalActions = useThreadGoalActions({
@@ -59,13 +67,14 @@ export function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
   const resumeGoalMutation = goalActions.resume;
 
   const busy = saveGoalMutation.isPending || clearGoalMutation.isPending || pauseGoalMutation.isPending || resumeGoalMutation.isPending;
-  const controls = goalControlState(currentGoal, { busy, objective, tokenBudget });
+  const controls = goalControlState(currentGoal, { busy, objective, tokenBudget, queryReady: goal.isSuccess });
   const unavailable = currentGoal?.available === false;
+  const visibleError = error ?? queryError;
 
   return (
     <Panel title="Goal" icon={<ClipboardCheck size={18} />}>
       <div className="settings-meta-grid">
-        <Metric label="状态" value={goalStatusLabel(currentGoal, goal.isLoading)} tone={goalStatusTone(currentGoal)} />
+        <Metric label="状态" value={goalStatusLabel(currentGoal, goal.isLoading, goal.isError)} tone={goal.isError ? "danger" : goalStatusTone(currentGoal)} />
         <Metric label="预算" value={currentGoal?.token_budget === null || currentGoal?.token_budget === undefined ? "无" : String(currentGoal.token_budget)} />
         {currentGoal?.completed_at ? <Metric label="完成时间" value={formatGoalTimestamp(currentGoal.completed_at)} /> : null}
         {currentGoal?.blocked_reason ? <Metric label="阻塞原因" value={currentGoal.blocked_reason} tone="danger" /> : null}
@@ -84,7 +93,7 @@ export function ThreadGoalPanel({ threadId, csrfToken, onFeedback }: {
         <button className="secondary-button" disabled={controls.pauseDisabled || unavailable} onClick={() => pauseGoalMutation.mutate()}><Square size={17} />暂停</button>
         <button className="secondary-button" disabled={controls.resumeDisabled || unavailable} onClick={() => resumeGoalMutation.mutate()}><Play size={17} />恢复</button>
       </div>
-      {error && <div className="form-error">{error}</div>}
+      {visibleError && <div className="form-error">{visibleError}</div>}
       {unavailable && <div className="muted-row">Goal 接口未接入</div>}
     </Panel>
   );

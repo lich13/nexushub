@@ -30,7 +30,7 @@ pub(crate) async fn codex_goal_get(
             thread_id: query.thread_id,
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::goal_get_plan(&state, plan)?)
+    ok(linux_adapter::goal_get_plan(&state, plan).await?)
 }
 
 pub(crate) async fn codex_goal_set(
@@ -46,6 +46,7 @@ pub(crate) async fn codex_goal_set(
         .save(payload)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .await
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
@@ -62,6 +63,7 @@ pub(crate) async fn codex_goal_clear(
         .clear(payload.thread_id.as_deref())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .await
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
@@ -76,6 +78,7 @@ pub(crate) async fn codex_goal_pause(
     let plan = linux_adapter::goal_pause_plan(&state, thread_id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .await
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }
 
@@ -90,5 +93,6 @@ pub(crate) async fn codex_goal_resume(
     let plan = linux_adapter::goal_resume_plan(&state, thread_id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
     ok(linux_adapter::apply_goal_command_plan(&state, plan)
+        .await
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
 }

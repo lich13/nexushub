@@ -688,6 +688,7 @@ export type CodexGoalStatus = "idle" | "active" | "paused" | "cleared" | "blocke
 export type CodexGoal = {
   available: boolean;
   enabled: boolean;
+  thread_id?: string | null;
   objective: string | null;
   token_budget: number | null;
   status: CodexGoalStatus;

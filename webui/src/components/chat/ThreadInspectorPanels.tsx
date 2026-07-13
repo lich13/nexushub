@@ -66,7 +66,7 @@ export function ThreadInspectorPanels({
         )}
       </Panel>
 
-      <ThreadGoalPanel threadId={summary.id} csrfToken={csrfToken} onFeedback={onFeedback} />
+      <ThreadGoalPanel key={summary.id} threadId={summary.id} csrfToken={csrfToken} onFeedback={onFeedback} />
 
       <Panel title="复制与路径" icon={<Files size={18} />}>
         <Metric label="线程 ID" value={copyId || "无"} wide />

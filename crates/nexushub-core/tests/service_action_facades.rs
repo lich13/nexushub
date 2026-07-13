@@ -1,7 +1,4 @@
-use nexushub_core::{
-    codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
-    db::ThreadGoal,
-};
+use nexushub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
 use nexushub_core::{
     config::Config,
     platform::{PlatformKind, PlatformPaths},
@@ -740,36 +737,20 @@ fn goal_facades_cover_get_save_clear_pause_and_resume_as_core_plans() {
     assert_eq!(clear.command.command, GoalCommandKind::Clear);
     assert_eq!(clear.command.update.status, "cleared");
 
-    let existing = ThreadGoal {
-        thread_id: "thread-a".to_string(),
-        objective: Some("Keep context".to_string()),
-        token_budget: Some(512),
-        status: "active".to_string(),
-        created_at: 1,
-        updated_at: 2,
-        completed_at: None,
-        blocked_reason: None,
-    };
-    let paused = nexushub_core::services::goals::plan_goal_pause_with_capability(
-        &linux,
-        " thread-a ",
-        Some(&existing),
-    )
-    .unwrap();
+    let paused =
+        nexushub_core::services::goals::plan_goal_pause_with_capability(&linux, " thread-a ")
+            .unwrap();
     assert_eq!(paused.command.command, GoalCommandKind::Pause);
-    assert_eq!(
-        paused.command.update.objective.as_deref(),
-        Some("Keep context")
-    );
+    assert_eq!(paused.command.update.objective, None);
+    assert_eq!(paused.command.update.token_budget, None);
     assert_eq!(paused.command.update.status, "paused");
 
-    let resumed = nexushub_core::services::goals::plan_goal_resume_with_capability(
-        &linux,
-        " thread-a ",
-        Some(&existing),
-    )
-    .unwrap();
+    let resumed =
+        nexushub_core::services::goals::plan_goal_resume_with_capability(&linux, " thread-a ")
+            .unwrap();
     assert_eq!(resumed.command.command, GoalCommandKind::Resume);
+    assert_eq!(resumed.command.update.objective, None);
+    assert_eq!(resumed.command.update.token_budget, None);
     assert_eq!(resumed.command.update.status, "active");
 }
 

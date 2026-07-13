@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-    codex::{resolve_codex_paths, CodexPaths},
+    codex::{resolve_codex_paths, CodexGoalClient, CodexPaths},
     config::Config,
     crypto::SecretBox,
     db::PanelDb,
@@ -62,6 +62,7 @@ pub struct DesktopState {
     config: Arc<RwLock<Config>>,
     pub db: PanelDb,
     pub jobs: JobRunner,
+    pub(crate) goal_client: CodexGoalClient,
     platform: PlatformPaths,
     host_surface: HostSurface,
 }
@@ -82,11 +83,31 @@ impl DesktopState {
     }
 
     pub fn new(config: Config, db: PanelDb, platform: PlatformPaths) -> Self {
+        Self::new_inner(config, db, platform, CodexGoalClient::new())
+    }
+
+    #[cfg(test)]
+    pub fn new_with_goal_client(
+        config: Config,
+        db: PanelDb,
+        platform: PlatformPaths,
+        goal_client: CodexGoalClient,
+    ) -> Self {
+        Self::new_inner(config, db, platform, goal_client)
+    }
+
+    fn new_inner(
+        config: Config,
+        db: PanelDb,
+        platform: PlatformPaths,
+        goal_client: CodexGoalClient,
+    ) -> Self {
         let jobs = JobRunner::new(db.clone());
         Self {
             config: Arc::new(RwLock::new(config)),
             db,
             jobs,
+            goal_client,
             platform,
             host_surface: HostSurface::DesktopEmbeddedTauri,
         }

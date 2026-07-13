@@ -787,9 +787,10 @@ mod tests {
             ".get(request)?",
             ".save(request)?",
             ".clear(request.thread_id.as_deref())?",
-            ".pause(&thread_id, existing.as_ref())?",
-            ".resume(&thread_id, existing.as_ref())?",
-            ".apply(&state.db, plan.command)",
+            ".pause(&thread_id)?",
+            ".resume(&thread_id)?",
+            "goal_service::execute_goal_get(",
+            "goal_service::execute_goal_command(",
         ] {
             assert!(
                 goals_source.contains(required),

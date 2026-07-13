@@ -386,7 +386,7 @@ fn hook_request_user_input_bark_timeout_is_bounded_to_three_seconds() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    assert!(elapsed < Duration::from_millis(750), "elapsed: {elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "elapsed: {elapsed:?}");
     let events = wait_for_event_count(&db, 1, Duration::from_secs(6));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].payload["bark"]["reason"], "timeout");

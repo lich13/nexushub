@@ -169,52 +169,46 @@ pub fn enqueue_followup_plan(
     Ok(core_followup_view(followup))
 }
 
-pub fn goal_get_plan(
+pub async fn goal_get_plan(
     state: &AppState,
     plan: goal_service::GoalGetPlan,
 ) -> Result<goal_service::GoalView> {
-    let Some(thread_id) = plan.thread_id.as_deref() else {
-        return Ok(goal_service::goal_empty("missing_thread"));
-    };
-    Ok(goal_service::goal_response(
-        state.db.get_thread_goal(thread_id)?.as_ref(),
-    ))
+    goal_service::execute_goal_get(&state.goal_client, &state.resolved_codex_paths().home, plan)
+        .await
 }
 
-pub fn apply_goal_command_plan(
+pub async fn apply_goal_command_plan(
     state: &AppState,
     plan: goal_service::GoalCommandFacadePlan,
 ) -> Result<goal_service::GoalView> {
-    let command: goal_service::GoalCommandPlan = plan.command;
-    NexusHubUseCases::new(&PlatformPaths::for_kind(
-        nexushub_core::platform::PlatformKind::Linux,
-    ))
-    .goals()
-    .apply(&state.db, command)
+    goal_service::execute_goal_command(
+        &state.goal_client,
+        &state.resolved_codex_paths().home,
+        plan.command,
+    )
+    .await
 }
 
 pub fn goal_pause_plan(
-    state: &AppState,
+    _state: &AppState,
     thread_id: &str,
 ) -> Result<goal_service::GoalCommandFacadePlan> {
-    let existing = state.db.get_thread_goal(thread_id)?;
     NexusHubUseCases::new(&PlatformPaths::for_kind(
         nexushub_core::platform::PlatformKind::Linux,
     ))
     .goals()
-    .pause(thread_id, existing.as_ref())
+    .pause(thread_id)
 }
 
 pub fn goal_resume_plan(
-    state: &AppState,
+    _state: &AppState,
     thread_id: &str,
 ) -> Result<goal_service::GoalCommandFacadePlan> {
-    let existing = state.db.get_thread_goal(thread_id)?;
     NexusHubUseCases::new(&PlatformPaths::for_kind(
         nexushub_core::platform::PlatformKind::Linux,
     ))
     .goals()
-    .resume(thread_id, existing.as_ref())
+    .resume(thread_id)
 }
 
 pub fn resolve_thread_stop_plan(

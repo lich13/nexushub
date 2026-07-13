@@ -94,9 +94,9 @@ type AppExports = typeof import("./App") & {
   setLocalThreadTitleOverride?: (threadId: string, title: string, now?: number) => void;
   clearLocalThreadTitleOverride?: (threadId: string) => void;
   applyThreadTitleOverride?: <T extends Partial<ThreadSummary>>(summary: T, now?: number) => T;
-  goalStatusLabel?: (goal: CodexGoal | undefined, loading: boolean) => string;
+  goalStatusLabel?: (goal: CodexGoal | undefined, loading: boolean, failed?: boolean) => string;
   goalStatusTone?: (goal: CodexGoal | undefined) => "success" | "warning" | "danger" | undefined;
-  goalControlState?: (goal: CodexGoal | undefined, options?: { busy?: boolean; objective?: string; tokenBudget?: string }) => {
+  goalControlState?: (goal: CodexGoal | undefined, options?: { busy?: boolean; objective?: string; tokenBudget?: string; queryReady?: boolean }) => {
     saveDisabled: boolean;
     clearDisabled: boolean;
     pauseDisabled: boolean;
@@ -1326,17 +1326,33 @@ describe("conversation helpers", () => {
       status: "cleared"
     };
     const blocked: CodexGoal = { ...active, status: "blocked", blocked_reason: "等待确认" };
+    const usageLimited: CodexGoal = { ...active, status: "usageLimited" };
+    const budgetLimited: CodexGoal = { ...active, status: "budgetLimited" };
+    const complete: CodexGoal = { ...active, status: "complete" };
+    const unknown: CodexGoal = { ...active, status: "futureStatus" };
 
     expect(app.goalStatusLabel?.(undefined, true)).toBe("读取中");
+    expect(app.goalStatusLabel?.(undefined, false, true)).toBe("读取失败");
     expect(app.goalStatusLabel?.({ ...active, status: "idle", enabled: false }, false)).toBe("未设置");
     expect(app.goalStatusLabel?.(active, false)).toBe("进行中");
     expect(app.goalStatusLabel?.(paused, false)).toBe("已暂停");
     expect(app.goalStatusLabel?.(cleared, false)).toBe("已清除");
     expect(app.goalStatusLabel?.(blocked, false)).toBe("阻塞");
-    expect(app.goalStatusLabel?.({ ...active, status: "complete" }, false)).toBe("完成");
+    expect(app.goalStatusLabel?.(usageLimited, false)).toBe("用量受限");
+    expect(app.goalStatusLabel?.(budgetLimited, false)).toBe("预算已用尽");
+    expect(app.goalStatusLabel?.(complete, false)).toBe("完成");
     expect(app.goalStatusTone?.(blocked)).toBe("danger");
+    expect(app.goalStatusTone?.(usageLimited)).toBe("danger");
+    expect(app.goalStatusTone?.(budgetLimited)).toBe("danger");
+    expect(app.goalStatusTone?.(unknown)).toBeUndefined();
 
     expect(app.goalControlState?.(undefined, { objective: "", tokenBudget: "" })).toEqual({
+      saveDisabled: true,
+      clearDisabled: true,
+      pauseDisabled: true,
+      resumeDisabled: true
+    });
+    expect(app.goalControlState?.(undefined, { objective: "新目标", tokenBudget: "" })).toEqual({
       saveDisabled: true,
       clearDisabled: true,
       pauseDisabled: true,
@@ -1354,6 +1370,20 @@ describe("conversation helpers", () => {
       pauseDisabled: true,
       resumeDisabled: false
     });
+    for (const resumable of [blocked, usageLimited, budgetLimited, complete]) {
+      expect(app.goalControlState?.(resumable, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+        saveDisabled: false,
+        clearDisabled: false,
+        pauseDisabled: true,
+        resumeDisabled: false
+      });
+    }
+    expect(app.goalControlState?.(unknown, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
+      saveDisabled: false,
+      clearDisabled: false,
+      pauseDisabled: true,
+      resumeDisabled: true
+    });
     expect(app.goalControlState?.(cleared, { objective: "", tokenBudget: "" })?.pauseDisabled).toBe(true);
     expect(app.goalControlState?.(active, { objective: "补齐右栏", tokenBudget: "0" })?.saveDisabled).toBe(true);
     expect(app.goalControlState?.(active, { busy: true, objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
@@ -1370,6 +1400,13 @@ describe("conversation helpers", () => {
       resumeDisabled: true
     });
     expect(app.formatGoalTimestamp?.(0)).toContain("1970");
+    const goalQueryStart = threadQuerySource.indexOf("export function useThreadGoalQuery");
+    const goalQueryEnd = threadQuerySource.indexOf("export function useThreadGoalActions", goalQueryStart);
+    expect(threadQuerySource.slice(goalQueryStart, goalQueryEnd)).not.toContain("placeholderData");
+    expect(threadGoalPanelSource).toContain("goal.isError");
+    expect(threadGoalPanelSource).toContain('setObjective("");');
+    expect(threadGoalPanelSource).toContain('setTokenBudget("");');
+    expect(threadInspectorPanelsSource).toContain("<ThreadGoalPanel key={summary.id}");
   });
 
   test("probe thread rows use canonical ThreadSummary status values", async () => {

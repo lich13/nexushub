@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::{collections::HashSet, fs, path::Path};
 
+mod goal_client;
 mod mutations;
 mod paths;
 mod rollout_events;
@@ -12,6 +13,7 @@ mod tests;
 mod thread_rows;
 mod types;
 
+pub use goal_client::{CodexGoalAction, CodexGoalClient, CodexThreadGoal};
 pub use mutations::{db_integrity, set_thread_archived, set_thread_title};
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,

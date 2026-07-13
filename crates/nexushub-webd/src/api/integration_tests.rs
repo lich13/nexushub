@@ -7,7 +7,9 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use nexushub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
+use nexushub_core::codex::{
+    CodexGoalClient, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary,
+};
 use nexushub_core::{
     config::Config,
     db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
@@ -29,9 +31,11 @@ use nexushub_core::{
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashSet;
+use std::time::Duration;
 use std::{
     collections::HashMap,
     env, fs,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -164,6 +168,80 @@ fn authenticated_test_state_with_config_file(
     )
     .unwrap();
     (state, session_token, csrf_token, dir, config_path)
+}
+
+fn authenticated_test_state_with_goal_client(
+    script: &str,
+) -> (crate::state::AppState, String, String, PathBuf) {
+    let (state, session_token, csrf_token) = authenticated_test_state();
+    let home = temp_test_dir("nexushub-goal-client");
+    fs::create_dir_all(&home).unwrap();
+    mark_codex_home(&home);
+    let executable = home.join("codex");
+    fs::write(&executable, script).unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+    let mut config = state.config();
+    config.codex.home = home.clone();
+    config.codex.workspace = home.clone();
+    let goal_client = CodexGoalClient::with_candidates(vec![executable], Duration::from_secs(10));
+    let state = crate::state::AppState::new_with_goal_client(config, state.db.clone(), goal_client);
+    (state, session_token, csrf_token, home)
+}
+
+fn stateful_goal_script() -> &'static str {
+    r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+status_file="$CODEX_HOME/fake-goal-status"
+objective_file="$CODEX_HOME/fake-goal-objective"
+budget_file="$CODEX_HOME/fake-goal-budget"
+emit_goal() {
+  response_id="$1"
+  if [ ! -f "$status_file" ]; then
+    echo "{\"id\":$response_id,\"result\":{\"goal\":null}}"
+    return
+  fi
+  status=$(cat "$status_file")
+  objective=$(cat "$objective_file")
+  budget=$(cat "$budget_file")
+  echo "{\"id\":$response_id,\"result\":{\"goal\":{\"threadId\":\"thread-a\",\"objective\":\"$objective\",\"status\":\"$status\",\"tokenBudget\":$budget,\"tokensUsed\":10,\"timeUsedSeconds\":2,\"createdAt\":100,\"updatedAt\":200}}}"
+}
+while IFS= read -r line; do
+  response_id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      emit_goal "$response_id"
+      ;;
+    *'"method":"thread/goal/set"'*)
+      case "$line" in
+        *'"status":"paused"'*) echo 'paused' > "$status_file" ;;
+        *'"status":"active"'*) echo 'active' > "$status_file" ;;
+        *)
+          if [ ! -f "$status_file" ]; then echo 'active' > "$status_file"; fi
+          objective=$(printf '%s' "$line" | sed -n 's/.*"objective":"\([^"]*\)".*/\1/p')
+          budget=$(printf '%s' "$line" | sed -n 's/.*"tokenBudget":\([0-9][0-9]*\).*/\1/p')
+          if [ -n "$objective" ]; then echo "$objective" > "$objective_file"; fi
+          if [ -n "$budget" ]; then echo "$budget" > "$budget_file"; else echo 'null' > "$budget_file"; fi
+          ;;
+      esac
+      [ -f "$objective_file" ] || echo 'official objective' > "$objective_file"
+      [ -f "$budget_file" ] || echo 'null' > "$budget_file"
+      emit_goal "$response_id"
+      ;;
+    *'"method":"thread/goal/clear"'*)
+      rm -f "$status_file" "$objective_file" "$budget_file"
+      echo "{\"id\":$response_id,\"result\":{\"cleared\":true}}"
+      ;;
+  esac
+done
+"#
 }
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
@@ -346,9 +424,9 @@ async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
 }
 
 #[tokio::test]
-async fn goal_routes_use_local_store_without_app_server_socket() {
-    let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
-    seed_local_codex_thread(&home, "thread-a", "local title");
+async fn goal_routes_use_official_app_server_state() {
+    let (state, session_token, csrf_token, home) =
+        authenticated_test_state_with_goal_client(stateful_goal_script());
     let app = router(state);
 
     let initial = request_rpc_json(
@@ -366,16 +444,16 @@ async fn goal_routes_use_local_store_without_app_server_socket() {
     let set = request_rpc_json(
         app.clone(),
         "threads.goal.save",
-        r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345,"status":"paused","enabled":false}"#,
+        r#"{"thread_id":"thread-a","objective":"ship official goal","token_budget":12345,"status":"paused","enabled":false}"#,
         &session_token,
         Some(&csrf_token),
     )
     .await;
     assert_eq!(set["available"], true);
     assert_eq!(set["enabled"], true);
-    assert_eq!(set["objective"], "ship local goal");
+    assert_eq!(set["objective"], "ship official goal");
     assert_eq!(set["token_budget"], 12345);
-    assert_eq!(set["status"], "paused");
+    assert_eq!(set["status"], "active");
 
     let get = request_rpc_json(
         app.clone(),
@@ -387,23 +465,9 @@ async fn goal_routes_use_local_store_without_app_server_socket() {
     .await;
     assert_eq!(get["available"], true);
     assert_eq!(get["enabled"], true);
-    assert_eq!(get["objective"], "ship local goal");
+    assert_eq!(get["objective"], "ship official goal");
     assert_eq!(get["token_budget"], 12345);
-    assert_eq!(get["status"], "paused");
-
-    let saved_active = request_rpc_json(
-        app.clone(),
-        "threads.goal.save",
-        r#"{"thread_id":"thread-a","objective":"ship local goal","token_budget":12345}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(saved_active["available"], true);
-    assert_eq!(saved_active["enabled"], true);
-    assert_eq!(saved_active["objective"], "ship local goal");
-    assert_eq!(saved_active["token_budget"], 12345);
-    assert_eq!(saved_active["status"], "active");
+    assert_eq!(get["status"], "active");
 
     let paused = request_rpc_json(
         app.clone(),
@@ -415,9 +479,21 @@ async fn goal_routes_use_local_store_without_app_server_socket() {
     .await;
     assert_eq!(paused["available"], true);
     assert_eq!(paused["enabled"], true);
-    assert_eq!(paused["objective"], "ship local goal");
+    assert_eq!(paused["objective"], "ship official goal");
     assert_eq!(paused["token_budget"], 12345);
     assert_eq!(paused["status"], "paused");
+
+    let saved_while_paused = request_rpc_json(
+        app.clone(),
+        "threads.goal.save",
+        r#"{"thread_id":"thread-a","objective":"updated while paused","token_budget":6789}"#,
+        &session_token,
+        Some(&csrf_token),
+    )
+    .await;
+    assert_eq!(saved_while_paused["objective"], "updated while paused");
+    assert_eq!(saved_while_paused["token_budget"], 6789);
+    assert_eq!(saved_while_paused["status"], "paused");
 
     let resumed = request_rpc_json(
         app.clone(),
@@ -429,8 +505,8 @@ async fn goal_routes_use_local_store_without_app_server_socket() {
     .await;
     assert_eq!(resumed["available"], true);
     assert_eq!(resumed["enabled"], true);
-    assert_eq!(resumed["objective"], "ship local goal");
-    assert_eq!(resumed["token_budget"], 12345);
+    assert_eq!(resumed["objective"], "updated while paused");
+    assert_eq!(resumed["token_budget"], 6789);
     assert_eq!(resumed["status"], "active");
 
     let cleared = request_rpc_json(
@@ -445,26 +521,24 @@ async fn goal_routes_use_local_store_without_app_server_socket() {
     assert_eq!(cleared["enabled"], false);
     assert_eq!(cleared["objective"], serde_json::Value::Null);
     assert_eq!(cleared["token_budget"], serde_json::Value::Null);
-    assert_eq!(cleared["status"], "cleared");
+    assert_eq!(cleared["status"], "idle");
 
-    let resumed_after_clear = request_rpc_json(
+    let resumed_after_clear = request_rpc_status(
         app,
         "threads.goal.resume",
         r#"{"thread_id":"thread-a"}"#,
-        &session_token,
+        Some(&session_token),
         Some(&csrf_token),
     )
     .await;
-    assert_eq!(resumed_after_clear["available"], true);
-    assert_eq!(resumed_after_clear["enabled"], true);
-    assert_eq!(resumed_after_clear["status"], "active");
+    assert_eq!(resumed_after_clear, StatusCode::BAD_REQUEST);
     let _ = fs::remove_dir_all(home);
 }
 
 #[tokio::test]
 async fn rpc_goal_wrapper_preserves_goal_dto_shape() {
-    let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
-    seed_local_codex_thread(&home, "thread-a", "local title");
+    let (state, session_token, csrf_token, home) =
+        authenticated_test_state_with_goal_client(stateful_goal_script());
     let app = router(state);
 
     let rpc_initial = request_rpc_json(
@@ -1056,8 +1130,12 @@ fn normalize_goal_response_maps_goal_statuses() {
 }
 
 #[tokio::test]
-async fn goal_resume_route_requires_csrf_and_uses_local_goal_store() {
-    let (state, session_token, csrf_token) = authenticated_test_state();
+async fn goal_resume_route_requires_csrf_and_uses_official_goal() {
+    let (state, session_token, csrf_token, home) =
+        authenticated_test_state_with_goal_client(stateful_goal_script());
+    fs::write(home.join("fake-goal-status"), "paused").unwrap();
+    fs::write(home.join("fake-goal-objective"), "official paused goal").unwrap();
+    fs::write(home.join("fake-goal-budget"), "9876").unwrap();
     let app = router(state.clone());
 
     let missing_csrf = app
@@ -1095,19 +1173,193 @@ async fn goal_resume_route_requires_csrf_and_uses_local_goal_store() {
     assert_eq!(payload["available"], true);
     assert_eq!(payload["enabled"], true);
     assert_eq!(payload["status"], "active");
-    assert_eq!(payload["raw"]["source"], "local");
+    assert_eq!(payload["objective"], "official paused goal");
+    assert_eq!(payload["raw"]["source"], "codex_app_server");
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test]
-async fn goal_pause_route_requires_csrf_and_preserves_local_goal() {
-    let (state, session_token, csrf_token) = authenticated_test_state();
+async fn goal_get_route_uses_app_server_instead_of_shadow_goal_store() {
+    let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{"id":2,"result":{"goal":{"threadId":"thread-a","objective":"official objective","status":"budgetLimited","tokenBudget":5000,"tokensUsed":6000,"timeUsedSeconds":90,"createdAt":100,"updatedAt":200}}}'
+      ;;
+  esac
+done
+"#;
+    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
     state
         .db
         .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
             thread_id: "thread-a",
-            objective: Some("ship paused goal"),
-            token_budget: Some(9876),
-            status: "active",
+            objective: Some("stale shadow objective"),
+            token_budget: Some(1),
+            status: "paused",
+            completed_at: None,
+            blocked_reason: None,
+        })
+        .unwrap();
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/rpc/threads.goal.get")
+                .header("cookie", format!("nexushub_session={session_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"threadId":"thread-a"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["objective"], "official objective");
+    assert_eq!(payload["status"], "budgetLimited");
+    assert_eq!(payload["raw"]["source"], "codex_app_server");
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_official_goal_is_null() {
+    let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"id":1,"result":{"userAgent":"fake"}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{"id":2,"result":{"goal":null}}'
+      ;;
+  esac
+done
+"#;
+    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
+    state
+        .db
+        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
+            thread_id: "thread-a",
+            objective: Some("stale shadow objective"),
+            token_budget: Some(1),
+            status: "paused",
+            completed_at: None,
+            blocked_reason: None,
+        })
+        .unwrap();
+    let shadow_db = state.db.clone();
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/rpc/threads.goal.get")
+                .header("cookie", format!("nexushub_session={session_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"threadId":"thread-a"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["enabled"], false);
+    assert_eq!(payload["objective"], serde_json::Value::Null);
+    assert_eq!(payload["status"], "idle");
+    let shadow = shadow_db.get_thread_goal("thread-a").unwrap().unwrap();
+    assert_eq!(shadow.objective.as_deref(), Some("stale shadow objective"));
+    assert_eq!(shadow.status, "paused");
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_app_server_fails() {
+    let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"id":1,"result":{"userAgent":"fake"}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{"id":2,"error":{"code":-32603,"message":"goal control unavailable"}}'
+      ;;
+  esac
+done
+"#;
+    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
+    state
+        .db
+        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
+            thread_id: "thread-a",
+            objective: Some("stale shadow objective"),
+            token_budget: Some(1),
+            status: "paused",
+            completed_at: None,
+            blocked_reason: None,
+        })
+        .unwrap();
+    let shadow_db = state.db.clone();
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/rpc/threads.goal.get")
+                .header("cookie", format!("nexushub_session={session_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"threadId":"thread-a"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .unwrap()
+        .contains("goal control unavailable"));
+    assert_ne!(payload["error"], "stale shadow objective");
+    let shadow = shadow_db.get_thread_goal("thread-a").unwrap().unwrap();
+    assert_eq!(shadow.objective.as_deref(), Some("stale shadow objective"));
+    assert_eq!(shadow.status, "paused");
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn goal_pause_route_requires_csrf_and_preserves_official_goal() {
+    let (state, session_token, csrf_token, home) =
+        authenticated_test_state_with_goal_client(stateful_goal_script());
+    fs::write(home.join("fake-goal-status"), "active").unwrap();
+    fs::write(home.join("fake-goal-objective"), "official active goal").unwrap();
+    fs::write(home.join("fake-goal-budget"), "9876").unwrap();
+    state
+        .db
+        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
+            thread_id: "thread-a",
+            objective: Some("stale shadow goal"),
+            token_budget: Some(1),
+            status: "paused",
             completed_at: None,
             blocked_reason: None,
         })
@@ -1148,10 +1400,11 @@ async fn goal_pause_route_requires_csrf_and_preserves_local_goal() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["available"], true);
     assert_eq!(payload["enabled"], true);
-    assert_eq!(payload["objective"], "ship paused goal");
+    assert_eq!(payload["objective"], "official active goal");
     assert_eq!(payload["token_budget"], 9876);
     assert_eq!(payload["status"], "paused");
-    assert_eq!(payload["raw"]["source"], "local");
+    assert_eq!(payload["raw"]["source"], "codex_app_server");
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test]

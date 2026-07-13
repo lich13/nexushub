@@ -133,7 +133,7 @@ pub fn uploadFiles(
 }
 
 #[tauri::command(rename = "threads.goal.get")]
-pub fn getCodexGoal(
+pub async fn getCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
@@ -141,11 +141,13 @@ pub fn getCodexGoal(
     let request = GoalGetRequest {
         thread_id: threadId.or(thread_id),
     };
-    goal_service::get_goal_with_state(&state, request).map_err(|err| err.to_string())
+    goal_service::get_goal_with_state(&state, request)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.save")]
-pub fn saveCodexGoal(
+pub async fn saveCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
@@ -160,11 +162,13 @@ pub fn saveCodexGoal(
         status: None,
         enabled: None,
     };
-    goal_service::save_goal_with_state(&state, request).map_err(|err| err.to_string())
+    goal_service::save_goal_with_state(&state, request)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.clear")]
-pub fn clearCodexGoal(
+pub async fn clearCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
@@ -172,11 +176,13 @@ pub fn clearCodexGoal(
     let request = GoalGetRequest {
         thread_id: threadId.or(thread_id),
     };
-    goal_service::clear_goal_with_state(&state, request).map_err(|err| err.to_string())
+    goal_service::clear_goal_with_state(&state, request)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.pause")]
-pub fn pauseCodexGoal(
+pub async fn pauseCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
@@ -184,11 +190,13 @@ pub fn pauseCodexGoal(
     let request = GoalGetRequest {
         thread_id: threadId.or(thread_id),
     };
-    goal_service::pause_goal_with_state(&state, request).map_err(|err| err.to_string())
+    goal_service::pause_goal_with_state(&state, request)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "threads.goal.resume")]
-pub fn resumeCodexGoal(
+pub async fn resumeCodexGoal(
     state: tauri::State<'_, DesktopState>,
     threadId: Option<String>,
     thread_id: Option<String>,
@@ -196,5 +204,7 @@ pub fn resumeCodexGoal(
     let request = GoalGetRequest {
         thread_id: threadId.or(thread_id),
     };
-    goal_service::resume_goal_with_state(&state, request).map_err(|err| err.to_string())
+    goal_service::resume_goal_with_state(&state, request)
+        .await
+        .map_err(|err| err.to_string())
 }

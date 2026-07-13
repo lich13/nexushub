@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-07-13
-> **Mode**: V0.1.153_ACCEPTED
+> **Mode**: V0.1.154_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.153` false-question notification suppression accepted<br>
-**Active Task**: Goal 22 is complete. Commit `64a97d5` makes the PreToolUse Hook return immediately and schedules a hidden one-shot confirmation helper; after a fixed 1-second grace period, only an exact `turn_id + call_id + request_user_input` that remains unresolved in the bounded rollout tail may claim dedupe, write an event/marker, and request Bark. Missing, unreadable, answered, failed, aborted, or completed calls fail closed with zero notification side effects. The complete local gate, GitHub CI/Release, 15-asset audit, Tencent Cloud/macOS deployment, isolated and real Hook acceptance, regression checks, evidence recording, and final cleanup passed.
+**Active Phase**: `v0.1.154` official Codex Goal control-plane repair in progress<br>
+**Active Task**: Goal 23 is in progress. NexusHub Goal reads and mutations now use a bounded `codex app-server --stdio` client for official `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear` state instead of the retained compatibility-only `codex_thread_goals` shadow table. TDD covers the experimental handshake, response correlation, notifications, protocol failures, timeout cleanup, CLI version selection, official status transitions, no shadow fallback, frontend error state, strict controls, and thread-switch isolation. The complete workspace/Tauri/WebUI/install/package gate passed after updating the architecture guard to prohibit shadow-store execution and stabilizing two process-timing assertions without relaxing production timeouts. Release, deployment, dual-end real Goal acceptance, regression evidence, and final cleanup remain pending and must not be inferred from this in-progress record.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.153` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.153` is the current accepted production checkpoint.
+Rows through `v0.1.153` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.154` is the current in-progress target; `v0.1.153` remains the accepted production checkpoint until Goal 23 closes.
 
 ## Deep Refactor Goal Tracker
 
@@ -68,6 +68,7 @@ Rows before `v0.1.153` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 20: `v0.1.151` memory-consolidation notification suppression and release acceptance - completed on 2026-07-11. TDD and the complete local gate cover canonical memory-root identity, custom resolved Codex homes, path normalization, empty-transcript matching, fail-open counterexamples, body disposal, and zero dedupe/storage/Bark. Commit `ec08c1d` was published as `v0.1.151`; CI/Release, exact-tag Tencent Cloud and official macOS DMG deployment, dual-end memory/control replay, normal completion and sequential question notifications, completion/dangling/Stop/cleanup regressions, authorized `6 + 2` historical cleanup, scoped route checks, and final local/cloud cleanup all passed.
 - [x] Goal 21: `v0.1.152` question-notification thread-title fix and release acceptance - completed on 2026-07-11. TDD and the complete workspace/Tauri/WebUI/install/package gate cover explicit Hook-title precedence, current local title resolution, invalid-state fail-open behavior, empty stdout, body/call identity preservation, and suppression ordering. Commits `30f3c15` and `d20899c` were published as exact tag `v0.1.152`; CI/Release, 15 assets, Tencent Cloud and official macOS deployment, dual-end title/Bark replays, sequential no-repeat questions, memory/control/completion/dangling/Stop/cleanup regressions, scoped route checks, and final local/cloud cleanup passed.
 - [x] Goal 22: `v0.1.153` false-question notification suppression and release acceptance - completed on 2026-07-13. Commit `64a97d5` adds bounded-tail `Pending`/`Resolved`/`Missing` confirmation and a nonblocking one-shot child after the 1-second grace period. TDD and the complete workspace/Tauri/WebUI/install/package gate passed; CI `29218204389` and Release `29218463206` succeeded at the exact tag commit with 15 assets. Official macOS and exact-tag Tencent Cloud deployments passed four-call false-question suppression, one confirmed-pending positive replay, real Default-mode rejection, real sequential Plan-mode questions with distinct calls and no repeat, memory/control/completion/dangling/Stop/title/cleanup regressions, health and scoped `404` checks, and final cleanup. Existing four historical false-question events and four persistent markers remain unchanged for audit.
+- [ ] Goal 23: `v0.1.154` official Codex Goal control-plane repair and release acceptance - in progress on 2026-07-13. Production Goal read/save/clear/pause/resume paths now call official app-server methods with the resolved `CODEX_HOME`; shadow-table rows remain intact but are excluded from production reads, writes, and fallback. Targeted core/Web/Tauri/WebUI tests and the complete workspace/Tauri/WebUI/install/package gate pass, including official `null` and error authority, app-server process cleanup, no mutation retry, architecture enforcement, and stable Hook timing coverage. CI/Release, exact-tag deployment, dual-end real Goal CRUD acceptance, regression checks, evidence closure, and cleanup are still pending.
 
 ## Governance Status
 
@@ -81,7 +82,7 @@ Rows before `v0.1.153` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.153_ACCEPTED
+  mode: V0.1.154_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -373,6 +374,8 @@ The `v0.1.152` final cleanup removed the Release downloads, App rollback copy, i
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-13 | v0.1.154-official-goal-local-gate | Completed the local implementation gate for Goal 23: official app-server Goal state is authoritative on Web and Tauri, shadow rows are compatibility-only, all targeted and complete workspace/Tauri/WebUI/install/package checks pass, and architecture/timing guards cover the observed gate failures. CI/Release, exact-tag deployment, dual-end real Goal CRUD, regressions, evidence closure, and cleanup remain pending. |
+| 2026-07-13 | v0.1.154-official-goal-control-start | Started Goal 23 after NexusHub displayed `未设置` and mutated `codex_thread_goals` while the same task had an official Codex Goal. The in-progress implementation replaces production shadow-table access with a bounded `codex app-server --stdio` client, preserves public Goal command payloads, keeps shadow rows untouched for compatibility, and requires complete local, Release, Tencent Cloud, macOS, real Goal CRUD, regression, and cleanup acceptance before closure. |
 | 2026-07-13 | v0.1.153-final-accepted | Closed Goal 22 after commit `64a97d5` passed the complete local gate, CI `29218204389`, Release `29218463206`, 15-asset metadata/signature/SHA verification, exact-tag Tencent Cloud and official macOS deployment, dual-end four-call negative and confirmed-pending positive fixtures, real Default-mode rejection and sequential Plan-mode Bark acceptance, memory/control/completion/dangling/Stop/title/cleanup regressions, preserved historical `4 events + 4 markers`, production health/scoped-route checks, and local/cloud cleanup. |
 | 2026-07-13 | v0.1.153-false-question-confirmation | Started Goal 22 after four PreToolUse calls were notified before Codex returned `request_user_input is unavailable in Default mode`. The accepted design keeps PreToolUse nonblocking, confirms exact unresolved rollout state after one second, fails closed on unknown state, preserves all existing notification semantics for real questions, and retains the four historical audit events/markers. |
 | 2026-07-11 | v0.1.152-final-accepted | Closed Goal 21 after the PreToolUse title resolver shipped in `30f3c15` with root-version alignment `d20899c`: full gates, corrected CI/Release, 15 assets, exact-tag cloud and official DMG deployment, dual-end accurate title/Bark HTTP `200`, sequential no-repeat helper replays, memory/control/completion/dangling/Stop/cleanup regressions, public/sensitive-path checks, and final cleanup all passed. |

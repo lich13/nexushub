@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::Path;
 
 use crate::{
-    db::{PanelDb, ThreadGoal, ThreadGoalUpdate},
+    codex::{CodexGoalAction, CodexGoalClient, CodexThreadGoal},
     platform::PlatformPaths,
     services::commands,
     services::system::{require_capability, Capability},
@@ -52,15 +53,53 @@ impl GoalCommandKind {
 #[cfg(test)]
 mod tests {
     use crate::{
-        db::ThreadGoal,
+        codex::CodexThreadGoal,
         platform::{PlatformKind, PlatformPaths},
         services::goals::{
-            goal_empty, normalize_goal_status, plan_clear_goal_update,
+            goal_empty, goal_response_from_codex, normalize_goal_status, plan_clear_goal_update,
             plan_goal_get_with_capability, plan_goal_save_with_capability, plan_goal_update,
             plan_pause_goal_update, plan_resume_goal_update, GoalCommandKind, GoalGetRequest,
             GoalUpdateRequest,
         },
     };
+
+    #[test]
+    fn codex_goal_response_uses_official_state_without_local_fallback() {
+        let empty = goal_response_from_codex(None);
+        assert!(empty.available);
+        assert!(!empty.enabled);
+        assert_eq!(empty.status, "idle");
+        assert_eq!(empty.objective, None);
+
+        let active = goal_response_from_codex(Some(&CodexThreadGoal {
+            thread_id: "thread-live".to_string(),
+            objective: "Ship the real Goal".to_string(),
+            status: "budgetLimited".to_string(),
+            token_budget: Some(12_000),
+            tokens_used: 12_500,
+            time_used_seconds: 90,
+            created_at: 100,
+            updated_at: 200,
+        }));
+        assert!(active.available);
+        assert!(active.enabled);
+        assert_eq!(active.thread_id.as_deref(), Some("thread-live"));
+        assert_eq!(active.objective.as_deref(), Some("Ship the real Goal"));
+        assert_eq!(active.token_budget, Some(12_000));
+        assert_eq!(active.status, "budgetLimited");
+        assert_eq!(
+            active.raw.as_ref().and_then(|raw| raw.source.as_deref()),
+            Some("codex_app_server")
+        );
+        assert_eq!(
+            active.raw.as_ref().and_then(|raw| raw.created_at),
+            Some(100)
+        );
+        assert_eq!(
+            active.raw.as_ref().and_then(|raw| raw.updated_at),
+            Some(200)
+        );
+    }
 
     #[test]
     fn goal_update_request_plans_save_clear_pause_and_resume() {
@@ -84,27 +123,26 @@ mod tests {
         assert_eq!(clear.update.objective, None);
         assert_eq!(clear.update.status, "cleared");
 
-        let existing = thread_goal("thread-a", Some("Keep context"), Some(512), "active");
-        let paused = plan_pause_goal_update(" thread-a ", Some(&existing)).unwrap();
+        let paused = plan_pause_goal_update(" thread-a ").unwrap();
         assert_eq!(paused.command, GoalCommandKind::Pause);
-        assert_eq!(paused.update.objective.as_deref(), Some("Keep context"));
-        assert_eq!(paused.update.token_budget, Some(512));
+        assert_eq!(paused.update.objective, None);
+        assert_eq!(paused.update.token_budget, None);
         assert_eq!(paused.update.status, "paused");
 
-        let resumed = plan_resume_goal_update(" thread-a ", Some(&existing)).unwrap();
+        let resumed = plan_resume_goal_update(" thread-a ").unwrap();
         assert_eq!(resumed.command, GoalCommandKind::Resume);
         assert_eq!(resumed.update.status, "active");
     }
 
     #[test]
     fn goal_pause_and_resume_can_plan_without_existing_goal() {
-        let paused = plan_pause_goal_update("thread-a", None).unwrap();
+        let paused = plan_pause_goal_update("thread-a").unwrap();
         assert_eq!(paused.update.thread_id, "thread-a");
         assert_eq!(paused.update.objective, None);
         assert_eq!(paused.update.token_budget, None);
         assert_eq!(paused.update.status, "paused");
 
-        let resumed = plan_resume_goal_update("thread-a", None).unwrap();
+        let resumed = plan_resume_goal_update("thread-a").unwrap();
         assert_eq!(resumed.update.thread_id, "thread-a");
         assert_eq!(resumed.update.status, "active");
     }
@@ -159,24 +197,6 @@ mod tests {
         )
         .is_err());
     }
-
-    fn thread_goal(
-        thread_id: &str,
-        objective: Option<&str>,
-        token_budget: Option<u64>,
-        status: &str,
-    ) -> ThreadGoal {
-        ThreadGoal {
-            thread_id: thread_id.to_string(),
-            objective: objective.map(str::to_string),
-            token_budget,
-            status: status.to_string(),
-            created_at: 1,
-            updated_at: 2,
-            completed_at: None,
-            blocked_reason: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,19 +247,6 @@ pub struct GoalRawView {
     pub thread_id: Option<String>,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
-}
-
-impl GoalUpdatePlan {
-    pub fn as_thread_goal_update(&self) -> ThreadGoalUpdate<'_> {
-        ThreadGoalUpdate {
-            thread_id: &self.thread_id,
-            objective: self.objective.as_deref(),
-            token_budget: self.token_budget,
-            status: &self.status,
-            completed_at: self.completed_at,
-            blocked_reason: self.blocked_reason.as_deref(),
-        }
-    }
 }
 
 pub fn required_thread_id(value: Option<&str>) -> Result<String> {
@@ -345,98 +352,112 @@ pub fn plan_goal_clear_with_capability(
     })
 }
 
-pub fn plan_pause_goal(goal: &ThreadGoal) -> GoalUpdatePlan {
-    plan_goal_status(goal, "paused")
-}
-
-pub fn plan_resume_goal(goal: &ThreadGoal) -> GoalUpdatePlan {
-    plan_goal_status(goal, "active")
-}
-
-pub fn plan_pause_goal_update(
-    thread_id: &str,
-    existing: Option<&ThreadGoal>,
-) -> Result<GoalCommandPlan> {
+pub fn plan_pause_goal_update(thread_id: &str) -> Result<GoalCommandPlan> {
     Ok(GoalCommandPlan {
         command: GoalCommandKind::Pause,
-        update: plan_goal_status_for_thread(thread_id, existing, "paused")?,
+        update: plan_goal_status_for_thread(thread_id, "paused")?,
     })
 }
 
 pub fn plan_goal_pause_with_capability(
     platform: &PlatformPaths,
     thread_id: &str,
-    existing: Option<&ThreadGoal>,
 ) -> Result<GoalCommandFacadePlan> {
     require_capability(platform, Capability::Threads)?;
     Ok(GoalCommandFacadePlan {
         required_capability: Capability::Threads,
-        command: plan_pause_goal_update(thread_id, existing)?,
+        command: plan_pause_goal_update(thread_id)?,
     })
 }
 
-pub fn plan_resume_goal_update(
-    thread_id: &str,
-    existing: Option<&ThreadGoal>,
-) -> Result<GoalCommandPlan> {
+pub fn plan_resume_goal_update(thread_id: &str) -> Result<GoalCommandPlan> {
     Ok(GoalCommandPlan {
         command: GoalCommandKind::Resume,
-        update: plan_goal_status_for_thread(thread_id, existing, "active")?,
+        update: plan_goal_status_for_thread(thread_id, "active")?,
     })
 }
 
 pub fn plan_goal_resume_with_capability(
     platform: &PlatformPaths,
     thread_id: &str,
-    existing: Option<&ThreadGoal>,
 ) -> Result<GoalCommandFacadePlan> {
     require_capability(platform, Capability::Threads)?;
     Ok(GoalCommandFacadePlan {
         required_capability: Capability::Threads,
-        command: plan_resume_goal_update(thread_id, existing)?,
+        command: plan_resume_goal_update(thread_id)?,
     })
 }
 
-pub fn plan_goal_status_for_thread(
-    thread_id: &str,
-    existing: Option<&ThreadGoal>,
-    status: &str,
-) -> Result<GoalUpdatePlan> {
+pub fn plan_goal_status_for_thread(thread_id: &str, status: &str) -> Result<GoalUpdatePlan> {
     let thread_id = required_thread_id(Some(thread_id))?;
     Ok(GoalUpdatePlan {
         thread_id,
-        objective: existing.and_then(|goal| goal.objective.clone()),
-        token_budget: existing.and_then(|goal| goal.token_budget),
-        status: normalize_goal_status(
-            Some(status),
-            None,
-            existing.and_then(|goal| goal.objective.as_deref()),
-        ),
+        objective: None,
+        token_budget: None,
+        status: normalize_goal_status(Some(status), None, None),
         completed_at: None,
         blocked_reason: None,
     })
 }
 
-pub fn goal_response(goal: Option<&ThreadGoal>) -> GoalView {
+pub fn goal_response_from_codex(goal: Option<&CodexThreadGoal>) -> GoalView {
     let Some(goal) = goal else {
         return goal_empty("idle");
     };
     GoalView {
         available: true,
-        enabled: goal_enabled(goal),
+        enabled: true,
         thread_id: Some(goal.thread_id.clone()),
-        objective: goal.objective.clone(),
+        objective: Some(goal.objective.clone()),
         token_budget: goal.token_budget,
         status: goal.status.clone(),
-        completed_at: goal.completed_at,
-        blocked_reason: goal.blocked_reason.clone(),
+        completed_at: None,
+        blocked_reason: None,
         raw: Some(GoalRawView {
-            source: Some("local".to_string()),
+            source: Some("codex_app_server".to_string()),
             thread_id: Some(goal.thread_id.clone()),
             created_at: Some(goal.created_at),
             updated_at: Some(goal.updated_at),
         }),
     }
+}
+
+pub async fn execute_goal_get(
+    client: &CodexGoalClient,
+    codex_home: &Path,
+    plan: GoalGetPlan,
+) -> Result<GoalView> {
+    let Some(thread_id) = plan.thread_id.as_deref() else {
+        return Ok(goal_empty("missing_thread"));
+    };
+    let goal = client
+        .execute(codex_home, thread_id, CodexGoalAction::Get)
+        .await?;
+    Ok(goal_response_from_codex(goal.as_ref()))
+}
+
+pub async fn execute_goal_command(
+    client: &CodexGoalClient,
+    codex_home: &Path,
+    command: GoalCommandPlan,
+) -> Result<GoalView> {
+    let action = match command.command {
+        GoalCommandKind::Save => CodexGoalAction::Save {
+            objective: command
+                .update
+                .objective
+                .clone()
+                .ok_or_else(|| anyhow!("objective is required"))?,
+            token_budget: command.update.token_budget,
+        },
+        GoalCommandKind::Clear => CodexGoalAction::Clear,
+        GoalCommandKind::Pause => CodexGoalAction::Pause,
+        GoalCommandKind::Resume => CodexGoalAction::Resume,
+    };
+    let goal = client
+        .execute(codex_home, &command.update.thread_id, action)
+        .await?;
+    Ok(goal_response_from_codex(goal.as_ref()))
 }
 
 pub fn goal_empty(status: &str) -> GoalView {
@@ -451,20 +472,6 @@ pub fn goal_empty(status: &str) -> GoalView {
         blocked_reason: None,
         raw: None,
     }
-}
-
-pub fn goal_enabled(goal: &ThreadGoal) -> bool {
-    if matches!(goal.status.as_str(), "idle" | "missing_thread" | "cleared") {
-        return false;
-    }
-    goal.objective
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-        || matches!(
-            goal.status.as_str(),
-            "active" | "running" | "complete" | "completed" | "blocked" | "paused"
-        )
 }
 
 pub fn normalize_goal_response_value(value: &Value) -> Value {
@@ -517,65 +524,6 @@ fn goal_enabled_from_value(goal: &Value, status: &str) -> bool {
             ))
 }
 
-pub fn goal_get_response_with_capability(
-    db: &PanelDb,
-    platform: &PlatformPaths,
-    request: GoalGetRequest,
-) -> Result<GoalView> {
-    let plan = plan_goal_get_with_capability(platform, request)?;
-    let Some(thread_id) = plan.thread_id.as_deref() else {
-        return Ok(goal_empty("missing_thread"));
-    };
-    Ok(goal_response(db.get_thread_goal(thread_id)?.as_ref()))
-}
-
-pub fn apply_goal_command(db: &PanelDb, command: GoalCommandPlan) -> Result<GoalView> {
-    let goal = db.upsert_thread_goal(command.update.as_thread_goal_update())?;
-    Ok(goal_response(Some(&goal)))
-}
-
-pub fn save_goal_with_capability(
-    db: &PanelDb,
-    platform: &PlatformPaths,
-    request: GoalUpdateRequest,
-) -> Result<GoalView> {
-    let plan = plan_goal_save_with_capability(platform, request)?;
-    apply_goal_command(db, plan.command)
-}
-
-pub fn clear_goal_with_capability(
-    db: &PanelDb,
-    platform: &PlatformPaths,
-    thread_id: Option<&str>,
-) -> Result<GoalView> {
-    let plan = plan_goal_clear_with_capability(platform, thread_id)?;
-    apply_goal_command(db, plan.command)
-}
-
-pub fn pause_goal_with_capability(
-    db: &PanelDb,
-    platform: &PlatformPaths,
-    thread_id: &str,
-) -> Result<GoalView> {
-    require_capability(platform, Capability::Threads)?;
-    let thread_id = required_thread_id(Some(thread_id))?;
-    let existing = db.get_thread_goal(&thread_id)?;
-    let plan = plan_goal_pause_with_capability(platform, &thread_id, existing.as_ref())?;
-    apply_goal_command(db, plan.command)
-}
-
-pub fn resume_goal_with_capability(
-    db: &PanelDb,
-    platform: &PlatformPaths,
-    thread_id: &str,
-) -> Result<GoalView> {
-    require_capability(platform, Capability::Threads)?;
-    let thread_id = required_thread_id(Some(thread_id))?;
-    let existing = db.get_thread_goal(&thread_id)?;
-    let plan = plan_goal_resume_with_capability(platform, &thread_id, existing.as_ref())?;
-    apply_goal_command(db, plan.command)
-}
-
 pub fn normalize_goal_status(
     status: Option<&str>,
     enabled: Option<bool>,
@@ -597,16 +545,5 @@ pub fn normalize_goal_status(
         None if enabled == Some(false) => "paused".to_string(),
         None if objective.is_some() || enabled == Some(true) => "active".to_string(),
         None => "idle".to_string(),
-    }
-}
-
-fn plan_goal_status(goal: &ThreadGoal, status: &str) -> GoalUpdatePlan {
-    GoalUpdatePlan {
-        thread_id: goal.thread_id.clone(),
-        objective: goal.objective.clone(),
-        token_budget: goal.token_budget,
-        status: normalize_goal_status(Some(status), None, goal.objective.as_deref()),
-        completed_at: None,
-        blocked_reason: None,
     }
 }

@@ -6,16 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::{
     codex::{ThreadDetail, ThreadStatus},
     config::{Config, SecurityConfig},
-    db::{JobRecord, PanelDb, ThreadFollowUp, ThreadGoal},
+    db::{JobRecord, PanelDb, ThreadFollowUp},
     platform::PlatformPaths,
     services::{
         cleanup::{
             self, CleanupAction, CleanupActionPlan, CleanupExecuteRequest, CleanupOperationKind,
             CleanupOperationPlan, CleanupTarget,
         },
-        goals::{
-            self, GoalCommandFacadePlan, GoalGetPlan, GoalGetRequest, GoalUpdateRequest, GoalView,
-        },
+        goals::{self, GoalCommandFacadePlan, GoalGetPlan, GoalGetRequest, GoalUpdateRequest},
         jobs::{
             self, ActionResponse, FollowUpAutoSubmitExecutionPlan, FollowUpCancelPlan,
             FollowUpCancelRequest, FollowUpClaimPlan, FollowUpClaimRequest,
@@ -477,24 +475,12 @@ impl<'a> GoalUseCases<'a> {
         goals::plan_goal_clear_with_capability(self.platform, thread_id)
     }
 
-    pub fn pause(
-        self,
-        thread_id: &str,
-        existing: Option<&ThreadGoal>,
-    ) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_pause_with_capability(self.platform, thread_id, existing)
+    pub fn pause(self, thread_id: &str) -> Result<GoalCommandFacadePlan> {
+        goals::plan_goal_pause_with_capability(self.platform, thread_id)
     }
 
-    pub fn resume(
-        self,
-        thread_id: &str,
-        existing: Option<&ThreadGoal>,
-    ) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_resume_with_capability(self.platform, thread_id, existing)
-    }
-
-    pub fn apply(self, db: &PanelDb, command: goals::GoalCommandPlan) -> Result<GoalView> {
-        goals::apply_goal_command(db, command)
+    pub fn resume(self, thread_id: &str) -> Result<GoalCommandFacadePlan> {
+        goals::plan_goal_resume_with_capability(self.platform, thread_id)
     }
 }
 

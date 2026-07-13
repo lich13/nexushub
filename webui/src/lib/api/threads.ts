@@ -171,7 +171,15 @@ export async function getCodexGoal(threadId: string): Promise<CodexGoal> {
   if (USE_DEMO) return demoCodexGoal(threadId);
   const result = await callCommand<CodexGoal | { goal?: CodexGoal | null }>("threads.goal.get", { threadId });
   return result && typeof result === "object" && "goal" in result
-    ? result.goal ?? demoCodexGoal(threadId)
+    ? result.goal ?? {
+      available: true,
+      enabled: false,
+      thread_id: threadId,
+      objective: null,
+      token_budget: null,
+      status: "idle",
+      raw: { source: "codex_app_server", thread_id: threadId }
+    }
     : result as CodexGoal;
 }
 

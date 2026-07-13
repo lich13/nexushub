@@ -339,6 +339,26 @@ describe("archive delete API compatibility", () => {
     }
   });
 
+  test("codex goal get maps an explicit null goal to idle without demo fallback", async () => {
+    const { getCodexGoal } = await loadRealApi();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ goal: null }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+
+    const goal = await getCodexGoal("thread-null");
+
+    expect(goal).toMatchObject({
+      available: true,
+      enabled: false,
+      thread_id: "thread-null",
+      objective: null,
+      token_budget: null,
+      status: "idle"
+    });
+    expect(goal.raw).toEqual({ source: "codex_app_server", thread_id: "thread-null" });
+  });
+
   test("demo plugin list mirrors composer mention metadata", async () => {
     vi.resetModules();
     const { listPlugins } = await import("./api");

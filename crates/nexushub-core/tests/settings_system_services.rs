@@ -1,4 +1,5 @@
 use nexushub_core::{
+    codex::CodexThreadGoal,
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
@@ -6,8 +7,8 @@ use nexushub_core::{
     platform::{PlatformKind, PlatformPaths},
     services::{
         goals::{
-            goal_empty, goal_response, plan_clear_goal, plan_pause_goal, plan_resume_goal,
-            plan_save_goal, GoalUpdateRequest,
+            goal_empty, goal_response_from_codex, plan_clear_goal, plan_pause_goal_update,
+            plan_resume_goal_update, plan_save_goal, GoalUpdateRequest,
         },
         security::{
             plan_password_change, plan_password_change_with_capability, plan_security_patch,
@@ -148,34 +149,40 @@ fn goal_service_normalizes_status_and_shared_response_shape() {
     assert_eq!(disabled.objective, None);
     assert_eq!(disabled.token_budget, None);
 
-    let goal = nexushub_core::db::ThreadGoal {
+    let goal = CodexThreadGoal {
         thread_id: "thread-a".to_string(),
-        objective: Some("ship".to_string()),
+        objective: "ship".to_string(),
         token_budget: Some(1000),
-        status: "completed".to_string(),
+        status: "complete".to_string(),
+        tokens_used: 900,
+        time_used_seconds: 30,
         created_at: 1,
         updated_at: 2,
-        completed_at: Some(3),
-        blocked_reason: None,
     };
-    let view = goal_response(Some(&goal));
+    let view = goal_response_from_codex(Some(&goal));
     assert!(view.available);
     assert!(view.enabled);
     assert_eq!(view.thread_id.as_deref(), Some("thread-a"));
-    assert_eq!(view.status, "completed");
-    assert_eq!(view.completed_at, Some(3));
+    assert_eq!(view.status, "complete");
+    assert_eq!(view.completed_at, None);
     assert_eq!(
         view.raw.as_ref().and_then(|raw| raw.source.as_deref()),
-        Some("local")
+        Some("codex_app_server")
     );
 
     assert!(!goal_empty("missing_thread").available);
-    assert_eq!(goal_response(None).status, "idle");
+    assert_eq!(goal_response_from_codex(None).status, "idle");
 
     let cleared = plan_clear_goal(" thread-a ").unwrap();
     assert_eq!(cleared.status, "cleared");
-    assert_eq!(plan_pause_goal(&goal).status, "paused");
-    assert_eq!(plan_resume_goal(&goal).status, "active");
+    assert_eq!(
+        plan_pause_goal_update("thread-a").unwrap().update.status,
+        "paused"
+    );
+    assert_eq!(
+        plan_resume_goal_update("thread-a").unwrap().update.status,
+        "active"
+    );
 }
 
 #[test]

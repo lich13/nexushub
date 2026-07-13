@@ -898,8 +898,7 @@ export function useThreadGoalQuery(threadId: string) {
     queryFn: () => getCodexGoal(threadId),
     enabled: Boolean(threadId),
     staleTime: 5000,
-    refetchInterval: 15000,
-    placeholderData: preservePreviousQueryData
+    refetchInterval: 15000
   });
 }
 
@@ -916,26 +915,30 @@ export function useThreadGoalActions(input: {
     input.onSuccess(goal, message);
     qc.invalidateQueries({ queryKey: threadQueryKeys.goal(input.threadId) });
   };
+  const handleError = (error: Error) => {
+    input.onError(error);
+    void qc.invalidateQueries({ queryKey: threadQueryKeys.goal(input.threadId) });
+  };
   return {
     save: useMutation({
       mutationFn: () => saveCodexGoal(input.threadId, input.saveInput(), input.csrfToken),
       onSuccess: (goal) => handleSuccess(goal, "Goal 已保存"),
-      onError: input.onError
+      onError: handleError
     }),
     clear: useMutation({
       mutationFn: () => clearCodexGoal(input.threadId, input.csrfToken),
       onSuccess: (goal) => handleSuccess(goal, "Goal 已清除"),
-      onError: input.onError
+      onError: handleError
     }),
     pause: useMutation({
       mutationFn: () => pauseCodexGoal(input.threadId, input.csrfToken),
       onSuccess: (goal) => handleSuccess(goal, "Goal 已暂停"),
-      onError: input.onError
+      onError: handleError
     }),
     resume: useMutation({
       mutationFn: () => resumeCodexGoal(input.threadId, input.csrfToken),
       onSuccess: (goal) => handleSuccess(goal, "Goal 已恢复"),
-      onError: input.onError
+      onError: handleError
     })
   };
 }
