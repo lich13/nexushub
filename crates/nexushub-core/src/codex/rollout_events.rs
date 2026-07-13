@@ -2,9 +2,19 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
     path::Path,
 };
+
+const REQUEST_USER_INPUT_TAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RolloutRequestUserInputState {
+    Pending,
+    Resolved,
+    Missing,
+}
 
 use super::{
     extract_proposed_plan_text, session_index::SessionIndexEntry, CodexMessage, MessageBlock,
@@ -646,6 +656,88 @@ pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<
         }
     }
     Ok(false)
+}
+
+pub fn rollout_request_user_input_state(
+    path: &Path,
+    turn_id: &str,
+    call_id: &str,
+) -> Result<RolloutRequestUserInputState> {
+    let turn_id = turn_id.trim();
+    let call_id = call_id.trim();
+    if turn_id.is_empty() || call_id.is_empty() {
+        return Ok(RolloutRequestUserInputState::Missing);
+    }
+
+    let Ok(mut file) = File::open(path) else {
+        return Ok(RolloutRequestUserInputState::Missing);
+    };
+    let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
+        return Ok(RolloutRequestUserInputState::Missing);
+    };
+    let start = size.saturating_sub(REQUEST_USER_INPUT_TAIL_MAX_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Ok(RolloutRequestUserInputState::Missing);
+    }
+    let mut tail =
+        Vec::with_capacity((size - start).min(REQUEST_USER_INPUT_TAIL_MAX_BYTES) as usize);
+    if file.read_to_end(&mut tail).is_err() {
+        return Ok(RolloutRequestUserInputState::Missing);
+    }
+    if start > 0 {
+        let Some(first_newline) = tail.iter().position(|byte| *byte == b'\n') else {
+            return Ok(RolloutRequestUserInputState::Missing);
+        };
+        tail.drain(..=first_newline);
+    }
+
+    let mut found_call = false;
+    for line in String::from_utf8_lossy(&tail).lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if !found_call {
+            if is_request_user_input(&value)
+                && event_turn_id(&value).as_deref() == Some(turn_id)
+                && event_call_id(&value).as_deref() == Some(call_id)
+            {
+                found_call = true;
+            }
+            continue;
+        }
+        if request_user_input_resolution_matches(&value, turn_id, call_id) {
+            return Ok(RolloutRequestUserInputState::Resolved);
+        }
+    }
+
+    Ok(if found_call {
+        RolloutRequestUserInputState::Pending
+    } else {
+        RolloutRequestUserInputState::Missing
+    })
+}
+
+fn request_user_input_resolution_matches(value: &Value, turn_id: &str, call_id: &str) -> bool {
+    let event_type = rollout_event_type(value);
+    if (event_type == "task_complete" || is_turn_terminal_event(event_type))
+        && event_turn_id(value).as_deref() == Some(turn_id)
+    {
+        return true;
+    }
+
+    let event_call = event_call_id(value);
+    let call_matches = event_call.as_deref() == Some(call_id);
+    let turn_matches = event_turn_id(value)
+        .as_deref()
+        .is_none_or(|event_turn| event_turn == turn_id);
+    if !call_matches || !turn_matches {
+        return false;
+    }
+    if is_user_input_answer(value) {
+        return true;
+    }
+    let payload = value.get("payload").unwrap_or(value);
+    payload.get("type").and_then(Value::as_str) == Some("function_call_output")
 }
 
 fn task_complete_has_last_agent_message(value: &Value) -> bool {

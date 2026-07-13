@@ -30,7 +30,8 @@ pub use rollout_events::{
     rollout_completion_last_agent_message_with_source, rollout_has_completed_turn,
     rollout_hook_stop_message, rollout_hook_stop_message_selection,
     rollout_hook_stop_message_with_source, rollout_latest_assistant_message,
-    thread_detail_from_summary, window_thread_detail, RolloutMessageSelection,
+    rollout_request_user_input_state, thread_detail_from_summary, window_thread_detail,
+    RolloutMessageSelection, RolloutRequestUserInputState,
 };
 #[cfg(test)]
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};

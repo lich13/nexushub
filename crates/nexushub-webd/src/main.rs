@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
         list_threads, resolve_codex_paths, rollout_completion_last_agent_message_selection,
-        rollout_hook_stop_message_selection, PendingElicitation, RolloutMessageSelection,
-        UserInputQuestion,
+        rollout_hook_stop_message_selection, rollout_request_user_input_state, PendingElicitation,
+        RolloutMessageSelection, RolloutRequestUserInputState, UserInputQuestion,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -34,10 +34,11 @@ use serde_json::{json, Value};
 use state::AppState;
 use std::{
     collections::BTreeMap,
-    fs,
-    io::{self, IsTerminal, Read},
+    env, fs,
+    io::{self, IsTerminal, Read, Write},
     net::SocketAddr,
     path::{Path, PathBuf},
+    process::{Command as ProcessCommand, Stdio},
     time::Duration,
 };
 use tokio::{net::TcpListener, time};
@@ -49,6 +50,7 @@ const PROBE_LOGS_DB_LAST_COMPACT_SETTING: &str = "probe_logs_db_last_compact";
 const PROBE_LOGS_DB_SCHEDULER_TICK_SECONDS: u64 = 300;
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
 const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
+const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
 static PROBE_LOGS_DB_MAINTENANCE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -131,6 +133,8 @@ enum ProbeCommand {
     },
     #[command(hide = true)]
     HookRequestUserInput,
+    #[command(hide = true)]
+    HookRequestUserInputConfirm,
     HooksInstall {
         #[arg(long)]
         dry_run: bool,
@@ -214,6 +218,14 @@ async fn main() -> Result<()> {
                 );
                 tracing::warn!("probe hook-request-user-input failed open");
                 tracing::debug!("probe hook-request-user-input diagnostic: {err:#}");
+            }
+        }
+        Command::Probe {
+            command: ProbeCommand::HookRequestUserInputConfirm,
+        } => {
+            if let Err(err) = handle_hook_request_user_input_confirm_command(&cli.config).await {
+                tracing::warn!("probe hook-request-user-input-confirm failed closed");
+                tracing::debug!("probe hook-request-user-input-confirm diagnostic: {err:#}");
             }
         }
         Command::Probe { command } => {
@@ -301,7 +313,9 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                 println!("{}", serde_json::to_string(&codex_stop_continue_output())?);
             }
         },
-        ProbeCommand::HookRequestUserInput => unreachable!("handled before config loading"),
+        ProbeCommand::HookRequestUserInput | ProbeCommand::HookRequestUserInputConfirm => {
+            unreachable!("handled before config loading")
+        }
         ProbeCommand::HooksInstall { dry_run } => {
             println!(
                 "{}",
@@ -438,11 +452,74 @@ async fn handle_hook_stop_command(
 async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
     let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
     let config = Config::load(config_path)?;
-    let event_input = hook_request_user_input_event_input(&config, stdin_payload)?;
+    validate_hook_request_user_input_envelope(&stdin_payload)?;
+    if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
+        return Ok(());
+    }
+    validate_hook_request_user_input_payload(&stdin_payload)?;
+    schedule_hook_request_user_input_confirmation(config_path, &stdin_payload)?;
+    Ok(())
+}
+
+async fn handle_hook_request_user_input_confirm_command(config_path: &Path) -> Result<()> {
+    let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
+    let config = Config::load(config_path)?;
+    validate_hook_request_user_input_envelope(&stdin_payload)?;
+    if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
+        return Ok(());
+    }
+    let hook_payload = validate_hook_request_user_input_payload(&stdin_payload)?;
+    time::sleep(Duration::from_millis(QUESTION_CONFIRMATION_DELAY_MS)).await;
+    let Some(transcript_path) =
+        read_string_field(&stdin_payload, &["transcript_path", "transcriptPath"])
+    else {
+        return Ok(());
+    };
+    let state = rollout_request_user_input_state(
+        Path::new(&transcript_path),
+        hook_payload.turn_id.trim(),
+        hook_payload.tool_use_id.trim(),
+    )
+    .unwrap_or(RolloutRequestUserInputState::Missing);
+    if state != RolloutRequestUserInputState::Pending {
+        return Ok(());
+    }
+
+    let event_input = hook_request_user_input_event_input(&config, stdin_payload)?
+        .with_body_selection_diagnostics(question_confirmation_diagnostics());
     let db = open_panel_db(&config)?;
     let event = probe_runtime(&config).build_event(event_input);
     record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
         .await?;
+    Ok(())
+}
+
+fn schedule_hook_request_user_input_confirmation(
+    config_path: &Path,
+    payload: &Value,
+) -> Result<()> {
+    let executable = env::current_exe().context("resolve current helper executable")?;
+    let mut child = ProcessCommand::new(executable)
+        .args([
+            "--config",
+            config_path
+                .to_str()
+                .context("config path is not valid UTF-8")?,
+            "probe",
+            "hook-request-user-input-confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start question confirmation helper")?;
+    let payload = serde_json::to_vec(payload).context("serialize PreToolUse payload")?;
+    child
+        .stdin
+        .take()
+        .context("open question confirmation stdin")?
+        .write_all(&payload)
+        .context("send PreToolUse payload to confirmation helper")?;
     Ok(())
 }
 
@@ -461,15 +538,41 @@ struct HookRequestUserInputToolInput {
     questions: Vec<UserInputQuestion>,
 }
 
-fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Result<ProbeEventInput> {
+fn validate_hook_request_user_input_envelope(payload: &Value) -> Result<()> {
     anyhow::ensure!(
-        read_string_field(&payload, &["hook_event_name"]).as_deref() == Some("PreToolUse"),
+        read_string_field(payload, &["hook_event_name"]).as_deref() == Some("PreToolUse"),
         "unexpected hook_event_name"
     );
     anyhow::ensure!(
-        read_string_field(&payload, &["tool_name"]).as_deref() == Some("request_user_input"),
+        read_string_field(payload, &["tool_name"]).as_deref() == Some("request_user_input"),
         "unexpected tool_name"
     );
+    Ok(())
+}
+
+fn validate_hook_request_user_input_payload(
+    payload: &Value,
+) -> Result<HookRequestUserInputPayload> {
+    let mut hook_payload: HookRequestUserInputPayload =
+        serde_json::from_value(payload.clone()).context("parse PreToolUse payload")?;
+    anyhow::ensure!(
+        hook_payload.hook_event_name == "PreToolUse",
+        "unexpected hook_event_name"
+    );
+    anyhow::ensure!(
+        hook_payload.tool_name == "request_user_input",
+        "unexpected tool_name"
+    );
+    required_hook_field(&hook_payload.session_id, "session_id")?;
+    required_hook_field(&hook_payload.turn_id, "turn_id")?;
+    required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
+    hook_payload.tool_input.questions =
+        normalize_hook_questions(hook_payload.tool_input.questions)?;
+    Ok(hook_payload)
+}
+
+fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Result<ProbeEventInput> {
+    validate_hook_request_user_input_envelope(&payload)?;
     if let Some(reason) = hook_context_suppression_reason(config, &payload) {
         let session_id = read_string_field(&payload, &["session_id", "sessionId"]);
         let turn_id = read_string_field(&payload, &["turn_id", "turnId"]);
@@ -487,16 +590,7 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
         .with_call_id(tool_use_id.as_deref())
         .with_suppression_reason(Some(reason)));
     }
-    let hook_payload: HookRequestUserInputPayload =
-        serde_json::from_value(payload.clone()).context("parse PreToolUse payload")?;
-    anyhow::ensure!(
-        hook_payload.hook_event_name == "PreToolUse",
-        "unexpected hook_event_name"
-    );
-    anyhow::ensure!(
-        hook_payload.tool_name == "request_user_input",
-        "unexpected tool_name"
-    );
+    let hook_payload = validate_hook_request_user_input_payload(&payload)?;
     let session_id = required_hook_field(&hook_payload.session_id, "session_id")?;
     let turn_id = required_hook_field(&hook_payload.turn_id, "turn_id")?;
     let tool_use_id = required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
@@ -508,12 +602,13 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
     };
     let body = probe_service::format_probe_pending_elicitation(&elicitation);
     let thread_title = hook_thread_title(config, Some(&payload), Some(session_id));
+    let transcript_path = read_string_field(&payload, &["transcript_path", "transcriptPath"]);
 
     Ok(ProbeEventInput::hook_stop_with_context(
         Some(session_id),
         Some(turn_id),
         Some(session_id),
-        None,
+        transcript_path.as_deref(),
         Some(&body),
         "reply-needed",
     )
@@ -521,6 +616,20 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
     .with_pre_tool_use_scan_source()
     .with_call_id(Some(tool_use_id))
     .with_thread_title(thread_title.as_deref()))
+}
+
+fn question_confirmation_diagnostics() -> BTreeMap<String, Value> {
+    BTreeMap::from([
+        (
+            "question_confirmation_strategy".to_string(),
+            json!("rollout_unresolved_after_grace"),
+        ),
+        (
+            "question_confirmation_delay_ms".to_string(),
+            json!(QUESTION_CONFIRMATION_DELAY_MS),
+        ),
+        ("question_confirmed_pending".to_string(), json!(true)),
+    ])
 }
 
 fn required_hook_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
@@ -2312,6 +2421,10 @@ mod tests {
     #[test]
     fn hook_request_user_input_cli_subcommand_is_internal_and_argument_free() {
         assert!(Cli::try_parse_from(["nexushub-webd", "probe", "hook-request-user-input"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["nexushub-webd", "probe", "hook-request-user-input-confirm"])
+                .is_ok()
+        );
         assert!(Cli::try_parse_from([
             "nexushub-webd",
             "probe",

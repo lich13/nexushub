@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -15,9 +15,13 @@ use std::{
 fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout() {
     let (root, config_path, config) = test_config("valid");
     write_config(&config_path, &config);
-    let payload = pre_tool_use_payload(None);
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+    let payload = pre_tool_use_payload(Some(&transcript));
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
 
+    let started = Instant::now();
     let output = run_hook(&config_path, payload.to_string().as_bytes());
+    let elapsed = started.elapsed();
 
     assert!(
         output.status.success(),
@@ -25,8 +29,8 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
-    let events = db.list_probe_events(10).unwrap();
+    assert!(elapsed < Duration::from_secs(2), "elapsed: {elapsed:?}");
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, "reply-needed");
     assert_eq!(events[0].thread_id.as_deref(), Some("thread-hook"));
@@ -34,7 +38,16 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
     assert_eq!(events[0].payload["call_id"], "call-hook");
     assert_eq!(events[0].payload["body_source"], "request_user_input");
     assert_eq!(events[0].payload["scan_source"], "pre-tool-use-hook");
-    assert!(events[0].payload["transcript_path"].is_null());
+    assert_eq!(
+        events[0].payload["transcript_path"],
+        transcript.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        events[0].payload["question_confirmation_strategy"],
+        "rollout_unresolved_after_grace"
+    );
+    assert_eq!(events[0].payload["question_confirmation_delay_ms"], 1000);
+    assert_eq!(events[0].payload["question_confirmed_pending"], true);
     assert_eq!(events[0].title.as_deref(), Some("需要回复"));
     assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
     assert!(events[0].payload["body_summary"]
@@ -54,10 +67,14 @@ fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
         "审计并统一Loon配置逻辑",
     );
     write_config(&config_path, &config);
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
 
     let output = run_hook(
         &config_path,
-        pre_tool_use_payload(None).to_string().as_bytes(),
+        pre_tool_use_payload(Some(&transcript))
+            .to_string()
+            .as_bytes(),
     );
 
     assert!(
@@ -66,8 +83,7 @@ fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
-    let events = db.list_probe_events(10).unwrap();
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].title.as_deref(), Some("审计并统一Loon配置逻辑"));
     assert_eq!(events[0].payload["thread_title"], "审计并统一Loon配置逻辑");
@@ -93,8 +109,10 @@ fn hook_request_user_input_prefers_explicit_payload_thread_title() {
         "Local generated title",
     );
     write_config(&config_path, &config);
-    let mut payload = pre_tool_use_payload(None);
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+    let mut payload = pre_tool_use_payload(Some(&transcript));
     payload["thread_title"] = json!("Explicit hook title");
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
 
     let output = run_hook(&config_path, payload.to_string().as_bytes());
 
@@ -104,8 +122,7 @@ fn hook_request_user_input_prefers_explicit_payload_thread_title() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
-    let events = db.list_probe_events(10).unwrap();
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].title.as_deref(), Some("Explicit hook title"));
     assert_eq!(events[0].payload["thread_title"], "Explicit hook title");
@@ -126,10 +143,14 @@ fn hook_request_user_input_fails_open_when_local_thread_state_is_invalid() {
     )
     .unwrap();
     write_config(&config_path, &config);
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
 
     let output = run_hook(
         &config_path,
-        pre_tool_use_payload(None).to_string().as_bytes(),
+        pre_tool_use_payload(Some(&transcript))
+            .to_string()
+            .as_bytes(),
     );
 
     assert!(
@@ -138,8 +159,7 @@ fn hook_request_user_input_fails_open_when_local_thread_state_is_invalid() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    let db = PanelDb::open(&config.paths.db_path).unwrap();
-    let events = db.list_probe_events(10).unwrap();
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].title.as_deref(), Some("需要回复"));
     assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
@@ -217,6 +237,121 @@ fn hook_request_user_input_invalid_stdin_fails_open_without_stdout_or_recording(
 }
 
 #[test]
+fn hook_request_user_input_resolved_screenshot_calls_have_zero_side_effects() {
+    let (root, config_path, mut config) = test_config("resolved-screenshot-calls");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    config.probe.notifications.enabled = true;
+    config.probe.notifications.notify_reply_needed = true;
+    config.probe.notifications.server_url = format!("http://{}", listener.local_addr().unwrap());
+    write_config(&config_path, &config);
+    let db =
+        PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap()).unwrap();
+    db.set_secret_setting_bytes("probe_bark_device_key", b"test-device-key")
+        .unwrap();
+    let turn_id = "019f55ad-0e25-7872-bdde-5f8b1e011f1c";
+    let call_ids = [
+        "call_ewbJTMQy5Y9jfFvGrL4cQRhd",
+        "call_BlwC14PE47BjSEAbt54FOdPo",
+        "call_J93MFun82lrB2G97ZWg5bMUu",
+        "call_C9kAFgmLeNwVTFAZOMU9GecB",
+    ];
+    let transcript = write_resolved_rollout(&config, turn_id, &call_ids);
+
+    for call_id in call_ids {
+        let mut payload = pre_tool_use_payload(Some(&transcript));
+        payload["session_id"] = json!("019ef7f2-95e6-7e02-8519-f1b6431ef993");
+        payload["turn_id"] = json!(turn_id);
+        payload["tool_use_id"] = json!(call_id);
+        let output = run_hook(&config_path, payload.to_string().as_bytes());
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+
+    thread::sleep(Duration::from_millis(1_800));
+    assert!(db.list_probe_events(10).unwrap().is_empty());
+    assert_probe_side_effect_counts(&db, 0, 0);
+    let mut byte = [0_u8; 1];
+    match listener.accept() {
+        Ok((mut stream, _)) => panic!("unexpected Bark request: {:?}", stream.read(&mut byte)),
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock),
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_missing_or_invalid_transcript_has_zero_side_effects() {
+    let (root, config_path, config) = test_config("missing-transcript");
+    write_config(&config_path, &config);
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let missing = root.join("missing-rollout.jsonl");
+
+    for transcript in [None, Some(missing.as_path())] {
+        let output = run_hook(
+            &config_path,
+            pre_tool_use_payload(transcript).to_string().as_bytes(),
+        );
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+
+    thread::sleep(Duration::from_millis(1_800));
+    assert!(db.list_probe_events(10).unwrap().is_empty());
+    assert_probe_side_effect_counts(&db, 0, 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_answer_during_confirmation_window_is_not_recorded() {
+    let (root, config_path, config) = test_config("answered-during-window");
+    write_config(&config_path, &config);
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+
+    let output = run_hook(
+        &config_path,
+        pre_tool_use_payload(Some(&transcript))
+            .to_string()
+            .as_bytes(),
+    );
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    thread::sleep(Duration::from_millis(250));
+    append_rollout_event(
+        &transcript,
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-hook","output":"{\"answers\":{\"mode\":{\"answers\":[\"Safe mode\"]}}}","internal_chat_message_metadata_passthrough":{"turn_id":"turn-hook"}}}),
+    );
+
+    thread::sleep(Duration::from_millis(1_300));
+    assert!(db.list_probe_events(10).unwrap().is_empty());
+    assert_probe_side_effect_counts(&db, 0, 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hook_request_user_input_duplicate_pending_schedules_record_once() {
+    let (root, config_path, config) = test_config("duplicate-pending");
+    write_config(&config_path, &config);
+    let db = PanelDb::open(&config.paths.db_path).unwrap();
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
+    let payload = pre_tool_use_payload(Some(&transcript));
+
+    for _ in 0..2 {
+        let output = run_hook(&config_path, payload.to_string().as_bytes());
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(events.len(), 1);
+    assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+    assert_probe_side_effect_counts(&db, 1, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn hook_request_user_input_bark_timeout_is_bounded_to_three_seconds() {
     let (root, config_path, mut config) = test_config("timeout");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -234,11 +369,14 @@ fn hook_request_user_input_bark_timeout_is_bounded_to_three_seconds() {
         PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box().unwrap()).unwrap();
     db.set_secret_setting_bytes("probe_bark_device_key", b"test-device-key")
         .unwrap();
+    let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
 
     let started = Instant::now();
     let output = run_hook(
         &config_path,
-        pre_tool_use_payload(None).to_string().as_bytes(),
+        pre_tool_use_payload(Some(&transcript))
+            .to_string()
+            .as_bytes(),
     );
     let elapsed = started.elapsed();
 
@@ -248,15 +386,8 @@ fn hook_request_user_input_bark_timeout_is_bounded_to_three_seconds() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    assert!(
-        elapsed >= Duration::from_millis(2_500),
-        "elapsed: {elapsed:?}"
-    );
-    assert!(
-        elapsed < Duration::from_millis(4_500),
-        "elapsed: {elapsed:?}"
-    );
-    let events = db.list_probe_events(10).unwrap();
+    assert!(elapsed < Duration::from_millis(750), "elapsed: {elapsed:?}");
+    let events = wait_for_event_count(&db, 1, Duration::from_secs(6));
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].payload["bark"]["reason"], "timeout");
     assert_eq!(events[0].payload["bark"]["request_count"], 1);
@@ -287,6 +418,87 @@ fn pre_tool_use_payload(transcript_path: Option<&Path>) -> serde_json::Value {
         "transcript_path": transcript_path,
         "turn_id": "turn-hook"
     })
+}
+
+fn write_pending_rollout(config: &Config, turn_id: &str, call_id: &str) -> PathBuf {
+    let path = config.codex.home.join("sessions/pending-rollout.jsonl");
+    fs::write(
+        &path,
+        json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "request_user_input",
+                "arguments": "{\"questions\":[{\"id\":\"mode\",\"question\":\"Choose a mode?\",\"options\":[{\"label\":\"Safe mode\"}]}]}",
+                "call_id": call_id,
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    path
+}
+
+fn write_resolved_rollout(config: &Config, turn_id: &str, call_ids: &[&str]) -> PathBuf {
+    let path = config.codex.home.join("sessions/resolved-rollout.jsonl");
+    let mut events = Vec::new();
+    for call_id in call_ids {
+        events.push(json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"unused\",\"question\":\"占位\",\"options\":[{\"label\":\"继续（推荐）\"}]}]}","call_id":call_id,"internal_chat_message_metadata_passthrough":{"turn_id":turn_id}}}));
+        events.push(json!({"type":"response_item","payload":{"type":"function_call_output","call_id":call_id,"output":"request_user_input is unavailable in Default mode","internal_chat_message_metadata_passthrough":{"turn_id":turn_id}}}));
+    }
+    fs::write(
+        &path,
+        events
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    path
+}
+
+fn append_rollout_event(path: &Path, event: serde_json::Value) {
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(file, "{}", event).unwrap();
+}
+
+fn wait_for_event_count(
+    db: &PanelDb,
+    expected: usize,
+    timeout: Duration,
+) -> Vec<nexushub_core::db::ProbeEvent> {
+    let started = Instant::now();
+    loop {
+        let events = db.list_probe_events(10).unwrap();
+        if events.len() >= expected {
+            return events;
+        }
+        assert!(
+            started.elapsed() < timeout,
+            "timed out waiting for {expected} events"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn assert_probe_side_effect_counts(db: &PanelDb, dedupe: i64, marker: i64) {
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    let dedupe_count = conn
+        .query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    let marker_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM settings WHERE key LIKE 'probe_passive_sent_marker:%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(dedupe_count, dedupe);
+    assert_eq!(marker_count, marker);
 }
 
 fn run_hook(config_path: &Path, stdin: &[u8]) -> Output {

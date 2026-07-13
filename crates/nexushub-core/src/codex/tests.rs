@@ -1,8 +1,9 @@
 use super::{
     archived_thread_ids, hidden_thread_ids, is_request_user_input, list_threads,
-    parse_message_event, resolve_codex_paths_with_options, scan_rollout, set_thread_title,
-    test_support::source_line_count, thread_detail, thread_source_counts, window_thread_detail,
-    CodexPathDiscoveryOptions, CodexPaths, ThreadStatus,
+    parse_message_event, resolve_codex_paths_with_options, rollout_request_user_input_state,
+    scan_rollout, set_thread_title, test_support::source_line_count, thread_detail,
+    thread_source_counts, window_thread_detail, CodexPathDiscoveryOptions, CodexPaths,
+    RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -616,6 +617,156 @@ fn rollout_nested_turn_metadata_tracks_sequential_request_user_input_without_rev
     assert_eq!(selection.source, "task_complete.last_agent_message");
     assert_eq!(selection.message, "Both answers accepted.");
     assert!(!selection.message.contains("old plan"));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_request_user_input_pending_requires_exact_turn_and_call() {
+    let path = rollout_fixture_path(
+        "request-user-input-confirm-pending",
+        &[
+            json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"mode\",\"question\":\"Choose?\",\"options\":[{\"label\":\"A\"}]}]}","call_id":"call-other","internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"id\":\"mode\",\"question\":\"Choose?\",\"options\":[{\"label\":\"A\"}]}]}","call_id":"call-live","internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+        ],
+    );
+
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-live", "call-live").unwrap(),
+        RolloutRequestUserInputState::Pending
+    );
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-other", "call-live").unwrap(),
+        RolloutRequestUserInputState::Missing
+    );
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-live", "call-missing").unwrap(),
+        RolloutRequestUserInputState::Missing
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_request_user_input_screenshot_calls_are_resolved_by_function_outputs() {
+    let turn_id = "019f55ad-0e25-7872-bdde-5f8b1e011f1c";
+    let call_ids = [
+        "call_ewbJTMQy5Y9jfFvGrL4cQRhd",
+        "call_BlwC14PE47BjSEAbt54FOdPo",
+        "call_J93MFun82lrB2G97ZWg5bMUu",
+        "call_C9kAFgmLeNwVTFAZOMU9GecB",
+    ];
+    let mut events = Vec::new();
+    for call_id in call_ids {
+        events.push(json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "request_user_input",
+                "arguments": "{\"questions\":[{\"id\":\"unused\",\"question\":\"占位\",\"options\":[{\"label\":\"继续（推荐）\"}]}]}",
+                "call_id": call_id,
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}
+            }
+        }));
+        events.push(json!({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": "request_user_input is unavailable in Default mode",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}
+            }
+        }));
+    }
+    let path = rollout_fixture_path("request-user-input-screenshot-resolved", &events);
+
+    for call_id in call_ids {
+        assert_eq!(
+            rollout_request_user_input_state(&path, turn_id, call_id).unwrap(),
+            RolloutRequestUserInputState::Resolved,
+            "call_id={call_id}"
+        );
+    }
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_request_user_input_answer_and_turn_terminal_resolve_pending_call() {
+    for terminal in [
+        json!({"type":"UserInputAnswer","turnId":"turn-live","callId":"call-live","answers":{"mode":["A"]}}),
+        json!({"type":"turn_aborted","turn_id":"turn-live"}),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":"done"}}),
+    ] {
+        let path = rollout_fixture_path(
+            "request-user-input-confirm-terminal",
+            &[
+                json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"function_call","name":"request_user_input","call_id":"call-live","arguments":{"questions":[{"id":"mode","question":"Choose?","options":[{"label":"A"}]}]}}}),
+                terminal,
+            ],
+        );
+        assert_eq!(
+            rollout_request_user_input_state(&path, "turn-live", "call-live").unwrap(),
+            RolloutRequestUserInputState::Resolved
+        );
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
+fn rollout_request_user_input_missing_or_unreadable_is_not_confirmed() {
+    let missing = unique_temp_dir("request-user-input-missing").join("rollout.jsonl");
+    assert_eq!(
+        rollout_request_user_input_state(&missing, "turn-live", "call-live").unwrap(),
+        RolloutRequestUserInputState::Missing
+    );
+
+    let path = rollout_fixture_path(
+        "request-user-input-invalid",
+        &[
+            json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"message","role":"assistant","content":[{"text":"not the call"}]}}),
+        ],
+    );
+    fs::write(&path, "not-json\n").unwrap();
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-live", "call-live").unwrap(),
+        RolloutRequestUserInputState::Missing
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_request_user_input_bounded_tail_does_not_confirm_calls_before_eight_mib() {
+    let path = rollout_fixture_path(
+        "request-user-input-before-bounded-tail",
+        &[
+            json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"function_call","name":"request_user_input","call_id":"call-live","arguments":{"questions":[]}}}),
+        ],
+    );
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let padding = format!(
+        "{{\"type\":\"padding\",\"text\":\"{}\"}}\n",
+        "x".repeat(9 * 1024 * 1024)
+    );
+    std::io::Write::write_all(&mut file, padding.as_bytes()).unwrap();
+
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-live", "call-live").unwrap(),
+        RolloutRequestUserInputState::Missing
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn rollout_request_user_input_ignores_resolution_from_another_turn() {
+    let path = rollout_fixture_path(
+        "request-user-input-other-turn-output",
+        &[
+            json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-live","internal_chat_message_metadata_passthrough":{"turn_id":"turn-live"}}}),
+            json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-live","internal_chat_message_metadata_passthrough":{"turn_id":"turn-other"},"output":"request_user_input is unavailable"}}),
+        ],
+    );
+    assert_eq!(
+        rollout_request_user_input_state(&path, "turn-live", "call-live").unwrap(),
+        RolloutRequestUserInputState::Pending
+    );
     let _ = fs::remove_file(path);
 }
 

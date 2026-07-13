@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-07-11
-> **Mode**: V0.1.152_ACCEPTED
+> **Last Updated**: 2026-07-13
+> **Mode**: V0.1.153_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.152` question-notification thread-title fix accepted<br>
-**Active Task**: Goal 21 is complete. PreToolUse `request_user_input` events now resolve the same current Codex thread title as Stop Hook events, with explicit payload title precedence and fail-open fallback when local state is unavailable. TDD, the complete local gate, GitHub CI/Release, exact-tag Tencent Cloud deployment, official macOS DMG installation, dual-end installed-helper title/Bark acceptance, regressions, documentation, and final cleanup passed.
+**Active Phase**: `v0.1.153` false-question notification suppression and release acceptance<br>
+**Active Task**: Goal 22 is in progress. The PreToolUse Hook now returns immediately and schedules a hidden one-shot confirmation helper; after a fixed 1-second grace period, only an exact `turn_id + call_id + request_user_input` that remains unresolved in the bounded rollout tail may claim dedupe, write an event/marker, and request Bark. Missing, unreadable, answered, failed, aborted, or completed calls fail closed with zero notification side effects. TDD and targeted regressions pass; the complete local gate, implementation commit, GitHub Release, Tencent Cloud/macOS deployment, real acceptance, documentation, and final cleanup remain required.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows before `v0.1.152` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.152` is the current accepted production checkpoint.
+Rows before `v0.1.152` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.152` remains the accepted production checkpoint while `v0.1.153` is the active release target.
 
 ## Deep Refactor Goal Tracker
 
@@ -67,6 +67,7 @@ Rows before `v0.1.152` are historical execution records. Old `P/R pending` rows,
 - [x] Goal 19: `v0.1.150` notification-chain fix and release acceptance - completed on 2026-07-10. TDD and the complete local gate cover internal control-payload suppression, immediate `request_user_input` notification through `PreToolUse`, paired Hook management, nested rollout turn/call tracking, persistent unresolved-action markers, fail-open/empty-stdout behavior, and bounded Bark timeout. Commit `06a6d8f` was published and deployed; real dual-question Bark acceptance, historical control-event suppression/replay and bounded cleanup, completion/dangling/Stop Hook regressions, macOS cleanup confirmation states, and scoped sensitive-route checks passed.
 - [x] Goal 20: `v0.1.151` memory-consolidation notification suppression and release acceptance - completed on 2026-07-11. TDD and the complete local gate cover canonical memory-root identity, custom resolved Codex homes, path normalization, empty-transcript matching, fail-open counterexamples, body disposal, and zero dedupe/storage/Bark. Commit `ec08c1d` was published as `v0.1.151`; CI/Release, exact-tag Tencent Cloud and official macOS DMG deployment, dual-end memory/control replay, normal completion and sequential question notifications, completion/dangling/Stop/cleanup regressions, authorized `6 + 2` historical cleanup, scoped route checks, and final local/cloud cleanup all passed.
 - [x] Goal 21: `v0.1.152` question-notification thread-title fix and release acceptance - completed on 2026-07-11. TDD and the complete workspace/Tauri/WebUI/install/package gate cover explicit Hook-title precedence, current local title resolution, invalid-state fail-open behavior, empty stdout, body/call identity preservation, and suppression ordering. Commits `30f3c15` and `d20899c` were published as exact tag `v0.1.152`; CI/Release, 15 assets, Tencent Cloud and official macOS deployment, dual-end title/Bark replays, sequential no-repeat questions, memory/control/completion/dangling/Stop/cleanup regressions, scoped route checks, and final local/cloud cleanup passed.
+- [ ] Goal 22: `v0.1.153` false-question notification suppression and release acceptance - in progress on 2026-07-13. TDD covers bounded-tail `Pending`/`Resolved`/`Missing` confirmation, the four real unavailable calls, answers and terminal turns, confirmation-window races, missing/invalid transcripts, duplicate scheduling, exact title/body/call preservation, empty parent stdout, memory suppression, and a Bark timeout that no longer blocks the parent Hook. Existing four historical false-question events and four persistent markers are retained for audit. Full gate, release, dual-end deployment, real acceptance, evidence recording, and final cleanup remain pending.
 
 ## Governance Status
 
@@ -80,7 +81,7 @@ Rows before `v0.1.152` are historical execution records. Old `P/R pending` rows,
 
 ```yaml
 adaptive:
-  mode: V0.1.152_ACCEPTED
+  mode: V0.1.153_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -359,10 +360,20 @@ The `v0.1.151` final cleanup removed the local Release download, real Hook test 
 
 The `v0.1.152` final cleanup removed the Release downloads, App rollback copy, isolated Hook config/SQLite and diagnostic files, cloud title-acceptance copy, cloud deploy staging, mounted DMG, and audited Rust/Tauri/WebUI ignored build outputs. NexusHub App/helper processes were stopped, `git clean -fdX -n` became empty, active cloud `systemd-private` directories were retained, and Tencent Cloud remained `0.1.152`, active, and healthy.
 
+## v0.1.153 Acceptance Matrix (In Progress)
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` | none | tracked source plus temporary gate/release fixtures | Bounded rollout-tail confirmation reads at most `8 MiB` and returns `Pending`, `Resolved`, or `Missing`. The public PreToolUse command validates and applies memory suppression before directly spawning the same helper executable with the original payload only on child stdin; the hidden child waits `1000ms`, scans once, and opens the NexusHub DB only for confirmed pending questions. TDD red/green includes the four screenshot `call_id` values, zero event/dedupe/marker/Bark for resolved and unknown states, one event for pending, persistent no-repeat, accurate title/body/options/call diagnostics, and parent latency independent of Bark timeout. Version files target `0.1.153`; the complete workspace/Tauri/WebUI/install/package/diff gate passed, and the implementation commit is pending. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | systemd `nexushub-webd` | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/var/lib/nexushub-webd/nexushub.sqlite`, `/root/.codex` | Pending exact-tag deployment, paired Hook audit, isolated four-call negative and pending positive replay, health/doctor/public/scoped-route checks, and regression acceptance. No production fixture event may be written. |
+| macOS ARM64 Tauri | planned official `NexusHub-0.1.153-darwin-arm64.dmg` | native Tauri App plus one-shot Hook helper | `/Applications/NexusHub.app`, bundled helper, App Support helper, `~/.codex`, isolated Probe DB | Pending official DMG install and three-version checks, paired Hook audit, isolated negative/positive replays, one real displayed Plan-mode question plus two sequential legal questions, no-repeat verification, and memory/control/completion/dangling/Stop/title/cleanup regressions. The four historical false-question events and markers must remain unchanged. |
+| GitHub Release and Linux x86_64 Tauri | planned [v0.1.153](https://github.com/lich13/nexushub/releases/tag/v0.1.153) | GitHub Actions CI/Release plus Linux `xvfb` smoke | expected 15 uploaded Release assets | Pending implementation push, green CI, exact implementation tag, four-job Release success, 15-asset audit, `latest.json` version/platform/signature checks, and published sha256 verification for Linux server, macOS DMG, and darwin updater archives. |
+
 ## Session Log
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-13 | v0.1.153-false-question-confirmation | Started Goal 22 after four PreToolUse calls were notified before Codex returned `request_user_input is unavailable in Default mode`. The accepted design keeps PreToolUse nonblocking, confirms exact unresolved rollout state after one second, fails closed on unknown state, preserves all existing notification semantics for real questions, and retains the four historical audit events/markers. |
 | 2026-07-11 | v0.1.152-final-accepted | Closed Goal 21 after the PreToolUse title resolver shipped in `30f3c15` with root-version alignment `d20899c`: full gates, corrected CI/Release, 15 assets, exact-tag cloud and official DMG deployment, dual-end accurate title/Bark HTTP `200`, sequential no-repeat helper replays, memory/control/completion/dangling/Stop/cleanup regressions, public/sensitive-path checks, and final cleanup all passed. |
 | 2026-07-11 | v0.1.152-thread-title-fix-start | Started Goal 21 after a real PreToolUse `request_user_input` event produced `等待回复：未命名线程` while the same thread's later Stop Hook resolved `审计并统一Loon配置逻辑`. TDD now routes explicit or current local Codex titles into immediate question events while preserving fail-open, suppression, call identity, and safety boundaries; the complete local gate passed and release acceptance remains pending. |
 | 2026-07-11 | v0.1.151-final-accepted | Closed Goal 20 after real memory-consolidation completions still produced Bark notifications on `v0.1.150`: exact canonical resolved memory root plus missing/null/empty transcript suppression shipped in `ec08c1d`; full gates, CI/Release, 15 assets, Tencent Cloud and official macOS deployment, dual-end memory/control replay, normal completion and sequential question notifications, completion/dangling/Stop/cleanup regressions, guarded `6 + 2` history cleanup, public/sensitive-path checks, and final local/cloud cleanup all passed. |
