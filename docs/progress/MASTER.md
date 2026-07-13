@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-07-13
-> **Mode**: V0.1.154_ACCEPTED
+> **Mode**: V0.1.155_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.154` official Codex Goal control-plane repair accepted<br>
-**Active Task**: Goal 23 is accepted. NexusHub Goal reads and mutations use a bounded `codex app-server --stdio` client for official `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear` state instead of the retained compatibility-only `codex_thread_goals` shadow table. The complete workspace/Tauri/WebUI/install/package gate, CI, Release, exact-tag Tencent Cloud deployment, official macOS installation, dual-end Goal CRUD, app-server failure-state, Hook, Probe/Bark, completion, dangling-thread, cleanup-confirmation, health, and scoped-route regressions all passed. Shadow rows remained unchanged and are not used as production fallback. Final cleanup evidence is recorded in the `v0.1.154` acceptance matrix below.
+**Active Phase**: `v0.1.155` stale Codex turn activity repair in progress<br>
+**Active Task**: Goal 24 is in progress. Rollout terminal events now retire the matching active turn and all earlier active turns in start order, including their pending tool calls, while preserving newer turns and exact-only cleanup for unmatched named terminals. RED/GREEN coverage includes `task_complete`, `turn_completed`, `turn_aborted`, anonymous terminals, newer-running preservation, and the real `019ef7f2-95e6-7e02-8519-f1b6431ef993` rollout. Full local gates, Release, exact-tag deployment, macOS installation, dual-end acceptance, regression checks, evidence closure, and cleanup remain required before acceptance.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows through `v0.1.154` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.154` is the current accepted production checkpoint.
+Rows through `v0.1.154` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.154` remains the accepted production checkpoint while `v0.1.155` is the active release target.
 
 ## Deep Refactor Goal Tracker
 
@@ -69,6 +69,7 @@ Rows through `v0.1.154` are historical execution records. Old `P/R pending` rows
 - [x] Goal 21: `v0.1.152` question-notification thread-title fix and release acceptance - completed on 2026-07-11. TDD and the complete workspace/Tauri/WebUI/install/package gate cover explicit Hook-title precedence, current local title resolution, invalid-state fail-open behavior, empty stdout, body/call identity preservation, and suppression ordering. Commits `30f3c15` and `d20899c` were published as exact tag `v0.1.152`; CI/Release, 15 assets, Tencent Cloud and official macOS deployment, dual-end title/Bark replays, sequential no-repeat questions, memory/control/completion/dangling/Stop/cleanup regressions, scoped route checks, and final local/cloud cleanup passed.
 - [x] Goal 22: `v0.1.153` false-question notification suppression and release acceptance - completed on 2026-07-13. Commit `64a97d5` adds bounded-tail `Pending`/`Resolved`/`Missing` confirmation and a nonblocking one-shot child after the 1-second grace period. TDD and the complete workspace/Tauri/WebUI/install/package gate passed; CI `29218204389` and Release `29218463206` succeeded at the exact tag commit with 15 assets. Official macOS and exact-tag Tencent Cloud deployments passed four-call false-question suppression, one confirmed-pending positive replay, real Default-mode rejection, real sequential Plan-mode questions with distinct calls and no repeat, memory/control/completion/dangling/Stop/title/cleanup regressions, health and scoped `404` checks, and final cleanup. Existing four historical false-question events and four persistent markers remain unchanged for audit.
 - [x] Goal 23: `v0.1.154` official Codex Goal control-plane repair and release acceptance - completed on 2026-07-13. Production Goal read/save/clear/pause/resume paths call official app-server methods with the resolved `CODEX_HOME`; shadow-table rows remain intact but are excluded from production reads, writes, and fallback. Targeted core/Web/Tauri/WebUI tests and the complete workspace/Tauri/WebUI/install/package gate passed, including official `null` and error authority, app-server process cleanup, no mutation retry, architecture enforcement, and stable Hook timing coverage. CI/Release, exact-tag deployment, dual-end real Goal CRUD acceptance, regression checks, evidence closure, and cleanup all passed.
+- [ ] Goal 24: `v0.1.155` stale Codex turn activity repair and release acceptance - in progress. The rollout scanner retires ordered active-turn boundaries and their pending tools for named `task_complete`, `turn_completed`, and `turn_aborted` events, keeps newer activity, preserves conservative anonymous semantics, and avoids unmatched global fallback. The real stale-wait rollout and focused core/Web tests are green; complete gates, CI/Release, dual-end deployment and acceptance, regression evidence, and cleanup remain pending.
 
 ## Governance Status
 
@@ -82,7 +83,7 @@ Rows through `v0.1.154` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.154_ACCEPTED
+  mode: V0.1.155_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -385,6 +386,7 @@ The `v0.1.154` final cleanup removed the local Release download, App rollback co
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-13 | v0.1.155-stale-turn-activity-fix-start | Started Goal 24 after NexusHub reported a completed Codex task as running because older turns retained output-less `wait` calls. RED/GREEN tests now apply an ordered terminal boundary to active turns and pending tools, preserve newer turns, avoid unmatched named fallback, and pass the real target rollout; full gate and release acceptance remain pending. |
 | 2026-07-13 | v0.1.154-final-accepted | Closed Goal 23 after implementation commit `2b3145b`, CI `29234955486`, Release `29235520356`, 15-asset metadata/signature/SHA verification, exact-tag Tencent Cloud and official macOS deployment, dual-end official Goal CRUD, app-server failure-state, Hook/Probe/Bark/completion/dangling/Stop/cleanup regressions, production health/scoped-route checks, and local/cloud cleanup. |
 | 2026-07-13 | v0.1.154-official-goal-control-plane | Started Goal 23 after NexusHub displayed `未设置` and mutated `codex_thread_goals` while the same task had an official Codex Goal. The implementation replaces production shadow-table access with a bounded `codex app-server --stdio` client, preserves public Goal command payloads, keeps shadow rows untouched for compatibility, and was accepted after Release, dual-end CRUD, failure-state, regression, and cleanup verification. |
 | 2026-07-13 | v0.1.154-final-revalidation | Revalidated the installed App and Tencent Cloud after a temporary loopback Bark capture was stopped: production config is restored to `https://api.day.app` / `NexusHub`, no capture listener remains, App and helper versions are `0.1.154`, cloud service is active and healthy, public entry is `200`, scoped sensitive/retired routes are `404`, dangling search has no match, and both cleanup flows reached and cancelled confirmation state without deletion. |

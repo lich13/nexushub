@@ -203,30 +203,25 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
         }
         update_turn_state(&value, &mut scan);
         if is_turn_terminal_event(event_type) {
-            let mut active_tasks_changed = false;
             let completed_turn_id = event_turn_id(&value);
             if let Some(turn_id) = &completed_turn_id {
-                if let Some(index) = active_tasks
-                    .iter()
-                    .position(|active| active.as_deref() == Some(turn_id.as_str()))
+                if retire_active_turn_boundary(&mut active_tasks, &mut pending_tool_turns, turn_id)
                 {
-                    active_tasks.drain(..=index);
-                    active_tasks_changed = true;
+                    scan.active_turn_id = latest_active_task_turn(&active_tasks);
                 }
-            } else if !active_tasks.is_empty() {
+            } else {
                 active_tasks.clear();
-                active_tasks_changed = true;
+                pending_tool_turns.clear();
+                scan.active_turn_id = None;
             }
-            if active_tasks_changed {
-                scan.active_turn_id = latest_active_task_turn(&active_tasks);
-            }
-            clear_pending_tools_for_turn(&mut pending_tool_turns, completed_turn_id.as_deref());
             if scan.active_turn_id.is_none() {
                 scan.recoverable = false;
             }
         }
-        if event_type == "task_started" {
-            scan.recoverable = false;
+        if matches!(event_type, "task_started" | "turn_started" | "turn/started") {
+            if event_type == "task_started" {
+                scan.recoverable = false;
+            }
             if let Some(turn_id) = event_turn_id(&value) {
                 scan.active_turn_id = Some(turn_id.clone());
                 if !active_tasks
@@ -235,7 +230,7 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
                 {
                     active_tasks.push(Some(turn_id));
                 }
-            } else {
+            } else if event_type == "task_started" {
                 active_tasks.push(None);
             }
             scan.running = true;
@@ -252,13 +247,10 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
         if event_type == "task_complete" {
             let completed_turn_id = event_turn_id(&value);
             if let Some(turn_id) = completed_turn_id.as_deref() {
-                if let Some(index) = active_tasks
-                    .iter()
-                    .position(|active| active.as_deref() == Some(turn_id))
+                if retire_active_turn_boundary(&mut active_tasks, &mut pending_tool_turns, turn_id)
                 {
-                    active_tasks.drain(..=index);
+                    scan.active_turn_id = latest_active_task_turn(&active_tasks);
                 }
-                scan.active_turn_id = latest_active_task_turn(&active_tasks);
             } else {
                 if let Some(index) = active_tasks.iter().rposition(Option::is_none) {
                     active_tasks.remove(index);
@@ -284,10 +276,10 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|message| !message.is_empty());
-            if let Some(turn_id) = completed_turn_id.as_deref() {
-                clear_pending_tools_for_turn(&mut pending_tool_turns, Some(turn_id));
-            }
-            if last_agent_message.is_some() && scan.active_turn_id.is_none() {
+            if completed_turn_id.is_none()
+                && last_agent_message.is_some()
+                && scan.active_turn_id.is_none()
+            {
                 clear_anonymous_pending_tools(&mut pending_tool_turns);
             }
             if last_agent_null {
@@ -318,7 +310,11 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
                 });
             }
         }
-        update_pending_tool_calls(&value, &mut pending_tool_turns);
+        update_pending_tool_calls(
+            &value,
+            &mut pending_tool_turns,
+            scan.active_turn_id.as_deref(),
+        );
         if clears_pending_action(&value, pending_action.as_ref()) {
             pending_action = None;
         }
@@ -754,25 +750,38 @@ fn latest_active_task_turn(active_tasks: &[Option<String>]) -> Option<String> {
     active_tasks.iter().rev().find_map(Clone::clone)
 }
 
+fn retire_active_turn_boundary(
+    active_tasks: &mut Vec<Option<String>>,
+    pending_tool_turns: &mut HashMap<String, Option<String>>,
+    completed_turn_id: &str,
+) -> bool {
+    let Some(index) = active_tasks
+        .iter()
+        .position(|active| active.as_deref() == Some(completed_turn_id))
+    else {
+        pending_tool_turns
+            .retain(|_, pending_turn| pending_turn.as_deref() != Some(completed_turn_id));
+        return false;
+    };
+
+    let retired_turn_ids = active_tasks[..=index]
+        .iter()
+        .filter_map(Clone::clone)
+        .collect::<HashSet<_>>();
+    let retired_anonymous_turn = active_tasks[..=index].iter().any(Option::is_none);
+    active_tasks.drain(..=index);
+    pending_tool_turns.retain(|_, pending_turn| match pending_turn {
+        Some(turn_id) => !retired_turn_ids.contains(turn_id),
+        None => !retired_anonymous_turn,
+    });
+    true
+}
+
 fn is_turn_terminal_event(event_type: &str) -> bool {
     matches!(
         event_type,
         "turn_completed" | "turn/completed" | "turn_aborted" | "turn/aborted"
     )
-}
-
-fn clear_pending_tools_for_turn(
-    pending_tool_turns: &mut HashMap<String, Option<String>>,
-    turn_id: Option<&str>,
-) {
-    match turn_id {
-        Some(turn_id) => pending_tool_turns.retain(|_, pending_turn| {
-            pending_turn
-                .as_deref()
-                .is_some_and(|value| value != turn_id)
-        }),
-        None => pending_tool_turns.clear(),
-    }
 }
 
 fn clear_anonymous_pending_tools(pending_tool_turns: &mut HashMap<String, Option<String>>) {
@@ -812,6 +821,7 @@ fn rollout_event_type(value: &Value) -> &str {
 fn update_pending_tool_calls(
     value: &Value,
     pending_tool_turns: &mut HashMap<String, Option<String>>,
+    active_turn_id: Option<&str>,
 ) {
     let Some(payload) = event_payload(value) else {
         return;
@@ -835,7 +845,10 @@ fn update_pending_tool_calls(
     {
         return;
     }
-    pending_tool_turns.insert(call_id, event_turn_id(value));
+    pending_tool_turns.insert(
+        call_id,
+        event_turn_id(value).or_else(|| active_turn_id.map(str::to_string)),
+    );
 }
 
 fn plan_marker_for_event(

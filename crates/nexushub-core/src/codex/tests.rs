@@ -2916,6 +2916,70 @@ fn scan_rollout_task_complete_clears_wait_agent_pending_tool_for_same_turn() {
 }
 
 #[test]
+fn scan_rollout_latest_task_complete_retires_prior_pending_tools() {
+    let scan = scan_fixture(&[
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old-a"}}),
+        json!({"type":"response_item","turn_id":"turn-old-a","payload":{"type":"function_call","name":"wait","call_id":"wait-old-a","arguments":{"cell_id":"cell-old-a"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old-b"}}),
+        json!({"type":"response_item","turn_id":"turn-old-b","payload":{"type":"function_call","name":"exec_command","call_id":"exec-old-b","arguments":{"cmd":"sleep 10"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-latest"}}),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-latest","last_agent_message":"最新 turn 已完成。"}}),
+    ]);
+
+    assert!(!scan.running);
+    assert_eq!(scan.active_turn_id, None);
+    assert!(!scan.recoverable);
+}
+
+#[test]
+fn scan_rollout_latest_turn_completed_retires_prior_pending_tools() {
+    let scan = scan_fixture(&[
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old"}}),
+        json!({"type":"response_item","turn_id":"turn-old","payload":{"type":"function_call","name":"wait","call_id":"wait-old","arguments":{"cell_id":"cell-old"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-latest"}}),
+        json!({"type":"turn_completed","turn_id":"turn-latest"}),
+    ]);
+
+    assert!(!scan.running);
+    assert_eq!(scan.active_turn_id, None);
+}
+
+#[test]
+fn scan_rollout_latest_turn_aborted_retires_prior_pending_tools() {
+    let scan = scan_fixture(&[
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old"}}),
+        json!({"type":"response_item","turn_id":"turn-old","payload":{"type":"function_call","name":"wait","call_id":"wait-old","arguments":{"cell_id":"cell-old"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-latest"}}),
+        json!({"type":"turn_aborted","turn_id":"turn-latest","reason":"interrupted"}),
+    ]);
+
+    assert!(!scan.running);
+    assert_eq!(scan.active_turn_id, None);
+}
+
+#[test]
+fn scan_rollout_unmatched_named_terminal_preserves_anonymous_pending_tool() {
+    let scan = scan_fixture(&[
+        json!({"type":"response_item","payload":{"type":"function_call","name":"wait","call_id":"wait-anonymous","arguments":{"cell_id":"cell-anonymous"}}}),
+        json!({"type":"turn_completed","turn_id":"turn-not-active"}),
+    ]);
+
+    assert!(scan.running);
+    assert_eq!(scan.active_turn_id, None);
+}
+
+#[test]
+fn scan_rollout_anonymous_terminal_conservatively_clears_pending_tools() {
+    let scan = scan_fixture(&[
+        json!({"type":"response_item","payload":{"type":"function_call","name":"wait","call_id":"wait-anonymous","arguments":{"cell_id":"cell-anonymous"}}}),
+        json!({"type":"turn_completed"}),
+    ]);
+
+    assert!(!scan.running);
+    assert_eq!(scan.active_turn_id, None);
+}
+
+#[test]
 fn scan_rollout_task_complete_clears_anonymous_wait_agent_pending_tool_for_same_turn() {
     let scan = scan_fixture(&[
         json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-main"}}),
@@ -2959,6 +3023,20 @@ fn scan_rollout_task_complete_does_not_clear_newer_running_turn() {
         json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
         json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-agent-live","arguments":{"targets":["agent-live"]}}}),
         json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"旧 turn 完成。"}}),
+    ]);
+
+    assert!(scan.running);
+    assert_eq!(scan.active_turn_id.as_deref(), Some("turn-live"));
+}
+
+#[test]
+fn scan_rollout_old_turn_completed_preserves_newer_pending_tool() {
+    let scan = scan_fixture(&[
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-old"}}),
+        json!({"type":"response_item","turn_id":"turn-old","payload":{"type":"function_call","name":"wait","call_id":"wait-old","arguments":{"cell_id":"cell-old"}}}),
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}),
+        json!({"type":"response_item","turn_id":"turn-live","payload":{"type":"function_call","name":"wait","call_id":"wait-live","arguments":{"cell_id":"cell-live"}}}),
+        json!({"type":"turn_completed","turn_id":"turn-old"}),
     ]);
 
     assert!(scan.running);
