@@ -108,7 +108,12 @@ pub fn scan_codex_turn_errors(
     .with_context(|| format!("open Codex logs DB {}", logs_db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_millis(500))?;
     let latest = latest_cursor_tuple(&conn)?;
-    if previous.is_none_or(|cursor| cursor.database_identity != database_identity) {
+    let establish_baseline = match previous {
+        None => true,
+        Some(cursor) if cursor.database_identity != database_identity => true,
+        Some(cursor) => !cursor_tuple_exists(&conn, cursor)?,
+    };
+    if establish_baseline {
         let (ts, ts_nanos, id) = latest.unwrap_or((0, 0, 0));
         return Ok(ProbeErrorScan {
             cursor: ProbeErrorCursor {
@@ -308,6 +313,20 @@ fn latest_cursor_tuple(conn: &Connection) -> Result<Option<(i64, i64, i64)>> {
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )
     .optional()
+    .map_err(Into::into)
+}
+
+fn cursor_tuple_exists(conn: &Connection, cursor: &ProbeErrorCursor) -> Result<bool> {
+    if (cursor.ts, cursor.ts_nanos, cursor.id) == (0, 0, 0) {
+        return Ok(true);
+    }
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM logs WHERE ts = ?1 AND ts_nanos = ?2 AND id = ?3
+        )",
+        params![cursor.ts, cursor.ts_nanos, cursor.id],
+        |row| row.get::<_, bool>(0),
+    )
     .map_err(Into::into)
 }
 

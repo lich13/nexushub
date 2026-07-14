@@ -277,12 +277,24 @@ fn probe_error_monitor_first_scan_and_replaced_database_only_establish_baseline(
         Some(THREAD_ID),
         CAPACITY_BODY,
     );
-    let replaced = scan_codex_turn_errors(&logs, Some(&baseline.cursor), 100).unwrap();
+    let replacement_baseline = scan_codex_turn_errors(&logs, None, 100).unwrap();
+    let mut reused_identity_cursor = baseline.cursor.clone();
+    reused_identity_cursor.database_identity =
+        replacement_baseline.cursor.database_identity.clone();
+    let replaced = scan_codex_turn_errors(&logs, Some(&reused_identity_cursor), 100).unwrap();
     assert!(replaced.baseline_only);
     assert!(replaced.incidents.is_empty());
-    assert_ne!(
+    assert_eq!(
         replaced.cursor.database_identity,
-        baseline.cursor.database_identity
+        replacement_baseline.cursor.database_identity
+    );
+    assert_eq!(
+        (
+            replaced.cursor.ts,
+            replaced.cursor.ts_nanos,
+            replaced.cursor.id
+        ),
+        (200, 1, 1)
     );
     fs::remove_dir_all(root).unwrap();
 }
