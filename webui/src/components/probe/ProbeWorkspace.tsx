@@ -390,6 +390,8 @@ function ProbeRuntimeSettingsCard({
         <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
+        <Metric label="错误监控" value={probeStateLabel(status?.error_monitor_status ?? (draft.probe.error_monitor.enabled ? "enabled" : "disabled"))} tone={draft.probe.error_monitor.enabled ? "success" : "warning"} />
+        <Metric label="错误事件" value={String(status?.error_monitor_incident_count ?? 0)} />
         {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(status ?? settings?.codex)} wide />}
         <Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />
         <Metric label="Discovery" value={probeDiscoveryWarningsText(status?.discovery_warnings ?? settings?.codex?.discovery_warnings ?? settings?.discovery_warnings ?? logsDb?.discovery_warnings)} wide />
@@ -408,6 +410,8 @@ function ProbeRuntimeSettingsCard({
       </div>
       <div className="probe-toggle-grid">
         <label className="toggle-row"><span>启用 Probe</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
+        <label className="toggle-row"><span>终止错误监控</span><input type="checkbox" checked={draft.probe.error_monitor.enabled} onChange={(event) => setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })} /></label>
+        <label className="toggle-row"><span>受限 Goal 自动恢复</span><input type="checkbox" checked={draft.probe.error_monitor.auto_resume_goals} onChange={(event) => setProbe({ error_monitor: { ...draft.probe.error_monitor, auto_resume_goals: event.target.checked } })} /></label>
         <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
         <label className="toggle-row"><span>回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span>异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>

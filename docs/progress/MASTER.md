@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex behavior, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep the Claude Code provider read-only.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-07-13
-> **Mode**: V0.1.155_ACCEPTED
+> **Last Updated**: 2026-07-15
+> **Mode**: V0.1.156_IN_PROGRESS
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.155` stale Codex turn activity repair accepted<br>
-**Active Task**: Goal 24 is complete. Rollout terminal events retire the matching active turn and all earlier active turns in start order, including their pending tool calls, while preserving newer turns and exact-only cleanup for unmatched named terminals. RED/GREEN coverage includes `task_complete`, `turn_completed`, `turn_aborted`, anonymous terminals, newer-running preservation, and the real `019ef7f2-95e6-7e02-8519-f1b6431ef993` rollout. Full local gates, Release, exact-tag deployment, macOS installation, dual-end acceptance, regression checks, evidence closure, and cleanup passed.
+**Active Phase**: `v0.1.156` Codex terminal-error monitoring and restricted Goal recovery in progress<br>
+**Active Task**: Goal 25 Goal 1 is complete. The implementation incrementally scans `logs_2.sqlite` terminal `Turn error` rows, permanently claims redacted incidents, delivers Bark independently from official Goal recovery, retries bounded failures, and installs a no-listener macOS monitor `LaunchAgent`. Targeted TDD and the complete workspace, Tauri, WebUI, installer, Linux server package, formatting, and Clippy gate passed; implementation commit, Release, deployment, production acceptance, evidence closure, and cleanup remain pending.
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows through `v0.1.155` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.155` is the accepted production checkpoint.
+Rows through `v0.1.155` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as the active target. `v0.1.156` is the active release target; `v0.1.155` remains the accepted production checkpoint until Goal 25 closes.
 
 ## Deep Refactor Goal Tracker
 
@@ -70,6 +70,7 @@ Rows through `v0.1.155` are historical execution records. Old `P/R pending` rows
 - [x] Goal 22: `v0.1.153` false-question notification suppression and release acceptance - completed on 2026-07-13. Commit `64a97d5` adds bounded-tail `Pending`/`Resolved`/`Missing` confirmation and a nonblocking one-shot child after the 1-second grace period. TDD and the complete workspace/Tauri/WebUI/install/package gate passed; CI `29218204389` and Release `29218463206` succeeded at the exact tag commit with 15 assets. Official macOS and exact-tag Tencent Cloud deployments passed four-call false-question suppression, one confirmed-pending positive replay, real Default-mode rejection, real sequential Plan-mode questions with distinct calls and no repeat, memory/control/completion/dangling/Stop/title/cleanup regressions, health and scoped `404` checks, and final cleanup. Existing four historical false-question events and four persistent markers remain unchanged for audit.
 - [x] Goal 23: `v0.1.154` official Codex Goal control-plane repair and release acceptance - completed on 2026-07-13. Production Goal read/save/clear/pause/resume paths call official app-server methods with the resolved `CODEX_HOME`; shadow-table rows remain intact but are excluded from production reads, writes, and fallback. Targeted core/Web/Tauri/WebUI tests and the complete workspace/Tauri/WebUI/install/package gate passed, including official `null` and error authority, app-server process cleanup, no mutation retry, architecture enforcement, and stable Hook timing coverage. CI/Release, exact-tag deployment, dual-end real Goal CRUD acceptance, regression checks, evidence closure, and cleanup all passed.
 - [x] Goal 24: `v0.1.155` stale Codex turn activity repair and release acceptance - completed on 2026-07-13. The rollout scanner retires ordered active-turn boundaries and their pending tools for named `task_complete`, `turn_completed`, and `turn_aborted` events, keeps newer activity, preserves conservative anonymous semantics, and avoids unmatched global fallback. The real stale-wait rollout, complete local gates, CI/Release, exact-tag Tencent Cloud deployment, official macOS DMG acceptance, running-to-recent transition checks, regressions, and final cleanup all passed.
+- [ ] Goal 25: `v0.1.156` Codex terminal-error monitoring and restricted Goal recovery - in progress. Goal 1 is complete: TDD covers exact terminal log identity, bounded composite cursors, first-run/replacement baselines, redaction and classification, permanent/concurrent incident claims, persisted pending delivery replay, independent Bark and Goal recovery, restricted-only official mutation, mutation-timeout state recheck, bounded `0/15/60/300` retry behavior, final failure Bark, macOS no-listener `LaunchAgent`, and WebUI settings/status. The complete workspace, Tauri, WebUI, installer, Linux server package, formatting, and Clippy gate passed. Implementation commit, Release, exact-tag Tencent Cloud and official macOS deployment, dual-end acceptance, regressions, documentation, and cleanup remain pending.
 
 ## Governance Status
 
@@ -83,7 +84,7 @@ Rows through `v0.1.155` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.155_ACCEPTED
+  mode: V0.1.156_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, webui, and use-case layer with thin Linux server webd, macOS Tauri, Linux Tauri, and controlled desktop LAN WebUI host surfaces"
   phases:
     phase_1:
@@ -393,10 +394,21 @@ The `v0.1.154` final cleanup removed the local Release download, App rollback co
 
 The `v0.1.155` final cleanup removed the downloaded Release files and App rollback copy, unmounted `/Volumes/NexusHub`, stopped the NexusHub App, removed cloud `/tmp/nexushub-webd-deploy*`, `/tmp/nexushub-webd-linux-x86_64*`, and the temporary unpack directory, and removed audited ignored Rust/Tauri/WebUI build outputs. Production databases, configuration, logs, and active cloud `systemd-private` runtime directories were retained. Final repository, cloud version/health, and public route checks were rerun after cleanup.
 
+## v0.1.156 Acceptance Matrix
+
+| Platform | Entry | Service | Runtime paths | Required checks |
+|:--|:--|:--|:--|:--|
+| Local source | `/Users/gosu/Documents/程序开发/NexusHub` | none after cleanup | tracked source only | Goal 1 complete. The implementation adds the `logs_2.sqlite` terminal-error cursor, redacted incident state, persisted pending-delivery replay, independent Bark and official restricted-Goal recovery, bounded retries, macOS `LaunchAgent`, Linux monitor loop, and WebUI settings/status. Targeted core/webd/Tauri/WebUI TDD passed, followed by workspace and Tauri fmt/test/Clippy, WebUI typecheck/`240` tests/build/desktop build, installer guards, Linux server package `--check`, and `git diff --check`. Implementation commit remains pending. |
+| Tencent Cloud Linux server WebUI | `https://661313.xyz/nexushub/` | current production remains `nexushub-webd 0.1.155` until release | `/usr/local/bin/nexushub-webd`, `/usr/share/nexushub-webd/webui`, `/etc/nexushub-webd/config.toml`, `/var/lib/nexushub-webd/nexushub.sqlite`, `/root/.codex` | Exact-tag `0.1.156` deployment, systemd monitor status, isolated error/Goal fixtures, regressions, health, public entry, and scoped `404` checks are pending. |
+| macOS ARM64 Tauri | current installed production remains `0.1.155` until official DMG installation | native Tauri App plus no-listener `com.lich13.nexushub.probe-error-monitor` | `/Applications/NexusHub.app`, bundled helper, App Support helper, `~/Library/LaunchAgents`, `~/.codex`, local Probe DB | Official `0.1.156` DMG installation, helper parity, loaded `LaunchAgent`, App-closed operation, isolated error/Goal fixtures, Bark and regression acceptance are pending. |
+| GitHub Release and Linux x86_64 Tauri | planned [v0.1.156](https://github.com/lich13/nexushub/releases/tag/v0.1.156) | GitHub Actions CI/Release plus Linux `xvfb` smoke | expected 15 uploaded Release assets | Push, CI, exact implementation tag, Release jobs, metadata/signatures, 15 assets, and downloaded SHA-256 verification are pending. |
+
 ## Session Log
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-07-15 | v0.1.156-goal1-local-gate | Completed Goal 1 after targeted terminal-error, incident, Goal recovery, `LaunchAgent`, and WebUI TDD plus the full workspace/Tauri/WebUI/install/Linux-package gate. A Tauri settings test exposed an unintended real `LaunchAgent` side effect; production save still performs and reports repair, while unit tests now inject a no-op repair boundary. Source audit confirmed no new public RPC, listener, shell, Codex socket, `/v1`, `/responses`, or metrics surface. |
+| 2026-07-15 | v0.1.156-terminal-error-monitor-start | Started Goal 25 after terminal Codex failures such as `Selected model is at capacity` persisted only in `logs_2.sqlite` and left official Goals restricted. The in-progress implementation monitors exact terminal rows, sends redacted Bark alerts, restores only `blocked`/`usageLimited`/`budgetLimited` Goals through app-server, keeps paused/complete/missing Goals unchanged, and adds a no-listener macOS `LaunchAgent`; full gate and release acceptance remain pending. |
 | 2026-07-13 | v0.1.155-final-accepted | Closed Goal 24 after implementation commit `1f0d8fd`, CI `29251823844`, Release `29252496491`, 15-asset metadata/signature/SHA verification, exact-tag Tencent Cloud and official macOS deployment, stale-wait negative and newer-turn preservation fixtures, real running-to-recent state transition, Goal/Probe/Hook/cleanup regressions, public/sensitive-route checks, and local/cloud cleanup. |
 | 2026-07-13 | v0.1.155-stale-turn-activity-fix-start | Started Goal 24 after NexusHub reported a completed Codex task as running because older turns retained output-less `wait` calls. RED/GREEN tests now apply an ordered terminal boundary to active turns and pending tools, preserve newer turns, avoid unmatched named fallback, and pass the real target rollout; full gate and release acceptance remain pending. |
 | 2026-07-13 | v0.1.154-final-accepted | Closed Goal 23 after implementation commit `2b3145b`, CI `29234955486`, Release `29235520356`, 15-asset metadata/signature/SHA verification, exact-tag Tencent Cloud and official macOS deployment, dual-end official Goal CRUD, app-server failure-state, Hook/Probe/Bark/completion/dangling/Stop/cleanup regressions, production health/scoped-route checks, and local/cloud cleanup. |

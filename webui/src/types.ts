@@ -495,6 +495,12 @@ export type ProbeStatus = {
   snapshot_age_seconds?: number | null;
   is_refreshing?: boolean | null;
   snapshot_status?: string | null;
+  error_monitor_enabled?: boolean | null;
+  error_monitor_auto_resume_goals?: boolean | null;
+  error_monitor_status?: string | null;
+  error_monitor_last_scan_at?: string | number | null;
+  error_monitor_last_error?: string | null;
+  error_monitor_incident_count?: number | null;
 };
 
 export type ProbeEvent = {
@@ -534,6 +540,10 @@ export type ProbeSettings = {
     recent_limit?: number;
     hooks?: Record<string, unknown> & {
       manage_stop_hook?: boolean;
+    };
+    error_monitor?: Record<string, unknown> & {
+      enabled?: boolean;
+      auto_resume_goals?: boolean;
     };
     notifications?: Record<string, unknown> & {
       enabled?: boolean;

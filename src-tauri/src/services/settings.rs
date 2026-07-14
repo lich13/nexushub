@@ -113,6 +113,18 @@ pub(crate) fn probe_save_settings_with_state(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
+    probe_save_settings_with_state_and_repair(state, request, |config, platform| {
+        crate::resources::repair_probe_error_monitor_launch_agent(config, platform)
+            .map(|_| ())
+            .map_err(anyhow::Error::msg)
+    })
+}
+
+fn probe_save_settings_with_state_and_repair(
+    state: &DesktopState,
+    request: ProbeSettingsSaveRequest,
+    repair_error_monitor: impl FnOnce(&Config, &nexushub_core::platform::PlatformPaths) -> Result<()>,
+) -> Result<DesktopProbeSettings> {
     let config = state.config();
     let plan = NexusHubUseCases::with_config(&config, state.platform())
         .settings()?
@@ -131,7 +143,8 @@ pub(crate) fn probe_save_settings_with_state(
             secret_write.secret_value.as_bytes(),
         )?;
     }
-    state.replace_config(response_config);
+    state.replace_config(response_config.clone());
+    repair_error_monitor(&response_config, state.platform())?;
     probe_settings_with_state(state)
 }
 
@@ -140,7 +153,7 @@ pub(crate) fn test_probe_save_settings_with_state(
     state: &DesktopState,
     request: ProbeSettingsSaveRequest,
 ) -> Result<DesktopProbeSettings> {
-    probe_save_settings_with_state(state, request)
+    probe_save_settings_with_state_and_repair(state, request, |_, _| Ok(()))
 }
 
 pub(crate) fn probe_action_with_state(

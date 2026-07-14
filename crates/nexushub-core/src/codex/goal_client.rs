@@ -50,6 +50,7 @@ pub enum CodexGoalAction {
     Clear,
     Pause,
     Resume,
+    RecoverRestricted,
 }
 
 impl CodexGoalAction {
@@ -316,6 +317,25 @@ async fn run_goal_session(
                     "Goal cannot be resumed from {} status",
                     goal.status
                 ));
+            }
+            set_goal(
+                stdin,
+                stdout,
+                &mut next_id,
+                json!({"threadId": thread_id, "status": "active"}),
+            )
+            .await
+            .map(Some)
+        }
+        CodexGoalAction::RecoverRestricted => {
+            let Some(goal) = get_goal(stdin, stdout, &mut next_id, thread_id).await? else {
+                return Ok(None);
+            };
+            if !matches!(
+                goal.status.as_str(),
+                "blocked" | "usageLimited" | "budgetLimited"
+            ) {
+                return Ok(Some(goal));
             }
             set_goal(
                 stdin,
@@ -622,6 +642,100 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Codex CLI 0.144.2 or newer is required"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_goal_recover_restricted_only_mutates_recoverable_statuses() {
+        for (status, should_set) in [
+            ("blocked", true),
+            ("usageLimited", true),
+            ("budgetLimited", true),
+            ("active", false),
+            ("paused", false),
+            ("complete", false),
+        ] {
+            let _guard = process_test_guard().await;
+            let root = temp_dir(&format!("goal-recover-{status}"));
+            let executable = root.join("codex");
+            write_executable(
+                &executable,
+                &format!(
+                    r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+LOG='{}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$LOG"
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"id":1,"result":{{"userAgent":"fake","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{{"id":2,"result":{{"goal":{{"threadId":"thread-live","objective":"Recover me","status":"{status}","tokenBudget":9000,"tokensUsed":10,"timeUsedSeconds":2,"createdAt":100,"updatedAt":200}}}}}}'
+      ;;
+    *'"method":"thread/goal/set"'*)
+      echo '{{"id":3,"result":{{"goal":{{"threadId":"thread-live","objective":"Recover me","status":"active","tokenBudget":9000,"tokensUsed":10,"timeUsedSeconds":2,"createdAt":100,"updatedAt":201}}}}}}'
+      ;;
+  esac
+done
+"#,
+                    root.join("app-server-input.log").display()
+                ),
+            );
+            let client = CodexGoalClient::with_resolved_executable(
+                executable.clone(),
+                Duration::from_secs(2),
+            );
+            let goal = client
+                .execute(&root, "thread-live", CodexGoalAction::RecoverRestricted)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(goal.status, if should_set { "active" } else { status });
+            let input = fs::read_to_string(root.join("app-server-input.log")).unwrap_or_default();
+            assert_eq!(input.contains("\"method\":\"thread/goal/set\""), should_set);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_goal_recover_restricted_leaves_missing_goal_unchanged() {
+        let _guard = process_test_guard().await;
+        let root = temp_dir("goal-recover-missing");
+        let executable = root.join("codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.2'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"id":1,"result":{"userAgent":"fake"}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{"id":2,"result":{"goal":null}}'
+      ;;
+    *'"method":"thread/goal/set"'*)
+      exit 91
+      ;;
+  esac
+done
+"#,
+        );
+        let client = CodexGoalClient::with_resolved_executable(executable, Duration::from_secs(2));
+
+        let goal = client
+            .execute(&root, "thread-live", CodexGoalAction::RecoverRestricted)
+            .await
+            .unwrap();
+
+        assert_eq!(goal, None);
         fs::remove_dir_all(root).unwrap();
     }
 

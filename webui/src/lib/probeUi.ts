@@ -26,6 +26,10 @@ export type ProbeSettingsDraft = {
     enabled: boolean;
     poll_seconds: ProbeNumericDraftValue;
     recent_limit: ProbeNumericDraftValue;
+    error_monitor: {
+      enabled: boolean;
+      auto_resume_goals: boolean;
+    };
   };
   hooks: {
     manage_stop_hook: boolean;
@@ -102,7 +106,11 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
     probe: {
       enabled: Boolean(probe.enabled),
       poll_seconds: toBoundedInteger(probe.poll_seconds, 15) ?? 15,
-      recent_limit: toBoundedInteger(probe.recent_limit, 50) ?? 50
+      recent_limit: toBoundedInteger(probe.recent_limit, 50) ?? 50,
+      error_monitor: {
+        enabled: probe.error_monitor?.enabled !== false,
+        auto_resume_goals: probe.error_monitor?.auto_resume_goals !== false
+      }
     },
     hooks: {
       manage_stop_hook: probe.hooks?.manage_stop_hook !== false
@@ -145,7 +153,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
 
 export type ProbeSettingsPayload = {
   codex: ProbeSettings["codex"];
-  probe: Pick<ProbeSettings["probe"], "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "notifications" | "observability" | "logs_db">;
+  probe: Pick<ProbeSettings["probe"], "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "error_monitor" | "notifications" | "observability" | "logs_db">;
   notifications?: Pick<ProbeSettings["notifications"], "device_key">;
 };
 
@@ -183,6 +191,10 @@ export function buildProbeSettingsPayload(
       enabled: draft.probe.enabled,
       poll_seconds: requiredDraftNumber(draft.probe.poll_seconds),
       recent_limit: requiredDraftNumber(draft.probe.recent_limit),
+      error_monitor: {
+        enabled: draft.probe.error_monitor.enabled,
+        auto_resume_goals: draft.probe.error_monitor.auto_resume_goals
+      },
       hooks: {
         manage_stop_hook: draft.hooks.manage_stop_hook
       },

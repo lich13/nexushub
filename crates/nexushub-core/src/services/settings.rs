@@ -2,9 +2,9 @@ use crate::{
     codex::resolve_codex_paths,
     config::{
         valid_probe_notification_server_url, CodexProbeConfigPatch, Config, ProbeConfig,
-        ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeLogsDbConfig, ProbeLogsDbConfigPatch,
-        ProbeNotificationsConfig, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
-        ProbeSettingsPatch,
+        ProbeConfigFilePatch, ProbeErrorMonitorConfigPatch, ProbeHooksConfigPatch,
+        ProbeLogsDbConfig, ProbeLogsDbConfigPatch, ProbeNotificationsConfig,
+        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     platform::PlatformPaths,
     services::system::{require_capability, Capability},
@@ -212,6 +212,7 @@ pub struct ProbeSettingsSavePatch {
     pub notifications: Option<ProbeNotificationsSavePatch>,
     pub observability: Option<ProbeObservabilityConfigPatch>,
     pub logs_db: Option<ProbeLogsDbConfigPatch>,
+    pub error_monitor: Option<ProbeErrorMonitorConfigPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -346,6 +347,7 @@ impl ProbeSettingsSavePatch {
             notifications,
             observability: self.observability,
             logs_db: self.logs_db,
+            error_monitor: self.error_monitor,
         };
 
         (
@@ -405,6 +407,7 @@ fn is_probe_settings_patch_empty(patch: &ProbeSettingsPatch) -> bool {
         && patch.notifications.is_none()
         && patch.observability.is_none()
         && patch.logs_db.is_none()
+        && patch.error_monitor.is_none()
 }
 
 fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> bool {
@@ -440,6 +443,12 @@ pub fn normalize_probe_settings_patch(mut patch: ProbeSettingsPatch) -> Result<P
         .transpose()?;
     patch.observability = patch.observability.map(normalize_probe_observability_patch);
     patch.logs_db = patch.logs_db.map(normalize_probe_logs_db_patch);
+    patch.error_monitor = patch
+        .error_monitor
+        .map(|patch| ProbeErrorMonitorConfigPatch {
+            enabled: patch.enabled,
+            auto_resume_goals: patch.auto_resume_goals,
+        });
     Ok(patch)
 }
 

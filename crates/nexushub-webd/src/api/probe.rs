@@ -201,7 +201,7 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
 
 async fn probe_status_fresh_value(state: AppState) -> Value {
     match probe_runtime(&state).status().await {
-        Ok(status) => json!(status),
+        Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
         Err(err) => json!({
             "label": "Probe",
             "enabled": state.config().probe.enabled,
@@ -214,7 +214,7 @@ async fn probe_status_fresh_value(state: AppState) -> Value {
 
 async fn probe_status_base_value(state: AppState) -> Value {
     match probe_runtime(&state).status().await {
-        Ok(status) => json!(status),
+        Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
         Err(err) => json!({
             "label": "Probe",
             "enabled": state.config().probe.enabled,
@@ -223,6 +223,40 @@ async fn probe_status_base_value(state: AppState) -> Value {
             "error": err.to_string(),
         }),
     }
+}
+
+fn enrich_probe_error_monitor_status(state: &AppState, mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    let runtime = state
+        .db
+        .get_setting("probe_error_monitor_status")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    if let Some(runtime) = runtime.as_ref().and_then(Value::as_object) {
+        object.insert(
+            "error_monitor_status".to_string(),
+            runtime.get("status").cloned().unwrap_or(Value::Null),
+        );
+        object.insert(
+            "error_monitor_last_scan_at".to_string(),
+            runtime.get("last_scan_at").cloned().unwrap_or(Value::Null),
+        );
+        object.insert(
+            "error_monitor_last_error".to_string(),
+            runtime.get("last_error").cloned().unwrap_or(Value::Null),
+        );
+        object.insert(
+            "error_monitor_incident_count".to_string(),
+            runtime
+                .get("incident_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+    }
+    value
 }
 
 fn current_probe_status_snapshot(state: &AppState) -> Option<CachedProbeStatus> {

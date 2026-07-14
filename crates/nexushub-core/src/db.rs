@@ -110,6 +110,40 @@ pub struct NewProbeEvent<'a> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeErrorIncident {
+    pub incident_key: String,
+    pub source_ts: i64,
+    pub source_ts_nanos: i64,
+    pub source_row_id: i64,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub classification: String,
+    pub error_sha256: String,
+    pub error_summary: String,
+    pub event_id: Option<String>,
+    pub bark_status: String,
+    pub recovery_status: String,
+    pub recovery_attempts: u32,
+    pub next_retry_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewProbeErrorIncident {
+    pub incident_key: String,
+    pub source_ts: i64,
+    pub source_ts_nanos: i64,
+    pub source_row_id: i64,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub classification: String,
+    pub error_sha256: String,
+    pub error_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreadGoal {
     pub thread_id: String,
     pub objective: Option<String>,
@@ -271,6 +305,30 @@ impl PanelDb {
               created_at INTEGER NOT NULL,
               PRIMARY KEY(namespace, dedupe_key)
             );
+
+            CREATE TABLE IF NOT EXISTS probe_error_incidents (
+              incident_key TEXT PRIMARY KEY,
+              source_ts INTEGER NOT NULL,
+              source_ts_nanos INTEGER NOT NULL,
+              source_row_id INTEGER NOT NULL,
+              thread_id TEXT NOT NULL,
+              turn_id TEXT NOT NULL,
+              classification TEXT NOT NULL,
+              error_sha256 TEXT NOT NULL,
+              error_summary TEXT NOT NULL,
+              event_id TEXT,
+              bark_status TEXT NOT NULL DEFAULT 'pending',
+              recovery_status TEXT NOT NULL DEFAULT 'pending',
+              recovery_attempts INTEGER NOT NULL DEFAULT 0,
+              next_retry_at INTEGER,
+              last_error TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_probe_error_incidents_source
+              ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
+            CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_retry
+              ON probe_error_incidents(recovery_status, next_retry_at);
 
             CREATE TABLE IF NOT EXISTS codex_thread_goals (
               thread_id TEXT PRIMARY KEY,
@@ -995,6 +1053,203 @@ impl PanelDb {
         Ok(changed > 0)
     }
 
+    pub fn claim_probe_error_incident(&self, incident: &NewProbeErrorIncident) -> Result<bool> {
+        let now = Self::now();
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(conn.execute(
+            r#"
+            INSERT OR IGNORE INTO probe_error_incidents(
+              incident_key, source_ts, source_ts_nanos, source_row_id,
+              thread_id, turn_id, classification, error_sha256, error_summary,
+              bark_status, recovery_status, recovery_attempts, created_at, updated_at
+            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', 'pending', 0, ?10, ?10)
+            "#,
+            params![
+                incident.incident_key,
+                incident.source_ts,
+                incident.source_ts_nanos,
+                incident.source_row_id,
+                incident.thread_id,
+                incident.turn_id,
+                incident.classification,
+                incident.error_sha256,
+                incident.error_summary,
+                now,
+            ],
+        )? == 1)
+    }
+
+    pub fn probe_error_incident_count(&self) -> Result<u64> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.query_row("SELECT COUNT(*) FROM probe_error_incidents", [], |row| {
+            row.get(0)
+        })
+        .map_err(Into::into)
+    }
+
+    pub fn list_pending_probe_error_deliveries(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<ProbeErrorIncident>> {
+        let conn = self.conn.lock().expect("db mutex");
+        let mut statement = conn.prepare(
+            r#"
+            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
+                   thread_id, turn_id, classification, error_sha256, error_summary,
+                   event_id, bark_status, recovery_status, recovery_attempts,
+                   next_retry_at, last_error, created_at, updated_at
+            FROM probe_error_incidents
+            WHERE bark_status='pending'
+            ORDER BY created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows =
+            statement.query_map(params![limit.clamp(1, 100)], probe_error_incident_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_probe_error_incident(
+        &self,
+        incident_key: &str,
+    ) -> Result<Option<ProbeErrorIncident>> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.query_row(
+            r#"
+            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
+                   thread_id, turn_id, classification, error_sha256, error_summary,
+                   event_id, bark_status, recovery_status, recovery_attempts,
+                   next_retry_at, last_error, created_at, updated_at
+            FROM probe_error_incidents WHERE incident_key=?1
+            "#,
+            params![incident_key],
+            probe_error_incident_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn list_due_probe_error_incidents(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<ProbeErrorIncident>> {
+        let conn = self.conn.lock().expect("db mutex");
+        let mut statement = conn.prepare(
+            r#"
+            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
+                   thread_id, turn_id, classification, error_sha256, error_summary,
+                   event_id, bark_status, recovery_status, recovery_attempts,
+                   next_retry_at, last_error, created_at, updated_at
+            FROM probe_error_incidents
+            WHERE recovery_status IN ('pending', 'retrying')
+              AND (next_retry_at IS NULL OR next_retry_at <= ?1)
+            ORDER BY created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![now, limit.clamp(1, 100)],
+            probe_error_incident_from_row,
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn claim_probe_error_recovery_attempt(
+        &self,
+        incident_key: &str,
+        expected_attempts: u32,
+        now: i64,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(conn.execute(
+            r#"
+            UPDATE probe_error_incidents
+            SET recovery_status='recovering', recovery_attempts=recovery_attempts + 1,
+                next_retry_at=NULL, updated_at=?3
+            WHERE incident_key=?1
+              AND recovery_attempts=?2
+              AND recovery_status IN ('pending', 'retrying')
+              AND (next_retry_at IS NULL OR next_retry_at <= ?3)
+            "#,
+            params![incident_key, i64::from(expected_attempts), now],
+        )? == 1)
+    }
+
+    pub fn schedule_probe_error_recovery_retry(
+        &self,
+        incident_key: &str,
+        attempts: u32,
+        next_retry_at: i64,
+        last_error: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            r#"
+            UPDATE probe_error_incidents
+            SET recovery_status='retrying', next_retry_at=?3, last_error=?4, updated_at=?5
+            WHERE incident_key=?1 AND recovery_attempts=?2 AND recovery_status='recovering'
+            "#,
+            params![
+                incident_key,
+                i64::from(attempts),
+                next_retry_at,
+                last_error,
+                Self::now()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_probe_error_recovery(
+        &self,
+        incident_key: &str,
+        status: &str,
+        last_error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            r#"
+            UPDATE probe_error_incidents
+            SET recovery_status=?2, next_retry_at=NULL, last_error=?3, updated_at=?4
+            WHERE incident_key=?1
+            "#,
+            params![incident_key, status, last_error, Self::now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_probe_error_incident_delivery(
+        &self,
+        incident_key: &str,
+        event_id: Option<&str>,
+        bark_status: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            r#"
+            UPDATE probe_error_incidents
+            SET event_id=COALESCE(?2, event_id), bark_status=?3, updated_at=?4
+            WHERE incident_key=?1
+            "#,
+            params![incident_key, event_id, bark_status, Self::now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn probe_event_id_by_dedupe_key(&self, dedupe_key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.query_row(
+            "SELECT id FROM probe_events WHERE dedupe_key=?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            params![dedupe_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub fn probe_logs_db_counts(&self, retention_days: u32) -> Result<ProbeLogsDbCounts> {
         let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
         let now = Self::now();
@@ -1133,6 +1388,28 @@ fn probe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeEvent>
         payload,
         created_at: row.get(8)?,
         handled_at: row.get(9)?,
+    })
+}
+
+fn probe_error_incident_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProbeErrorIncident> {
+    Ok(ProbeErrorIncident {
+        incident_key: row.get(0)?,
+        source_ts: row.get(1)?,
+        source_ts_nanos: row.get(2)?,
+        source_row_id: row.get(3)?,
+        thread_id: row.get(4)?,
+        turn_id: row.get(5)?,
+        classification: row.get(6)?,
+        error_sha256: row.get(7)?,
+        error_summary: row.get(8)?,
+        event_id: row.get(9)?,
+        bark_status: row.get(10)?,
+        recovery_status: row.get(11)?,
+        recovery_attempts: row.get::<_, i64>(12)? as u32,
+        next_retry_at: row.get(13)?,
+        last_error: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 

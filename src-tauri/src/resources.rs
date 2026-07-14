@@ -31,6 +31,24 @@ pub(crate) fn prepare_desktop_webui_assets_from_resource(
     migrate_desktop_webui_dir_config(&platform).map_err(|err| err.to_string())
 }
 
+pub(crate) fn repair_probe_error_monitor_launch_agent(
+    config: &nexushub_core::config::Config,
+    platform: &nexushub_core::platform::PlatformPaths,
+) -> Result<nexushub_core::probe_error_monitor::ProbeErrorMonitorLaunchAgentStatus, String> {
+    if !platform.config_file.is_file() {
+        if let Some(parent) = platform.config_file.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        let text = toml::to_string_pretty(config).map_err(|err| err.to_string())?;
+        std::fs::write(&platform.config_file, text).map_err(|err| err.to_string())?;
+    }
+    nexushub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
+        platform,
+        config.probe.error_monitor.enabled,
+    )
+    .map_err(|err| err.to_string())
+}
+
 fn remove_legacy_webui_dir(
     platform: &nexushub_core::platform::PlatformPaths,
 ) -> std::io::Result<()> {
@@ -228,5 +246,19 @@ log_dir = "{}"
         let migrated = std::fs::read_to_string(&platform.config_file).unwrap();
         assert!(migrated.contains(&format!("webui_dir = \"{}\"", platform.webui_dir.display())));
         assert!(!migrated.contains(&format!("webui_dir = \"{}\"", legacy_webui.display())));
+    }
+
+    #[test]
+    fn error_monitor_launch_agent_contract_uses_helper_only_and_has_no_listener() {
+        let plist = nexushub_core::probe_error_monitor::probe_error_monitor_launch_agent_plist(
+            Path::new("/Users/test/Library/Application Support/NexusHub/bin/nexushub-webd"),
+            Path::new("/Users/test/Library/Application Support/NexusHub/config.toml"),
+            Path::new("/Users/test/Library/Logs/NexusHub/probe-error-monitor.out.log"),
+            Path::new("/Users/test/Library/Logs/NexusHub/probe-error-monitor.err.log"),
+        );
+        assert!(plist.contains("<string>monitor-errors</string>"));
+        assert!(!plist.contains("<string>serve</string>"));
+        assert!(!plist.contains("15742"));
+        assert!(!plist.contains("Sockets"));
     }
 }

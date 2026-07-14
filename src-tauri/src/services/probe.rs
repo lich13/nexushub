@@ -12,9 +12,20 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
         .probe()?
         .status()?
         .status;
-    let status = ProbeRuntime::new(config, state.platform().clone())
+    let mut status = ProbeRuntime::new(config, state.platform().clone())
         .status()
         .await?;
+    if let Some(raw) = state.db.get_setting("probe_error_monitor_status")? {
+        if let Ok(runtime) = serde_json::from_str::<
+            nexushub_core::probe_error_monitor::ProbeErrorMonitorRuntimeStatus,
+        >(&raw)
+        {
+            status.error_monitor_status = runtime.status;
+            status.error_monitor_last_scan_at = Some(runtime.last_scan_at);
+            status.error_monitor_last_error = runtime.last_error;
+            status.error_monitor_incident_count = runtime.incident_count;
+        }
+    }
     let recent_event_count = state
         .db
         .list_probe_events(limit as u32)

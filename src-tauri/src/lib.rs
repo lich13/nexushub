@@ -83,6 +83,12 @@ pub fn run() {
                 resources::prepare_desktop_webui_assets_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
+            if let Err(err) = resources::repair_probe_error_monitor_launch_agent(
+                &state.config(),
+                state.platform(),
+            ) {
+                eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
+            }
             app.manage(state);
             let main_window_config = app
                 .config()

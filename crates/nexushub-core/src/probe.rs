@@ -145,6 +145,17 @@ impl ProbeRuntime {
             bark_notify_completion: self.config.probe.notifications.notify_completion,
             bark_notify_reply_needed: self.config.probe.notifications.notify_reply_needed,
             bark_notify_recoverable: self.config.probe.notifications.notify_recoverable,
+            error_monitor_enabled: self.config.probe.error_monitor.enabled,
+            error_monitor_auto_resume_goals: self.config.probe.error_monitor.auto_resume_goals,
+            error_monitor_status: if self.config.probe.error_monitor.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .to_string(),
+            error_monitor_last_scan_at: None,
+            error_monitor_last_error: None,
+            error_monitor_incident_count: 0,
             logs_db_status: logs_db_status.status,
             lifecycle_status: self.lifecycle_status_text(),
             doctor_status: self.doctor_status_text(),
@@ -883,6 +894,12 @@ pub struct ProbeStatus {
     pub bark_notify_completion: bool,
     pub bark_notify_reply_needed: bool,
     pub bark_notify_recoverable: bool,
+    pub error_monitor_enabled: bool,
+    pub error_monitor_auto_resume_goals: bool,
+    pub error_monitor_status: String,
+    pub error_monitor_last_scan_at: Option<i64>,
+    pub error_monitor_last_error: Option<String>,
+    pub error_monitor_incident_count: u64,
     pub logs_db_status: String,
     pub lifecycle_status: String,
     pub doctor_status: String,
@@ -1169,6 +1186,12 @@ impl ProbeEventInput {
         self
     }
 
+    pub fn with_error_monitor_source(mut self) -> Self {
+        self.scan_source = Some("logs_2-turn-error".to_string());
+        self.source_override = Some("nexushub-webd probe monitor-errors".to_string());
+        self
+    }
+
     pub fn with_call_id(mut self, call_id: Option<&str>) -> Self {
         self.call_id = call_id
             .map(str::trim)
@@ -1229,6 +1252,9 @@ fn hook_stop_event_type(input: &ProbeEventInput, raw_kind: &str) -> String {
     let normalized_kind = raw_kind.trim().to_ascii_lowercase();
     if matches!(normalized_kind.as_str(), "completion" | "notify-completion") {
         return "completion".to_string();
+    }
+    if matches!(normalized_kind.as_str(), "turn-error" | "turn_error") {
+        return "recoverable".to_string();
     }
     if matches!(normalized_kind.as_str(), "reply-needed" | "reply_needed") {
         return "reply_needed".to_string();

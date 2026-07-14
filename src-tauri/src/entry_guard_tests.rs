@@ -87,6 +87,7 @@ mod tests {
         for required in [
             "resources::sync_nexushub_webd_helper_from_resource(&resource_dir)",
             "resources::prepare_desktop_webui_assets_from_resource(&resource_dir)",
+            "resources::repair_probe_error_monitor_launch_agent(",
             "desktop_boot::reveal_main_window(&window)",
             "desktop_boot::schedule_delayed_main_window_reveal(&window)",
             "desktop_boot::schedule_desktop_boot_probe(&window)",

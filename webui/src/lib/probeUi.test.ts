@@ -24,6 +24,10 @@ const settings: ProbeSettings = {
     hooks: {
       manage_stop_hook: true
     },
+    error_monitor: {
+      enabled: true,
+      auto_resume_goals: true
+    },
     notifications: {
       enabled: true,
       server_url: "https://api.day.app",
@@ -327,6 +331,10 @@ describe("Probe UI helpers", () => {
         enabled: true,
         poll_seconds: 15,
         recent_limit: 50,
+        error_monitor: {
+          enabled: true,
+          auto_resume_goals: true
+        },
         hooks: {
           manage_stop_hook: true
         },
@@ -467,7 +475,11 @@ describe("Probe UI helpers", () => {
       probe: {
         enabled: false,
         poll_seconds: 15,
-        recent_limit: 50
+        recent_limit: 50,
+        error_monitor: {
+          enabled: true,
+          auto_resume_goals: true
+        }
       },
       notifications: {
         enabled: false,

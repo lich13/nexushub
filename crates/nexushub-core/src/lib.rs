@@ -8,6 +8,7 @@ pub mod jobs;
 pub mod local;
 pub mod platform;
 pub mod probe;
+pub mod probe_error_monitor;
 pub mod providers;
 pub mod security;
 pub mod sentinel;

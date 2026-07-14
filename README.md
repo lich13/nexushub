@@ -103,6 +103,8 @@ Probe routes are canonical RPC commands under the daemon-local `/api/rpc/probe.*
 
 The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushub-webd probe hook-stop`.
 
+On macOS, the native App maintains `com.lich13.nexushub.probe-error-monitor`, a background `LaunchAgent` that runs the App Support helper with the fixed `probe monitor-errors` command so terminal Codex errors can still be observed while the App is closed. This process is not a Web service: its plist has no `Sockets` entry, opens no listener, and does not enable the optional desktop LAN WebUI. On Tencent Cloud the existing `nexushub-webd` systemd process runs the same monitor loop without installing another daemon.
+
 ## Local Build
 
 ```bash

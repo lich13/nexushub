@@ -93,6 +93,16 @@ pub struct ProbeConfig {
     pub observability: ProbeObservabilityConfig,
     #[serde(default)]
     pub logs_db: ProbeLogsDbConfig,
+    #[serde(default)]
+    pub error_monitor: ProbeErrorMonitorConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeErrorMonitorConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_resume_goals: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -188,6 +198,13 @@ pub struct ProbeSettingsPatch {
     pub notifications: Option<ProbeNotificationsConfigPatch>,
     pub observability: Option<ProbeObservabilityConfigPatch>,
     pub logs_db: Option<ProbeLogsDbConfigPatch>,
+    pub error_monitor: Option<ProbeErrorMonitorConfigPatch>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProbeErrorMonitorConfigPatch {
+    pub enabled: Option<bool>,
+    pub auto_resume_goals: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -335,6 +352,7 @@ impl Default for ProbeConfig {
             notifications: ProbeNotificationsConfig::default(),
             observability: ProbeObservabilityConfig::default(),
             logs_db: ProbeLogsDbConfig::default(),
+            error_monitor: ProbeErrorMonitorConfig::default(),
         }
     }
 }
@@ -424,6 +442,15 @@ impl Default for ProbeLogsDbConfig {
             compact_min_freelist_mb: default_compact_min_freelist_mb(),
             compact_min_freelist_ratio_percent: default_compact_min_freelist_ratio_percent(),
             minimum_free_space_mb: default_minimum_free_space_mb(),
+        }
+    }
+}
+
+impl Default for ProbeErrorMonitorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_resume_goals: true,
         }
     }
 }
@@ -927,6 +954,14 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
         editor.set_usize("probe", "recent_limit", probe.recent_limit);
         if let Some(hooks) = probe.hooks.as_ref() {
             editor.set_bool("probe.hooks", "manage_stop_hook", hooks.manage_stop_hook);
+        }
+        if let Some(error_monitor) = probe.error_monitor.as_ref() {
+            editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled);
+            editor.set_bool(
+                "probe.error_monitor",
+                "auto_resume_goals",
+                error_monitor.auto_resume_goals,
+            );
         }
         if let Some(notifications) = probe.notifications.as_ref() {
             editor.set_bool("probe.notifications", "enabled", notifications.enabled);
