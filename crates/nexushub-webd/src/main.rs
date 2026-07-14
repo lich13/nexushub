@@ -6020,7 +6020,7 @@ done
         );
         let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
             vec![executable],
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         );
 
         let outcome = run_probe_error_monitor_once(&config, &db, &goal_client)
