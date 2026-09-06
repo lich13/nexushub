@@ -17,9 +17,6 @@ export type RuntimeCapabilityMatrix = {
   probeLogMaintenance: boolean;
   threadArchiveActions: boolean;
   updateServiceLabels: boolean;
-  desktopWebuiControl: boolean;
-  forkAction: boolean;
-  approvalActions: boolean;
 };
 
 export const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
@@ -35,9 +32,6 @@ export const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: false,
   threadArchiveActions: false,
   updateServiceLabels: false,
-  desktopWebuiControl: false,
-  forkAction: false,
-  approvalActions: false
 };
 
 export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
@@ -53,9 +47,6 @@ export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: false,
   threadArchiveActions: false,
   updateServiceLabels: false,
-  desktopWebuiControl: false,
-  forkAction: false,
-  approvalActions: false
 };
 
 function runtimeKindForHostSurface(hostSurface: HostSurface): RuntimeCapabilityMatrix["runtimeKind"] {
@@ -76,9 +67,6 @@ function runtimeCapabilitiesFromCore(
       threadArchiveActions: core.thread_archive_actions === true,
       updateServiceLabels: false,
       updatePrune: false,
-      desktopWebuiControl: core.desktop_webui_control === true,
-      forkAction: false,
-      approvalActions: false
     };
   }
 
@@ -95,9 +83,6 @@ function runtimeCapabilitiesFromCore(
     probeLogMaintenance: core.probe_log_maintenance === true,
     threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: core.linux_update_job,
-    desktopWebuiControl: core.desktop_webui_control === true,
-    forkAction: core.web_auth,
-    approvalActions: core.web_auth
   };
 }
 

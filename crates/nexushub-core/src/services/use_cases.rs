@@ -119,6 +119,12 @@ impl<'a> NexusHubUseCases<'a> {
         }
     }
 
+    pub fn grok(self) -> GrokUseCases {
+        GrokUseCases {
+            paths: crate::grok::GrokPaths::default_for_user(),
+        }
+    }
+
     pub fn jobs(self) -> JobUseCases<'a> {
         JobUseCases {
             platform: self.platform,
@@ -184,6 +190,35 @@ impl<'a> NexusHubUseCases<'a> {
     fn config_required(self) -> Result<&'a Config> {
         self.config
             .ok_or_else(|| anyhow::anyhow!("config is required for this NexusHub use case"))
+    }
+}
+
+pub struct GrokUseCases {
+    paths: crate::grok::GrokPaths,
+}
+
+impl GrokUseCases {
+    pub fn list(
+        &self,
+        limit: usize,
+        query: Option<&str>,
+    ) -> Result<Vec<crate::grok::GrokSessionSummary>> {
+        crate::grok::list_grok_sessions(&self.paths, limit, query)
+    }
+    pub fn detail(&self, id: &str) -> Result<crate::grok::GrokSessionDetail> {
+        crate::grok::grok_session_detail(&self.paths, id, None)
+    }
+    pub async fn rename(&self, id: &str, title: &str) -> Result<crate::grok::GrokSessionSummary> {
+        crate::grok::rename_grok_session(&self.paths, id, title).await
+    }
+    pub fn delete_preview(&self, id: &str) -> Result<crate::grok::GrokDeletePreview> {
+        crate::grok::preview_grok_delete(&self.paths, id)
+    }
+    pub fn delete_execute(
+        &self,
+        request: crate::grok::GrokDeleteRequest,
+    ) -> Result<crate::grok::GrokDeleteResult> {
+        crate::grok::execute_grok_delete(&self.paths, request)
     }
 }
 

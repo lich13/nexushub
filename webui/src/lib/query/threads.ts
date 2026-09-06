@@ -1,40 +1,17 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  acceptPlan,
-  answerApproval,
-  answerElicitation,
   archiveThread,
-  cancelFollowUp,
-  clearCodexGoal,
-  createThread,
-  deleteUpload,
-  forkThread,
-  getCodexGoal,
   getThread,
   getThreadBlocks,
-  listFollowUps,
-  listPlugins,
   listThreads,
-  pauseCodexGoal,
   renameThread,
   restoreThread,
-  resumeCodexGoal,
-  revisePlan,
-  saveCodexGoal,
-  sendMessage,
-  stopThread,
-  steerThread,
   subscribeThreadEvents,
-  uploadFiles,
-  type ThreadDetailOptions,
-  type ThreadSendPayload
+  type ThreadDetailOptions
 } from "../api";
 import type {
   BridgeActionResult,
-  CodexGoal,
-  CodexGoalSaveInput,
-  FollowUpQueueState,
   MessageBlock,
   ThreadBlockPage,
   ThreadDetail,
@@ -66,7 +43,6 @@ export const threadQueryKeys = {
   threads: (status?: string, q?: string) => status === undefined && q === undefined ? ["threads"] as const : ["threads", status, q] as const,
   thread: (threadId: string | null) => ["thread", threadId] as const,
   threadBlocks: (threadId: string) => ["thread-blocks", threadId] as const,
-  followUps: (threadId: string) => ["thread-followups", threadId] as const,
   plugins: ["plugins"] as const,
   goal: (threadId: string) => ["thread-goal", threadId] as const,
   jobs: ["jobs"] as const
@@ -423,7 +399,6 @@ export function useThreadCacheActions() {
       qc.invalidateQueries({ queryKey: threadQueryKeys.threads(), ...(refetchType ? { refetchType } : {}) });
     },
     invalidateJobs: () => qc.invalidateQueries({ queryKey: threadQueryKeys.jobs }),
-    invalidateFollowUps: (threadId: string) => qc.invalidateQueries({ queryKey: threadQueryKeys.followUps(threadId) }),
     cancelThreadsAndThread: (threadId: string) => Promise.all([
       qc.cancelQueries({ queryKey: threadQueryKeys.threads() }),
       qc.cancelQueries({ queryKey: threadQueryKeys.thread(threadId) })
@@ -583,24 +558,6 @@ export function useThreadDetailQuery(input: {
   });
 }
 
-export function usePluginsQuery() {
-  return useQuery({
-    queryKey: threadQueryKeys.plugins,
-    queryFn: listPlugins,
-    staleTime: 30000,
-    placeholderData: preservePreviousQueryData
-  });
-}
-
-export function useFollowUpsQuery(threadId: string, running: boolean) {
-  return useQuery({
-    queryKey: threadQueryKeys.followUps(threadId),
-    queryFn: () => listFollowUps(threadId),
-    refetchInterval: running ? 3000 : 8000,
-    placeholderData: preservePreviousQueryData
-  });
-}
-
 export function useThreadBlockPageMutation(input: {
   onBeforeLoad: (threadId: string) => number;
   onSuccess: (result: { threadId: string; cursor: string; page: ThreadBlockPage; beforeHeight: number }) => void;
@@ -618,365 +575,18 @@ export function useThreadBlockPageMutation(input: {
   });
 }
 
-export function useThreadActionMutations(input: {
-  csrfToken?: string | null;
-  capabilities: RuntimeCapabilityMatrix;
-  buildPayload: (message: string, config: any, uploads: Pick<{ id: string }, "id">[]) => ThreadSendPayload;
-  onSendSuccess: (result: { threadId: string; result: BridgeActionResult }) => void;
-  onSteerSuccess: (result: { threadId: string; result: BridgeActionResult }) => void;
-  onStopSuccess: (result: { threadId: string }) => void;
-  onFollowUpCancelSuccess: (result: { threadId: string }) => void;
-  onArchiveSuccess: (result: { threadId: string; wasArchived: boolean }) => void;
-  onArchiveMutate: (variables: { threadId: string; status: ThreadStatus }) => Promise<unknown> | unknown;
-  onArchiveError: (error: Error, variables?: { threadId: string; status: ThreadStatus }, context?: unknown) => void;
-  onArchiveSettled: (variables?: { threadId: string; status: ThreadStatus }) => void;
-  onRenameMutate: (variables: { threadId: string; title: string }) => Promise<unknown> | unknown;
-  onRenameSuccess: (result: { threadId: string; title: string }) => void;
-  onRenameError: (error: Error, variables?: { threadId: string; title: string }, context?: unknown) => void;
-  onRenameSettled: (variables?: { threadId: string; title: string }) => void;
-  onForkSuccess: (result: { threadId: string; result: BridgeActionResult }) => void;
-  onBridgeActionSuccess: (result: { threadId: string; result: BridgeActionResult }) => void;
-  onActionError: (error: Error, variables?: { threadId?: string }) => void;
-}) {
-  const csrfToken = input.csrfToken;
-
-  return {
-    send: useMutation({
-      mutationFn: async ({ threadId, message, config, uploads }: { threadId: string; message: string; config: any; uploads: Pick<{ id: string }, "id">[] }) => ({
-        threadId,
-        result: await sendMessage(threadId, input.buildPayload(message, config, uploads), csrfToken)
-      }),
-      onSuccess: input.onSendSuccess,
-      onError: input.onActionError
-    }),
-    steer: useMutation({
-      mutationFn: async ({ threadId, message, config, uploads }: { threadId: string; message: string; config: any; uploads: Pick<{ id: string }, "id">[] }) => ({
-        threadId,
-        result: await steerThread(threadId, input.buildPayload(message, config, uploads), csrfToken)
-      }),
-      onSuccess: input.onSteerSuccess,
-      onError: input.onActionError
-    }),
-    stop: useMutation({
-      mutationFn: async ({ threadId, turnId, jobId }: { threadId: string; turnId?: string | null; jobId?: string | null }) => {
-        await stopThread(threadId, { turn_id: turnId, job_id: jobId }, csrfToken);
-        return { threadId };
-      },
-      onSuccess: input.onStopSuccess,
-      onError: input.onActionError
-    }),
-    followUpCancel: useMutation({
-      mutationFn: async ({ threadId, followUpId }: { threadId: string; followUpId: string }) => {
-        await cancelFollowUp(threadId, followUpId, csrfToken);
-        return { threadId };
-      },
-      onSuccess: input.onFollowUpCancelSuccess,
-      onError: input.onActionError
-    }),
-    archive: useMutation({
-      mutationFn: async ({ threadId, status }: { threadId: string; status: ThreadStatus }) => {
-        if (!input.capabilities.threadArchiveActions) {
-          throw new Error("当前运行时不支持归档操作");
-        }
-        const wasArchived = status === "Archived";
-        if (wasArchived) {
-          await restoreThread(threadId, csrfToken);
-        } else {
-          await archiveThread(threadId, csrfToken);
-        }
-        return { threadId, wasArchived };
-      },
-      onMutate: input.onArchiveMutate,
-      onSuccess: input.onArchiveSuccess,
-      onError: input.onArchiveError,
-      onSettled: (_data, _error, variables) => input.onArchiveSettled(variables)
-    }),
-    rename: useMutation({
-      mutationFn: async ({ threadId, title: requestedTitle }: { threadId: string; title: string }) => {
-        const title = requestedTitle.trim();
-        await renameThread(threadId, requestedTitle, csrfToken);
-        return { threadId, title };
-      },
-      onMutate: input.onRenameMutate,
-      onSuccess: input.onRenameSuccess,
-      onError: input.onRenameError,
-      onSettled: (_data, _error, variables) => input.onRenameSettled(variables)
-    }),
-    fork: useMutation({
-      mutationFn: async ({ threadId }: { threadId: string }) => ({
-        threadId,
-        result: await forkThread(threadId, csrfToken)
-      }),
-      onSuccess: input.onForkSuccess,
-      onError: input.onActionError
-    }),
-    answer: useMutation({
-      mutationFn: async ({ threadId, answers }: { threadId: string; answers: Record<string, string[]> }) => ({
-        threadId,
-        result: await answerElicitation(threadId, answers, csrfToken)
-      }),
-      onSuccess: input.onBridgeActionSuccess,
-      onError: input.onActionError
-    }),
-    planAccept: useMutation({
-      mutationFn: async ({ threadId, block }: { threadId: string; block: MessageBlock }) => ({
-        threadId,
-        result: await acceptPlan(threadId, { turn_id: block.turn_id, item_id: block.item_id }, csrfToken)
-      }),
-      onSuccess: input.onBridgeActionSuccess,
-      onError: input.onActionError
-    }),
-    planRevise: useMutation({
-      mutationFn: async ({ threadId, block, instructions }: { threadId: string; block: MessageBlock; instructions: string }) => ({
-        threadId,
-        result: await revisePlan(threadId, { turn_id: block.turn_id, item_id: block.item_id, instructions }, csrfToken)
-      }),
-      onSuccess: input.onBridgeActionSuccess,
-      onError: input.onActionError
-    }),
-    approval: useMutation({
-      mutationFn: async ({ threadId, block, decision }: { threadId: string; block: MessageBlock; decision: string }) => ({
-        threadId,
-        result: await answerApproval(threadId, { turn_id: block.turn_id, item_id: block.item_id ?? block.call_id, decision }, csrfToken)
-      }),
-      onSuccess: input.onBridgeActionSuccess,
-      onError: input.onActionError
-    })
-  };
-}
-
-export function useThreadConversationActions(input: {
-  csrfToken?: string | null;
-  capabilities: RuntimeCapabilityMatrix;
-  messageStore: ThreadMessageStoreController;
-  buildPayload: (message: string, config: any, uploads: Pick<{ id: string }, "id">[]) => ThreadSendPayload;
-  activeThreadId: string;
-  fallbackRenameTitle: string;
-  nextThreadAfterArchive: SelectedThread;
-  onActiveMessageAccepted: () => void;
-  onArchiveSelectionChange: (threadId: SelectedThread) => void;
-  onRenameDraftCommitted: (title: string) => void;
-  onRenameDraftRestored: (title: string) => void;
-  onForkedThread: (threadId: string) => void;
-}) {
-  const threadCache = useThreadCacheActions();
-  const {
-    messageStore,
-    activeThreadId
-  } = input;
-
-  return useThreadActionMutations({
-    csrfToken: input.csrfToken,
-    capabilities: input.capabilities,
-    buildPayload: input.buildPayload,
-    onSendSuccess: ({ threadId: resultThreadId, result }) => {
-      messageStore.setLastResult(resultThreadId, result);
-      if (result.job_id || result.turn_id) {
-        messageStore.patchSummary(resultThreadId, (current) => ({
-          ...current,
-          status: "Running",
-          active_turn_id: result.turn_id ?? current.active_turn_id,
-          active_job_id: result.job_id ?? current.active_job_id
-        }));
-      }
-      if (messageStore.isActive(resultThreadId)) {
-        input.onActiveMessageAccepted();
-      }
-      messageStore.setFeedback(resultThreadId, actionMessage(result));
-      threadCache.invalidateJobs();
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(resultThreadId);
-    },
-    onStopSuccess: ({ threadId: stoppedThreadId }) => {
-      messageStore.setFeedback(stoppedThreadId, "停止请求已发送");
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(stoppedThreadId);
-    },
-    onSteerSuccess: ({ threadId: resultThreadId, result }) => {
-      messageStore.setLastResult(resultThreadId, result);
-      if (messageStore.isActive(resultThreadId)) {
-        input.onActiveMessageAccepted();
-      }
-      messageStore.setFeedback(resultThreadId, actionMessage(result));
-      threadCache.invalidateFollowUps(resultThreadId);
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(resultThreadId);
-    },
-    onFollowUpCancelSuccess: ({ threadId: cancelledThreadId }) => {
-      messageStore.setFeedback(cancelledThreadId, "跟进已取消");
-      threadCache.invalidateFollowUps(cancelledThreadId);
-    },
-    onArchiveMutate: async (variables) => {
-      await threadCache.cancelThreadsAndThread(variables.threadId);
-      const wasArchived = variables.status === "Archived";
-      const snapshot = wasArchived
-        ? threadCache.applyOptimisticThreadRestore(variables.threadId)
-        : threadCache.applyOptimisticThreadArchive(messageStore, variables.threadId);
-      if (!wasArchived) {
-        input.onArchiveSelectionChange(input.nextThreadAfterArchive);
-      }
-      return { snapshot, wasArchived };
-    },
-    onArchiveSuccess: ({ threadId: archivedThreadId, wasArchived }) => {
-      messageStore.setFeedback(archivedThreadId, wasArchived ? "恢复请求已提交" : "归档请求已提交");
-    },
-    onArchiveError: (err, variables, context) => {
-      const archiveContext = context as { snapshot?: ThreadCacheSnapshot; wasArchived?: boolean } | undefined;
-      if (archiveContext?.wasArchived) {
-        threadCache.rollbackOptimisticThreadRestore(archiveContext.snapshot);
-      } else {
-        threadCache.rollbackOptimisticThreadArchive(archiveContext?.snapshot);
-        if (variables?.threadId) {
-          input.onArchiveSelectionChange(variables.threadId);
-        }
-      }
-      messageStore.setFeedback(variables?.threadId ?? activeThreadId, err.message);
-    },
-    onArchiveSettled: (variables) => {
-      threadCache.invalidateThreads();
-      if (variables?.threadId) {
-        threadCache.invalidateThread(variables.threadId);
-      }
-    },
-    onRenameMutate: async (variables) => {
-      const title = variables.title.trim();
-      await threadCache.cancelThreadsAndThread(variables.threadId);
-      const snapshot = threadCache.applyOptimisticThreadTitle(variables.threadId, title);
-      if (title) {
-        setLocalThreadTitleOverride(variables.threadId, title);
-        input.onRenameDraftCommitted(title);
-        messageStore.patchSummary(variables.threadId, { title });
-      }
-      return { snapshot };
-    },
-    onRenameSuccess: ({ threadId: renamedThreadId, title }) => {
-      messageStore.setFeedback(renamedThreadId, "线程名称已更新");
-      if (title) {
-        setLocalThreadTitleOverride(renamedThreadId, title);
-        threadCache.applyOptimisticThreadTitle(renamedThreadId, title);
-      }
-    },
-    onRenameError: (err, variables, context) => {
-      const renameContext = context as { snapshot?: ThreadCacheSnapshot } | undefined;
-      if (variables?.threadId) {
-        clearLocalThreadTitleOverride(variables.threadId);
-      }
-      threadCache.rollbackOptimisticThreadTitle(renameContext?.snapshot);
-      const failedThreadId = variables?.threadId ?? activeThreadId;
-      const restoredTitle = threadCache.cachedThreadSummary(failedThreadId)?.title ?? input.fallbackRenameTitle;
-      if (variables?.threadId === activeThreadId && restoredTitle) {
-        input.onRenameDraftRestored(restoredTitle);
-        messageStore.patchSummary(variables.threadId, { title: restoredTitle });
-      }
-      messageStore.setFeedback(failedThreadId, err.message);
-    },
-    onRenameSettled: (variables) => {
-      threadCache.invalidateThreads();
-      if (variables?.threadId) {
-        threadCache.invalidateThread(variables.threadId);
-      }
-    },
-    onForkSuccess: ({ threadId: forkedThreadId, result }) => {
-      messageStore.setLastResult(forkedThreadId, result);
-      messageStore.setFeedback(forkedThreadId, actionMessage(result));
-      if (result.thread_id) input.onForkedThread(result.thread_id);
-      threadCache.invalidateThreads();
-    },
-    onBridgeActionSuccess: ({ threadId: actionThreadId, result }) => {
-      messageStore.setLastResult(actionThreadId, result);
-      messageStore.setFeedback(actionThreadId, actionMessage(result));
-      threadCache.invalidateThreads();
-      threadCache.invalidateThread(actionThreadId);
-    },
-    onActionError: (err, variables) => messageStore.setFeedback(variables?.threadId ?? activeThreadId, err.message)
-  });
-}
-
-export function useThreadGoalQuery(threadId: string) {
-  return useQuery({
-    queryKey: threadQueryKeys.goal(threadId),
-    queryFn: () => getCodexGoal(threadId),
-    enabled: Boolean(threadId),
-    staleTime: 5000,
-    refetchInterval: 15000
-  });
-}
-
-export function useThreadGoalActions(input: {
-  threadId: string;
-  csrfToken?: string | null;
-  saveInput: () => CodexGoalSaveInput;
-  onSuccess: (goal: CodexGoal, message: string) => void;
-  onError: (error: Error) => void;
-}) {
-  const qc = useQueryClient();
-  const handleSuccess = (goal: CodexGoal, message: string) => {
-    qc.setQueryData<CodexGoal>(threadQueryKeys.goal(input.threadId), goal);
-    input.onSuccess(goal, message);
-    qc.invalidateQueries({ queryKey: threadQueryKeys.goal(input.threadId) });
-  };
-  const handleError = (error: Error) => {
-    input.onError(error);
-    void qc.invalidateQueries({ queryKey: threadQueryKeys.goal(input.threadId) });
-  };
-  return {
-    save: useMutation({
-      mutationFn: () => saveCodexGoal(input.threadId, input.saveInput(), input.csrfToken),
-      onSuccess: (goal) => handleSuccess(goal, "Goal 已保存"),
-      onError: handleError
-    }),
-    clear: useMutation({
-      mutationFn: () => clearCodexGoal(input.threadId, input.csrfToken),
-      onSuccess: (goal) => handleSuccess(goal, "Goal 已清除"),
-      onError: handleError
-    }),
-    pause: useMutation({
-      mutationFn: () => pauseCodexGoal(input.threadId, input.csrfToken),
-      onSuccess: (goal) => handleSuccess(goal, "Goal 已暂停"),
-      onError: handleError
-    }),
-    resume: useMutation({
-      mutationFn: () => resumeCodexGoal(input.threadId, input.csrfToken),
-      onSuccess: (goal) => handleSuccess(goal, "Goal 已恢复"),
-      onError: handleError
-    })
-  };
-}
-
-export function useCreateThreadMutation(input: {
-  csrfToken?: string | null;
-  payload: (message: string) => ThreadSendPayload;
-  onSuccess: (result: BridgeActionResult) => void;
-  onError: (error: Error) => void;
-}) {
-  const qc = useQueryClient();
+export function useReadOnlyThreadActions(input: { csrfToken?: string | null; onSuccess?: () => void }) {
+  const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ message }: { message: string }) => createThread(input.payload(message), input.csrfToken),
-    onSuccess: (result) => {
-      input.onSuccess(result);
-      qc.invalidateQueries({ queryKey: threadQueryKeys.threads() });
-      qc.invalidateQueries({ queryKey: threadQueryKeys.jobs });
+    mutationFn: async (action: { kind: "rename" | "archive" | "restore"; id: string; title?: string }) => {
+      if (action.kind === "rename") return renameThread(action.id, action.title ?? "", input.csrfToken);
+      if (action.kind === "archive") return archiveThread(action.id, input.csrfToken);
+      return restoreThread(action.id, input.csrfToken);
     },
-    onError: input.onError
+    onSuccess: (_result, action) => {
+      void client.invalidateQueries({ queryKey: threadQueryKeys.threads() });
+      void client.invalidateQueries({ queryKey: threadQueryKeys.thread(action.id) });
+      input.onSuccess?.();
+    }
   });
 }
-
-export function useUploadActions(input: {
-  csrfToken?: string | null;
-  onUploaded?: (outcome: UploadOutcome) => void;
-  onDeleted?: (id: string) => void;
-}) {
-  return {
-    upload: (files: File[]) => uploadFiles(files, input.csrfToken).then((outcome) => {
-      input.onUploaded?.(outcome);
-      return outcome;
-    }),
-    delete: (id: string) => deleteUpload(id, input.csrfToken).then((result) => {
-      input.onDeleted?.(id);
-      return result;
-    })
-  };
-}
-
-export { subscribeThreadEvents };
-export type { FollowUpQueueState, ThreadDetailOptions, ThreadSendPayload };

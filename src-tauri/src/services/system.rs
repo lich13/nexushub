@@ -1,12 +1,7 @@
 use crate::overview::DesktopState;
 use anyhow::Result;
 use nexushub_core::{
-    claude_code::{claude_overview, ClaudeOverview, ClaudePaths},
-    local::{
-        default_codex_models, default_permission_profiles, local_codex_config,
-        local_plugin_catalog, CodexModelInfo, CodexPermissionProfile, LocalCodexConfig,
-        LocalPluginInfo,
-    },
+    local::{local_plugin_catalog, LocalPluginInfo},
     platform::PlatformPaths,
     system::{system_status_with_surface, SystemStatus},
 };
@@ -42,30 +37,6 @@ pub(crate) fn providers() -> Vec<LocalPluginInfo> {
     local_plugin_catalog()
 }
 
-pub(crate) fn claude_code_overview() -> Result<ClaudeOverview> {
-    let paths = std::env::var_os("NEXUSHUB_CLAUDE_HOME")
-        .map(ClaudePaths::new)
-        .unwrap_or_else(ClaudePaths::default_for_user);
-    claude_overview(&paths)
-}
-
 pub(crate) fn platform_overview(state: &DesktopState) -> PlatformPaths {
     state.platform().clone()
-}
-
-pub(crate) fn plugins() -> Vec<LocalPluginInfo> {
-    local_plugin_catalog()
-}
-
-pub(crate) fn models() -> Vec<CodexModelInfo> {
-    default_codex_models()
-}
-
-pub(crate) fn permission_profiles() -> Vec<CodexPermissionProfile> {
-    default_permission_profiles()
-}
-
-pub(crate) fn codex_config(state: &DesktopState) -> LocalCodexConfig {
-    let config = state.config();
-    local_codex_config(&config, None)
 }

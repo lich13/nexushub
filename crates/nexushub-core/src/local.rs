@@ -72,15 +72,13 @@ pub fn local_plugin_catalog() -> Vec<LocalPluginInfo> {
             invocation_template: "@Probe ".to_string(),
         },
         LocalPluginInfo {
-            id: "claude_code".to_string(),
-            label: "Claude Code".to_string(),
-            status: "preview".to_string(),
+            id: "grok_build".to_string(),
+            label: "Grok Build".to_string(),
+            status: "ready".to_string(),
             kind: "builtin".to_string(),
-            description: "Claude Code 项目、会话和 MCP 只读预览".to_string(),
-            unavailable_reason: Some(
-                "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code".to_string(),
-            ),
-            invocation_template: "@Claude Code ".to_string(),
+            description: "Grok Build 会话、消息和工具活动只读浏览".to_string(),
+            unavailable_reason: None,
+            invocation_template: "@Grok Build ".to_string(),
         },
         LocalPluginInfo {
             id: "system_ops".to_string(),

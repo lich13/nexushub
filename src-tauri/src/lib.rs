@@ -21,30 +21,13 @@ pub fn run() {
             commands::system::getSystemStatus,
             commands::system::getSystemVersion,
             commands::system::listProviders,
-            commands::system::getClaudeCodeOverview,
             commands::system::getPlatformOverview,
-            commands::system::listPlugins,
-            commands::system::listModels,
-            commands::system::listPermissionProfiles,
-            commands::system::getCodexConfig,
             commands::threads::listThreads,
             commands::threads::getThread,
             commands::threads::getThreadBlocks,
-            commands::threads::createThread,
-            commands::threads::sendMessage,
-            commands::threads::steerThread,
-            commands::threads::listFollowUps,
-            commands::threads::enqueueFollowUp,
-            commands::threads::cancelFollowUp,
-            commands::threads::stopThread,
             commands::threads::archiveThread,
             commands::threads::restoreThread,
             commands::threads::renameThread,
-            commands::threads::forkThread,
-            commands::threads::answerElicitation,
-            commands::threads::acceptPlan,
-            commands::threads::revisePlan,
-            commands::threads::answerApproval,
             commands::probe::getProbeStatus,
             commands::updates::getUpdateStatus,
             commands::updates::updatesCheck,
@@ -61,26 +44,22 @@ pub fn run() {
             commands::settings::startArchiveDelete,
             commands::settings::dryRunHiddenThreadDelete,
             commands::settings::startHiddenThreadDelete,
-            commands::settings::deleteUpload,
-            commands::settings::uploadFiles,
-            commands::settings::getCodexGoal,
-            commands::settings::saveCodexGoal,
-            commands::settings::clearCodexGoal,
-            commands::settings::pauseCodexGoal,
-            commands::settings::resumeCodexGoal,
-            commands::desktop_webui::getDesktopWebUiSettings,
-            commands::desktop_webui::saveDesktopWebUiSettings,
-            commands::desktop_webui::getDesktopWebUiStatus,
-            commands::desktop_webui::startDesktopWebUi,
-            commands::desktop_webui::stopDesktopWebUi,
-            commands::desktop_webui::resetDesktopWebUiPassword,
             commands::jobs::listJobs,
-            commands::jobs::getJob
+            commands::jobs::getJob,
+            commands::grok::listGrokSessions,
+            commands::grok::getGrokSession,
+            commands::grok::renameGrokSession,
+            commands::grok::previewGrokSessionDelete,
+            commands::grok::deleteGrokSession
         ])
         .setup(|app| {
+            if let Err(err) = resources::retire_legacy_desktop_web_service(
+                &nexushub_core::platform::PlatformPaths::desktop_current(),
+            ) {
+                eprintln!("Legacy desktop WebUI retirement incomplete: {err}");
+            }
             if let Ok(resource_dir) = app.path().resource_dir() {
                 resources::sync_nexushub_webd_helper_from_resource(&resource_dir)?;
-                resources::prepare_desktop_webui_assets_from_resource(&resource_dir)?;
             }
             let state = DesktopState::current().map_err(|err| err.to_string())?;
             if let Err(err) = resources::repair_probe_error_monitor_launch_agent(

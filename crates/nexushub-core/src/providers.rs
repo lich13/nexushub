@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum AgentProviderId {
     Codex,
-    ClaudeCode,
+    GrokBuild,
     Cursor,
     Gemini,
 }
@@ -45,22 +45,20 @@ impl Default for ProviderRegistry {
                     safety: "uses existing Codex local state and controlled jobs without mutating official schema".to_string(),
                 },
                 AgentProviderInfo {
-                    id: AgentProviderId::ClaudeCode,
-                    label: "Claude Code".to_string(),
-                    status: "preview".to_string(),
+                    id: AgentProviderId::GrokBuild,
+                    label: "Grok Build".to_string(),
+                    status: "ready".to_string(),
                     description:
-                        "Read-only Claude Code overview from ~/.claude, including projects, recent sessions, settings, MCP, install, cache, and log summaries.".to_string(),
+                        "Read-only Grok Build session history with native rename and guarded local session deletion.".to_string(),
                     capabilities: vec![
                         "readonly".to_string(),
-                        "projects".to_string(),
                         "sessions".to_string(),
-                        "recent_sessions".to_string(),
-                        "settings_read".to_string(),
-                        "mcp_summary".to_string(),
-                        "install_health".to_string(),
-                        "cache_log_status".to_string(),
+                        "messages".to_string(),
+                        "tools".to_string(),
+                        "rename".to_string(),
+                        "delete_local_session".to_string(),
                     ],
-                    safety: "read-only filesystem inspection only; no ~/.claude writes and no launch, resume, send, or stop controls".to_string(),
+                    safety: "native rename only; deletion is local-session scoped and never touches workspaces or cloud tasks".to_string(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::Cursor,

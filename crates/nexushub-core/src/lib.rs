@@ -4,6 +4,7 @@ pub mod codex;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod grok;
 pub mod jobs;
 pub mod local;
 pub mod platform;

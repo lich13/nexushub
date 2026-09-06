@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_lan_webui_allows_public_login_view_but_not_security_admin_view() {
+    fn desktop_embedded_has_no_public_login_or_security_admin_view() {
         let config = Config::for_platform_kind(PlatformKind::Macos);
         let platform = PlatformPaths::for_kind(PlatformKind::Macos);
         let settings = SecuritySettings {
@@ -413,28 +413,27 @@ mod tests {
 
         let public = public_security_view_with_surface(
             &platform,
-            HostSurface::DesktopLanWebui,
+            HostSurface::DesktopEmbeddedTauri,
             settings.clone(),
             &config.security,
             None,
             true,
             None,
         )
-        .expect("desktop LAN WebUI should expose login metadata");
-        assert_eq!(public.required_capability, Capability::WebAuth);
-        assert!(!public.public.turnstile_enabled);
+        .expect_err("desktop embedded must not expose login metadata");
+        assert!(public.to_string().contains("web_auth is unavailable"));
 
         let err = security_view_with_surface(
             &platform,
-            HostSurface::DesktopLanWebui,
+            HostSurface::DesktopEmbeddedTauri,
             settings,
             &config.security,
             None,
             None,
         )
-        .expect_err("desktop LAN WebUI must not expose security admin settings");
+        .expect_err("desktop embedded must not expose security admin settings");
         assert!(err
             .to_string()
-            .contains("security_settings is unavailable on macos desktop_lan_webui"));
+            .contains("security_settings is unavailable on macos desktop_embedded_tauri"));
     }
 }

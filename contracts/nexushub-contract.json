@@ -2,8 +2,7 @@
   "schemaVersion": 1,
   "hostSurfaces": [
     "linux_server_webui",
-    "desktop_embedded_tauri",
-    "desktop_lan_webui"
+    "desktop_embedded_tauri"
   ],
   "capabilities": [
     "threads",
@@ -25,8 +24,7 @@
     "public_endpoint",
     "admin_password",
     "linux_update_job",
-    "prune_backups",
-    "desktop_webui_control"
+    "prune_backups"
   ],
   "capabilitiesByHostSurface": {
     "linux_server_webui": [
@@ -61,38 +59,22 @@
       "app_updater",
       "thread_cleanup",
       "probe_log_maintenance",
-      "thread_archive_actions",
-      "desktop_webui_control"
-    ],
-    "desktop_lan_webui": [
-      "threads",
-      "jobs",
-      "probe",
-      "status",
-      "settings",
-      "job_history",
-      "thread_cleanup",
-      "probe_log_maintenance",
-      "thread_archive_actions",
-      "web_auth",
-      "csrf"
+      "thread_archive_actions"
     ]
   },
   "visual": {
     "navigation": [
       "Codex",
-      "Claude Code",
+      "Grok Build",
       "Probe",
-      "运维"
+      "设置"
     ],
     "corePanelTitles": [
-      "Codex 本地线程",
-      "Goal",
-      "系统状态",
-      "NexusHub 更新",
-      "Job History",
-      "归档线程清理",
-      "隐藏线程清理"
+      "系统与更新",
+      "维护",
+      "执行记录",
+      "归档任务清理",
+      "隐藏任务清理"
     ],
     "actionLabels": {
       "dryRun": "Dry-run",
@@ -100,10 +82,7 @@
       "archiveConfirm": "确认清理归档",
       "hiddenDryRun": "扫描隐藏线程",
       "hiddenCleanup": "清理隐藏线程",
-      "hiddenConfirm": "确认清理隐藏",
-      "send": "发送",
-      "followup": "跟进",
-      "stop": "停止"
+      "hiddenConfirm": "确认清理隐藏"
     },
     "disabledStates": {
       "updateInstallWithoutAvailableVersion": "Install/Update disabled until update_available is true",
@@ -124,12 +103,7 @@
       "Prune",
       "安全"
     ],
-    "desktopTauriOnly": [
-      "WebUI 服务",
-      "启动 WebUI",
-      "停止 WebUI",
-      "重置 WebUI 密码"
-    ],
+    "desktopTauriOnly": [],
     "forbidden": {
       "desktopEmbeddedTauri": [
         "登录",
@@ -141,18 +115,6 @@
         "Nginx",
         "管理员密码",
         "Linux prune",
-        "安全"
-      ],
-      "desktopLanWebui": [
-        "Turnstile",
-        "登录设置",
-        "修改密码",
-        "Public endpoint",
-        "systemd",
-        "Nginx",
-        "管理员密码",
-        "Linux prune",
-        "WebUI 服务",
         "安全"
       ]
     }
@@ -270,66 +232,6 @@
       "responseDto": "SystemProvidersResponse"
     },
     {
-      "id": "system.plugins",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.plugins",
-      "linuxRpc": "system.plugins",
-      "tauriCommand": "commands::system::listPlugins",
-      "webuiWrapper": "listPlugins",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemPluginsResponse"
-    },
-    {
-      "id": "system.models",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.models",
-      "linuxRpc": "system.models",
-      "tauriCommand": "commands::system::listModels",
-      "webuiWrapper": "listModels",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemModelsResponse"
-    },
-    {
-      "id": "system.permissionProfiles",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.permissionProfiles",
-      "linuxRpc": "system.permissionProfiles",
-      "tauriCommand": "commands::system::listPermissionProfiles",
-      "webuiWrapper": "listPermissionProfiles",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemPermissionProfilesResponse"
-    },
-    {
-      "id": "system.codexConfig",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.codexConfig",
-      "linuxRpc": "system.codexConfig",
-      "tauriCommand": "commands::system::getCodexConfig",
-      "webuiWrapper": "getCodexConfig",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemCodexConfigResponse"
-    },
-    {
-      "id": "system.claudeCodeOverview",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "system.claudeCodeOverview",
-      "linuxRpc": "system.claudeCodeOverview",
-      "tauriCommand": "commands::system::getClaudeCodeOverview",
-      "webuiWrapper": "getClaudeCodeOverview",
-      "dtoOwner": "system",
-      "requestDto": "NoRequest",
-      "responseDto": "SystemClaudeCodeOverviewResponse"
-    },
-    {
       "id": "threads.list",
       "kind": "rpc",
       "scope": "shared",
@@ -366,54 +268,6 @@
       "responseDto": "ThreadsBlocksResponse"
     },
     {
-      "id": "threads.create",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.create",
-      "linuxRpc": "threads.create",
-      "tauriCommand": "commands::threads::createThread",
-      "webuiWrapper": "createThread",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsCreateRequest",
-      "responseDto": "ThreadsCreateResponse"
-    },
-    {
-      "id": "threads.send",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.send",
-      "linuxRpc": "threads.send",
-      "tauriCommand": "commands::threads::sendMessage",
-      "webuiWrapper": "sendMessage",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsSendRequest",
-      "responseDto": "ThreadsSendResponse"
-    },
-    {
-      "id": "threads.steer",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.steer",
-      "linuxRpc": "threads.steer",
-      "tauriCommand": "commands::threads::steerThread",
-      "webuiWrapper": "steerThread",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsSteerRequest",
-      "responseDto": "ThreadsSteerResponse"
-    },
-    {
-      "id": "threads.stop",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.stop",
-      "linuxRpc": "threads.stop",
-      "tauriCommand": "commands::threads::stopThread",
-      "webuiWrapper": "stopThread",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadsStopResponse"
-    },
-    {
       "id": "threads.archive",
       "kind": "rpc",
       "scope": "shared",
@@ -448,183 +302,6 @@
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsRenameResponse"
-    },
-    {
-      "id": "threads.fork",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.fork",
-      "linuxRpc": "threads.fork",
-      "tauriCommand": "commands::threads::forkThread",
-      "webuiWrapper": "forkThread",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadsForkResponse"
-    },
-    {
-      "id": "threads.followups.list",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.followups.list",
-      "linuxRpc": "threads.followups.list",
-      "tauriCommand": "commands::threads::listFollowUps",
-      "webuiWrapper": "listFollowUps",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadsFollowupsListResponse"
-    },
-    {
-      "id": "threads.followups.enqueue",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.followups.enqueue",
-      "linuxRpc": "threads.followups.enqueue",
-      "tauriCommand": "commands::threads::enqueueFollowUp",
-      "webuiWrapper": "enqueueFollowUp",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadsFollowupsEnqueueResponse"
-    },
-    {
-      "id": "threads.followups.claim",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "threads.followups.claim",
-      "hostOnlyReason": "Follow-up worker lifecycle command; internal core command only, not a public Linux RPC, WebUI wrapper, or Tauri invoke action"
-    },
-    {
-      "id": "threads.followups.submit",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "threads.followups.submit",
-      "hostOnlyReason": "Follow-up worker lifecycle command; internal core command only, not a public Linux RPC, WebUI wrapper, or Tauri invoke action"
-    },
-    {
-      "id": "threads.followups.error",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "threads.followups.error",
-      "hostOnlyReason": "Follow-up worker lifecycle command; internal core command only, not a public Linux RPC, WebUI wrapper, or Tauri invoke action"
-    },
-    {
-      "id": "threads.followups.cancel",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.followups.cancel",
-      "linuxRpc": "threads.followups.cancel",
-      "tauriCommand": "commands::threads::cancelFollowUp",
-      "webuiWrapper": "cancelFollowUp",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsFollowupsCancelRequest",
-      "responseDto": "ThreadsFollowupsCancelResponse"
-    },
-    {
-      "id": "threads.plan.accept",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.plan.accept",
-      "linuxRpc": "threads.plan.accept",
-      "tauriCommand": "commands::threads::acceptPlan",
-      "webuiWrapper": "acceptPlan",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsPlanAcceptRequest",
-      "responseDto": "ThreadsPlanAcceptResponse"
-    },
-    {
-      "id": "threads.plan.revise",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.plan.revise",
-      "linuxRpc": "threads.plan.revise",
-      "tauriCommand": "commands::threads::revisePlan",
-      "webuiWrapper": "revisePlan",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsPlanReviseRequest",
-      "responseDto": "ThreadsPlanReviseResponse"
-    },
-    {
-      "id": "threads.elicitation.answer",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.elicitation.answer",
-      "linuxRpc": "threads.elicitation.answer",
-      "tauriCommand": "commands::threads::answerElicitation",
-      "webuiWrapper": "answerElicitation",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsElicitationAnswerRequest",
-      "responseDto": "ThreadsElicitationAnswerResponse"
-    },
-    {
-      "id": "threads.approval.answer",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.approval.answer",
-      "linuxRpc": "threads.approval.answer",
-      "tauriCommand": "commands::threads::answerApproval",
-      "webuiWrapper": "answerApproval",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsApprovalAnswerRequest",
-      "responseDto": "ThreadsApprovalAnswerResponse"
-    },
-    {
-      "id": "threads.goal.get",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.goal.get",
-      "linuxRpc": "threads.goal.get",
-      "tauriCommand": "commands::settings::getCodexGoal",
-      "webuiWrapper": "getCodexGoal",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadsGoalGetResponse"
-    },
-    {
-      "id": "threads.goal.save",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.goal.save",
-      "linuxRpc": "threads.goal.save",
-      "tauriCommand": "commands::settings::saveCodexGoal",
-      "webuiWrapper": "saveCodexGoal",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsGoalSaveRequest",
-      "responseDto": "ThreadsGoalSaveResponse"
-    },
-    {
-      "id": "threads.goal.clear",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.goal.clear",
-      "linuxRpc": "threads.goal.clear",
-      "tauriCommand": "commands::settings::clearCodexGoal",
-      "webuiWrapper": "clearCodexGoal",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsGoalClearRequest",
-      "responseDto": "ThreadsGoalClearResponse"
-    },
-    {
-      "id": "threads.goal.pause",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.goal.pause",
-      "linuxRpc": "threads.goal.pause",
-      "tauriCommand": "commands::settings::pauseCodexGoal",
-      "webuiWrapper": "pauseCodexGoal",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsGoalPauseRequest",
-      "responseDto": "ThreadsGoalPauseResponse"
-    },
-    {
-      "id": "threads.goal.resume",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "threads.goal.resume",
-      "linuxRpc": "threads.goal.resume",
-      "tauriCommand": "commands::settings::resumeCodexGoal",
-      "webuiWrapper": "resumeCodexGoal",
-      "dtoOwner": "threads",
-      "requestDto": "ThreadsGoalResumeRequest",
-      "responseDto": "ThreadsGoalResumeResponse"
     },
     {
       "id": "jobs.list",
@@ -852,29 +529,6 @@
       "responseDto": "CleanupHiddenExecuteResponse"
     },
     {
-      "id": "uploads.delete",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "uploads.delete",
-      "linuxRpc": "uploads.delete",
-      "tauriCommand": "commands::settings::deleteUpload",
-      "webuiWrapper": "deleteUpload",
-      "dtoOwner": "uploads",
-      "requestDto": "UploadsDeleteRequest",
-      "responseDto": "UploadsDeleteResponse"
-    },
-    {
-      "id": "uploadFiles",
-      "kind": "transport",
-      "scope": "transport",
-      "coreUseCase": "uploads.store",
-      "tauriCommand": "commands::settings::uploadFiles",
-      "webuiWrapper": "uploadFiles",
-      "dtoOwner": "uploads",
-      "requestDto": "UploadFilesRequest",
-      "responseDto": "UploadFilesResponse"
-    },
-    {
       "id": "threadEvents",
       "kind": "transport",
       "scope": "transport",
@@ -885,58 +539,64 @@
       "responseDto": "ThreadEventsResponse"
     },
     {
-      "id": "desktopWebUi.settings.get",
+      "id": "grok.list",
       "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.settings.get",
-      "tauriCommand": "commands::desktop_webui::getDesktopWebUiSettings",
-      "webuiWrapper": "getDesktopWebUiSettings",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service"
+      "scope": "shared",
+      "coreUseCase": "grok.list",
+      "linuxRpc": "grok.list",
+      "tauriCommand": "commands::grok::listGrokSessions",
+      "webuiWrapper": "listGrokSessions",
+      "dtoOwner": "grok",
+      "requestDto": "GrokListRequest",
+      "responseDto": "GrokListResponse"
     },
     {
-      "id": "desktopWebUi.settings.save",
+      "id": "grok.detail",
       "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.settings.save",
-      "tauriCommand": "commands::desktop_webui::saveDesktopWebUiSettings",
-      "webuiWrapper": "saveDesktopWebUiSettings",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service"
+      "scope": "shared",
+      "coreUseCase": "grok.detail",
+      "linuxRpc": "grok.detail",
+      "tauriCommand": "commands::grok::getGrokSession",
+      "webuiWrapper": "getGrokSession",
+      "dtoOwner": "grok",
+      "requestDto": "GrokSessionRequest",
+      "responseDto": "GrokDetailResponse"
     },
     {
-      "id": "desktopWebUi.status",
+      "id": "grok.rename",
       "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.status",
-      "tauriCommand": "commands::desktop_webui::getDesktopWebUiStatus",
-      "webuiWrapper": "getDesktopWebUiStatus",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service"
+      "scope": "shared",
+      "coreUseCase": "grok.rename",
+      "linuxRpc": "grok.rename",
+      "tauriCommand": "commands::grok::renameGrokSession",
+      "webuiWrapper": "renameGrokSession",
+      "dtoOwner": "grok",
+      "requestDto": "GrokRenameRequest",
+      "responseDto": "GrokMutationResponse"
     },
     {
-      "id": "desktopWebUi.start",
+      "id": "grok.deletePreview",
       "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.start",
-      "tauriCommand": "commands::desktop_webui::startDesktopWebUi",
-      "webuiWrapper": "startDesktopWebUi",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service; LAN WebUI browser cannot start itself"
+      "scope": "shared",
+      "coreUseCase": "grok.delete_preview",
+      "linuxRpc": "grok.deletePreview",
+      "tauriCommand": "commands::grok::previewGrokSessionDelete",
+      "webuiWrapper": "previewGrokDelete",
+      "dtoOwner": "grok",
+      "requestDto": "GrokSessionRequest",
+      "responseDto": "GrokDeletePreview"
     },
     {
-      "id": "desktopWebUi.stop",
+      "id": "grok.deleteExecute",
       "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.stop",
-      "tauriCommand": "commands::desktop_webui::stopDesktopWebUi",
-      "webuiWrapper": "stopDesktopWebUi",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service; LAN WebUI browser cannot stop itself"
-    },
-    {
-      "id": "desktopWebUi.password.reset",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "desktopWebUi.password.reset",
-      "tauriCommand": "commands::desktop_webui::resetDesktopWebUiPassword",
-      "webuiWrapper": "resetDesktopWebUiPassword",
-      "hostOnlyReason": "Embedded Tauri control surface for its managed LAN WebUI service"
+      "scope": "shared",
+      "coreUseCase": "grok.delete_execute",
+      "linuxRpc": "grok.deleteExecute",
+      "tauriCommand": "commands::grok::deleteGrokSession",
+      "webuiWrapper": "deleteGrokSession",
+      "dtoOwner": "grok",
+      "requestDto": "GrokDeleteRequest",
+      "responseDto": "GrokMutationResponse"
     }
   ],
   "dtoCatalog": {
@@ -955,6 +615,38 @@
     "CleanupHiddenExecuteResponse": {
       "core": "CleanupHiddenExecuteResponse",
       "webui": "CleanupHiddenExecuteResponse"
+    },
+    "GrokDeletePreview": {
+      "core": "GrokDeletePreview",
+      "webui": "GrokDeletePreview"
+    },
+    "GrokDeleteRequest": {
+      "core": "GrokDeleteRequest",
+      "webui": "GrokDeleteRequest"
+    },
+    "GrokDetailResponse": {
+      "core": "GrokDetailResponse",
+      "webui": "GrokDetailResponse"
+    },
+    "GrokListRequest": {
+      "core": "GrokListRequest",
+      "webui": "GrokListRequest"
+    },
+    "GrokListResponse": {
+      "core": "GrokListResponse",
+      "webui": "GrokListResponse"
+    },
+    "GrokMutationResponse": {
+      "core": "GrokMutationResponse",
+      "webui": "GrokMutationResponse"
+    },
+    "GrokRenameRequest": {
+      "core": "GrokRenameRequest",
+      "webui": "GrokRenameRequest"
+    },
+    "GrokSessionRequest": {
+      "core": "GrokSessionRequest",
+      "webui": "GrokSessionRequest"
     },
     "JobsDetailResponse": {
       "core": "JobsDetailResponse",
@@ -1008,29 +700,9 @@
       "core": "ProbeStatusResponse",
       "webui": "ProbeStatusResponse"
     },
-    "SystemClaudeCodeOverviewResponse": {
-      "core": "SystemClaudeCodeOverviewResponse",
-      "webui": "SystemClaudeCodeOverviewResponse"
-    },
-    "SystemCodexConfigResponse": {
-      "core": "SystemCodexConfigResponse",
-      "webui": "SystemCodexConfigResponse"
-    },
-    "SystemModelsResponse": {
-      "core": "SystemModelsResponse",
-      "webui": "SystemModelsResponse"
-    },
-    "SystemPermissionProfilesResponse": {
-      "core": "SystemPermissionProfilesResponse",
-      "webui": "SystemPermissionProfilesResponse"
-    },
     "SystemPlatformResponse": {
       "core": "SystemPlatformResponse",
       "webui": "SystemPlatformResponse"
-    },
-    "SystemPluginsResponse": {
-      "core": "SystemPluginsResponse",
-      "webui": "SystemPluginsResponse"
     },
     "SystemProvidersResponse": {
       "core": "SystemProvidersResponse",
@@ -1048,14 +720,6 @@
       "core": "ThreadEventsResponse",
       "webui": "ThreadEventsResponse"
     },
-    "ThreadsApprovalAnswerRequest": {
-      "core": "ThreadsApprovalAnswerRequest",
-      "webui": "ThreadsApprovalAnswerRequest"
-    },
-    "ThreadsApprovalAnswerResponse": {
-      "core": "ThreadsApprovalAnswerResponse",
-      "webui": "ThreadsApprovalAnswerResponse"
-    },
     "ThreadsArchiveResponse": {
       "core": "ThreadsArchiveResponse",
       "webui": "ThreadsArchiveResponse"
@@ -1064,101 +728,13 @@
       "core": "ThreadsBlocksResponse",
       "webui": "ThreadsBlocksResponse"
     },
-    "ThreadsCreateRequest": {
-      "core": "ThreadsCreateRequest",
-      "webui": "ThreadsCreateRequest"
-    },
-    "ThreadsCreateResponse": {
-      "core": "ThreadsCreateResponse",
-      "webui": "ThreadsCreateResponse"
-    },
     "ThreadsDetailResponse": {
       "core": "ThreadsDetailResponse",
       "webui": "ThreadsDetailResponse"
     },
-    "ThreadsElicitationAnswerRequest": {
-      "core": "ThreadsElicitationAnswerRequest",
-      "webui": "ThreadsElicitationAnswerRequest"
-    },
-    "ThreadsElicitationAnswerResponse": {
-      "core": "ThreadsElicitationAnswerResponse",
-      "webui": "ThreadsElicitationAnswerResponse"
-    },
-    "ThreadsFollowupsCancelRequest": {
-      "core": "ThreadsFollowupsCancelRequest",
-      "webui": "ThreadsFollowupsCancelRequest"
-    },
-    "ThreadsFollowupsCancelResponse": {
-      "core": "ThreadsFollowupsCancelResponse",
-      "webui": "ThreadsFollowupsCancelResponse"
-    },
-    "ThreadsFollowupsEnqueueResponse": {
-      "core": "ThreadsFollowupsEnqueueResponse",
-      "webui": "ThreadsFollowupsEnqueueResponse"
-    },
-    "ThreadsFollowupsListResponse": {
-      "core": "ThreadsFollowupsListResponse",
-      "webui": "ThreadsFollowupsListResponse"
-    },
-    "ThreadsForkResponse": {
-      "core": "ThreadsForkResponse",
-      "webui": "ThreadsForkResponse"
-    },
-    "ThreadsGoalClearRequest": {
-      "core": "ThreadsGoalClearRequest",
-      "webui": "ThreadsGoalClearRequest"
-    },
-    "ThreadsGoalClearResponse": {
-      "core": "ThreadsGoalClearResponse",
-      "webui": "ThreadsGoalClearResponse"
-    },
-    "ThreadsGoalGetResponse": {
-      "core": "ThreadsGoalGetResponse",
-      "webui": "ThreadsGoalGetResponse"
-    },
-    "ThreadsGoalPauseRequest": {
-      "core": "ThreadsGoalPauseRequest",
-      "webui": "ThreadsGoalPauseRequest"
-    },
-    "ThreadsGoalPauseResponse": {
-      "core": "ThreadsGoalPauseResponse",
-      "webui": "ThreadsGoalPauseResponse"
-    },
-    "ThreadsGoalResumeRequest": {
-      "core": "ThreadsGoalResumeRequest",
-      "webui": "ThreadsGoalResumeRequest"
-    },
-    "ThreadsGoalResumeResponse": {
-      "core": "ThreadsGoalResumeResponse",
-      "webui": "ThreadsGoalResumeResponse"
-    },
-    "ThreadsGoalSaveRequest": {
-      "core": "ThreadsGoalSaveRequest",
-      "webui": "ThreadsGoalSaveRequest"
-    },
-    "ThreadsGoalSaveResponse": {
-      "core": "ThreadsGoalSaveResponse",
-      "webui": "ThreadsGoalSaveResponse"
-    },
     "ThreadsListResponse": {
       "core": "ThreadsListResponse",
       "webui": "ThreadsListResponse"
-    },
-    "ThreadsPlanAcceptRequest": {
-      "core": "ThreadsPlanAcceptRequest",
-      "webui": "ThreadsPlanAcceptRequest"
-    },
-    "ThreadsPlanAcceptResponse": {
-      "core": "ThreadsPlanAcceptResponse",
-      "webui": "ThreadsPlanAcceptResponse"
-    },
-    "ThreadsPlanReviseRequest": {
-      "core": "ThreadsPlanReviseRequest",
-      "webui": "ThreadsPlanReviseRequest"
-    },
-    "ThreadsPlanReviseResponse": {
-      "core": "ThreadsPlanReviseResponse",
-      "webui": "ThreadsPlanReviseResponse"
     },
     "ThreadsRenameResponse": {
       "core": "ThreadsRenameResponse",
@@ -1167,26 +743,6 @@
     "ThreadsRestoreResponse": {
       "core": "ThreadsRestoreResponse",
       "webui": "ThreadsRestoreResponse"
-    },
-    "ThreadsSendRequest": {
-      "core": "ThreadsSendRequest",
-      "webui": "ThreadsSendRequest"
-    },
-    "ThreadsSendResponse": {
-      "core": "ThreadsSendResponse",
-      "webui": "ThreadsSendResponse"
-    },
-    "ThreadsSteerRequest": {
-      "core": "ThreadsSteerRequest",
-      "webui": "ThreadsSteerRequest"
-    },
-    "ThreadsSteerResponse": {
-      "core": "ThreadsSteerResponse",
-      "webui": "ThreadsSteerResponse"
-    },
-    "ThreadsStopResponse": {
-      "core": "ThreadsStopResponse",
-      "webui": "ThreadsStopResponse"
     },
     "UpdatesCheckResponse": {
       "core": "UpdatesCheckResponse",
@@ -1199,22 +755,41 @@
     "UpdatesStatusResponse": {
       "core": "UpdatesStatusResponse",
       "webui": "UpdatesStatusResponse"
-    },
-    "UploadFilesRequest": {
-      "core": "UploadFilesRequest",
-      "webui": "UploadFilesRequest"
-    },
-    "UploadFilesResponse": {
-      "core": "UploadFilesResponse",
-      "webui": "UploadFilesResponse"
-    },
-    "UploadsDeleteRequest": {
-      "core": "UploadsDeleteRequest",
-      "webui": "UploadsDeleteRequest"
-    },
-    "UploadsDeleteResponse": {
-      "core": "UploadsDeleteResponse",
-      "webui": "UploadsDeleteResponse"
     }
-  }
+  },
+  "retiredActions": [
+    "system.plugins",
+    "system.models",
+    "system.permissionProfiles",
+    "system.codexConfig",
+    "system.claudeCodeOverview",
+    "threads.create",
+    "threads.send",
+    "threads.steer",
+    "threads.stop",
+    "threads.fork",
+    "threads.followups.list",
+    "threads.followups.enqueue",
+    "threads.followups.claim",
+    "threads.followups.submit",
+    "threads.followups.error",
+    "threads.followups.cancel",
+    "threads.plan.accept",
+    "threads.plan.revise",
+    "threads.elicitation.answer",
+    "threads.approval.answer",
+    "threads.goal.get",
+    "threads.goal.save",
+    "threads.goal.clear",
+    "threads.goal.pause",
+    "threads.goal.resume",
+    "uploads.delete",
+    "uploadFiles",
+    "desktopWebUi.settings.get",
+    "desktopWebUi.settings.save",
+    "desktopWebUi.status",
+    "desktopWebUi.start",
+    "desktopWebUi.stop",
+    "desktopWebUi.password.reset"
+  ]
 }

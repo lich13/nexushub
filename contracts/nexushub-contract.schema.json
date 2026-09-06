@@ -11,9 +11,11 @@
     "capabilitiesByHostSurface",
     "visual",
     "actions",
+    "retiredActions",
     "dtoCatalog"
   ],
   "properties": {
+    "retiredActions": { "$ref": "#/$defs/stringList" },
     "schemaVersion": {
       "type": "integer",
       "const": 1
@@ -66,10 +68,9 @@
         "forbidden": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["desktopEmbeddedTauri", "desktopLanWebui"],
+          "required": ["desktopEmbeddedTauri"],
           "properties": {
-            "desktopEmbeddedTauri": { "$ref": "#/$defs/stringList" },
-            "desktopLanWebui": { "$ref": "#/$defs/stringList" }
+            "desktopEmbeddedTauri": { "$ref": "#/$defs/stringList" }
           }
         }
       }

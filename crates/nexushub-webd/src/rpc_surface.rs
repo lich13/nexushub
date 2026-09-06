@@ -1,7 +1,6 @@
 use nexushub_core::services::commands as rpc_commands;
 
 pub(crate) const RPC_THREAD_EVENTS_ROUTE: &str = "/api/rpc/threadEvents/:id";
-pub(crate) const RPC_UPLOAD_FILES_ROUTE: &str = "/api/rpc/uploadFiles";
 pub(crate) const RPC_COMMAND_ROUTE: &str = "/api/rpc/:command";
 pub(crate) const LEGACY_API_FALLBACK_ROUTE: &str = "/api/*path";
 
@@ -22,14 +21,14 @@ mod tests {
     use super::{
         is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
         LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE, RPC_THREAD_EVENTS_ROUTE,
-        RPC_UPLOAD_FILES_ROUTE,
     };
     use nexushub_core::services::commands as rpc_commands;
 
     #[test]
     fn routes_keep_transport_surface_explicit() {
         assert_eq!(RPC_THREAD_EVENTS_ROUTE, "/api/rpc/threadEvents/:id");
-        assert_eq!(RPC_UPLOAD_FILES_ROUTE, "/api/rpc/uploadFiles");
+        assert!(!is_transport_rpc_command("uploadFiles"));
+        assert!(is_retired_rpc_command("uploadFiles"));
         assert_eq!(RPC_COMMAND_ROUTE, "/api/rpc/:command");
         assert_eq!(LEGACY_API_FALLBACK_ROUTE, "/api/*path");
     }
@@ -55,7 +54,8 @@ mod tests {
 
     #[test]
     fn required_transport_and_retired_exceptions_stay_out_of_business_allowlist() {
-        for command in ["uploadFiles", "threadEvents"] {
+        {
+            let command = "threadEvents";
             assert!(
                 is_transport_rpc_command(command),
                 "transport exception must remain explicit: {command}"

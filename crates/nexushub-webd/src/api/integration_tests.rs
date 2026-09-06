@@ -424,6 +424,7 @@ async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_routes_use_official_app_server_state() {
     let (state, session_token, csrf_token, home) =
         authenticated_test_state_with_goal_client(stateful_goal_script());
@@ -536,6 +537,7 @@ async fn goal_routes_use_official_app_server_state() {
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn rpc_goal_wrapper_preserves_goal_dto_shape() {
     let (state, session_token, csrf_token, home) =
         authenticated_test_state_with_goal_client(stateful_goal_script());
@@ -712,33 +714,38 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
         .next()
         .expect("api source must include production section");
     let cleanup_source = include_str!("cleanup.rs");
-    let goals_source = include_str!("goals.rs");
     let jobs_source = include_str!("jobs.rs");
     let threads_source = include_str!("threads.rs");
-    let handler_source =
-        format!("{source}\n{cleanup_source}\n{goals_source}\n{jobs_source}\n{threads_source}");
+    let handler_source = format!("{source}\n{cleanup_source}\n{jobs_source}\n{threads_source}");
     let adapter_source = include_str!("../linux_adapter.rs");
 
     for required in [
         "NexusHubUseCases::new",
-        "linux_adapter::start_thread_command_execution_plan",
-        "linux_adapter::start_codex_resume_action",
-        "linux_adapter::resolve_thread_stop_plan",
-        "linux_adapter::enqueue_followup_plan",
-        "linux_adapter::cancel_thread_stop_plan",
         "linux_adapter::apply_thread_state_action_plan",
-        "linux_adapter::cancel_followup_plan",
         "linux_adapter::execute_cleanup_plan",
         "linux_adapter::list_jobs_plan",
         "linux_adapter::job_detail_plan",
-        "linux_adapter::goal_get_plan",
-        "linux_adapter::apply_goal_command_plan",
-        "linux_adapter::goal_pause_plan",
-        "linux_adapter::goal_resume_plan",
     ] {
         assert!(
             handler_source.contains(required),
             "Linux RPC handlers must call the shared core facade/plan: {required}"
+        );
+    }
+    for retired in [
+        "start_thread_command_execution_plan",
+        "start_codex_resume_action",
+        "execute_autosubmit_effects",
+        "enqueue_followup_plan",
+        "goal_get_plan",
+        "apply_goal_command_plan",
+    ] {
+        assert!(
+            !handler_source.contains(retired),
+            "retired handler remains: {retired}"
+        );
+        assert!(
+            !adapter_source.contains(retired),
+            "retired executor remains: {retired}"
         );
     }
     for required_adapter_landing in [
@@ -855,6 +862,7 @@ async fn rpc_update_status_uses_shared_update_status_shape() {
 }
 
 #[tokio::test]
+#[ignore = "public follow-up RPC was retired in v0.1.157"]
 async fn rpc_enqueue_followup_accepts_thread_id_and_payload_wrappers() {
     let (state, session_token, csrf_token) = authenticated_test_state();
     let app = router(state.clone());
@@ -884,6 +892,7 @@ async fn rpc_enqueue_followup_accepts_thread_id_and_payload_wrappers() {
 }
 
 #[tokio::test]
+#[ignore = "public model/config RPC was retired in v0.1.157"]
 async fn local_codex_routes_do_not_require_app_server_socket() {
     let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
@@ -1130,6 +1139,7 @@ fn normalize_goal_response_maps_goal_statuses() {
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_resume_route_requires_csrf_and_uses_official_goal() {
     let (state, session_token, csrf_token, home) =
         authenticated_test_state_with_goal_client(stateful_goal_script());
@@ -1179,6 +1189,7 @@ async fn goal_resume_route_requires_csrf_and_uses_official_goal() {
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_get_route_uses_app_server_instead_of_shadow_goal_store() {
     let script = r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -1231,6 +1242,7 @@ done
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_official_goal_is_null() {
     let script = r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -1288,6 +1300,7 @@ done
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_app_server_fails() {
     let script = r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -1347,6 +1360,7 @@ done
 }
 
 #[tokio::test]
+#[ignore = "public Goal RPC was retired in v0.1.157"]
 async fn goal_pause_route_requires_csrf_and_preserves_official_goal() {
     let (state, session_token, csrf_token, home) =
         authenticated_test_state_with_goal_client(stateful_goal_script());
@@ -2129,6 +2143,7 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
 }
 
 #[tokio::test]
+#[ignore = "composer provider RPC was retired in v0.1.157"]
 async fn plugin_list_exposes_descriptions_and_unavailable_reasons_for_composer_mentions() {
     let (state, session_token, _csrf_token) = authenticated_test_state();
     let app = router(state);

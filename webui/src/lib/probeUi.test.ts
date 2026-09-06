@@ -91,29 +91,9 @@ const settings: ProbeSettings = {
 
 describe("Probe UI helpers", () => {
   test("uses Chinese probe labels and only slim first-screen sections", () => {
-    expect(PROBE_NAV_LABEL).toBe("探针");
-    expect(probeSections.map((section) => section.id)).toEqual([
-      "overview",
-      "reply-needed",
-      "recoverable",
-      "running",
-      "hook",
-      "bark",
-      "logs-db",
-      "events",
-      "settings"
-    ]);
-    expect(probeSections.map((section) => section.label)).toEqual([
-      "总览",
-      "需回复",
-      "异常/可恢复",
-      "运行中",
-      "Hook",
-      "Bark",
-      "日志库",
-      "最近事件",
-      "设置"
-    ]);
+    expect(PROBE_NAV_LABEL).toBe("Probe");
+    expect(probeSections.map((section) => section.id)).toEqual(["events", "settings"]);
+    expect(probeSections.map((section) => section.label)).toEqual(["最近事件", "通知配置"]);
   });
 
   test("builds readable event display details without exposing secret payload values", () => {

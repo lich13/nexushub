@@ -24,8 +24,6 @@ const LEGACY_PRECHECK_COMMAND_WITH_AUDIT: &str = "codex --version && sudo -n cod
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
-    #[serde(default)]
-    pub desktop_webui: DesktopWebuiConfig,
     pub codex: CodexConfig,
     #[serde(default)]
     pub probe: ProbeConfig,
@@ -39,24 +37,6 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: Option<String>,
     pub trust_forwarded_headers: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DesktopWebuiConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_desktop_webui_listen")]
-    pub listen: SocketAddr,
-    #[serde(default = "default_desktop_webui_username")]
-    pub username: String,
-    #[serde(default = "default_desktop_webui_session_ttl_seconds")]
-    pub session_ttl_seconds: u64,
-    #[serde(default)]
-    pub cookie_secure: bool,
-    #[serde(default)]
-    pub public_base_url: Option<String>,
-    #[serde(default)]
-    pub turnstile_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,18 +242,6 @@ fn default_probe_poll_seconds() -> u64 {
     15
 }
 
-fn default_desktop_webui_listen() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 15743)
-}
-
-fn default_desktop_webui_username() -> String {
-    "admin".to_string()
-}
-
-fn default_desktop_webui_session_ttl_seconds() -> u64 {
-    86_400
-}
-
 fn default_probe_recent_limit() -> usize {
     50
 }
@@ -354,40 +322,6 @@ impl Default for ProbeConfig {
             logs_db: ProbeLogsDbConfig::default(),
             error_monitor: ProbeErrorMonitorConfig::default(),
         }
-    }
-}
-
-impl Default for DesktopWebuiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: default_desktop_webui_listen(),
-            username: default_desktop_webui_username(),
-            session_ttl_seconds: default_desktop_webui_session_ttl_seconds(),
-            cookie_secure: false,
-            public_base_url: None,
-            turnstile_enabled: false,
-        }
-    }
-}
-
-impl DesktopWebuiConfig {
-    pub fn normalize(&mut self) {
-        if self.username.trim().is_empty() {
-            self.username = default_desktop_webui_username();
-        } else {
-            self.username = self.username.trim().to_string();
-        }
-        if self.session_ttl_seconds < 300 {
-            self.session_ttl_seconds = 300;
-        }
-        self.public_base_url = self
-            .public_base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        self.turnstile_enabled = false;
     }
 }
 
@@ -623,7 +557,6 @@ impl Config {
                 public_base_url: None,
                 trust_forwarded_headers: true,
             },
-            desktop_webui: DesktopWebuiConfig::default(),
             codex: CodexConfig {
                 home: default_codex_home(),
                 workspace: if desktop {
@@ -734,7 +667,6 @@ impl Config {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
         self.probe.normalize();
-        self.desktop_webui.normalize();
         if self.security.turnstile_expected_action.is_none() {
             self.security.turnstile_expected_action = default_turnstile_expected_action();
         }
@@ -778,15 +710,6 @@ impl Config {
         {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
-    }
-
-    pub fn apply_desktop_webui_server_surface(&mut self) {
-        self.server.listen = self.desktop_webui.listen;
-        self.server.public_base_url = self.desktop_webui.public_base_url.clone();
-        self.security.cookie_secure = self.desktop_webui.cookie_secure;
-        self.security.session_ttl_seconds = self.desktop_webui.session_ttl_seconds;
-        self.security.turnstile_expected_hostname = None;
-        self.security.turnstile_expected_action = default_turnstile_expected_action();
     }
 
     pub fn secret_box(&self) -> Result<SecretBox> {

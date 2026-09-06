@@ -10,7 +10,7 @@ import type {
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
-export type View = "codex" | "claude" | "probe" | "ops" | "security";
+export type View = "codex" | "grok" | "probe" | "ops" | "security";
 export type SelectedThread = string | "__new" | null;
 export type PermissionPresetId = "ask" | "auto" | "full" | "custom";
 

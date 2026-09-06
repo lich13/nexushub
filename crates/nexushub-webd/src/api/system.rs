@@ -5,12 +5,8 @@ use crate::{
     state::AppState,
 };
 use anyhow::Result as AnyhowResult;
-use axum::{
-    extract::{Query, State},
-    http::HeaderMap,
-};
+use axum::{extract::State, http::HeaderMap};
 use nexushub_core::{
-    local,
     platform::{PlatformKind, PlatformPaths},
     services::{
         system::{require_capability_for_surface, Capability},
@@ -107,38 +103,6 @@ async fn npm_latest_version(package: &str) -> AnyhowResult<String> {
         .json()
         .await?;
     Ok(package.dist_tags.latest)
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct CwdQuery {
-    pub(crate) cwd: Option<String>,
-}
-
-pub(crate) async fn codex_models(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local::default_codex_models())
-}
-
-pub(crate) async fn codex_permission_profiles(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<CwdQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let _ = query.cwd;
-    ok(local::default_permission_profiles())
-}
-
-pub(crate) async fn codex_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<CwdQuery>,
-) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local::local_codex_config(
-        &state.config(),
-        query.cwd.as_deref(),
-    ))
 }
 
 pub(crate) async fn start_update_action(

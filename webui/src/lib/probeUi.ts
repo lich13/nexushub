@@ -1,17 +1,10 @@
 import type { ProbeEvent, ProbeSettings } from "../types";
 
-export const PROBE_NAV_LABEL = "探针";
+export const PROBE_NAV_LABEL = "Probe";
 
 export const probeSections = [
-  { id: "overview", label: "总览" },
-  { id: "reply-needed", label: "需回复" },
-  { id: "recoverable", label: "异常/可恢复" },
-  { id: "running", label: "运行中" },
-  { id: "hook", label: "Hook" },
-  { id: "bark", label: "Bark" },
-  { id: "logs-db", label: "日志库" },
   { id: "events", label: "最近事件" },
-  { id: "settings", label: "设置" }
+  { id: "settings", label: "通知配置" }
 ] as const;
 
 export type ProbeSectionId = typeof probeSections[number]["id"];

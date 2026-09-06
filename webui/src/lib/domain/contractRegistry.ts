@@ -32,7 +32,6 @@ export type ContractVisual = {
   desktopTauriOnly: string[];
   forbidden: {
     desktopEmbeddedTauri: string[];
-    desktopLanWebui: string[];
   };
 };
 
@@ -44,6 +43,7 @@ export type NexusHubContractRegistry = {
   visual: ContractVisual;
   actions: ContractAction[];
   dtoCatalog: Record<string, ContractDtoCatalogEntry>;
+  retiredActions: string[];
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -91,9 +91,10 @@ function assertContractRegistry(value: unknown): asserts value is NexusHubContra
   if (!isObject(value.visual.actionLabels) || !isObject(value.visual.disabledStates)) {
     throw new Error("contract registry visual labels and disabled states must be objects");
   }
-  if (!isStringArray(value.visual.forbidden.desktopEmbeddedTauri) || !isStringArray(value.visual.forbidden.desktopLanWebui)) {
+  if (!isStringArray(value.visual.forbidden.desktopEmbeddedTauri)) {
     throw new Error("contract registry forbidden visual rules must cover desktop host surfaces");
   }
+  if (!isStringArray(value.retiredActions)) throw new Error("contract registry retiredActions must be a string array");
   if (!Array.isArray(value.actions)) {
     throw new Error("contract registry actions must be an array");
   }

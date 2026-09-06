@@ -11,14 +11,12 @@ use std::{fmt, str::FromStr};
 pub enum HostSurface {
     LinuxServerWebui,
     DesktopEmbeddedTauri,
-    DesktopLanWebui,
 }
 
 impl HostSurface {
     pub const ALL: &'static [HostSurface] = &[
         HostSurface::LinuxServerWebui,
         HostSurface::DesktopEmbeddedTauri,
-        HostSurface::DesktopLanWebui,
     ];
 
     pub fn default_for_platform(platform: &PlatformPaths) -> Self {
@@ -32,7 +30,6 @@ impl HostSurface {
         match self {
             Self::LinuxServerWebui => "linux_server_webui",
             Self::DesktopEmbeddedTauri => "desktop_embedded_tauri",
-            Self::DesktopLanWebui => "desktop_lan_webui",
         }
     }
 }
@@ -50,7 +47,6 @@ impl FromStr for HostSurface {
         match value.trim().replace('-', "_").as_str() {
             "linux_server_webui" => Ok(Self::LinuxServerWebui),
             "desktop_embedded_tauri" => Ok(Self::DesktopEmbeddedTauri),
-            "desktop_lan_webui" => Ok(Self::DesktopLanWebui),
             other => Err(format!("unsupported host surface: {other}")),
         }
     }
@@ -79,7 +75,6 @@ pub enum Capability {
     AdminPassword,
     LinuxUpdateJob,
     PruneBackups,
-    DesktopWebuiControl,
 }
 
 impl Capability {
@@ -104,7 +99,6 @@ impl Capability {
         Capability::AdminPassword,
         Capability::LinuxUpdateJob,
         Capability::PruneBackups,
-        Capability::DesktopWebuiControl,
     ];
 
     pub fn all() -> &'static [Capability] {
@@ -133,7 +127,6 @@ impl Capability {
             Self::AdminPassword => "admin_password",
             Self::LinuxUpdateJob => "linux_update_job",
             Self::PruneBackups => "prune_backups",
-            Self::DesktopWebuiControl => "desktop_webui_control",
         }
     }
 
@@ -146,7 +139,6 @@ impl Capability {
         let linux_server_webui = surface == HostSurface::LinuxServerWebui
             && matches!(platform.kind, PlatformKind::Linux);
         let desktop_embedded = surface == HostSurface::DesktopEmbeddedTauri && shared_core;
-        let desktop_lan_webui = surface == HostSurface::DesktopLanWebui && shared_core;
         match self {
             Self::Threads
             | Self::Jobs
@@ -156,11 +148,9 @@ impl Capability {
             | Self::JobHistory
             | Self::ThreadCleanup
             | Self::ProbeLogMaintenance
-            | Self::ThreadArchiveActions => {
-                linux_server_webui || desktop_embedded || desktop_lan_webui
-            }
+            | Self::ThreadArchiveActions => linux_server_webui || desktop_embedded,
             Self::AppUpdater => linux_server_webui || desktop_embedded,
-            Self::WebAuth | Self::Csrf => linux_server_webui || desktop_lan_webui,
+            Self::WebAuth | Self::Csrf => linux_server_webui,
             Self::SecuritySettings
             | Self::Turnstile
             | Self::Systemd
@@ -169,7 +159,6 @@ impl Capability {
             | Self::AdminPassword
             | Self::LinuxUpdateJob
             | Self::PruneBackups => linux_server_webui,
-            Self::DesktopWebuiControl => desktop_embedded,
         }
     }
 }
@@ -196,7 +185,6 @@ pub struct SystemCapabilities {
     pub admin_password: bool,
     pub linux_update_job: bool,
     pub prune_backups: bool,
-    pub desktop_webui_control: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -303,8 +291,6 @@ pub fn system_capabilities_for_surface(
         linux_update_job: Capability::LinuxUpdateJob
             .is_supported_on_surface(platform, host_surface),
         prune_backups: Capability::PruneBackups.is_supported_on_surface(platform, host_surface),
-        desktop_webui_control: Capability::DesktopWebuiControl
-            .is_supported_on_surface(platform, host_surface),
     }
 }
 
@@ -342,11 +328,10 @@ mod tests {
         assert!(matrix.admin_password);
         assert!(matrix.linux_update_job);
         assert!(matrix.prune_backups);
-        assert!(!matrix.desktop_webui_control);
     }
 
     #[test]
-    fn desktop_embedded_tauri_hides_web_host_surfaces_but_can_control_lan_webui() {
+    fn desktop_embedded_tauri_hides_all_web_host_surfaces() {
         for kind in [
             crate::platform::PlatformKind::Linux,
             crate::platform::PlatformKind::Macos,
@@ -363,7 +348,6 @@ mod tests {
             assert!(matrix.probe);
             assert!(matrix.app_updater);
             assert!(matrix.thread_cleanup);
-            assert!(matrix.desktop_webui_control);
             assert!(!matrix.web_auth);
             assert!(!matrix.security_settings);
             assert!(!matrix.turnstile);
@@ -377,27 +361,14 @@ mod tests {
     }
 
     #[test]
-    fn desktop_lan_webui_uses_auth_without_linux_host_admin_surfaces() {
-        let config = Config::for_platform_kind(crate::platform::PlatformKind::Macos);
-        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
-        let matrix = system_capabilities_for_surface(&config, &macos, HostSurface::DesktopLanWebui);
-
-        assert!(matrix.threads);
-        assert!(matrix.jobs);
-        assert!(matrix.probe);
-        assert!(matrix.web_auth);
-        assert!(matrix.csrf);
-        assert!(matrix.thread_cleanup);
-        assert!(!matrix.app_updater);
-        assert!(!matrix.desktop_webui_control);
-        assert!(!matrix.security_settings);
-        assert!(!matrix.turnstile);
-        assert!(!matrix.systemd);
-        assert!(!matrix.nginx);
-        assert!(!matrix.public_endpoint);
-        assert!(!matrix.admin_password);
-        assert!(!matrix.linux_update_job);
-        assert!(!matrix.prune_backups);
+    fn desktop_lan_webui_is_not_a_supported_surface() {
+        assert!("desktop-lan-webui".parse::<HostSurface>().is_err());
+        assert!(!HostSurface::ALL
+            .iter()
+            .any(|surface| surface.as_str() == "desktop_lan_webui"));
+        assert!(!Capability::ALL
+            .iter()
+            .any(|capability| capability.as_str() == "desktop_webui_control"));
     }
 
     #[test]

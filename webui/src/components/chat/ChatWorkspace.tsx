@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, Search, X } from "lucide-react";
+import { MessageSquare, RefreshCw, Search, X } from "lucide-react";
 import { useState } from "react";
 import { threadDetailFromSlot, useConversationController } from "../../hooks/useConversationController";
 import {
@@ -12,7 +12,7 @@ import {
 } from "../../lib/domain/codexViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { ThreadSummary } from "../../types";
-import { Conversation, EmptyConversation } from "./Conversation";
+import { Conversation } from "./Conversation";
 
 export const statusTabs = [
   { id: "all", label: "全部" },
@@ -58,7 +58,6 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
       threads={visibleThreads}
       selectedId={resolvedSelected}
       onSelect={selectThread}
-      onNew={() => selectThread("__new")}
       onRefresh={() => threadCache.invalidateThreads()}
       loading={threads.isLoading}
     />
@@ -89,20 +88,14 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
             capabilities={capabilities}
           />
         ) : (
-          <EmptyConversation
-            loading={Boolean(resolvedSelected && detailLoading)}
-            csrfToken={csrfToken}
-            onCreated={(id) => selectThread(id)}
-            onPanelSelect={setView}
-            capabilities={capabilities}
-          />
+          <div className="empty-state"><MessageSquare size={28} /><strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong></div>
         )}
       </section>
     </div>
   );
 }
 
-function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onNew, onRefresh, loading }: {
+function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading }: {
   status: string;
   q: string;
   setQ: (value: string) => void;
@@ -110,7 +103,6 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
   threads: ThreadSummary[];
   selectedId: string | null;
   onSelect: (id: SelectedThread) => void;
-  onNew: () => void;
   onRefresh: () => void;
   loading: boolean;
 }) {
@@ -123,7 +115,6 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
         </div>
         <div className="thread-title-actions">
           <button className="icon-button compact" onClick={onRefresh} title="刷新线程"><RefreshCw size={16} /></button>
-          <button className="icon-button compact primary-icon" onClick={onNew} title="新建线程"><Plus size={16} /></button>
         </div>
       </div>
       <label className="search-box">
@@ -164,5 +155,3 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
     </div>
   );
 }
-
-

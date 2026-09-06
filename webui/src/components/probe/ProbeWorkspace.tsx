@@ -58,13 +58,13 @@ import type {
 
 type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
 
-export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
+export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix; maintenance?: boolean }) {
   const { status, settings, logsDbStatus, events, jobs } = useProbeQueries();
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<ProbeSaveStatus>(null);
   const [actionStatus, setActionStatus] = useState<ProbeSaveStatus>(null);
   const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
-  const [activeSection, setActiveSection] = useState<ProbeSectionId>("overview");
+  const [activeSection, setActiveSection] = useState<ProbeSectionId>("events");
   const data = status.data?.data;
   const available = status.data?.available ?? false;
   const currentSettings = settings.data?.data;
@@ -122,66 +122,7 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
     setDraft(buildProbeSettingsDraft(currentSettings));
   }, [currentSettings, draft]);
 
-  const overviewSection = (
-    <>
-      <section className="probe-core-metrics" aria-label="探针核心指标">
-        <Metric label="Codex APP" value={probeView.availability.metric} tone={probeView.statusTone} />
-        <Metric label="运行中" value={probeRunningCountValue(data)} tone={Number(probeRunningCountValue(data)) > 0 ? "success" : undefined} />
-        <Metric label="需回复" value={String(data?.reply_needed_count ?? 0)} tone={(data?.reply_needed_count ?? 0) > 0 ? "warning" : undefined} />
-        <Metric label="异常数" value={String(data?.recoverable_count ?? 0)} tone={(data?.recoverable_count ?? 0) > 0 ? "danger" : undefined} />
-        <Metric label="Bark" value={probeView.barkConfigured ? "已配置" : "未配置"} tone={probeView.barkConfigured ? "success" : "warning"} />
-        <Metric label="Hook 事件" value={String(data?.recent_event_count ?? recentEvents.length)} tone={(data?.recent_event_count ?? recentEvents.length) > 0 ? "success" : undefined} />
-        <Metric label="日志库" value={probeStateLabel(probeView.logsDbStatusText)} tone={probeView.logsDbTone} />
-        {capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}
-        <Metric label="刷新" value={probeView.snapshotText} tone={probeView.snapshotTone} />
-      </section>
-      <section className="probe-control-grid" aria-label="探针线程状态">
-        <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />
-        <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />
-        <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />
-      </section>
-    </>
-  );
-  const activeSectionContent = (() => {
-    switch (activeSection) {
-      case "reply-needed":
-        return <ProbeThreadBucket title="需回复" icon={<MessageSquare size={18} />} threads={probeView.probeThreads.replyNeeded} emptyText="当前没有待回复线程" />;
-      case "recoverable":
-        return <ProbeThreadBucket title="异常/可恢复" icon={<TriangleAlert size={18} />} threads={probeView.probeThreads.recoverable} emptyText="当前没有可恢复异常" />;
-      case "running":
-        return <ProbeThreadBucket title="运行中" icon={<Play size={18} />} threads={probeView.probeThreads.running} emptyText="当前没有运行线程" />;
-      case "hook":
-        return (
-          <Panel title="Hook" icon={<GitFork size={18} />}>
-            <ProbeHookCard
-              status={data}
-              draft={draft}
-              busy={probeJobMutation.isPending}
-              onInstall={() => probeJobMutation.mutate("hooks-install")}
-            />
-          </Panel>
-        );
-      case "bark":
-        return (
-          <Panel title="Bark" icon={<Cloud size={18} />}>
-            {draft ? (
-              <ProbeBarkCard
-                draft={draft}
-                setDraft={setDraft}
-                configuredDeviceKey={probeView.barkConfigured}
-                saveStatus={saveStatus}
-                saving={saveMutation.isPending}
-                testing={pendingProbeAction === "bark-test"}
-                onSave={(deviceKey) => saveMutation.mutate(deviceKey)}
-                onTest={() => probeJobMutation.mutate("bark-test")}
-              />
-            ) : (
-              <div className="muted-row">{settings.isLoading ? "正在读取 Bark 设置" : "Bark 设置不可用"}</div>
-            )}
-          </Panel>
-        );
-      case "logs-db":
-        return (
+  if (maintenance) return (
           <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
             <ProbeLogsDbCard
               logsDb={logsDb}
@@ -194,6 +135,8 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
             />
           </Panel>
         );
+  const activeSectionContent = (() => {
+    switch (activeSection) {
       case "events":
         return (
           <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
@@ -223,14 +166,17 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
                 <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
               )}
             </Panel>
-            <Panel title="Probe Job History" icon={<TerminalSquare size={18} />} className="wide-panel">
-              <JobList jobs={probeView.probeJobs} capabilities={capabilities} />
+            <Panel title="Codex Hook" icon={<GitFork size={18} />}>
+              <ProbeHookCard status={data} draft={draft} busy={probeJobMutation.isPending} onInstall={() => probeJobMutation.mutate("hooks-install")} />
             </Panel>
+            <Panel title="Bark" icon={<Cloud size={18} />}>
+              {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={(key) => saveMutation.mutate(key)} onTest={() => probeJobMutation.mutate("bark-test")} />}
+            </Panel>
+            <details className="execution-history"><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
           </>
         );
-      case "overview":
       default:
-        return overviewSection;
+        return null;
     }
   })();
 
@@ -238,8 +184,7 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
     <div className="probe-layout">
       <div className="probe-header">
         <div>
-          <span>{PROBE_NAV_LABEL}</span>
-          <h1>探针</h1>
+          <h1>{PROBE_NAV_LABEL}</h1>
         </div>
         <div className="button-row">
           <button className="secondary-button" onClick={probeActions.refresh}><RefreshCw size={17} />刷新</button>
@@ -276,35 +221,6 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
         </Panel>
       )}
     </div>
-  );
-}
-
-function ProbeThreadBucket({
-  title,
-  icon,
-  threads,
-  emptyText
-}: {
-  title: string;
-  icon: ReactNode;
-  threads: ThreadSummary[];
-  emptyText: string;
-}) {
-  return (
-    <Panel title={title} icon={icon}>
-      <div className="preview-list compact">
-        {threads.map((thread) => (
-          <article className="preview-item" key={`${thread.status}-${thread.id}`}>
-            <div>
-              <strong>{threadListItemText(thread)}</strong>
-              <span>{threadListItemPreviewText(thread) || thread.id}</span>
-            </div>
-            <small>{threadListItemStatusText(thread)} · {thread.updated_at ?? thread.id}</small>
-          </article>
-        ))}
-        {threads.length === 0 && <div className="muted-row">{emptyText}</div>}
-      </div>
-    </Panel>
   );
 }
 

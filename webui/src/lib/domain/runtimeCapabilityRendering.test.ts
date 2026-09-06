@@ -8,7 +8,6 @@ import {
   opsWorkspaceVisibleCopy
 } from "./runtimeViewModel";
 import {
-  desktopLanForbiddenVisualSurfaces,
   macosForbiddenVisualSurfaces,
   sharedActionLabels,
   sharedCorePanelTitles,
@@ -31,9 +30,6 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: true,
-  desktopWebuiControl: false,
-  forkAction: true,
-  approvalActions: true
 };
 
 const macosTauriCapabilities: RuntimeCapabilityMatrix = {
@@ -49,27 +45,6 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   probeLogMaintenance: true,
   threadArchiveActions: true,
   updateServiceLabels: false,
-  desktopWebuiControl: true,
-  forkAction: false,
-  approvalActions: false
-};
-
-const desktopLanWebCapabilities: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  hostSurface: "desktop_lan_webui",
-  webAuth: true,
-  logout: true,
-  securitySettings: false,
-  publicEndpointStatus: false,
-  codexStatePaths: false,
-  updatePrune: false,
-  threadCleanup: true,
-  probeLogMaintenance: true,
-  threadArchiveActions: true,
-  updateServiceLabels: false,
-  desktopWebuiControl: false,
-  forkAction: true,
-  approvalActions: true
 };
 
 function extractFunctionSource(name: string): string {
@@ -85,48 +60,24 @@ describe("runtime capability rendering", () => {
   test("shared visual contract keeps Linux WebUI and macOS Tauri on one layout vocabulary", () => {
     const linuxContract = visualContractForRuntime(linuxWebCapabilities);
     const macContract = visualContractForRuntime(macosTauriCapabilities);
-    const lanContract = visualContractForRuntime(desktopLanWebCapabilities);
 
     expect(linuxContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
     expect(macContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
-    expect(lanContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
     expect(linuxContract.sharedPanels).toEqual(expect.arrayContaining([...sharedCorePanelTitles]));
-    expect(macContract.sharedPanels).toEqual(expect.arrayContaining([
-      "Codex 本地线程",
-      "Goal",
-      "系统状态",
-      "NexusHub 更新",
-      "Job History",
-      "归档线程清理",
-      "隐藏线程清理"
-    ]));
+    expect(macContract.sharedPanels).toEqual([...sharedCorePanelTitles]);
     expect(linuxContract.sharedActions).toEqual(expect.arrayContaining([
-      sharedActionLabels.send,
-      sharedActionLabels.followup,
-      sharedActionLabels.stop,
       sharedActionLabels.dryRun,
       sharedActionLabels.archiveConfirm,
       sharedActionLabels.hiddenConfirm
     ]));
     expect(macContract.sharedActions).toEqual(expect.arrayContaining([
-      sharedActionLabels.send,
-      sharedActionLabels.followup,
-      sharedActionLabels.stop,
       sharedActionLabels.dryRun,
       sharedActionLabels.archiveConfirm,
       sharedActionLabels.hiddenConfirm
     ]));
-    expect(lanContract.sharedActions).toEqual(expect.arrayContaining([
-      sharedActionLabels.send,
-      sharedActionLabels.followup,
-      sharedActionLabels.stop,
-      sharedActionLabels.dryRun,
-      sharedActionLabels.archiveConfirm,
-      sharedActionLabels.hiddenConfirm
-    ]));
+
     expect(linuxContract.cleanupRequiresDryRun).toBe(true);
     expect(macContract.cleanupRequiresDryRun).toBe(true);
-    expect(lanContract.cleanupRequiresDryRun).toBe(true);
     expect(linuxContract.disabledStates).toEqual(expect.arrayContaining([
       sharedDisabledStates.updateInstallWithoutAvailableVersion,
       sharedDisabledStates.cleanupArmBeforeDryRun,
@@ -150,12 +101,12 @@ describe("runtime capability rendering", () => {
 
     expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", webAuth: false, securitySettings: false });
     expect(visibleCopy).toMatch(/系统状态|NexusHub 更新|Check|Install/);
-    expect(visibleCopy).toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
+    expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
     expect(visibleCopy).toMatch(/归档线程清理|隐藏线程清理|Job History/);
     expect(contract.updateActions).toEqual(["Check", "Install"]);
-    expect(contract.desktopTauriOnly).toEqual(["WebUI 服务", "启动 WebUI", "停止 WebUI", "重置 WebUI 密码"]);
+    expect(contract.desktopTauriOnly).toEqual([]);
     expect(contract.forbidden).toEqual([...macosForbiddenVisualSurfaces]);
-    expect(opsWorkspaceSource).toContain("capabilities.desktopWebuiControl && <DesktopWebUiPanel");
+    expect(opsWorkspaceSource).not.toContain("DesktopWebUiPanel");
     expect(visibleCopy).not.toMatch(/登录|CSRF|Turnstile|security settings|管理员密码|systemd|Nginx|公网入口|Public endpoint|Linux update|Linux prune|Prune/i);
   });
 
@@ -178,7 +129,7 @@ describe("runtime capability rendering", () => {
     expect(contract.linuxWebOnly).toEqual(expect.arrayContaining(["Turnstile", "Public endpoint", "systemd", "Nginx", "Prune", "安全"]));
     expect(contract.desktopTauriOnly).toEqual([]);
     expect(contract.updateActions).toEqual(["Precheck", "Update", "Prune"]);
-    expect(appShellSource).toContain('capabilities.securitySettings && view === "security"');
+    expect(appShellSource).toContain('settingsSection === "security" && capabilities.securitySettings');
     expect(appShellSource).toContain("<WebAuthGate");
     expect(appShellSource).toContain("webAuth={capabilities.webAuth}");
     expect(authGateSource).toContain("!session && webAuth");
@@ -187,25 +138,10 @@ describe("runtime capability rendering", () => {
     expect(loginScreenSource).toMatch(/Turnstile|登录|password|turnstileToken/);
   });
 
-  test("desktop LAN WebUI keeps browser login but hides server and Tauri control surfaces", () => {
-    const contract = visualContractForRuntime(desktopLanWebCapabilities);
-    const visibleCopy = [
-      ...opsWorkspacePanelTitles(desktopLanWebCapabilities),
-      ...opsWorkspaceVisibleCopy(desktopLanWebCapabilities)
-    ].join("\n");
-
-    expect(desktopLanWebCapabilities).toMatchObject({
-      runtimeKind: "web",
-      hostSurface: "desktop_lan_webui",
-      webAuth: true,
-      securitySettings: false,
-      desktopWebuiControl: false
-    });
-    expect(contract.linuxWebOnly).toEqual([]);
+  test("task controls and desktop LAN service are absent from the visual contract", () => {
+    const contract = visualContractForRuntime(macosTauriCapabilities);
+    expect(contract.sharedNavigation).toEqual(["Codex", "Grok Build", "Probe", "设置"]);
+    expect(contract.sharedActions).not.toEqual(expect.arrayContaining(["发送", "停止", "恢复 Goal"]));
     expect(contract.desktopTauriOnly).toEqual([]);
-    expect(contract.forbidden).toEqual([...desktopLanForbiddenVisualSurfaces]);
-    expect(contract.updateActions).toEqual(["Check", "Install"]);
-    expect(visibleCopy).toMatch(/系统状态|NexusHub 更新|Check|Install|归档线程清理|隐藏线程清理/);
-    expect(visibleCopy).not.toMatch(/Turnstile|登录设置|修改密码|systemd|Nginx|Public endpoint|Precheck|Prune|WebUI 服务/i);
   });
 });

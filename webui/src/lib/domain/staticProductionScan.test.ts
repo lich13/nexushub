@@ -96,7 +96,7 @@ describe("production business source scan", () => {
     }
   });
 
-  test("App is only the shell/composition layer for auth, composer, and conversation orchestration", () => {
+  test("App is only the shell/composition layer for auth and readonly task browsing", () => {
     const source = productionComponentSources["../../App.tsx"];
     const chatWorkspace = productionComponentSources["../../components/chat/ChatWorkspace.tsx"];
     const conversation = productionComponentSources["../../components/chat/Conversation.tsx"];
@@ -108,9 +108,9 @@ describe("production business source scan", () => {
     expect(source).not.toContain("SlashCommandTextarea");
     expect(source).not.toContain("useComposerAttachments");
     expect(chatWorkspace).toContain("useConversationController");
-    expect(conversation).toContain("SlashCommandTextarea");
-    expect(conversation).toContain("useComposerAttachments");
-    expect(composerAttachments).toContain("function useComposerAttachments");
+    expect(conversation).not.toContain("SlashCommandTextarea");
+    expect(conversation).not.toContain("useComposerAttachments");
+    expect(composerAttachments).toBeUndefined();
     expect(source).not.toMatch(/\bfunction\s+(LoginScreen|ensureTurnstileScript|SlashCommandTextarea|useComposerAttachments)\b/);
     expect(source).not.toContain("useThreadRealtimeSubscription(");
     expect(source).not.toContain("useThreadCacheActions(");

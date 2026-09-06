@@ -48,8 +48,8 @@ fn hook_request_user_input_accepts_official_pre_tool_use_stdin_with_empty_stdout
     );
     assert_eq!(events[0].payload["question_confirmation_delay_ms"], 1000);
     assert_eq!(events[0].payload["question_confirmed_pending"], true);
-    assert_eq!(events[0].title.as_deref(), Some("需要回复"));
-    assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
+    assert_eq!(events[0].title.as_deref(), Some("thread-hook"));
+    assert_eq!(events[0].payload["bark"]["title"], "等待回复：thread-hook");
     assert!(events[0].payload["body_summary"]
         .as_str()
         .is_some_and(|body| body.contains("Choose a mode?") && body.contains("Safe mode")));
@@ -317,7 +317,8 @@ fn hook_request_user_input_answer_during_confirmation_window_is_not_recorded() {
     );
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    thread::sleep(Duration::from_millis(250));
+    // Write the resolution well before the fixed one-second confirmation grace period.
+    thread::sleep(Duration::from_millis(50));
     append_rollout_event(
         &transcript,
         json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-hook","output":"{\"answers\":{\"mode\":{\"answers\":[\"Safe mode\"]}}}","internal_chat_message_metadata_passthrough":{"turn_id":"turn-hook"}}}),
@@ -421,6 +422,19 @@ fn pre_tool_use_payload(transcript_path: Option<&Path>) -> serde_json::Value {
 }
 
 fn write_pending_rollout(config: &Config, turn_id: &str, call_id: &str) -> PathBuf {
+    let state_db = config.codex.home.join("state_5.sqlite");
+    if !state_db.exists() {
+        let conn = Connection::open(&state_db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, first_user_message TEXT, source TEXT, thread_source TEXT, updated_at INTEGER, rollout_path TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, first_user_message, source, thread_source, updated_at, rollout_path) VALUES('thread-hook', 'thread-hook', 'thread-hook', 'vscode', 'user', 1, NULL)",
+            [],
+        )
+        .unwrap();
+    }
     let path = config.codex.home.join("sessions/pending-rollout.jsonl");
     fs::write(
         &path,
@@ -556,6 +570,8 @@ fn seed_local_thread_title(
             id TEXT PRIMARY KEY,
             title TEXT,
             first_user_message TEXT,
+            source TEXT,
+            thread_source TEXT,
             updated_at INTEGER,
             rollout_path TEXT
         );
@@ -563,7 +579,7 @@ fn seed_local_thread_title(
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO threads(id, title, first_user_message, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4, NULL)",
+        "INSERT INTO threads(id, title, first_user_message, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, ?3, 'vscode', 'user', ?4, NULL)",
         params![
             thread_id,
             first_user_message,

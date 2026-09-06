@@ -88,6 +88,7 @@ fn contract_schema_locks_registry_top_level_shape() {
         "visual",
         "actions",
         "dtoCatalog",
+        "retiredActions",
     ]
     .into_iter()
     .map(str::to_string)
@@ -149,10 +150,6 @@ fn contract_registry_capability_matrix_matches_core_policy() {
         ),
         (
             HostSurface::DesktopEmbeddedTauri,
-            PlatformPaths::for_kind(PlatformKind::Macos),
-        ),
-        (
-            HostSurface::DesktopLanWebui,
             PlatformPaths::for_kind(PlatformKind::Macos),
         ),
     ] {

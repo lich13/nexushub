@@ -4,14 +4,12 @@ use nexushub_core::{
         archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
         set_thread_title, thread_detail, ThreadDetail, ThreadSummary,
     },
-    db::{JobRecord, ThreadFollowUp},
+    db::JobRecord,
     services::{
         jobs as job_service,
         threads::{self as thread_service, ThreadBlocksPage, ThreadsQuery},
-        uploads as upload_service,
         use_cases::NexusHubUseCases,
     },
-    uploads,
 };
 
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
@@ -19,10 +17,8 @@ use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 mod types;
 
 pub(crate) use types::{
-    DesktopApprovalAnswerRequest, DesktopCancelFollowupRequest, DesktopElicitationAnswerRequest,
-    DesktopFollowupRequest, DesktopPlanAcceptRequest, DesktopPlanReviseRequest,
-    DesktopRenameThreadRequest, DesktopSendMessageRequest, DesktopStopRequest,
-    DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest, ThreadListRequest,
+    DesktopRenameThreadRequest, DesktopThreadIdRequest, ThreadBlocksRequest, ThreadDetailRequest,
+    ThreadListRequest,
 };
 
 pub(crate) fn thread_summaries_with_query(
@@ -53,10 +49,6 @@ pub(crate) fn thread_summaries_with_query(
         plan.list.query.q.as_deref(),
         plan.list.fetch_limit,
     )?;
-    let pending_followups = raw_threads
-        .iter()
-        .flat_map(|thread| pending_followup_for_thread(state, &thread.id).transpose())
-        .collect::<Result<Vec<_>>>()?;
     let view = thread_service::thread_list_read_model(
         state.platform(),
         thread_service::ThreadReadModelInputs {
@@ -64,43 +56,12 @@ pub(crate) fn thread_summaries_with_query(
             running_jobs,
             hidden_thread_ids,
             archived_thread_ids,
-            pending_followups,
+            pending_followups: Vec::new(),
             default_workspace: state.config().codex.workspace.clone(),
         },
         plan.list.query,
     )?;
-    execute_autosubmit_effects(state, view.autosubmit_effects)?;
     Ok(view.threads)
-}
-
-#[allow(dead_code)]
-pub(crate) fn codex_job_spec_for_request(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-    kind: job_service::CodexActionKind,
-) -> Result<job_service::CodexJobSpec> {
-    let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let message = request.into_thread_message(attachments);
-    let config = state.config();
-    let use_cases = NexusHubUseCases::new(state.platform()).threads();
-    let plan = match kind {
-        job_service::CodexActionKind::Exec => {
-            use_cases.create_job(message, config.codex.workspace.clone())
-        }
-        job_service::CodexActionKind::Resume => {
-            use_cases.resume_job(message, config.codex.workspace.clone())
-        }
-    }?;
-    Ok(plan.spec)
-}
-
-pub(crate) fn prepare_request_attachments(
-    state: &DesktopState,
-    attachment_ids: &[String],
-) -> Result<Vec<uploads::PreparedAttachment>> {
-    upload_service::validate_attachment_id_count(attachment_ids)?;
-    let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    uploads::prepare_uploads(&root, attachment_ids)
 }
 
 pub(crate) fn threads_with_state(
@@ -154,119 +115,6 @@ pub(crate) fn thread_blocks_with_state(
     )))
 }
 
-pub(crate) fn send_message_with_state(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let config = state.config();
-    let plan = NexusHubUseCases::new(state.platform()).threads().send_job(
-        job_service::ThreadSendRequest {
-            thread_id: request.thread_id.clone(),
-            message: request.into_thread_message(attachments),
-        },
-        config.codex.workspace.clone(),
-    )?;
-    start_codex_job_from_plan(state, plan)
-}
-
-pub(crate) fn steer_thread_with_state(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let facade = NexusHubUseCases::new(state.platform()).threads().steer(
-        job_service::ThreadSteerRequest {
-            thread_id: request.thread_id.clone(),
-            message: request.into_thread_message(attachments),
-        },
-    )?;
-    let followup = facade
-        .command
-        .followup
-        .ok_or_else(|| anyhow::anyhow!("thread steer plan is missing follow-up action"))?;
-    let followup = job_service::enqueue_planned_followup(&state.db, followup)?;
-    Ok(job_service::codex_action_submitted(
-        Some(followup.thread_id),
-        None,
-    ))
-}
-
-pub(crate) fn stop_thread_with_state(
-    state: &DesktopState,
-    request: DesktopStopRequest,
-) -> Result<DesktopActionResponse> {
-    let use_cases = NexusHubUseCases::new(state.platform()).threads();
-    let plan = use_cases.stop(job_service::ThreadStopRequest {
-        thread_id: request.thread_id,
-        turn_id: request.turn_id,
-        job_id: request.job_id,
-    })?;
-    let active_job_id = plan
-        .requires_active_job_lookup
-        .then(|| derive_active_job_id(state, &plan.thread_id))
-        .flatten();
-    let Ok(stop) = use_cases.resolve_stop(&plan, active_job_id) else {
-        return Ok(unavailable_action(
-            nexushub_core::services::commands::THREADS_STOP,
-            "stop requires a running local fallback job; Codex app-server stop is not available in the native read model",
-        ));
-    };
-    let cancelled = state.jobs.cancel_job(&stop.job_id)?;
-    Ok(job_service::thread_stop_response(&stop, cancelled).into())
-}
-
-pub(crate) fn accept_plan_with_state(
-    state: &DesktopState,
-    request: DesktopPlanAcceptRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let _ = (request.turn_id, request.item_id);
-    start_codex_resume_job(
-        state,
-        &request.thread_id,
-        job_service::plan_accept_resume_message(),
-    )
-}
-
-pub(crate) fn revise_plan_with_state(
-    state: &DesktopState,
-    request: DesktopPlanReviseRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let _ = (request.turn_id, request.item_id);
-    let instructions = request.instructions.trim();
-    if instructions.is_empty() {
-        anyhow::bail!("revision instructions cannot be empty");
-    }
-    start_codex_resume_job(
-        state,
-        &request.thread_id,
-        job_service::plan_revise_resume_message(instructions),
-    )
-}
-
-pub(crate) fn answer_approval_with_state(
-    request: DesktopApprovalAnswerRequest,
-) -> Result<DesktopActionResponse> {
-    let _ = request.payload;
-    let mut response = unavailable_action(
-        nexushub_core::services::commands::THREADS_APPROVAL_ANSWER,
-        "approval actions are unavailable in the local Codex read model",
-    );
-    response.thread_id = Some(request.thread_id);
-    Ok(response)
-}
-
-pub(crate) fn answer_elicitation_with_state(
-    state: &DesktopState,
-    request: DesktopElicitationAnswerRequest,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let message = job_service::elicitation_answer_resume_message(&request.answers);
-    if message.trim().is_empty() {
-        anyhow::bail!("answers cannot be empty");
-    }
-    start_codex_resume_job(state, &request.thread_id, message)
-}
-
 pub(crate) fn archive_thread_with_state(
     state: &DesktopState,
     request: DesktopThreadIdRequest,
@@ -304,123 +152,6 @@ pub(crate) fn rename_thread_with_state(
     job_service::thread_state_action_response(&plan).map(Into::into)
 }
 
-pub(crate) fn fork_thread_unavailable(request: DesktopThreadIdRequest) -> DesktopActionResponse {
-    job_service::fork_thread_unavailable_response(Some(request.thread_id)).into()
-}
-
-pub(crate) fn list_followups_with_state(
-    state: &DesktopState,
-    request: DesktopFollowupRequest,
-) -> Result<Vec<ThreadFollowUp>> {
-    NexusHubUseCases::new(state.platform())
-        .threads()
-        .list_followups(
-            &state.db,
-            job_service::FollowUpListRequest {
-                thread_id: request.thread_id,
-                limit: request.limit,
-            },
-        )
-}
-
-pub(crate) fn enqueue_followup_with_state(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-) -> Result<ThreadFollowUp> {
-    let attachments = prepare_request_attachments(state, &request.attachments)?;
-    NexusHubUseCases::new(state.platform())
-        .threads()
-        .apply_enqueue_followup(
-            &state.db,
-            job_service::ThreadSteerRequest {
-                thread_id: request.thread_id.clone(),
-                message: request.into_thread_message(attachments),
-            },
-        )
-}
-
-pub(crate) fn cancel_followup_with_state(
-    state: &DesktopState,
-    request: DesktopCancelFollowupRequest,
-) -> Result<DesktopActionResponse> {
-    Ok(NexusHubUseCases::new(state.platform())
-        .threads()
-        .apply_cancel_followup(
-            &state.db,
-            job_service::FollowUpCancelRequest {
-                thread_id: request.thread_id,
-                followup_id: request.followup_id,
-            },
-        )?
-        .into())
-}
-
-pub(crate) fn start_codex_resume_job(
-    state: &DesktopState,
-    thread_id: &str,
-    message: String,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    start_codex_job_from_request(
-        state,
-        DesktopSendMessageRequest {
-            thread_id: Some(thread_id.to_string()),
-            message,
-            ..DesktopSendMessageRequest::default()
-        },
-        job_service::CodexActionKind::Resume,
-    )
-}
-
-pub(crate) fn start_codex_job_from_request(
-    state: &DesktopState,
-    request: DesktopSendMessageRequest,
-    kind: job_service::CodexActionKind,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let attachments = prepare_request_attachments(state, &request.attachments)?;
-    let message = request.into_thread_message(attachments);
-    let config = state.config();
-    let use_cases = NexusHubUseCases::new(state.platform()).threads();
-    let plan = match kind {
-        job_service::CodexActionKind::Exec => {
-            use_cases.create_job(message, config.codex.workspace.clone())
-        }
-        job_service::CodexActionKind::Resume => {
-            use_cases.resume_job(message, config.codex.workspace.clone())
-        }
-    }?;
-    start_codex_job_from_plan(state, plan)
-}
-
-pub(crate) fn start_codex_job_from_plan(
-    state: &DesktopState,
-    plan: job_service::ThreadCommandExecutionPlan,
-) -> Result<nexushub_core::jobs::CodexActionResult> {
-    let spec = &plan.spec;
-    let resolved = state.resolved_codex_paths();
-    let job_id = state.jobs.start_codex_job(
-        &spec.title,
-        &resolved.home,
-        &spec.cwd,
-        spec.args.clone(),
-        spec.prompt.clone(),
-    )?;
-    state.db.link_job_thread(
-        &job_id,
-        plan.link.thread_id.as_deref(),
-        plan.link.turn_id.as_deref(),
-    )?;
-    plan.submitted_response(&job_id)
-}
-
-pub(crate) fn derive_active_job_id(state: &DesktopState, thread_id: &str) -> Option<String> {
-    state
-        .db
-        .running_job_for_thread(thread_id)
-        .ok()
-        .flatten()
-        .map(|job| job.id)
-}
-
 fn load_thread_detail_read_model(
     state: &DesktopState,
     thread_id: &str,
@@ -430,89 +161,16 @@ fn load_thread_detail_read_model(
         return Ok(None);
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
-    let pending_followup = pending_followup_for_thread(state, &detail.summary.id)?;
     let view = thread_service::thread_detail_read_model(
         state.platform(),
         detail,
         active_job,
-        pending_followup,
+        None,
         state.config().codex.workspace.clone(),
     )?;
-    execute_autosubmit_effects(state, view.autosubmit_effects)?;
     Ok(Some(view.detail))
 }
 
 fn active_job_for_thread(state: &DesktopState, thread_id: &str) -> Result<Option<JobRecord>> {
     state.db.running_job_for_thread(thread_id)
-}
-
-fn pending_followup_for_thread(
-    state: &DesktopState,
-    thread_id: &str,
-) -> Result<Option<ThreadFollowUp>> {
-    NexusHubUseCases::new(state.platform())
-        .threads()
-        .pending_followup(&state.db, thread_id)
-}
-
-fn execute_autosubmit_effects(
-    state: &DesktopState,
-    effects: Vec<job_service::FollowUpAutoSubmitExecutionPlan>,
-) -> Result<()> {
-    for plan in effects {
-        let Some(claim) = plan.claim.as_ref() else {
-            continue;
-        };
-        let use_cases = NexusHubUseCases::new(state.platform()).threads();
-        let Some(followup) = use_cases.claim_next_followup(
-            &state.db,
-            job_service::FollowUpClaimRequest {
-                thread_id: claim.thread_id.clone(),
-            },
-        )?
-        else {
-            continue;
-        };
-        let Some(job_plan) = plan.job.clone() else {
-            continue;
-        };
-        match start_codex_job_from_plan(state, job_plan) {
-            Ok(result) => {
-                let Some(job_id) = result.job_id else {
-                    continue;
-                };
-                let submit = plan.submitted_result(&job_id)?;
-                let _ = use_cases.apply_followup_submitted(
-                    &state.db,
-                    job_service::FollowUpSubmitResultRequest {
-                        followup_id: submit.followup_id,
-                        result: submit.result,
-                    },
-                );
-            }
-            Err(err) => {
-                let error = plan.error_result(&err.to_string()).unwrap_or_else(|_| {
-                    job_service::FollowUpErrorPlan {
-                        required_capability: plan.required_capability,
-                        command: nexushub_core::services::commands::THREADS_FOLLOWUPS_ERROR
-                            .to_string(),
-                        followup_id: followup.id,
-                        error: err.to_string(),
-                    }
-                });
-                let _ = use_cases.apply_followup_error(
-                    &state.db,
-                    job_service::FollowUpErrorRequest {
-                        followup_id: error.followup_id,
-                        error: error.error,
-                    },
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn unavailable_action(command: &str, message: &str) -> DesktopActionResponse {
-    job_service::action_unavailable(command, message).into()
 }

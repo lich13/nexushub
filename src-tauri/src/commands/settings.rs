@@ -4,20 +4,14 @@ use crate::{
     overview::DesktopState,
     services::{
         actions::DesktopActionResponse,
-        goals::{self as goal_service},
         settings::{
-            self as settings_service, DesktopCleanupExecuteRequest, DesktopDeleteUploadRequest,
-            DesktopDeleteUploadResponse, DesktopProbeEventsRequest, DesktopProbeEventsResponse,
-            DesktopProbeSettings, DesktopUploadFile,
+            self as settings_service, DesktopCleanupExecuteRequest, DesktopProbeEventsRequest,
+            DesktopProbeEventsResponse, DesktopProbeSettings,
         },
     },
 };
 use anyhow::Result;
-use nexushub_core::services::{
-    goals::{GoalGetRequest, GoalUpdateRequest},
-    probe as probe_service,
-    settings::ProbeSettingsSaveRequest,
-};
+use nexushub_core::services::{probe as probe_service, settings::ProbeSettingsSaveRequest};
 
 #[tauri::command(rename = "probe.settings.get")]
 pub fn getProbeSettings(
@@ -112,99 +106,5 @@ pub fn startHiddenThreadDelete(
     request: DesktopCleanupExecuteRequest,
 ) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
     settings_service::hidden_delete_execute_with_state(&state, request)
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "uploads.delete")]
-pub fn deleteUpload(
-    state: tauri::State<'_, DesktopState>,
-    id: String,
-) -> Result<DesktopDeleteUploadResponse, String> {
-    settings_service::delete_upload_with_state(&state, DesktopDeleteUploadRequest { id })
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "uploadFiles")]
-pub fn uploadFiles(
-    state: tauri::State<'_, DesktopState>,
-    files: Vec<DesktopUploadFile>,
-) -> Result<nexushub_core::uploads::UploadOutcome, String> {
-    settings_service::store_uploads_with_state(&state, files).map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "threads.goal.get")]
-pub async fn getCodexGoal(
-    state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-) -> Result<goal_service::DesktopGoalView, String> {
-    let request = GoalGetRequest {
-        thread_id: threadId.or(thread_id),
-    };
-    goal_service::get_goal_with_state(&state, request)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "threads.goal.save")]
-pub async fn saveCodexGoal(
-    state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-    objective: Option<String>,
-    tokenBudget: Option<u64>,
-    token_budget: Option<u64>,
-) -> Result<goal_service::DesktopGoalView, String> {
-    let request = GoalUpdateRequest {
-        thread_id: threadId.or(thread_id),
-        objective,
-        token_budget: tokenBudget.or(token_budget),
-        status: None,
-        enabled: None,
-    };
-    goal_service::save_goal_with_state(&state, request)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "threads.goal.clear")]
-pub async fn clearCodexGoal(
-    state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-) -> Result<goal_service::DesktopGoalView, String> {
-    let request = GoalGetRequest {
-        thread_id: threadId.or(thread_id),
-    };
-    goal_service::clear_goal_with_state(&state, request)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "threads.goal.pause")]
-pub async fn pauseCodexGoal(
-    state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-) -> Result<goal_service::DesktopGoalView, String> {
-    let request = GoalGetRequest {
-        thread_id: threadId.or(thread_id),
-    };
-    goal_service::pause_goal_with_state(&state, request)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command(rename = "threads.goal.resume")]
-pub async fn resumeCodexGoal(
-    state: tauri::State<'_, DesktopState>,
-    threadId: Option<String>,
-    thread_id: Option<String>,
-) -> Result<goal_service::DesktopGoalView, String> {
-    let request = GoalGetRequest {
-        thread_id: threadId.or(thread_id),
-    };
-    goal_service::resume_goal_with_state(&state, request)
-        .await
         .map_err(|err| err.to_string())
 }

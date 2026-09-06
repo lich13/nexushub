@@ -41,11 +41,14 @@ pub fn set_thread_title(paths: &CodexPaths, id: &str, title: &str) -> Result<()>
     let db = paths.state_db();
     let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
     let columns = table_columns(&conn, "threads")?;
-    let Some(title_column) = first_existing(&columns, &["title", "name"]) else {
+    let Some(title_column) = first_existing(&columns, &["name", "title"]) else {
         anyhow::bail!("threads title/name column not found");
     };
     let sql = format!("UPDATE threads SET {title_column}=?2 WHERE id=?1");
-    conn.execute(&sql, rusqlite::params![id, name])?;
+    anyhow::ensure!(
+        conn.execute(&sql, rusqlite::params![id, name])? == 1,
+        "thread not found"
+    );
     Ok(())
 }
 

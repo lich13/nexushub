@@ -23,6 +23,7 @@ pub(crate) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, RpcPa
     serde_json::from_value(value.clone()).map_err(|err| RpcPayloadError::new(err.to_string()))
 }
 
+#[cfg(test)]
 pub(crate) fn rpc_payload_or_empty<T: DeserializeOwned>(
     value: &Value,
 ) -> Result<T, RpcPayloadError> {

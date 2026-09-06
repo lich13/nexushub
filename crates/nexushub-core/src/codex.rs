@@ -1,9 +1,13 @@
 use anyhow::Result;
-use std::{collections::HashSet, fs, path::Path};
+use std::{fs, path::Path};
 
 mod goal_client;
+mod identity;
 mod mutations;
 mod paths;
+mod read_cache;
+#[cfg(test)]
+mod rollout_accuracy_tests;
 mod rollout_events;
 mod session_index;
 #[cfg(test)]
@@ -14,6 +18,7 @@ mod thread_rows;
 mod types;
 
 pub use goal_client::{CodexGoalAction, CodexGoalClient, CodexThreadGoal};
+pub use identity::{codex_task_identity, CodexTaskIdentity};
 pub use mutations::{db_integrity, set_thread_archived, set_thread_title};
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
@@ -53,46 +58,8 @@ pub fn list_threads(
 ) -> Result<Vec<ThreadSummary>> {
     let mut rows = read_thread_rows(paths)?;
     let session_index = read_session_index(paths).unwrap_or_default();
-    let mut hidden_threads = HashSet::new();
-    for row in &mut rows {
-        let index_entry = session_index.get(&row.summary.id);
-        if row.summary.rollout_path.is_none() {
-            row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
-        }
-        let missing_rollout = row
-            .summary
-            .rollout_path
-            .as_deref()
-            .is_some_and(|path| missing_rollout_inside_codex_home(paths, path));
-        row.summary.rollout_path = row
-            .summary
-            .rollout_path
-            .take()
-            .filter(|path| paths.contains_path(path));
-        if missing_rollout {
-            hidden_threads.insert(row.summary.id.clone());
-            continue;
-        }
-        if should_repair_thread_title_from_local_metadata(
-            row.db_title.as_deref(),
-            row.first_user_message.as_deref(),
-            index_entry,
-        ) {
-            row.summary.title = index_entry
-                .and_then(SessionIndexEntry::title_candidate)
-                .or_else(|| {
-                    row.first_user_message
-                        .as_deref()
-                        .and_then(first_user_message_title)
-                })
-                .unwrap_or_else(|| "未命名线程".to_string());
-        }
-        if enrich_thread_from_rollout(&mut row.summary).unwrap_or(false) {
-            hidden_threads.insert(row.summary.id.clone());
-        }
-    }
+    rows.retain_mut(|row| enrich_local_thread_row(paths, row, session_index.get(&row.summary.id)));
     let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
-    rows.retain(|row| !hidden_threads.contains(&row.id));
 
     let needle = q
         .map(|v| v.trim().to_ascii_lowercase())
@@ -124,6 +91,52 @@ pub fn list_threads(
     rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     rows.truncate(limit.max(1));
     Ok(rows)
+}
+
+pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<ThreadSummary>> {
+    let Some(mut row) = thread_rows::read_thread_rows_matching(paths, Some(id))?.pop() else {
+        return Ok(None);
+    };
+    let index = read_session_index(paths).unwrap_or_default();
+    Ok(enrich_local_thread_row(paths, &mut row, index.get(id)).then_some(row.summary))
+}
+
+fn enrich_local_thread_row(
+    paths: &CodexPaths,
+    row: &mut thread_rows::LocalThreadRow,
+    index_entry: Option<&SessionIndexEntry>,
+) -> bool {
+    if row.summary.rollout_path.is_none() {
+        row.summary.rollout_path = index_entry.and_then(|entry| entry.path.clone());
+    }
+    if row
+        .summary
+        .rollout_path
+        .as_deref()
+        .is_some_and(|path| missing_rollout_inside_codex_home(paths, path))
+    {
+        return false;
+    }
+    row.summary.rollout_path = row
+        .summary
+        .rollout_path
+        .take()
+        .filter(|path| paths.contains_path(path));
+    if should_repair_thread_title_from_local_metadata(
+        row.db_title.as_deref(),
+        row.first_user_message.as_deref(),
+        index_entry,
+    ) {
+        row.summary.title = index_entry
+            .and_then(SessionIndexEntry::title_candidate)
+            .or_else(|| {
+                row.first_user_message
+                    .as_deref()
+                    .and_then(first_user_message_title)
+            })
+            .unwrap_or_else(|| "未命名线程".to_string());
+    }
+    !enrich_thread_from_rollout(&mut row.summary).unwrap_or(false)
 }
 
 fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {

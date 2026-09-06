@@ -172,7 +172,7 @@ fn platform_paths_cover_linux_macos_and_windows() {
 }
 
 #[test]
-fn provider_registry_exposes_codex_and_claude_preview() {
+fn provider_registry_exposes_codex_and_grok_build() {
     let registry = ProviderRegistry::default();
     let providers = registry.list();
 
@@ -186,20 +186,20 @@ fn provider_registry_exposes_codex_and_claude_preview() {
         .iter()
         .any(|capability| capability == "ready"));
 
-    let claude = providers
+    let grok = providers
         .iter()
-        .find(|provider| provider.id == AgentProviderId::ClaudeCode)
+        .find(|provider| provider.id == AgentProviderId::GrokBuild)
         .unwrap();
-    assert_eq!(claude.status, "preview");
-    assert!(claude
+    assert_eq!(grok.status, "ready");
+    assert!(grok
         .capabilities
         .iter()
         .any(|capability| capability == "readonly"));
-    assert!(!claude
+    assert!(grok
         .capabilities
         .iter()
-        .any(|capability| capability.contains("maintenance")));
-    assert!(claude.safety.contains("read-only"));
+        .any(|capability| capability == "rename"));
+    assert!(grok.safety.contains("native rename"));
 
     assert!(providers
         .iter()
@@ -220,12 +220,9 @@ fn local_plugin_catalog_matches_existing_builtin_surface() {
     assert_eq!(plugin_json[0]["kind"], "builtin");
     assert_eq!(plugin_json[0]["invocation_template"], "@Codex ");
     assert_eq!(plugin_json[1]["id"], "probe");
-    assert_eq!(plugin_json[2]["id"], "claude_code");
-    assert_eq!(plugin_json[2]["status"], "preview");
-    assert_eq!(
-        plugin_json[2]["unavailable_reason"],
-        "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code"
-    );
+    assert_eq!(plugin_json[2]["id"], "grok_build");
+    assert_eq!(plugin_json[2]["status"], "ready");
+    assert_eq!(plugin_json[2]["invocation_template"], "@Grok Build ");
     assert_eq!(plugin_json[3]["id"], "system_ops");
 }
 

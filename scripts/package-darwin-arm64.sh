@@ -119,10 +119,7 @@ assert_app_bundle_resources() {
   [[ "${helper_kind}" == *"Mach-O 64-bit executable arm64"* ]] ||
     die "app bundle helper must be a macOS arm64 executable, got: ${helper_kind}"
 
-  [[ -f "${bundled_webui}/index.html" ]] || die "app bundle missing WebUI index.html resource"
-  [[ -d "${bundled_webui}/assets" ]] || die "app bundle missing WebUI assets resource"
-  diff -qr "${WEBUI_DIR}/dist" "${bundled_webui}" >/dev/null ||
-    die "app bundle WebUI resource does not match current webui/dist"
+  [[ ! -e "${bundled_webui}" ]] || die "app bundle contains retired duplicate LAN WebUI resources"
 }
 
 assert_helper_resource_placeholder() {

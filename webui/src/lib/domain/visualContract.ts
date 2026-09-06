@@ -24,9 +24,6 @@ export const sharedActionLabels = contractVisual.actionLabels as {
   hiddenDryRun: string;
   hiddenCleanup: string;
   hiddenConfirm: string;
-  send: string;
-  followup: string;
-  stop: string;
 };
 
 export const sharedDisabledStates = contractVisual.disabledStates as {
@@ -40,7 +37,6 @@ export const linuxWebOnlyVisualSurfaces = contractVisual.linuxWebOnly;
 
 export const macosForbiddenVisualSurfaces = contractVisual.forbidden.desktopEmbeddedTauri;
 
-export const desktopLanForbiddenVisualSurfaces = contractVisual.forbidden.desktopLanWebui;
 
 export const desktopTauriOnlyVisualSurfaces = contractVisual.desktopTauriOnly;
 
@@ -64,9 +60,6 @@ export function visualContractForRuntime(input?: RuntimeCapabilityMatrix): Visua
       capabilities.threadCleanup || (title !== OPS_PANEL_TITLES.archivedCleanup && title !== OPS_PANEL_TITLES.hiddenCleanup)
     )),
     sharedActions: [
-      sharedActionLabels.send,
-      sharedActionLabels.followup,
-      sharedActionLabels.stop,
       ...(capabilities.threadCleanup ? [
         sharedActionLabels.dryRun,
         sharedActionLabels.archiveCleanup,
@@ -85,12 +78,10 @@ export function visualContractForRuntime(input?: RuntimeCapabilityMatrix): Visua
       ] : [])
     ],
     linuxWebOnly: capabilities.hostSurface === "linux_server_webui" ? [...linuxWebOnlyVisualSurfaces] : [],
-    desktopTauriOnly: capabilities.desktopWebuiControl ? [...desktopTauriOnlyVisualSurfaces] : [],
+    desktopTauriOnly: [],
     forbidden: capabilities.hostSurface === "desktop_embedded_tauri"
       ? [...macosForbiddenVisualSurfaces]
-      : capabilities.hostSurface === "desktop_lan_webui"
-        ? [...desktopLanForbiddenVisualSurfaces]
-        : [],
+      : [],
     cleanupRequiresDryRun: capabilities.threadCleanup,
     updateActions: opsUpdateActionView(null, capabilities).map((action) => action.label)
   };

@@ -8,48 +8,25 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use nexushub_core::services::{
-    desktop_webui::realm_username, security as security_service, system::HostSurface,
-    use_cases::NexusHubUseCases,
-};
+use nexushub_core::services::{security as security_service, use_cases::NexusHubUseCases};
 use serde_json::{json, Value};
 
 pub(crate) async fn public_settings(State(state): State<AppState>) -> ApiResponse {
     let config = state.config();
     let platform = state.platform().clone();
-    let mut security = state
+    let security = state
         .db
         .security_settings(config.security.session_ttl_seconds)?;
-    if state.host_surface() == HostSurface::DesktopLanWebui {
-        security.turnstile_enabled = false;
-        security.turnstile_required = false;
-        security.turnstile_site_key = None;
-        security.turnstile_secret_configured = false;
-        security.session_ttl_seconds = config.desktop_webui.session_ttl_seconds;
-    }
     ok(
         NexusHubUseCases::with_config_for_surface(&config, &platform, state.host_surface())
             .security()?
             .public_view(
                 security,
                 state.db.get_setting("turnstile_expected_action")?,
-                admin_configured_for_surface(&state, &config)?,
+                state.db.admin_count()? > 0,
                 config.server.public_base_url.clone(),
             )?,
     )
-}
-
-fn admin_configured_for_surface(
-    state: &AppState,
-    config: &nexushub_core::Config,
-) -> anyhow::Result<bool> {
-    if state.host_surface() == HostSurface::DesktopLanWebui {
-        return Ok(state
-            .db
-            .admin_by_username(&realm_username(&config.desktop_webui.username))?
-            .is_some());
-    }
-    Ok(state.db.admin_count()? > 0)
 }
 
 pub(crate) async fn get_security(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {

@@ -60,9 +60,7 @@ impl AppState {
             HostSurface::LinuxServerWebui => {
                 PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux)
             }
-            HostSurface::DesktopEmbeddedTauri | HostSurface::DesktopLanWebui => {
-                PlatformPaths::current()
-            }
+            HostSurface::DesktopEmbeddedTauri => PlatformPaths::current(),
         };
         Self {
             config: Arc::new(RwLock::new(config)),

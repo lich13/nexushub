@@ -2,10 +2,7 @@ use crate::state::AppState;
 use anyhow::Result;
 use axum::http::HeaderMap;
 use chrono::Utc;
-use nexushub_core::services::{
-    desktop_webui::{is_desktop_webui_admin, public_username, realm_username},
-    system::HostSurface,
-};
+use nexushub_core::services::system::HostSurface;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 
@@ -87,25 +84,19 @@ pub fn require_auth(
     }
     Ok(AuthContext {
         admin_id: admin.id,
-        username: public_username(&admin.username).to_string(),
+        username: admin.username.clone(),
         session_id: session.id,
         csrf_token_hash: session.csrf_token_hash,
     })
 }
 
-pub fn login_username_for_surface(surface: HostSurface, username: &str) -> String {
-    match surface {
-        HostSurface::DesktopLanWebui => realm_username(username),
-        HostSurface::LinuxServerWebui | HostSurface::DesktopEmbeddedTauri => {
-            username.trim().to_string()
-        }
-    }
+pub fn login_username_for_surface(_surface: HostSurface, username: &str) -> String {
+    username.trim().to_string()
 }
 
 fn admin_matches_surface(surface: HostSurface, username: &str) -> bool {
     match surface {
-        HostSurface::DesktopLanWebui => is_desktop_webui_admin(username),
-        HostSurface::LinuxServerWebui => !is_desktop_webui_admin(username),
+        HostSurface::LinuxServerWebui => !username.starts_with("desktop-webui:"),
         HostSurface::DesktopEmbeddedTauri => false,
     }
 }

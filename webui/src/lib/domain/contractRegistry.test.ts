@@ -10,7 +10,6 @@ import {
 } from "./contractRegistry";
 import { contractDtoNameSet, contractDtoNames } from "./contractDtoMap";
 import {
-  desktopLanForbiddenVisualSurfaces,
   desktopTauriOnlyVisualSurfaces,
   linuxWebOnlyVisualSurfaces,
   macosForbiddenVisualSurfaces,
@@ -44,7 +43,6 @@ type NexusHubContract = {
     desktopTauriOnly: string[];
     forbidden: {
       desktopEmbeddedTauri: string[];
-      desktopLanWebui: string[];
     };
   };
   actions: ContractAction[];
@@ -103,9 +101,11 @@ describe("contract registry", () => {
       "capabilitiesByHostSurface",
       "visual",
       "actions",
+      "retiredActions",
       "dtoCatalog"
     ]);
     expect(Object.keys(schema.properties ?? {})).toEqual([
+      "retiredActions",
       "schemaVersion",
       "hostSurfaces",
       "capabilities",
@@ -136,7 +136,6 @@ describe("contract registry", () => {
     expect(contractVisual.corePanelTitles).toEqual(contract().visual.corePanelTitles);
     expect(contractVisual.actionLabels).toEqual(contract().visual.actionLabels);
     expect(contractVisual.disabledStates).toEqual(contract().visual.disabledStates);
-    expect(contractVisual.forbidden.desktopLanWebui).toEqual(contract().visual.forbidden.desktopLanWebui);
     expect(contractDtoCatalog).toEqual(contract().dtoCatalog);
     expect(contractCapabilitiesByHostSurface.desktop_embedded_tauri).toEqual(
       contract().capabilitiesByHostSurface.desktop_embedded_tauri
@@ -192,7 +191,6 @@ describe("contract registry", () => {
     expect(visual.linuxWebOnly).toEqual([...linuxWebOnlyVisualSurfaces]);
     expect(visual.desktopTauriOnly).toEqual([...desktopTauriOnlyVisualSurfaces]);
     expect(visual.forbidden.desktopEmbeddedTauri).toEqual([...macosForbiddenVisualSurfaces]);
-    expect(visual.forbidden.desktopLanWebui).toEqual([...desktopLanForbiddenVisualSurfaces]);
   });
 
   test("covers WebUI runtime command wrappers without ad hoc command strings", () => {
@@ -211,7 +209,6 @@ describe("contract registry", () => {
     expect(contract().hostSurfaces).toEqual([
       "linux_server_webui",
       "desktop_embedded_tauri",
-      "desktop_lan_webui"
     ]);
   });
 });

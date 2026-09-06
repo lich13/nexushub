@@ -81,7 +81,7 @@ assert_bundle_resources() {
   helper_count="$(find "${bundle_root}" -type f -name "nexushub-webd" -print 2>/dev/null | wc -l | tr -d ' ')"
   webui_count="$(find "${bundle_root}" -type f -path "*/webui/index.html" -print 2>/dev/null | wc -l | tr -d ' ')"
   [[ "${helper_count}" -gt 0 ]] || die "Linux Tauri bundle missing nexushub-webd resource"
-  [[ "${webui_count}" -gt 0 ]] || die "Linux Tauri bundle missing webui/index.html resource"
+  [[ "${webui_count}" -eq 0 ]] || die "Linux Tauri bundle contains retired duplicate LAN WebUI resources"
 }
 
 assert_helper_resource_placeholder() {

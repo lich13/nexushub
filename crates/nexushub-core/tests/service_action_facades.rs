@@ -970,8 +970,8 @@ fn goal_action_helpers_use_unified_thread_goal_commands() {
         commands::THREADS_GOAL_PAUSE,
         commands::THREADS_GOAL_RESUME,
     ] {
-        assert!(commands::is_allowed_rpc_command(command));
-        assert!(!commands::is_retired_command(command));
+        assert!(!commands::is_allowed_rpc_command(command));
+        assert!(commands::is_retired_command(command));
     }
 }
 
@@ -1031,13 +1031,6 @@ fn retired_commands_are_not_emitted_by_core_action_plans() {
         serde_json::to_value(archive_thread_response("thread-a".to_string(), false)).unwrap(),
         serde_json::to_value(rename_thread_response("thread-a".to_string(), "new name").unwrap())
             .unwrap(),
-        serde_json::to_value(cancel_followup_response(
-            commands::THREADS_FOLLOWUPS_CANCEL,
-            "thread-a".to_string(),
-            "followup-a".to_string(),
-            true,
-        ))
-        .unwrap(),
     ]);
 
     for value in values {

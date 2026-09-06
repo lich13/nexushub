@@ -1,3 +1,8 @@
+pub const GROK_LIST: &str = "grok.list";
+pub const GROK_DETAIL: &str = "grok.detail";
+pub const GROK_RENAME: &str = "grok.rename";
+pub const GROK_DELETE_PREVIEW: &str = "grok.deletePreview";
+pub const GROK_DELETE_EXECUTE: &str = "grok.deleteExecute";
 pub const AUTH_PUBLIC_SETTINGS: &str = "auth.publicSettings";
 pub const AUTH_LOGIN: &str = "auth.login";
 pub const AUTH_LOGOUT: &str = "auth.logout";
@@ -76,34 +81,12 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     SYSTEM_VERSION,
     SYSTEM_PLATFORM,
     SYSTEM_PROVIDERS,
-    SYSTEM_PLUGINS,
-    SYSTEM_MODELS,
-    SYSTEM_PERMISSION_PROFILES,
-    SYSTEM_CODEX_CONFIG,
-    SYSTEM_CLAUDE_CODE_OVERVIEW,
     THREADS_LIST,
     THREADS_DETAIL,
     THREADS_BLOCKS,
-    THREADS_CREATE,
-    THREADS_SEND,
-    THREADS_STEER,
-    THREADS_STOP,
     THREADS_ARCHIVE,
     THREADS_RESTORE,
     THREADS_RENAME,
-    THREADS_FORK,
-    THREADS_FOLLOWUPS_LIST,
-    THREADS_FOLLOWUPS_ENQUEUE,
-    THREADS_FOLLOWUPS_CANCEL,
-    THREADS_PLAN_ACCEPT,
-    THREADS_PLAN_REVISE,
-    THREADS_ELICITATION_ANSWER,
-    THREADS_APPROVAL_ANSWER,
-    THREADS_GOAL_GET,
-    THREADS_GOAL_SAVE,
-    THREADS_GOAL_CLEAR,
-    THREADS_GOAL_PAUSE,
-    THREADS_GOAL_RESUME,
     JOBS_LIST,
     JOBS_DETAIL,
     PROBE_STATUS,
@@ -123,18 +106,23 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     CLEANUP_ARCHIVE_EXECUTE,
     CLEANUP_HIDDEN_DRY_RUN,
     CLEANUP_HIDDEN_EXECUTE,
-    UPLOADS_DELETE,
+    GROK_LIST,
+    GROK_DETAIL,
+    GROK_RENAME,
+    GROK_DELETE_PREVIEW,
+    GROK_DELETE_EXECUTE,
 ];
 
-pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_UPLOAD_FILES, TRANSPORT_THREAD_EVENTS];
+pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_THREAD_EVENTS];
 
-pub const INTERNAL_COMMANDS: &[&str] = &[
-    THREADS_FOLLOWUPS_CLAIM,
-    THREADS_FOLLOWUPS_SUBMIT,
-    THREADS_FOLLOWUPS_ERROR,
-];
+pub const INTERNAL_COMMANDS: &[&str] = &[];
 
 pub const DECLARED_COMMANDS: &[&str] = &[
+    GROK_LIST,
+    GROK_DETAIL,
+    GROK_RENAME,
+    GROK_DELETE_PREVIEW,
+    GROK_DELETE_EXECUTE,
     AUTH_PUBLIC_SETTINGS,
     AUTH_LOGIN,
     AUTH_LOGOUT,
@@ -202,6 +190,39 @@ pub const DECLARED_COMMANDS: &[&str] = &[
 ];
 
 pub const RETIRED_COMMANDS: &[&str] = &[
+    "system.plugins",
+    "system.models",
+    "system.permissionProfiles",
+    "system.codexConfig",
+    "system.claudeCodeOverview",
+    "threads.create",
+    "threads.send",
+    "threads.steer",
+    "threads.stop",
+    "threads.fork",
+    "threads.followups.list",
+    "threads.followups.enqueue",
+    "threads.followups.claim",
+    "threads.followups.submit",
+    "threads.followups.error",
+    "threads.followups.cancel",
+    "threads.plan.accept",
+    "threads.plan.revise",
+    "threads.elicitation.answer",
+    "threads.approval.answer",
+    "threads.goal.get",
+    "threads.goal.save",
+    "threads.goal.clear",
+    "threads.goal.pause",
+    "threads.goal.resume",
+    "uploads.delete",
+    "uploadFiles",
+    "desktopWebUi.settings.get",
+    "desktopWebUi.settings.save",
+    "desktopWebUi.status",
+    "desktopWebUi.start",
+    "desktopWebUi.stop",
+    "desktopWebUi.password.reset",
     "getPublicSettings",
     "login",
     "logout",
@@ -335,7 +356,7 @@ mod tests {
     fn transport_commands_are_explicit_exceptions() {
         assert_eq!(
             ALLOWED_TRANSPORT_COMMANDS,
-            &["uploadFiles", "threadEvents"],
+            &["threadEvents"],
             "non-dot command names are reserved for transport endpoints only"
         );
     }

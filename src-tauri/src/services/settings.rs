@@ -11,9 +11,7 @@ use nexushub_core::{
         },
         jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
-        uploads as upload_service,
     },
-    uploads,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,50 +47,10 @@ pub(crate) struct DesktopProbeEventsResponse {
     pub limit: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopDeleteUploadResponse {
-    pub ok: bool,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopUploadFile {
-    pub name: String,
-    pub mime: String,
-    pub bytes: Vec<u8>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopProbeEventsRequest {
     pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DesktopDeleteUploadRequest {
-    pub id: String,
-}
-
-pub(crate) fn store_uploads_with_state(
-    state: &DesktopState,
-    files: Vec<DesktopUploadFile>,
-) -> Result<uploads::UploadOutcome> {
-    let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let uploads = NexusHubUseCases::new(state.platform()).uploads();
-    let facade = uploads.store(
-        files
-            .into_iter()
-            .map(|file| upload_service::UploadBatchItem {
-                name: file.name,
-                mime: Some(file.mime),
-                bytes: file.bytes,
-            })
-            .collect(),
-    )?;
-    uploads.store_to_root(&root, facade.plan)
 }
 
 pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopProbeSettings> {
@@ -333,25 +291,6 @@ pub(crate) fn probe_events_with_state(
         .map(redact_probe_event_for_output)
         .collect();
     Ok(DesktopProbeEventsResponse { events, limit })
-}
-
-pub(crate) fn delete_upload_with_state(
-    state: &DesktopState,
-    request: DesktopDeleteUploadRequest,
-) -> Result<DesktopDeleteUploadResponse> {
-    let root = uploads::upload_root(&state.resolved_codex_paths().home);
-    let uploads = NexusHubUseCases::new(state.platform()).uploads();
-    let plan = uploads.delete_execute(request.id)?;
-    let deleted = uploads.execute_delete(&root, &plan)?;
-    Ok(DesktopDeleteUploadResponse { ok: true, deleted })
-}
-
-#[cfg(test)]
-pub(crate) fn test_delete_upload_with_state(
-    state: &DesktopState,
-    request: DesktopDeleteUploadRequest,
-) -> Result<DesktopDeleteUploadResponse> {
-    delete_upload_with_state(state, request)
 }
 
 fn ok_action(

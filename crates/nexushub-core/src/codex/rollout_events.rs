@@ -26,6 +26,7 @@ pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail
     let mut messages = Vec::new();
     let mut block_builder = MessageBlockBuilder::default();
     let mut raw_event_count = 0;
+    let mut turn_context = None;
     if let Some(path) = &summary.rollout_path {
         let text =
             fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
@@ -34,9 +35,10 @@ pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail
                 continue;
             }
             raw_event_count += 1;
-            let Ok(value) = serde_json::from_str::<Value>(line) else {
+            let Ok(mut value) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
+            normalize_canonical_turn(&mut value, &mut turn_context);
             if let Some(message) = parse_message_event(&value) {
                 messages.push(message);
             }
@@ -85,8 +87,11 @@ pub fn message_blocks_from_events<'a>(
     events: impl IntoIterator<Item = &'a Value>,
 ) -> Vec<MessageBlock> {
     let mut block_builder = MessageBlockBuilder::default();
+    let mut turn_context = None;
     for (index, value) in events.into_iter().enumerate() {
-        block_builder.push_event(value, index + 1);
+        let mut value = value.clone();
+        normalize_canonical_turn(&mut value, &mut turn_context);
+        block_builder.push_event(&value, index + 1);
     }
     block_builder.finish()
 }
@@ -115,7 +120,7 @@ pub fn is_macos_network_volume_path(path: &Path) -> bool {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct RolloutScan {
     pub(crate) message_count: usize,
     pub(crate) latest_message: Option<String>,
@@ -166,6 +171,23 @@ pub struct RolloutMessageSelection {
 }
 
 pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
+    static CACHE: super::read_cache::ReadCache<RolloutScan> =
+        super::read_cache::ReadCache::new(4 * 1024 * 1024);
+    CACHE.read(
+        path,
+        |scan, _| {
+            4096 + scan.latest_message.as_ref().map_or(0, String::len) as u64
+                + scan
+                    .pending_elicitation
+                    .as_ref()
+                    .and_then(|value| serde_json::to_vec(value).ok())
+                    .map_or(0, |value| value.len()) as u64
+        },
+        || scan_rollout_uncached(path, max_messages),
+    )
+}
+
+fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     let mut scan = RolloutScan::default();
@@ -174,13 +196,15 @@ pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutSc
     let mut last_task_status: Option<String> = None;
     let mut active_tasks: Vec<Option<String>> = Vec::new();
     let mut pending_tool_turns: HashMap<String, Option<String>> = HashMap::new();
+    let mut turn_context = None;
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        normalize_canonical_turn(&mut value, &mut turn_context);
         if let Some(payload) = value.get("session_meta").and_then(|v| v.get("payload")) {
             scan.is_subagent |= is_subagent_session_meta(payload);
             scan.cwd = payload
@@ -385,26 +409,7 @@ pub fn rollout_hook_stop_message_selection(
 ) -> Result<Option<RolloutMessageSelection>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    Ok(select_rollout_message(&text, turn_id, true))
-}
-
-fn select_rollout_message(
-    text: &str,
-    turn_id: Option<&str>,
-    allow_global_fallback: bool,
-) -> Option<RolloutMessageSelection> {
-    let scoped = select_rollout_message_inner(text, turn_id);
-    if scoped.is_some()
-        || turn_id.is_none()
-        || !allow_global_fallback
-        || rollout_has_turn_signal(text, turn_id)
-    {
-        return scoped;
-    }
-    select_rollout_message_inner(text, None).map(|mut selection| {
-        selection.strategy = format!("global_fallback.{}", selection.strategy);
-        selection
-    })
+    Ok(select_rollout_message_inner(&text, turn_id))
 }
 
 fn select_rollout_message_inner(
@@ -421,13 +426,11 @@ fn select_rollout_message_inner(
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(event_turn) = event_turn_id(&value) {
-            current_turn_id = Some(event_turn);
-        }
-        let effective_turn_id = event_turn_id(&value).or_else(|| current_turn_id.clone());
+        normalize_canonical_turn(&mut value, &mut current_turn_id);
+        let effective_turn_id = event_turn_id(&value);
         let matches_turn_scope = turn_id
             .map(|expected_turn_id| effective_turn_id.as_deref() == Some(expected_turn_id))
             .unwrap_or(true);
@@ -492,7 +495,7 @@ fn select_rollout_message_inner(
                         latest_unresolved_action = Some(pending_plan);
                     }
                     event_added_candidate = true;
-                } else {
+                } else if is_final_assistant_message(&value) {
                     latest_assistant = Some(RolloutMessageSelection {
                         message: message.text,
                         source: source.to_string(),
@@ -555,22 +558,6 @@ fn select_rollout_message_inner(
     Some(selection)
 }
 
-fn rollout_has_turn_signal(text: &str, turn_id: Option<&str>) -> bool {
-    let Some(expected_turn_id) = turn_id else {
-        return false;
-    };
-    text.lines().any(|line| {
-        if line.trim().is_empty() {
-            return false;
-        }
-        serde_json::from_str::<Value>(line)
-            .ok()
-            .and_then(|value| event_turn_id(&value))
-            .as_deref()
-            == Some(expected_turn_id)
-    })
-}
-
 fn should_replace_pending_hook_stop_action(
     current: Option<&PendingHookStopAction>,
     next: &PendingHookStopAction,
@@ -621,7 +608,7 @@ pub fn rollout_completion_last_agent_message_selection(
 ) -> Result<Option<RolloutMessageSelection>> {
     let text =
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    Ok(select_rollout_message(&text, turn_id, false))
+    Ok(select_rollout_message_inner(&text, turn_id))
 }
 
 pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<bool> {
@@ -688,10 +675,12 @@ pub fn rollout_request_user_input_state(
     }
 
     let mut found_call = false;
+    let mut turn_context = None;
     for line in String::from_utf8_lossy(&tail).lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        normalize_canonical_turn(&mut value, &mut turn_context);
         if !found_call {
             if is_request_user_input(&value)
                 && event_turn_id(&value).as_deref() == Some(turn_id)
@@ -935,7 +924,7 @@ fn function_output_matches(value: &Value, pending: &PendingAction) -> bool {
     }
 }
 
-fn event_turn_id(value: &Value) -> Option<String> {
+fn explicit_event_turn_id(value: &Value) -> Option<String> {
     value
         .get("turn_id")
         .or_else(|| value.get("turnId"))
@@ -945,10 +934,67 @@ fn event_turn_id(value: &Value) -> Option<String> {
         .or_else(|| value.pointer("/payload/event/turnId"))
         .or_else(|| value.pointer("/payload/payload/turn_id"))
         .or_else(|| value.pointer("/payload/payload/turnId"))
-        .or_else(|| value.pointer("/internal_chat_message_metadata_passthrough/turn_id"))
-        .or_else(|| value.pointer("/payload/internal_chat_message_metadata_passthrough/turn_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn event_turn_id(value: &Value) -> Option<String> {
+    explicit_event_turn_id(value).or_else(|| {
+        value
+            .pointer("/payload/internal_chat_message_metadata_passthrough/turn_id")
+            .or_else(|| value.pointer("/internal_chat_message_metadata_passthrough/turn_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
+// Model-response metadata may contain a different internal turn id. Only
+// lifecycle records establish the canonical task context for subsequent items.
+fn normalize_canonical_turn(value: &mut Value, current: &mut Option<String>) {
+    let kind = rollout_event_type(value);
+    let explicit = explicit_event_turn_id(value);
+    if matches!(
+        kind,
+        "turn_context" | "task_started" | "turn_started" | "turn/started"
+    ) && explicit.is_some()
+    {
+        *current = explicit.clone();
+    }
+    let is_item = value.get("type").and_then(Value::as_str) == Some("response_item")
+        || matches!(
+            kind,
+            "agent_message"
+                | "user_message"
+                | "assistant_message"
+                | "request_user_input"
+                | "item_started"
+                | "item_completed"
+        );
+    if is_item {
+        if let Some(turn) = explicit
+            .or_else(|| current.clone())
+            .or_else(|| event_turn_id(value))
+        {
+            value["turn_id"] = Value::String(turn);
+        }
+    }
+}
+
+fn is_internal_agent_message(value: &Value) -> bool {
+    let payload = event_payload(value).unwrap_or(value);
+    payload.get("type").and_then(Value::as_str) == Some("agent_message")
+        && (payload.get("author").is_some() || payload.get("recipient").is_some())
+}
+
+fn is_final_assistant_message(value: &Value) -> bool {
+    !is_internal_agent_message(value)
+        && matches!(
+            event_payload(value)
+                .unwrap_or(value)
+                .get("phase")
+                .and_then(Value::as_str),
+            Some("final" | "final_answer")
+        )
 }
 
 fn event_item_id(value: &Value) -> Option<String> {
@@ -980,6 +1026,9 @@ pub(crate) fn parse_message_event(value: &Value) -> Option<CodexMessage> {
 }
 
 fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
+    if is_internal_agent_message(value) {
+        return None;
+    }
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     let payload = value
         .get("payload")
@@ -1001,8 +1050,8 @@ fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
         .and_then(Value::as_str)
         .or_else(|| value.get("role").and_then(Value::as_str))
         .unwrap_or_else(|| {
-            if payload_type.contains("function") {
-                "tool"
+            if payload_type == "user_message" {
+                "user"
             } else {
                 "assistant"
             }
@@ -1098,6 +1147,9 @@ struct PendingToolCall {
 
 impl MessageBlockBuilder {
     fn push_event(&mut self, value: &Value, raw_index: usize) {
+        if is_internal_agent_message(value) {
+            return;
+        }
         let event_type = rollout_event_type(value);
         if event_type == "task_complete" || is_turn_terminal_event(event_type) {
             self.clear_pending_tools_for_turn(event_turn_id(value).as_deref());

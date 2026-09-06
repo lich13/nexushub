@@ -14,7 +14,6 @@ use axum::{
     Json,
 };
 use nexushub_core::db::NewSession;
-use nexushub_core::services::system::HostSurface;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -50,15 +49,9 @@ pub(crate) async fn login(
             "too many login attempts",
         ));
     }
-    let mut security = state
+    let security = state
         .db
         .security_settings(state.config().security.session_ttl_seconds)?;
-    if state.host_surface() == HostSurface::DesktopLanWebui {
-        let config = state.config();
-        security.turnstile_enabled = false;
-        security.turnstile_required = false;
-        security.session_ttl_seconds = config.desktop_webui.session_ttl_seconds;
-    }
     match turnstile_login_action(security.turnstile_enabled, security.turnstile_required) {
         TurnstileLoginAction::Skip => {}
         TurnstileLoginAction::FailClosed => {

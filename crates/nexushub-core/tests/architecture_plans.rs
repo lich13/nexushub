@@ -16,7 +16,7 @@ use nexushub_core::{
 use serde_json::json;
 
 #[test]
-fn core_thread_read_model_merges_running_jobs_and_plans_autosubmit_effects() {
+fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let pending = followup("followup-a", "idle-thread", "continue");
     let known_running_job = running_job("job-running", "known-thread", Some("turn-running"), 20);
@@ -88,29 +88,11 @@ fn core_thread_read_model_merges_running_jobs_and_plans_autosubmit_effects() {
     )
     .expect("idle follow-up should produce core autosubmit effect plan");
 
-    assert_eq!(idle_view.autosubmit_effects.len(), 1);
-    assert_eq!(
-        idle_view.autosubmit_effects[0]
-            .claim
-            .as_ref()
-            .expect("claim plan")
-            .to_status,
-        "submitting"
-    );
-    assert_eq!(
-        idle_view.autosubmit_effects[0]
-            .job
-            .as_ref()
-            .expect("resume job plan")
-            .spec
-            .thread_id
-            .as_deref(),
-        Some("idle-thread")
-    );
+    assert!(idle_view.autosubmit_effects.is_empty());
 }
 
 #[test]
-fn core_thread_detail_read_model_returns_updated_detail_and_autosubmit_effect() {
+fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effect() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let detail = ThreadDetail {
         summary: thread(
@@ -136,14 +118,7 @@ fn core_thread_detail_read_model_returns_updated_detail_and_autosubmit_effect() 
     .expect("core should own detail read-model/autosubmit planning");
 
     assert_eq!(view.detail.summary.status, ThreadStatus::Recent);
-    assert_eq!(view.autosubmit_effects.len(), 1);
-    assert_eq!(
-        view.autosubmit_effects[0]
-            .followup_id
-            .as_deref()
-            .expect("followup id"),
-        "followup-a"
-    );
+    assert!(view.autosubmit_effects.is_empty());
 }
 
 #[test]

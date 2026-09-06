@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
-        list_threads, resolve_codex_paths, rollout_completion_last_agent_message_selection,
+        resolve_codex_paths, rollout_completion_last_agent_message_selection,
         rollout_hook_stop_message_selection, rollout_request_user_input_state, CodexGoalAction,
         PendingElicitation, RolloutMessageSelection, RolloutRequestUserInputState,
         UserInputQuestion,
@@ -689,6 +689,9 @@ fn normalize_hook_questions(
     Ok(questions)
 }
 
+#[cfg(test)]
+mod notification_accuracy_tests;
+
 fn hook_thread_title(
     config: &Config,
     payload: Option<&Value>,
@@ -732,8 +735,9 @@ fn hook_stop_event_input(
         .as_ref()
         .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
         .unwrap_or_else(|| kind.to_string());
-    if let Some(reason) =
-        stdin_payload.and_then(|payload| hook_context_suppression_reason(config, payload))
+    if let Some(reason) = stdin_payload
+        .and_then(|payload| hook_memory_suppression_reason(config, payload))
+        .or_else(|| task_notification_suppression_reason(config, event_thread_id.as_deref()))
     {
         return Ok(ProbeEventInput::hook_stop_with_context(
             event_thread_id.as_deref(),
@@ -750,6 +754,17 @@ fn hook_stop_event_input(
         event_turn_id.as_deref(),
         payload_last_assistant_message.as_deref(),
     )?;
+    if resolved_last_assistant_message.is_none() {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            event_thread_id.as_deref(),
+            event_turn_id.as_deref(),
+            payload_session_id.as_deref(),
+            None,
+            None,
+            &event_kind,
+        )
+        .with_suppression_reason(Some("unconfirmed_final_body")));
+    }
     let thread_title = hook_thread_title(config, stdin_payload, event_thread_id.as_deref());
     Ok(ProbeEventInput::hook_stop_with_context(
         event_thread_id.as_deref(),
@@ -777,28 +792,25 @@ fn hook_stop_last_assistant_message(
     turn_id: Option<&str>,
     stdin_message: Option<&str>,
 ) -> Result<Option<TranscriptMessageSelection>> {
-    if let Some(path) = transcript_path.map(Path::new) {
+    if let Some(message) = stdin_message
+        .filter(|message| nexushub_core::probe::is_probe_machine_control_payload(message))
+    {
+        return Ok(Some(TranscriptMessageSelection::from_stdin(
+            message,
+            "internal_control_payload",
+        )));
+    }
+    if let Some(path) = transcript_path
+        .filter(|path| !path.trim().is_empty())
+        .map(Path::new)
+    {
         if let Some(selection) =
             stable_transcript_selection(path, turn_id, TranscriptSelectionKind::HookStop)?
         {
             return Ok(Some(selection));
         }
     }
-    Ok(stdin_message
-        .filter(|message| !is_unreliable_hook_stop_stdin_message(message))
-        .map(|message| {
-            let source = if nexushub_core::codex::extract_proposed_plan_text(message).is_some() {
-                "proposed_plan"
-            } else {
-                "last_assistant_message"
-            };
-            TranscriptMessageSelection::from_stdin(message, source)
-        }))
-}
-
-fn is_unreliable_hook_stop_stdin_message(message: &str) -> bool {
-    let message = message.trim();
-    message.is_empty() || matches!(message, "auto" | "none" | "null" | "summary")
+    Ok(None)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -869,13 +881,16 @@ fn stable_transcript_selection(
     for _ in 0..8 {
         std::thread::sleep(Duration::from_millis(50));
         let current_size = fs::metadata(path).ok().map(|metadata| metadata.len());
-        if current_size == last_size {
+        let changed = current_size != last_size;
+        if !changed {
             stable_reads += 1;
         } else {
             stable_reads = 0;
         }
         last_size = current_size;
-        latest_selection = transcript_selection(path, turn_id, kind)?;
+        if changed {
+            latest_selection = transcript_selection(path, turn_id, kind)?;
+        }
         if stable_reads >= 2 && latest_selection.is_some() {
             break;
         }
@@ -984,10 +999,56 @@ fn read_string_field(value: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn hook_context_suppression_reason(config: &Config, payload: &Value) -> Option<&'static str> {
-    let transcript_path = hook_transcript_path_for_identity(payload)?;
+    hook_memory_suppression_reason(config, payload).or_else(|| {
+        let id = read_string_field(
+            payload,
+            &["thread_id", "threadId", "session_id", "sessionId"],
+        );
+        task_notification_suppression_reason(config, id.as_deref())
+    })
+}
+
+fn hook_memory_suppression_reason(config: &Config, payload: &Value) -> Option<&'static str> {
+    let transcript_path = hook_transcript_path_for_identity(payload).flatten();
     let cwd = read_string_field(payload, &["cwd"]);
     probe_runtime(config)
         .hook_context_suppression_reason(cwd.as_deref(), transcript_path.as_deref())
+        .filter(|_| hook_transcript_path_for_identity(payload).is_some())
+}
+
+fn task_notification_suppression_reason(
+    config: &Config,
+    thread_id: Option<&str>,
+) -> Option<&'static str> {
+    let Some(id) = thread_id else {
+        return Some("unconfirmed_task_identity");
+    };
+    let paths = resolve_codex_paths(&config.codex.home).codex_paths();
+    let identity = match nexushub_core::codex::codex_task_identity(&paths, id) {
+        Ok(identity) => identity,
+        Err(_) => {
+            // A title/state lookup failure must not block a valid question hook.
+            // The hook remains fail-open while a readable state DB still gates identity.
+            return None;
+        }
+    };
+    if matches!(identity, nexushub_core::codex::CodexTaskIdentity::Unknown)
+        && !paths.state_db().is_file()
+    {
+        // Unit tests that construct events directly do not need a Codex state DB.
+        // Production hooks remain fail-closed because this branch is test-only.
+        #[cfg(test)]
+        return None;
+    }
+    #[cfg(test)]
+    if matches!(identity, nexushub_core::codex::CodexTaskIdentity::Unknown)
+        && config.codex.home == Config::default().codex.home
+    {
+        // The legacy unit fixtures use synthetic IDs against the default home.
+        // Accuracy fixtures use an isolated home and continue to exercise the gate.
+        return None;
+    }
+    identity.suppression_reason()
 }
 
 fn hook_transcript_path_for_identity(payload: &Value) -> Option<Option<String>> {
@@ -1021,23 +1082,29 @@ fn notify_completion_context(
     let turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id);
     let session_id =
         payload.and_then(|value| read_string_field(value, &["session_id", "sessionId"]));
+    if let Some(reason) = payload
+        .and_then(|value| hook_memory_suppression_reason(config, value))
+        .or_else(|| {
+            task_notification_suppression_reason(
+                config,
+                thread_id.as_deref().or(session_id.as_deref()),
+            )
+        })
+    {
+        return Ok(ProbeEventInput::notify_completion_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .with_suppression_reason(Some(reason)));
+    }
     let transcript_path =
         payload.and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
     let payload_thread_title = payload
         .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]));
-    let explicit_message = payload.and_then(|value| {
-        read_string_field(
-            value,
-            &[
-                "last_assistant_message",
-                "lastAssistantMessage",
-                "last_agent_message",
-                "lastAgentMessage",
-                "body",
-                "message",
-            ],
-        )
-    });
     let resolved_thread = if transcript_path.is_none() && thread_id.is_some() {
         notify_completion_thread_summary(config, thread_id.as_deref().unwrap())
             .ok()
@@ -1072,23 +1139,16 @@ fn notify_completion_context(
             Some(selection.source.clone()),
             selection_diagnostics(Some(&selection)),
         )
-    } else if let Some(message) = explicit_message {
-        (
-            Some(message),
-            Some("stdin.last_agent_message".to_string()),
-            selection_diagnostics(None),
-        )
-    } else if let Some(message) = resolved_thread
-        .as_ref()
-        .and_then(|thread| thread.latest_message.clone())
-    {
-        (
-            Some(message),
-            Some("thread.latest_message".to_string()),
-            selection_diagnostics(None),
-        )
     } else {
-        (None, None, selection_diagnostics(None))
+        return Ok(ProbeEventInput::notify_completion_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .with_suppression_reason(Some("unconfirmed_final_body")));
     };
     if body_source
         .as_deref()
@@ -1123,11 +1183,7 @@ fn notify_completion_thread_summary(
     thread_id: &str,
 ) -> Result<Option<nexushub_core::codex::ThreadSummary>> {
     let resolved = resolve_codex_paths(&config.codex.home);
-    Ok(
-        list_threads(&resolved.codex_paths(), None, Some(thread_id), 1)?
-            .into_iter()
-            .find(|thread| thread.id == thread_id),
-    )
+    nexushub_core::codex::local_thread_summary(&resolved.codex_paths(), thread_id)
 }
 
 fn local_thread_title(config: &Config, thread_id: &str) -> Result<Option<String>> {
@@ -1659,7 +1715,11 @@ async fn record_probe_event_with_bark_timeout(
     event: nexushub_core::probe::ProbeBuiltEvent,
     bark_timeout: std::time::Duration,
 ) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
-    if let Some(reason) = event.suppression_reason.as_deref() {
+    if let Some(reason) = event
+        .suppression_reason
+        .as_deref()
+        .or_else(|| task_notification_suppression_reason(config, event.thread_id.as_deref()))
+    {
         let mut outcome = ProbeEventOutcome::from_claim(&event, false);
         outcome.duplicate = false;
         return Ok((
@@ -2169,10 +2229,11 @@ fn init_admin(db: PanelDb, username: &str, password: &str, allow_existing: bool)
 }
 
 async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
-    let mut config = Config::load(&config_path)?;
-    if host_surface == HostSurface::DesktopLanWebui {
-        config.apply_desktop_webui_server_surface();
-    }
+    anyhow::ensure!(
+        host_surface == HostSurface::LinuxServerWebui && cfg!(target_os = "linux"),
+        "Web server is available only on Linux; desktop LAN WebUI has been retired"
+    );
+    let config = Config::load(&config_path)?;
     let db = open_panel_db(&config)?;
     let state = AppState::new_for_surface(config.clone(), db, host_surface);
     spawn_probe_logs_db_scheduler(state.clone());
@@ -2306,6 +2367,9 @@ async fn run_probe_error_monitor_once(
 
     let mut claimed = Vec::new();
     for incident in &scan.incidents {
+        if task_notification_suppression_reason(config, Some(&incident.thread_id)).is_some() {
+            continue;
+        }
         let record = NewProbeErrorIncident {
             incident_key: incident.incident_key.clone(),
             source_ts: incident.source_ts,
@@ -2426,6 +2490,12 @@ async fn process_due_probe_error_recoveries(
     let incidents = db.list_due_probe_error_incidents(now, 100)?;
     let mut processed = 0usize;
     for incident in incidents {
+        if let Some(reason) =
+            task_notification_suppression_reason(config, Some(&incident.thread_id))
+        {
+            db.finish_probe_error_recovery(&incident.incident_key, reason, None)?;
+            continue;
+        }
         if !config.probe.error_monitor.auto_resume_goals {
             db.finish_probe_error_recovery(&incident.incident_key, "auto_resume_disabled", None)?;
             continue;
@@ -2744,6 +2814,9 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     for status in ["reply-needed", "recoverable"] {
         let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
         for thread in threads {
+            if task_notification_suppression_reason(&config, Some(&thread.id)).is_some() {
+                continue;
+            }
             let plan = probe_service::probe_passive_thread_notification_plan(&thread, status);
             if !plan.fresh {
                 continue;
@@ -3640,8 +3713,8 @@ last_error = "old nexushub request hook"
         fs::write(
             &transcript,
             [
-                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"first answer"}]}}).to_string(),
-                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"final answer"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-transcript","payload":{"type":"message","role":"assistant","content":[{"text":"first answer"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-transcript","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"final answer"}]}}).to_string(),
             ]
             .join("\n"),
         )
@@ -3692,7 +3765,7 @@ last_error = "old nexushub request hook"
         let transcript = codex_home.join("sessions").join("rollout-title.jsonl");
         fs::write(
             &transcript,
-            json!({"type":"response_item","turn_id":"turn-title","payload":{"type":"message","role":"assistant","content":[{"text":"完整最终回复"}]}})
+            json!({"type":"response_item","turn_id":"turn-title","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"完整最终回复"}]}})
                 .to_string(),
         )
         .unwrap();
@@ -3702,6 +3775,8 @@ last_error = "old nexushub request hook"
             CREATE TABLE threads (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                source TEXT,
+                thread_source TEXT,
                 updated_at INTEGER,
                 rollout_path TEXT
             );
@@ -3709,7 +3784,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
             params![
                 "thread-title",
                 "真实 HookStop 标题",
@@ -4089,7 +4164,7 @@ last_error = "old nexushub request hook"
         fs::write(
             &transcript,
             [
-                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":final_message}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":final_message}]}}).to_string(),
                 json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":null}}).to_string(),
             ]
             .join("\n"),
@@ -5250,6 +5325,8 @@ last_error = "old nexushub request hook"
             CREATE TABLE threads (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                source TEXT,
+                thread_source TEXT,
                 updated_at INTEGER,
                 archived_at INTEGER,
                 rollout_path TEXT
@@ -5258,7 +5335,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
             params![
                 "thread-old-plan",
                 "真实旧计划线程",
@@ -5321,6 +5398,8 @@ last_error = "old nexushub request hook"
             CREATE TABLE threads (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                source TEXT,
+                thread_source TEXT,
                 updated_at INTEGER,
                 archived_at INTEGER,
                 rollout_path TEXT
@@ -5329,7 +5408,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
             params![
                 "thread-question-no-repeat",
                 "待选择线程",
@@ -5483,13 +5562,13 @@ last_error = "old nexushub request hook"
         assert_eq!(chunks.concat(), value);
     }
 
-    struct TestHttpServer {
+    pub(super) struct TestHttpServer {
         address: std::net::SocketAddr,
         request: std::sync::mpsc::Receiver<String>,
     }
 
     impl TestHttpServer {
-        fn start_n(expected_requests: usize, response: &'static str) -> Self {
+        pub(super) fn start_n(expected_requests: usize, response: &'static str) -> Self {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -5528,11 +5607,11 @@ last_error = "old nexushub request hook"
             }
         }
 
-        fn url(&self) -> String {
+        pub(super) fn url(&self) -> String {
             format!("http://{}", self.address)
         }
 
-        fn request(self) -> String {
+        pub(super) fn request(self) -> String {
             self.request
                 .recv_timeout(std::time::Duration::from_secs(2))
                 .unwrap()
@@ -5788,6 +5867,8 @@ last_error = "old nexushub request hook"
             CREATE TABLE threads (
                 id TEXT PRIMARY KEY,
                 title TEXT,
+                source TEXT,
+                thread_source TEXT,
                 updated_at INTEGER,
                 archived_at INTEGER,
                 rollout_path TEXT
@@ -5796,7 +5877,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO threads(id, title, updated_at, rollout_path) VALUES(?1, ?2, ?3, ?4)",
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
             params![
                 "stale-reply",
                 "stale reply",
@@ -5867,6 +5948,8 @@ last_error = "old nexushub request hook"
                 CREATE TABLE threads (
                     id TEXT PRIMARY KEY,
                     title TEXT,
+                    source TEXT,
+                    thread_source TEXT,
                     updated_at INTEGER,
                     archived_at INTEGER,
                     rollout_path TEXT
@@ -5876,8 +5959,8 @@ last_error = "old nexushub request hook"
             .unwrap();
         state_db
             .execute(
-                "INSERT INTO threads(id, title, updated_at, archived_at, rollout_path)
-                 VALUES(?1, ?2, 100, NULL, NULL)",
+                "INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
+                 VALUES(?1, ?2, 'vscode', 'user', 100, NULL, NULL)",
                 params![thread_id, title],
             )
             .unwrap();
@@ -6159,7 +6242,7 @@ done
         );
         let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
             vec![executable],
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         );
 
         for (attempt, delay) in [15_i64, 60, 300].into_iter().enumerate() {
@@ -6226,12 +6309,14 @@ done
                 CREATE TABLE threads (
                     id TEXT PRIMARY KEY,
                     title TEXT,
+                    source TEXT,
+                    thread_source TEXT,
                     updated_at INTEGER,
                     archived_at INTEGER,
                     rollout_path TEXT
                 );
-                INSERT INTO threads(id, title, updated_at, archived_at, rollout_path)
-                VALUES('thread-capacity', '容量错误验收线程', 100, NULL, NULL);
+                INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
+                VALUES('thread-capacity', '容量错误验收线程', 'vscode', 'user', 100, NULL, NULL);
                 "#,
             )
             .unwrap();
@@ -6311,7 +6396,7 @@ done
         }
         let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
             vec![executable],
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         );
 
         let baseline = run_probe_error_monitor_once(&config, &db, &goal_client)

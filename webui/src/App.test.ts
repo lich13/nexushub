@@ -3,23 +3,18 @@ import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
 import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
 import chatWorkspaceSource from "./components/chat/ChatWorkspace.tsx?raw";
-import composerControlsSource from "./components/composer/ComposerControls.tsx?raw";
 import conversationSource from "./components/chat/Conversation.tsx?raw";
-import currentActionCardSource from "./components/chat/CurrentActionCard.tsx?raw";
 import jobListSource from "./components/jobs/JobList.tsx?raw";
 import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
-import runConfigControlsSource from "./components/chat/RunConfigControls.tsx?raw";
 import securityWorkspaceSource from "./components/security/SecurityWorkspace.tsx?raw";
-import threadGoalPanelSource from "./components/chat/ThreadGoalPanel.tsx?raw";
-import threadInspectorPanelsSource from "./components/chat/ThreadInspectorPanels.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
 import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
-import type { CodexGoal, MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
+import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
 type AppExports = typeof import("./App") & {
   buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
@@ -94,15 +89,6 @@ type AppExports = typeof import("./App") & {
   setLocalThreadTitleOverride?: (threadId: string, title: string, now?: number) => void;
   clearLocalThreadTitleOverride?: (threadId: string) => void;
   applyThreadTitleOverride?: <T extends Partial<ThreadSummary>>(summary: T, now?: number) => T;
-  goalStatusLabel?: (goal: CodexGoal | undefined, loading: boolean, failed?: boolean) => string;
-  goalStatusTone?: (goal: CodexGoal | undefined) => "success" | "warning" | "danger" | undefined;
-  goalControlState?: (goal: CodexGoal | undefined, options?: { busy?: boolean; objective?: string; tokenBudget?: string; queryReady?: boolean }) => {
-    saveDisabled: boolean;
-    clearDisabled: boolean;
-    pauseDisabled: boolean;
-    resumeDisabled: boolean;
-  };
-  formatGoalTimestamp?: (value: number | string | null | undefined) => string;
   codexVisibleCopy?: () => Record<string, string>;
   failureCategoryLabel?: (category: string, capabilities?: RuntimeCapabilityMatrix) => string;
   jobFailureAnalysisView?: (
@@ -169,7 +155,7 @@ type ThreadQueryExports = typeof import("./lib/query/threads") & {
 };
 
 async function loadApp(): Promise<AppExports> {
-  return import("./App") as Promise<AppExports>;
+  return { ...await import("./lib/domain/conversationViewModel"), ...await import("./lib/domain/runtimeViewModel"), ...await import("./lib/domain/codexViewModel"), ...await import("./App") } as AppExports;
 }
 
 async function loadThreadQuery(): Promise<ThreadQueryExports> {
@@ -184,15 +170,6 @@ function extractThreadListSource(): string {
   return source.slice(start);
 }
 
-function extractThreadInspectorSource(): string {
-  const source = threadInspectorPanelsSource;
-  const start = source.indexOf("function ThreadInspectorPanels(");
-  const end = source.length;
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
-}
 
 function extractProbeWorkspaceSource(): string {
   const source = probeWorkspaceSource;
@@ -203,9 +180,7 @@ function extractProbeWorkspaceSource(): string {
 }
 
 function extractFunctionSource(name: string): string {
-  const source = name === "SlashCommandTextarea"
-    ? composerControlsSource
-    : name === "OpsWorkspace"
+  const source = name === "OpsWorkspace"
       ? opsWorkspaceSource
       : name === "JobList"
         ? jobListSource
@@ -305,85 +280,6 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
 };
 
 describe("conversation helpers", () => {
-  test("desktop runtime hides Web-only auth and security navigation", async () => {
-    const app = await loadApp();
-    const webCapabilities = linuxWebCapabilities;
-    const desktopCapabilities = macosDesktopCapabilities;
-
-    expect(webCapabilities).toBeDefined();
-    expect(desktopCapabilities).toBeDefined();
-    expect(app.navigationLabelsForRuntime?.(webCapabilities)).toContain("安全");
-    expect(app.navigationLabelsForRuntime?.(desktopCapabilities)).toEqual(["Codex", "Claude Code", "探针", "运维"]);
-    expect(app.shouldShowLogoutForRuntime?.(webCapabilities)).toBe(true);
-    expect(app.shouldShowLogoutForRuntime?.(desktopCapabilities)).toBe(false);
-    expect(app.initialSessionForRuntime?.(desktopCapabilities)).toMatchObject({
-      username: "desktop",
-      csrf_token: null
-    });
-  }, 15000);
-
-  test("security workspace is gated by web security capability and derives endpoint copy", () => {
-    const securityWorkspaceSource = extractFunctionSource("SecurityWorkspace");
-    const shellSource = appSource.slice(
-      appSource.indexOf("function App()"),
-      appSource.indexOf("class WorkspaceErrorBoundary")
-    );
-
-    expect(shellSource).toContain('capabilities.securitySettings && view === "security"');
-    expect(securityWorkspaceSource).toContain("useSystemStatusQuery");
-    expect(securityWorkspaceSource).toContain('value={expectedHostname ?? "未配置"}');
-    expect(securityWorkspaceSource).toContain('placeholder={defaultExpectedHostname ?? "未配置"}');
-    expect(securityWorkspaceSource).not.toContain('|| "661313.xyz"');
-    expect(securityWorkspaceSource).not.toContain("661313.xyz");
-  });
-
-  test("desktop runtime keeps shared update entry but removes Linux-only update actions", async () => {
-    const app = await loadApp();
-    const webCapabilities = linuxWebCapabilities;
-    const desktopCapabilities = macosDesktopCapabilities;
-
-    expect(app.navigationLabelsForRuntime?.(desktopCapabilities)).toEqual(expect.arrayContaining(["Codex", "探针", "运维"]));
-    expect(app.opsWorkspacePanelTitles?.(webCapabilities)).toContain("NexusHub 更新");
-    expect(app.opsWorkspacePanelTitles?.(desktopCapabilities)).toContain("NexusHub 更新");
-    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).not.toEqual(expect.arrayContaining(["Precheck", "Prune", "Public endpoint"]));
-    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).not.toEqual(expect.arrayContaining(["state DB", "Codex Home", "State DB"]));
-    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities).join("\n")).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune/i);
-    expect(app.opsWorkspaceVisibleCopy?.(desktopCapabilities)).toEqual(expect.arrayContaining(["系统状态", "NexusHub 更新", "Check", "Install", "归档线程清理", "隐藏线程清理", "Job History"]));
-    expect(app.opsWorkspaceVisibleCopy?.(webCapabilities)).toEqual(expect.arrayContaining(["Public endpoint", "state DB", "Codex Home", "State DB", "Precheck", "Update", "Prune", "systemd 失败", "Nginx 失败"]));
-    expect(app.opsUpdateActionView?.(null, desktopCapabilities).map((action) => action.label)).toEqual(["Check", "Install"]);
-    expect(app.opsUpdateActionView?.({ update_available: true } as UpdateStatus, webCapabilities).map((action) => action.label)).toEqual(["Precheck", "Update", "Prune"]);
-    expect(app.opsUpdateActionView?.({ update_available: false } as UpdateStatus, desktopCapabilities).find((action) => action.action === "install")?.disabled).toBe(true);
-  });
-
-  test("desktop runtime hides unsupported fork and approval actions", async () => {
-    const app = await loadApp();
-    const webCapabilities = linuxWebCapabilities;
-    const desktopCapabilities = macosDesktopCapabilities;
-
-    expect(webCapabilities).toBeDefined();
-    expect(desktopCapabilities).toBeDefined();
-    expect(app.canShowForkAction?.(webCapabilities)).toBe(true);
-    expect(app.canShowForkAction?.(desktopCapabilities)).toBe(false);
-    expect(app.slashCommandsForRuntime?.(webCapabilities).map((item) => item.command)).toContain("/fork");
-    expect(app.slashCommandsForRuntime?.(desktopCapabilities).map((item) => item.command)).not.toContain("/fork");
-    expect(app.slashCommandsForRuntime?.(webCapabilities).map((item) => item.command)).toContain("/logout");
-    expect(app.slashCommandsForRuntime?.(desktopCapabilities).map((item) => item.command)).not.toContain("/logout");
-    expect(app.slashCommandSuggestions?.("/fo", 3, true, webCapabilities).map((item) => item.command)).toContain("/fork");
-    expect(app.slashCommandSuggestions?.("/fo", 3, true, desktopCapabilities).map((item) => item.command)).not.toContain("/fork");
-    expect(app.slashCommandSuggestions?.("/lo", 3, true, webCapabilities).map((item) => item.command)).toContain("/logout");
-    expect(app.slashCommandSuggestions?.("/lo", 3, true, desktopCapabilities).map((item) => item.command)).not.toContain("/logout");
-    expect(app.exactSlashCommandFromDraft?.(" /fork ", desktopCapabilities)).toBeNull();
-    expect(app.exactSlashCommandFromDraft?.(" /logout ", desktopCapabilities)).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.(" /fork ", desktopCapabilities)).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.(" /logout ", desktopCapabilities)).toBeNull();
-    expect(app.slashCommandAction?.("/fork", true, desktopCapabilities)).toEqual({
-      kind: "unknown",
-      command: "/fork",
-      message: expect.stringContaining("未知")
-    });
-    expect(app.approvalActionMode?.(webCapabilities)).toBe("interactive");
-    expect(app.approvalActionMode?.(desktopCapabilities)).toBe("unsupported");
-  });
 
   test("desktop runtime maps Linux-only job failure categories to generic copy", async () => {
     const app = await loadApp();
@@ -414,26 +310,6 @@ describe("conversation helpers", () => {
       "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
       webCapabilities
     )).toMatch(/systemd|nginx|管理员密码|Linux prune|sudo/i);
-  });
-
-  test("component sources use capability props instead of runtime or transport access", () => {
-    const guardedComponents = [
-      "App",
-      "SideNav",
-      "MobileTopBar",
-      "ChatWorkspace",
-      "Conversation",
-      "EmptyConversation",
-      "SlashCommandTextarea",
-      "ProbeWorkspace",
-      "OpsWorkspace",
-      "JobList"
-    ];
-
-    for (const component of guardedComponents) {
-      const source = extractFunctionSource(component);
-      expectSourceToAvoidTokens(source, component, forbiddenComponentTokens);
-    }
   });
 
   test("App delegates realtime lifecycle, query placeholders, failure copy, and action gating to lib helpers", async () => {
@@ -538,125 +414,6 @@ describe("conversation helpers", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  test("Conversation passes semantic callbacks while thread query facade owns mutation cache lifecycle", async () => {
-    const threadQuery = await loadThreadQuery();
-    const conversationSource = extractFunctionSource("Conversation");
-
-    expect(typeof threadQuery.useThreadConversationActions).toBe("function");
-    expect(conversationSource).toContain("useThreadConversationActions");
-    expect(conversationSource).not.toContain("onSendSuccess");
-    expect(conversationSource).not.toContain("onSteerSuccess");
-    expect(conversationSource).not.toContain("onArchiveMutate");
-    expect(conversationSource).not.toContain("onArchiveError");
-    expect(conversationSource).not.toContain("onArchiveSettled");
-    expect(conversationSource).not.toContain("onRenameMutate");
-    expect(conversationSource).not.toContain("onRenameSuccess");
-    expect(conversationSource).not.toContain("onRenameError");
-    expect(conversationSource).not.toContain("onRenameSettled");
-    expect(conversationSource).not.toContain("invalidateJobs");
-    expect(conversationSource).not.toContain("invalidateFollowUps");
-    expect(conversationSource).not.toContain("applyOptimisticThread");
-    expect(threadQuerySource).toContain("onSendSuccess");
-    expect(threadQuerySource).toContain("onArchiveMutate");
-    expect(threadQuerySource).toContain("onRenameError");
-  });
-
-  test("components consume query/state layer instead of direct domain API functions", () => {
-    expect(appSource, "App.tsx must not import the domain API barrel").not.toContain("from \"./lib/api\"");
-    expect(appSource, "App.tsx must not import React Query client primitives").not.toContain("@tanstack/react-query");
-    expect(appSource, "App.tsx must not create raw mutations; use query/state action hooks").not.toContain("useMutation(");
-    expect(appSource, "App.tsx must not hold the query client").not.toContain("useQueryClient");
-    expect(appSource, "App.tsx must not write query cache directly").not.toContain("setQueryData");
-    expect(appSource, "App.tsx must not invalidate query cache directly").not.toContain("invalidateQueries");
-    expect(appSource, "App.tsx must not cancel query cache directly").not.toContain("cancelQueries");
-    expect(appSource, "App.tsx must not remove query cache directly").not.toContain("removeQueries");
-    expect(appSource, "App.tsx must not type against QueryClient").not.toMatch(/\bQueryClient\b/);
-    expect(appSource, "App.tsx must not type against QueryKey").not.toMatch(/\bQueryKey\b/);
-
-    const appImportBlock = appSource.slice(0, appSource.indexOf("import { clearSession"));
-    const queryProxiedApiFunctions = [
-      "acceptPlan",
-      "answerApproval",
-      "answerElicitation",
-      "archiveThread",
-      "cancelFollowUp",
-      "changePassword",
-      "clearCodexGoal",
-      "createThread",
-      "deleteUpload",
-      "dryRunArchiveDelete",
-      "dryRunHiddenThreadDelete",
-      "forkThread",
-      "getClaudeCodeOverview",
-      "getCodexConfig",
-      "getCodexGoal",
-      "getPlatformOverview",
-      "getProbeEvents",
-      "getProbeLogsDbStatus",
-      "getProbeSettings",
-      "getProbeStatus",
-      "getPublicSettings",
-      "getSecurity",
-      "getSystemStatus",
-      "getThread",
-      "getThreadBlocks",
-      "getUpdateStatus",
-      "listFollowUps",
-      "listJobs",
-      "listModels",
-      "listPermissionProfiles",
-      "listPlugins",
-      "listProviders",
-      "listThreads",
-      "login",
-      "logout",
-      "pauseCodexGoal",
-      "renameThread",
-      "restoreThread",
-      "resumeCodexGoal",
-      "revisePlan",
-      "saveCodexGoal",
-      "saveProbeSettings",
-      "saveSecurity",
-      "sendMessage",
-      "startArchiveDelete",
-      "startHiddenThreadDelete",
-      "runProbeBarkTest",
-      "runProbeHooksInstall",
-      "runProbeLogsDbDryRun",
-      "runProbeLogsDbExecute",
-      "steerThread",
-      "stopThread",
-      "uploadFiles"
-    ];
-
-    for (const name of queryProxiedApiFunctions) {
-      expect(appImportBlock, `App.tsx should consume ${name} via query/state hooks`).not.toMatch(new RegExp(`\\b${name}\\b`));
-    }
-
-    const threadQueryPublicExports = threadQuerySource.slice(threadQuerySource.lastIndexOf("export {"));
-    for (const name of queryProxiedApiFunctions) {
-      expect(threadQueryPublicExports, `query/threads.ts must not re-export raw ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
-    }
-
-    const opsSource = extractFunctionSource("OpsWorkspace");
-    const probeSource = extractProbeWorkspaceSource();
-    const chatWorkspaceSource = extractFunctionSource("ChatWorkspace");
-    const conversationSource = extractFunctionSource("Conversation");
-    const emptyConversationSource = extractFunctionSource("EmptyConversation");
-    const goalPanelSource = extractFunctionSource("ThreadGoalPanel");
-    for (const source of [opsSource, probeSource, chatWorkspaceSource, conversationSource, emptyConversationSource, goalPanelSource]) {
-      for (const name of queryProxiedApiFunctions) {
-        expect(source, `workspace should not directly call ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`));
-      }
-      expect(source).not.toContain("useQueryClient");
-      expect(source).not.toContain("setQueryData");
-      expect(source).not.toContain("invalidateQueries");
-      expect(source).not.toContain("cancelQueries");
-      expect(source).not.toContain("removeQueries");
-    }
-  });
-
   test("App.tsx keeps domain-only pure helpers out of the component file", () => {
     expect(appSource).not.toContain("export function canStartHiddenThreadDelete(");
     expect(appSource).not.toContain("export function canStartUpdateInstall(");
@@ -694,328 +451,6 @@ describe("conversation helpers", () => {
       })
     ]));
     expect(app.segmentInternalReferences?.("goal abc123")).toEqual([{ type: "text", text: "goal abc123" }]);
-  });
-
-  test("slash command catalog covers Codex TUI commands with Chinese descriptions and usage hints", async () => {
-    const app = await loadApp();
-
-    const requiredCommands = [
-      "/permissions", "/ide", "/keymap", "/vim", "/sandbox-add-read-dir", "/agent", "/apps", "/plugins", "/hooks",
-      "/clear", "/archive", "/compact", "/copy", "/diff", "/exit", "/quit", "/experimental", "/approve",
-      "/memories", "/skills", "/feedback", "/init", "/logout", "/mcp", "/mention", "/model", "/fast", "/plan",
-      "/personality", "/ps", "/stop", "/fork", "/side", "/btw", "/raw", "/resume", "/new", "/review", "/status",
-      "/debug-config", "/statusline", "/title", "/theme"
-    ];
-    const commands = app.slashCommands?.map((item) => item.command);
-
-    expect(commands).toEqual(requiredCommands);
-    expect(app.slashCommands?.every((item) => item.description.trim().length > 0)).toBe(true);
-    expect(app.slashCommands?.every((item) => /[\u4e00-\u9fff]/.test(item.description))).toBe(true);
-    expect(app.slashCommands?.every((item) => item.usageHint.trim().length > 0)).toBe(true);
-    expect(app.slashCommands?.some((item) => item.command.startsWith("/goal"))).toBe(false);
-  });
-
-  test("slash command helpers filter full catalog and keep thread commands visible for new threads", async () => {
-    const app = await loadApp();
-    const removedGoalResume = ["/goal", "resume"].join(" ");
-
-    expect(app.slashCommandSuggestions?.("/", 1, true, linuxWebCapabilities).map((item) => item.command)).toEqual(app.slashCommands?.map((item) => item.command));
-    expect(app.slashCommandSuggestions?.("/go", 3).map((item) => item.command)).toEqual([]);
-    expect(app.slashCommandSuggestions?.("/goal", 5).map((item) => item.command)).toEqual([]);
-    expect(app.slashCommandSuggestions?.("/goal r", 7)).toEqual([]);
-    expect(app.slashCommandSuggestions?.(removedGoalResume, removedGoalResume.length, false)).toEqual([]);
-    expect(app.renderSlashCommandMenuHtml?.("/", 1, false)).not.toContain(removedGoalResume);
-    expect(app.slashCommandSuggestions?.("/theme", 6)).toEqual([
-      expect.objectContaining({ command: "/theme", description: expect.stringContaining("主题") })
-    ]);
-  });
-
-  test("slash command menu renders listbox with command, Chinese explanation, usage, and thread marker", async () => {
-    const app = await loadApp();
-
-    const html = app.renderSlashCommandMenuHtml?.("/archive", 8, false, 0, linuxWebCapabilities);
-
-    expect(html).toContain('role="listbox"');
-    expect(html).toContain("/archive");
-    expect(html).toContain("归档");
-    expect(html).toContain("用法");
-    expect(html).toContain("需要已有线程");
-  });
-
-  test("slash command selection helpers support keyboard actions and insert without submitting", async () => {
-    const app = await loadApp();
-    const suggestions = app.slashCommandSuggestions?.("/", 1) ?? [];
-
-    expect(app.nextSlashCommandSelection?.(0, suggestions.length, "ArrowDown")).toBe(1);
-    expect(app.nextSlashCommandSelection?.(0, suggestions.length, "ArrowUp")).toBe(suggestions.length - 1);
-    expect(app.slashCommandKeyAction?.({ key: "ArrowDown", selected: 0, suggestions })).toEqual({ action: "move", selected: 1 });
-    expect(app.slashCommandKeyAction?.({ key: "Escape", selected: 0, suggestions })).toEqual({ action: "dismiss" });
-    expect(app.slashCommandKeyAction?.({ key: "Enter", selected: 2, suggestions })).toEqual({ action: "insert", command: suggestions[2].command });
-    expect(app.slashCommandKeyAction?.({ key: "Enter", shiftKey: true, selected: 2, suggestions })).toEqual({ action: "none" });
-    expect(app.applySlashCommandSelection?.("继续 /pl", 6, "/plan")).toEqual({
-      value: "继续 /plan ",
-      cursor: "继续 /plan ".length
-    });
-  });
-
-  test("@ plugin mention helpers filter, insert, render fallback, and ignore non-trigger contexts", async () => {
-    const app = await loadApp();
-    const plugins: PluginInfo[] = [
-      { id: "probe", label: "Probe", status: "ready", kind: "builtin", description: "探针状态和维护" },
-      { id: "plugins", label: "Plugins", status: "preview", kind: "builtin", description: "插件列表" },
-      { id: "claude-code", label: "Claude Code", status: "planned", kind: "builtin", unavailable_reason: "当前仅支持只读预览" }
-    ];
-
-    expect(app.pluginMentionSuggestions?.("@", 1, plugins).map((item) => item.id)).toEqual(["probe", "plugins", "claude-code"]);
-    expect(app.pluginMentionSuggestions?.("@p", 2, plugins).map((item) => item.id)).toEqual(["probe", "plugins"]);
-    expect(app.pluginMentionSuggestions?.("mail a@b.com", "mail a@b.com".length, plugins)).toEqual([]);
-    expect(app.pluginMentionSuggestions?.("const x='@p'", "const x='@p'".length, plugins)).toEqual([]);
-    expect(app.pluginMentionSuggestions?.("@p", 2, null, true)).toEqual([
-      expect.objectContaining({ id: "__plugins_unavailable__", description: expect.stringContaining("当前无法读取插件列表") })
-    ]);
-
-    expect(app.applyPluginMentionSelection?.("请调用 @p", "请调用 @p".length, plugins[0])).toEqual({
-      value: "请调用 @Probe ",
-      cursor: "请调用 @Probe ".length
-    });
-    expect(app.renderPluginMentionMenuHtml?.("@claude", 7, plugins)).toContain("当前仅支持只读预览");
-  });
-
-  test("composer menu kind gives the nearest valid trigger priority and shares TUI key semantics", async () => {
-    const app = await loadApp();
-    const plugins: PluginInfo[] = [{ id: "probe", label: "Probe", status: "ready", kind: "builtin" }];
-
-    expect(app.activeComposerMenuKind?.("/", 1, plugins)).toBe("slash");
-    expect(app.activeComposerMenuKind?.("/goal @p", "/goal @p".length, plugins)).toBe("plugin");
-    expect(app.activeComposerMenuKind?.("@probe /go", "@probe /go".length, plugins)).toBe("slash");
-    expect(app.composerMenuKeyAction?.({ key: "Enter", composing: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
-    expect(app.composerMenuKeyAction?.({ key: "Enter", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
-    expect(app.composerMenuKeyAction?.({ key: "Enter", menuSelectionArmed: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
-    expect(app.composerMenuKeyAction?.({ key: "Tab", selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "insert", index: 0 });
-    expect(app.composerMenuKeyAction?.({ key: "Enter", shiftKey: true, selected: 0, suggestions: [{ id: "probe" }] })).toEqual({ action: "none" });
-  });
-
-  test("composer submit sends partial slash text literally instead of accepting visible suggestions", async () => {
-    const app = await loadApp();
-    const config = app.defaultRunConfig?.() ?? {};
-    const cases = ["/go", "/plugins 文本", "/plan 文本"];
-
-    for (const draft of cases) {
-      expect(app.activeComposerMenuKind?.(draft, draft.length, [])).toBe("slash");
-      expect(app.composerMenuKeyAction?.({
-        key: "Enter",
-        selected: 0,
-        suggestions: app.slashCommandSuggestions?.(draft, draft.length) ?? []
-      })).toEqual({ action: "none" });
-      expect(app.slashCommandForComposerSubmit?.(draft)).toBeNull();
-      expect(app.buildPayload?.(draft, config).message).toBe(draft);
-    }
-  });
-
-  test("composer submit uses the textarea DOM value when React state lags behind", async () => {
-    const app = await loadApp();
-
-    const currentDraft = app.composerSubmitDraftValue?.("/plugins", "/plugins 文本");
-
-    expect(currentDraft).toBe("/plugins 文本");
-    expect(app.slashCommandForComposerSubmit?.(currentDraft ?? "")).toBeNull();
-    expect(app.buildPayload?.(currentDraft ?? "", app.defaultRunConfig?.() ?? {}).message).toBe("/plugins 文本");
-  });
-
-  test("exact /plugins stays an explicit control command while /plugins text remains a message", async () => {
-    const app = await loadApp();
-
-    expect(app.slashCommandForComposerSubmit?.("/plugins")).toBe("/plugins");
-    expect(app.slashCommandAction?.("/plugins")).toEqual({ kind: "open_plugins", command: "/plugins" });
-    expect(app.slashCommandForComposerSubmit?.("/plugins 文本")).toBeNull();
-    expect(app.slashCommandAction?.("/plugins 文本")).toEqual({
-      kind: "unknown",
-      command: "/plugins 文本",
-      message: expect.stringContaining("未知")
-    });
-  });
-
-  test("IME composition never submits or inserts slash/plugin menu candidates", async () => {
-    const app = await loadApp();
-
-    expect(app.composerMenuKeyAction?.({
-      key: "Enter",
-      composing: true,
-      selected: 0,
-      suggestions: [{ command: "/goal" }]
-    })).toEqual({ action: "none" });
-    expect(app.composerMenuKeyAction?.({
-      key: "Enter",
-      composing: true,
-      menuSelectionArmed: true,
-      selected: 0,
-      suggestions: [{ id: "probe" }]
-    })).toEqual({ action: "none" });
-  });
-
-  test("exact slash command detection separates execution from partial candidate insertion", async () => {
-    const app = await loadApp();
-
-    expect(app.exactSlashCommandFromDraft?.("/plan")).toBe("/plan");
-    expect(app.exactSlashCommandFromDraft?.(" /fork ", linuxWebCapabilities)).toBe("/fork");
-    expect(app.exactSlashCommandFromDraft?.("/go")).toBeNull();
-    expect(app.exactSlashCommandFromDraft?.("/goal r")).toBeNull();
-  });
-
-  test("composer submit only executes complete controlled slash commands", async () => {
-    const app = await loadApp();
-
-    expect(app.slashCommandForComposerSubmit?.("/plugins")).toBe("/plugins");
-    expect(app.slashCommandForComposerSubmit?.(" /apps ")).toBe("/apps");
-    expect(app.slashCommandForComposerSubmit?.("/plan")).toBe("/plan");
-    expect(app.slashCommandForComposerSubmit?.("/p")).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.("/plugins 请说明")).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.("/unknown")).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.("/Users/gosu/Documents")).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.("/go")).toBeNull();
-    expect(app.slashCommandForComposerSubmit?.("/plan 请先分析")).toBeNull();
-  });
-
-  test("slash command action classifier only exposes controlled web actions and Chinese unavailable reasons", async () => {
-    const app = await loadApp();
-
-    expect(app.slashCommandAction?.("/plan")).toEqual({ kind: "toggle_plan_mode", command: "/plan" });
-    expect(app.slashCommandAction?.("/new")).toEqual({ kind: "open_new_thread", command: "/new" });
-    expect(app.slashCommandAction?.("/archive")).toEqual({
-      kind: "unknown",
-      command: "/archive",
-      message: expect.stringContaining("未知")
-    });
-    expect(app.slashCommandAction?.("/archive", true, linuxWebCapabilities)).toEqual({ kind: "archive_thread", command: "/archive" });
-    expect(app.slashCommandAction?.("/archive", false, linuxWebCapabilities)).toEqual({
-      kind: "requires_thread",
-      command: "/archive",
-      message: expect.stringContaining("需要已有线程")
-    });
-    expect(app.slashCommandAction?.("/theme")).toEqual({
-      kind: "unavailable",
-      command: "/theme",
-      message: expect.stringContaining("Web 端暂不支持")
-    });
-    expect(app.slashCommandAction?.("/unknown")).toEqual({
-      kind: "unknown",
-      command: "/unknown",
-      message: expect.stringContaining("未知")
-    });
-  });
-
-  test("slash command execution planning is delegated out of Conversation switch logic", async () => {
-    const app = await loadApp();
-    const conversationSource = extractFunctionSource("Conversation");
-
-    expect(typeof app.slashCommandExecutionPlan).toBe("function");
-    expect(app.slashCommandExecutionPlan?.({
-      command: "/fork",
-      hasThread: true,
-      capabilities: macosDesktopCapabilities,
-      inspectorActions: { showFork: false, showArchive: true, approvalMode: "unsupported" },
-      supportsFast: false,
-      serviceTier: "",
-      latestAssistantCopy: "ready"
-    })).toEqual({
-      kind: "feedback",
-      draft: "",
-      message: "macOS App 当前不支持 Fork 操作"
-    });
-    expect(app.slashCommandExecutionPlan?.({
-      command: "/fast",
-      hasThread: true,
-      capabilities: macosDesktopCapabilities,
-      inspectorActions: { showFork: false, showArchive: true, approvalMode: "unsupported" },
-      supportsFast: false,
-      serviceTier: "",
-      latestAssistantCopy: "ready"
-    })).toEqual({
-      kind: "feedback",
-      draft: "",
-      message: "当前模型不支持 Fast service tier"
-    });
-    expect(app.slashCommandExecutionPlan?.({
-      command: "/copy",
-      hasThread: true,
-      capabilities: linuxWebCapabilities,
-      inspectorActions: { showFork: true, showArchive: true, approvalMode: "interactive" },
-      supportsFast: true,
-      serviceTier: "",
-      latestAssistantCopy: null
-    })).toEqual({
-      kind: "feedback",
-      draft: "",
-      message: "没有可复制的最新回复"
-    });
-    expect(conversationSource).toContain("slashCommandExecutionPlan");
-    expect(conversationSource).not.toContain("slashCommandAction(");
-    expect(conversationSource).not.toMatch(/switch\s*\(\s*action\.kind\s*\)/);
-    expect(conversationSource).not.toContain("当前模型不支持 Fast service tier");
-    expect(conversationSource).not.toContain("macOS App 当前不支持 Fork 操作");
-    expect(conversationSource).not.toContain("没有可复制的最新回复");
-  });
-
-  test("plan mode button is a persistent thread send state", async () => {
-    const app = await loadApp();
-    const config = {
-      ...(app.defaultRunConfig?.() ?? {}),
-      collaborationMode: "plan"
-    };
-
-    expect(app.planModeButtonState?.(true, "Recent", false, false)).toEqual({
-      pressed: true,
-      label: "Plan Mode",
-      statusText: "下一条消息将使用 Plan Mode"
-    });
-    expect(app.planModeButtonState?.(false, "ReplyNeeded", true, false)).toEqual({
-      pressed: false,
-      label: "Plan Mode",
-      statusText: "当前线程正在等待计划确认"
-    });
-    expect(app.planModeButtonState?.(false, "ReplyNeeded", false, true)?.statusText).toBe("当前线程正在等待问题回复");
-    expect(app.buildPayload?.("请先制定计划", config).collaboration_mode).toBe("plan");
-    expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "plan", other: "kept" })).toEqual({
-      collaborationMode: "plan",
-      other: "kept"
-    });
-    expect(app.runConfigAfterSuccessfulSend?.({ collaborationMode: "", other: "kept" })).toEqual({
-      collaborationMode: "",
-      other: "kept"
-    });
-    expect(app.composerActionMode?.(false, "失败后保留的输入", false)).toBe("send");
-  });
-
-  test("config refresh merges persistent defaults without clearing next-send Plan Mode", async () => {
-    const app = await loadApp();
-    const current = {
-      model: "gpt-5.5",
-      serviceTier: "priority",
-      reasoning: "xhigh",
-      cwd: "/old",
-      permissionPreset: "full",
-      permissionProfile: "",
-      approvalPolicy: "never",
-      sandboxMode: "danger-full-access",
-      networkAccess: true,
-      collaborationMode: "plan"
-    };
-    const defaults = {
-      ...current,
-      model: "gpt-5.4",
-      serviceTier: "",
-      reasoning: "high",
-      cwd: "/new",
-      approvalPolicy: "on-request",
-      sandboxMode: "workspace-write",
-      collaborationMode: ""
-    };
-
-    expect(app.mergeRunConfigFromDefaults?.(current, defaults)).toEqual({
-      ...defaults,
-      collaborationMode: "plan"
-    });
-    expect(app.runConfigAfterSuccessfulSend?.(app.mergeRunConfigFromDefaults?.(current, defaults) ?? current).collaborationMode).toBe("plan");
   });
 
   test("latest assistant copy text skips tools, plans, and internal context", async () => {
@@ -1262,153 +697,6 @@ describe("conversation helpers", () => {
     expect(visibleText).toBe("Codex 本地状态不可用 Codex 本地状态不可用");
   });
 
-  test("composer file picker has no accept whitelist", async () => {
-    const app = await loadApp();
-
-    expect(app.composerFileInputAcceptValue?.()).toBeUndefined();
-  });
-
-  test("thread copy panel restores id, rollout path, and resume command without internal metrics", async () => {
-    const app = await loadApp();
-    const inspectorSource = extractThreadInspectorSource();
-
-    expect(app.threadInspectorPanelTitles?.()).toEqual(["名称与归档", "Goal", "复制与路径"]);
-    expect(app.threadSettingsMetricLabels?.()).not.toEqual(expect.arrayContaining([
-      "Thread ID",
-      "Active turn",
-      "Active job",
-      "Last event",
-      "Rollout path",
-      "Blocks"
-    ]));
-    expect(app.threadInspectorPanelTitles?.()).not.toContain("状态摘要");
-    expect(app.threadResumeCommand?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
-      "codex resume 019ec943-0b86-7e22-86e9-4dc0c919b09d"
-    );
-    expect(app.threadCopyId?.("019ec943-0b86-7e22-86e9-4dc0c919b09d")).toBe(
-      "019ec943-0b86-7e22-86e9-4dc0c919b09d"
-    );
-    expect(app.threadRolloutPath?.(" /Users/gosu/.codex/sessions/thread.jsonl ")).toBe(
-      "/Users/gosu/.codex/sessions/thread.jsonl"
-    );
-    expect(app.threadCopyId?.("  ")).toBeNull();
-    expect(app.threadCopyId?.(null)).toBeNull();
-    expect(app.threadRolloutPath?.("  ")).toBeNull();
-    expect(app.threadRolloutPath?.(null)).toBeNull();
-    expect(app.threadResumeCommand?.("  ")).toBeNull();
-    expect(app.threadResumeCommand?.(null)).toBeNull();
-    expect(inspectorSource).toContain("复制与路径");
-    expect(inspectorSource).toContain("线程 ID");
-    expect(inspectorSource).toContain("复制 ID");
-    expect(inspectorSource).toContain("复制文件路径");
-    expect(inspectorSource).toContain("复制 codex resume+ID");
-    expect(inspectorSource).toContain("会话文件");
-    expect(inspectorSource).not.toContain("状态摘要");
-    expect(inspectorSource).not.toContain("Codex Home");
-    expect(inspectorSource).not.toContain("State DB");
-  });
-
-  test("goal panel helpers cover TUI states and button rules", async () => {
-    const app = await loadApp();
-    const active: CodexGoal = {
-      available: true,
-      enabled: true,
-      objective: "补齐右栏",
-      token_budget: 12000,
-      status: "active"
-    };
-    const paused: CodexGoal = { ...active, status: "paused" };
-    const cleared: CodexGoal = {
-      available: true,
-      enabled: false,
-      objective: null,
-      token_budget: null,
-      status: "cleared"
-    };
-    const blocked: CodexGoal = { ...active, status: "blocked", blocked_reason: "等待确认" };
-    const usageLimited: CodexGoal = { ...active, status: "usageLimited" };
-    const budgetLimited: CodexGoal = { ...active, status: "budgetLimited" };
-    const complete: CodexGoal = { ...active, status: "complete" };
-    const unknown: CodexGoal = { ...active, status: "futureStatus" };
-
-    expect(app.goalStatusLabel?.(undefined, true)).toBe("读取中");
-    expect(app.goalStatusLabel?.(undefined, false, true)).toBe("读取失败");
-    expect(app.goalStatusLabel?.({ ...active, status: "idle", enabled: false }, false)).toBe("未设置");
-    expect(app.goalStatusLabel?.(active, false)).toBe("进行中");
-    expect(app.goalStatusLabel?.(paused, false)).toBe("已暂停");
-    expect(app.goalStatusLabel?.(cleared, false)).toBe("已清除");
-    expect(app.goalStatusLabel?.(blocked, false)).toBe("阻塞");
-    expect(app.goalStatusLabel?.(usageLimited, false)).toBe("用量受限");
-    expect(app.goalStatusLabel?.(budgetLimited, false)).toBe("预算已用尽");
-    expect(app.goalStatusLabel?.(complete, false)).toBe("完成");
-    expect(app.goalStatusTone?.(blocked)).toBe("danger");
-    expect(app.goalStatusTone?.(usageLimited)).toBe("danger");
-    expect(app.goalStatusTone?.(budgetLimited)).toBe("danger");
-    expect(app.goalStatusTone?.(unknown)).toBeUndefined();
-
-    expect(app.goalControlState?.(undefined, { objective: "", tokenBudget: "" })).toEqual({
-      saveDisabled: true,
-      clearDisabled: true,
-      pauseDisabled: true,
-      resumeDisabled: true
-    });
-    expect(app.goalControlState?.(undefined, { objective: "新目标", tokenBudget: "" })).toEqual({
-      saveDisabled: true,
-      clearDisabled: true,
-      pauseDisabled: true,
-      resumeDisabled: true
-    });
-    expect(app.goalControlState?.(active, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-      saveDisabled: false,
-      clearDisabled: false,
-      pauseDisabled: false,
-      resumeDisabled: true
-    });
-    expect(app.goalControlState?.(paused, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-      saveDisabled: false,
-      clearDisabled: false,
-      pauseDisabled: true,
-      resumeDisabled: false
-    });
-    for (const resumable of [blocked, usageLimited, budgetLimited, complete]) {
-      expect(app.goalControlState?.(resumable, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-        saveDisabled: false,
-        clearDisabled: false,
-        pauseDisabled: true,
-        resumeDisabled: false
-      });
-    }
-    expect(app.goalControlState?.(unknown, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-      saveDisabled: false,
-      clearDisabled: false,
-      pauseDisabled: true,
-      resumeDisabled: true
-    });
-    expect(app.goalControlState?.(cleared, { objective: "", tokenBudget: "" })?.pauseDisabled).toBe(true);
-    expect(app.goalControlState?.(active, { objective: "补齐右栏", tokenBudget: "0" })?.saveDisabled).toBe(true);
-    expect(app.goalControlState?.(active, { busy: true, objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-      saveDisabled: true,
-      clearDisabled: true,
-      pauseDisabled: true,
-      resumeDisabled: true
-    });
-    expect(app.goalStatusLabel?.({ ...active, available: false }, false)).toBe("未接入");
-    expect(app.goalControlState?.({ ...active, available: false }, { objective: "补齐右栏", tokenBudget: "12000" })).toEqual({
-      saveDisabled: true,
-      clearDisabled: true,
-      pauseDisabled: true,
-      resumeDisabled: true
-    });
-    expect(app.formatGoalTimestamp?.(0)).toContain("1970");
-    const goalQueryStart = threadQuerySource.indexOf("export function useThreadGoalQuery");
-    const goalQueryEnd = threadQuerySource.indexOf("export function useThreadGoalActions", goalQueryStart);
-    expect(threadQuerySource.slice(goalQueryStart, goalQueryEnd)).not.toContain("placeholderData");
-    expect(threadGoalPanelSource).toContain("goal.isError");
-    expect(threadGoalPanelSource).toContain('setObjective("");');
-    expect(threadGoalPanelSource).toContain('setTokenBudget("");');
-    expect(threadInspectorPanelsSource).toContain("<ThreadGoalPanel key={summary.id}");
-  });
-
   test("probe thread rows use canonical ThreadSummary status values", async () => {
     const app = await loadApp();
     const rows = app.probeStatusThreads?.({
@@ -1419,20 +707,6 @@ describe("conversation helpers", () => {
 
     expect(rows.map((thread) => thread.status)).toEqual(["Running", "ReplyNeeded", "Recoverable"]);
     expect(rows.map((thread) => app.threadListItemStatusText?.(thread))).toEqual(["运行中", "待回复", "异常"]);
-  });
-
-  test("probe running summary uses running_threads when backend count is stale", async () => {
-    const app = await loadApp();
-    const probeSource = extractProbeWorkspaceSource();
-    const runningThreads: ThreadSummary[] = [
-      { id: "running-a", title: "运行 A", status: "Running", message_count: 1 },
-      { id: "running-b", title: "运行 B", status: "Running", message_count: 2 }
-    ];
-
-    expect(app.probeThreadsByStatus?.({ running_threads: runningThreads }).running).toEqual(runningThreads);
-    expect(app.probeRunningCountValue?.({ running_count: 0, running_threads: runningThreads })).toBe("2");
-    expect(app.probeRunningCountValue?.({ running_count: 3, running_threads: runningThreads.slice(0, 1) })).toBe("3");
-    expect(probeSource).toContain('<Metric label="运行中" value={probeRunningCountValue(data)}');
   });
 
   test("probe availability copy treats initial snapshot fetch as loading instead of unavailable", async () => {
@@ -1652,14 +926,6 @@ describe("conversation helpers", () => {
     expect(copy).not.toContain("State DB");
   });
 
-  test("probe path metrics keep Linux Codex Home while hiding it from desktop runtime", () => {
-    const probeSource = extractProbeWorkspaceSource();
-
-    expect(probeSource).toContain('{capabilities.codexStatePaths && <Metric label="Codex Home" value={codexHomeStatusValue(data ?? currentSettings?.codex)} wide />}');
-    expect(probeSource).toContain('{capabilities.codexStatePaths && <label className="field-label">Codex Home<input value={draft.codex.home} placeholder="auto" onChange={(event) => setCodex({ home: event.target.value })} /></label>}');
-    expect(probeSource).toContain('<Metric label="Logs DB Path" value={logsDbPathStatusValue(logsDb ?? settings?.logs_db)} wide />');
-  });
-
   test("probe workspace labels the paired lifecycle hooks as Codex Hook", () => {
     const probeSource = extractProbeWorkspaceSource();
 
@@ -1748,35 +1014,13 @@ describe("conversation helpers", () => {
     expect(app.canStartUpdateInstall?.({ ...baseStatus, latest_version: "0.1.118", update_available: true })).toBe(true);
   });
 
-  test("thread inspector gating and desktop ops copy stay capability-driven", async () => {
-    const app = await loadApp();
-    const desktopVisibleCopy = app.opsWorkspaceVisibleCopy?.(macosDesktopCapabilities).join("\n") ?? "";
-    const linuxVisibleCopy = app.opsWorkspaceVisibleCopy?.(linuxWebCapabilities).join("\n") ?? "";
+});
 
-    expect(app.threadInspectorActionState?.(macosDesktopCapabilities)).toEqual({
-      showFork: false,
-      showArchive: true,
-      approvalMode: "unsupported"
-    });
-    expect(app.threadInspectorActionState?.(linuxWebCapabilities)).toEqual({
-      showFork: true,
-      showArchive: true,
-      approvalMode: "interactive"
-    });
-
-    expect(desktopVisibleCopy).not.toContain("Web 登录");
-    expect(desktopVisibleCopy).not.toContain("Turnstile");
-    expect(desktopVisibleCopy).not.toContain("systemd");
-    expect(desktopVisibleCopy).not.toContain("Nginx");
-    expect(desktopVisibleCopy).not.toContain("管理员密码");
-    expect(desktopVisibleCopy).not.toContain("公网入口");
-    expect(desktopVisibleCopy).not.toContain("Linux update");
-    expect(desktopVisibleCopy).not.toContain("Linux prune");
-
-    expect(linuxVisibleCopy).toContain("Public endpoint");
-    expect(linuxVisibleCopy).toContain("Prune");
-    expect(linuxVisibleCopy).toContain("systemd 失败");
-    expect(linuxVisibleCopy).toContain("Nginx 失败");
-  });
-
+test("retired task controls are absent from the user entrypoints", () => {
+  for (const source of [appSource, chatWorkspaceSource, conversationSource, messageStreamSource]) {
+    expect(source).not.toMatch(/SlashCommandTextarea|useComposerAttachments|ThreadGoalPanel|ThreadInspectorPanels|onDecision|onSubmitQuestion|sendMessage|createThread|enqueueFollowUp|steerThread/);
+  }
+  expect(conversationSource).toContain("useReadOnlyThreadActions");
+  expect(conversationSource).toContain("复制恢复命令");
+  expect(conversationSource).not.toContain("textarea");
 });

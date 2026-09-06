@@ -2,12 +2,6 @@ type RuntimeKind = "web" | "desktop";
 
 type RpcArgs = Record<string, unknown> | undefined;
 
-type RuntimeUploadFile = {
-  name: string;
-  mime: string;
-  bytes: number[];
-};
-
 type RuntimeThreadEventSource = {
   unavailable?: boolean;
   addEventListener(
@@ -149,27 +143,6 @@ async function webJsonRpc<T = unknown>(
   return checkedResponse(response) as Promise<T>;
 }
 
-async function webFormRpc<T = unknown>(
-  command: string,
-  form: FormData,
-  csrfToken?: string | null,
-): Promise<T> {
-  const headers = new Headers();
-  if (csrfToken?.trim()) {
-    headers.set("x-csrf-token", csrfToken.trim());
-  }
-  const response = await fetch(
-    buildRuntimeApiPath(`/api/rpc/${encodeURIComponent(command)}`),
-    {
-      method: "POST",
-      credentials: "include",
-      headers,
-      body: form
-    },
-  );
-  return checkedResponse(response) as Promise<T>;
-}
-
 async function invokeDesktop<T = unknown>(
   command: string,
   args?: RpcArgs,
@@ -195,24 +168,4 @@ export async function runtimeRpc<T = unknown>(
     return invokeDesktop<T>(command, desktopRpcArgs(args));
   }
   return webJsonRpc<T>(command, args);
-}
-
-export async function uploadRuntimeFiles<T = unknown>(
-  files: File[],
-  csrfToken?: string | null,
-): Promise<T> {
-  if (getRuntimeKind() === "desktop") {
-    const uploads: RuntimeUploadFile[] = await Promise.all(files.map(async (file) => ({
-      name: file.name,
-      mime: file.type || "application/octet-stream",
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
-    })));
-    return invokeDesktop<T>("uploadFiles", { files: uploads });
-  }
-
-  const form = new FormData();
-  for (const file of files) {
-    form.append("files", file, file.name);
-  }
-  return webFormRpc<T>("uploadFiles", form, csrfToken);
 }

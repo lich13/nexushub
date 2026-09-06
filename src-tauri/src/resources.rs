@@ -2,7 +2,6 @@ use std::path::Path;
 
 const NEXUSHUB_WEBD_RESOURCE_NAME: &str = "nexushub-webd";
 const NEXUSHUB_WEBD_HELPER_PLACEHOLDER: &[u8] = b"NEXUSHUB_HELPER_PLACEHOLDER";
-const WEBUI_RESOURCE_NAME: &str = "webui";
 
 pub(crate) fn sync_nexushub_webd_helper_from_resource(resource_dir: &Path) -> Result<(), String> {
     let source = resource_dir.join(NEXUSHUB_WEBD_RESOURCE_NAME);
@@ -15,20 +14,6 @@ pub(crate) fn sync_nexushub_webd_helper_from_resource(resource_dir: &Path) -> Re
     let platform = nexushub_core::platform::PlatformPaths::desktop_current();
     let target = platform.daemon_binary();
     sync_nexushub_webd_helper_file(&source, &target).map_err(|err| err.to_string())
-}
-
-pub(crate) fn prepare_desktop_webui_assets_from_resource(
-    resource_dir: &Path,
-) -> Result<(), String> {
-    let source = resource_dir.join(WEBUI_RESOURCE_NAME);
-    if !source.join("index.html").is_file() {
-        return Ok(());
-    }
-
-    let platform = nexushub_core::platform::PlatformPaths::desktop_current();
-    sync_directory(&source, &platform.webui_dir).map_err(|err| err.to_string())?;
-    remove_legacy_webui_dir(&platform).map_err(|err| err.to_string())?;
-    migrate_desktop_webui_dir_config(&platform).map_err(|err| err.to_string())
 }
 
 pub(crate) fn repair_probe_error_monitor_launch_agent(
@@ -47,50 +32,6 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
         config.probe.error_monitor.enabled,
     )
     .map_err(|err| err.to_string())
-}
-
-fn remove_legacy_webui_dir(
-    platform: &nexushub_core::platform::PlatformPaths,
-) -> std::io::Result<()> {
-    let legacy = platform.data_dir.join("webui");
-    if legacy != platform.webui_dir && legacy.is_dir() {
-        std::fs::remove_dir_all(legacy)?;
-    }
-    Ok(())
-}
-
-fn migrate_desktop_webui_dir_config(
-    platform: &nexushub_core::platform::PlatformPaths,
-) -> anyhow::Result<()> {
-    let config_path = &platform.config_file;
-    if !config_path.is_file() {
-        return Ok(());
-    }
-    let text = std::fs::read_to_string(config_path)?;
-    let mut value = text.parse::<toml::Value>()?;
-    let Some(paths) = value.get_mut("paths").and_then(toml::Value::as_table_mut) else {
-        return Ok(());
-    };
-    let data_dir = paths
-        .get("data_dir")
-        .and_then(toml::Value::as_str)
-        .map(Path::new);
-    if data_dir != Some(platform.data_dir.as_path()) {
-        return Ok(());
-    }
-    let webui_dir = paths
-        .get("webui_dir")
-        .and_then(toml::Value::as_str)
-        .map(Path::new);
-    if webui_dir == Some(platform.webui_dir.as_path()) {
-        return Ok(());
-    }
-    paths.insert(
-        "webui_dir".to_string(),
-        toml::Value::String(platform.webui_dir.display().to_string()),
-    );
-    std::fs::write(config_path, toml::to_string_pretty(&value)?)?;
-    Ok(())
 }
 
 fn is_nexushub_webd_helper_placeholder(path: &Path) -> std::io::Result<bool> {
@@ -116,29 +57,6 @@ fn sync_nexushub_webd_helper_file(source: &Path, target: &Path) -> std::io::Resu
     }
     std::fs::copy(source, target)?;
     ensure_executable(target)
-}
-
-fn sync_directory(source: &Path, target: &Path) -> std::io::Result<()> {
-    if target.exists() {
-        std::fs::remove_dir_all(target)?;
-    }
-    copy_directory_recursive(source, target)
-}
-
-fn copy_directory_recursive(source: &Path, target: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_directory_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            std::fs::copy(source_path, target_path)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -190,65 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn sync_directory_replaces_stale_webui_assets() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("resource-webui");
-        let target = temp.path().join("desktop-assets");
-        std::fs::create_dir_all(source.join("assets")).unwrap();
-        std::fs::create_dir_all(target.join("assets")).unwrap();
-        std::fs::write(
-            source.join("index.html"),
-            "<script src=\"/assets/new.js\"></script>",
-        )
-        .unwrap();
-        std::fs::write(source.join("assets/new.js"), "new").unwrap();
-        std::fs::write(target.join("assets/old.js"), "old").unwrap();
-
-        sync_directory(&source, &target).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(target.join("index.html")).unwrap(),
-            "<script src=\"/assets/new.js\"></script>"
-        );
-        assert_eq!(
-            std::fs::read_to_string(target.join("assets/new.js")).unwrap(),
-            "new"
-        );
-        assert!(!target.join("assets/old.js").exists());
-    }
-
-    #[test]
-    fn migrate_desktop_webui_dir_config_moves_legacy_webui_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let platform = nexushub_core::platform::PlatformPaths::for_kind_with_home(
-            nexushub_core::platform::PlatformKind::Macos,
-            temp.path(),
-        );
-        std::fs::create_dir_all(&platform.data_dir).unwrap();
-        let legacy_webui = platform.data_dir.join("webui");
-        let config = format!(
-            r#"
-[paths]
-data_dir = "{}"
-db_path = "{}"
-webui_dir = "{}"
-log_dir = "{}"
-"#,
-            platform.data_dir.display(),
-            platform.data_dir.join("nexushub.sqlite").display(),
-            legacy_webui.display(),
-            platform.log_dir.display()
-        );
-        std::fs::write(&platform.config_file, config).unwrap();
-
-        migrate_desktop_webui_dir_config(&platform).unwrap();
-
-        let migrated = std::fs::read_to_string(&platform.config_file).unwrap();
-        assert!(migrated.contains(&format!("webui_dir = \"{}\"", platform.webui_dir.display())));
-        assert!(!migrated.contains(&format!("webui_dir = \"{}\"", legacy_webui.display())));
-    }
-
-    #[test]
     fn error_monitor_launch_agent_contract_uses_helper_only_and_has_no_listener() {
         let plist = nexushub_core::probe_error_monitor::probe_error_monitor_launch_agent_plist(
             Path::new("/Users/test/Library/Application Support/NexusHub/bin/nexushub-webd"),
@@ -260,5 +119,126 @@ log_dir = "{}"
         assert!(!plist.contains("<string>serve</string>"));
         assert!(!plist.contains("15742"));
         assert!(!plist.contains("Sockets"));
+    }
+}
+
+pub(crate) fn retire_legacy_desktop_web_service(
+    platform: &nexushub_core::platform::PlatformPaths,
+) -> anyhow::Result<()> {
+    let pid_path = platform.data_dir.join("desktop-webui.pid");
+    if let Ok(text) = std::fs::read_to_string(&pid_path) {
+        let pid = text.trim().parse::<u32>()?;
+        anyhow::ensure!(pid > 1, "invalid legacy desktop WebUI PID");
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()?;
+        if output.status.success() {
+            let arguments = String::from_utf8(output.stdout)?;
+            anyhow::ensure!(
+                legacy_web_service_matches(arguments.trim(), platform),
+                "legacy PID identity mismatch; process preserved"
+            );
+            let status = std::process::Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "could not stop verified legacy desktop WebUI"
+            );
+        }
+        std::fs::remove_file(&pid_path)?;
+    }
+    for name in ["desktop-assets", "webui"] {
+        let path = platform.data_dir.join(name);
+        if audited_static_copy(&path)? {
+            std::fs::remove_dir_all(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn legacy_web_service_matches(
+    arguments: &str,
+    platform: &nexushub_core::platform::PlatformPaths,
+) -> bool {
+    arguments
+        == format!(
+            "{} --config {} serve --surface desktop-lan-webui",
+            platform.daemon_binary().display(),
+            platform.config_file.display()
+        )
+}
+
+fn audited_static_copy(path: &Path) -> std::io::Result<bool> {
+    if !path.try_exists()? {
+        return Ok(false);
+    }
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Ok(false);
+    }
+    let index = path.join("index.html");
+    let Ok(text) = std::fs::read_to_string(&index) else {
+        return Ok(false);
+    };
+    if !text.contains("<title>NexusHub</title>") {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if entry.file_type()?.is_symlink() {
+            return Ok(false);
+        }
+        if name == "index.html" && entry.file_type()?.is_file() {
+            continue;
+        }
+        if name != "assets" || !entry.file_type()?.is_dir() {
+            return Ok(false);
+        }
+        for asset in std::fs::read_dir(entry.path())? {
+            let asset = asset?;
+            if !asset.file_type()?.is_file() {
+                return Ok(false);
+            }
+            let name = asset.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("index-") || !(name.ends_with(".js") || name.ends_with(".css")) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    #[test]
+    fn desktop_retirement_preserves_unknown_files_and_monitor() {
+        let home = tempfile::tempdir().unwrap();
+        let platform = nexushub_core::platform::PlatformPaths::for_kind_with_home(
+            nexushub_core::platform::PlatformKind::Macos,
+            home.path(),
+        );
+        let assets = platform.data_dir.join("desktop-assets");
+        std::fs::create_dir_all(assets.join("assets")).unwrap();
+        std::fs::write(assets.join("index.html"), "<title>NexusHub</title>").unwrap();
+        std::fs::write(assets.join("assets/index-hash.js"), "generated").unwrap();
+        assert!(audited_static_copy(&assets).unwrap());
+        std::fs::write(assets.join("user.txt"), "preserve").unwrap();
+        assert!(!audited_static_copy(&assets).unwrap());
+        let command = format!(
+            "{} --config {} probe monitor-errors",
+            platform.daemon_binary().display(),
+            platform.config_file.display()
+        );
+        assert!(!legacy_web_service_matches(&command, &platform));
+        let command = format!(
+            "{} --config {} serve --surface desktop-lan-webui",
+            platform.daemon_binary().display(),
+            platform.config_file.display()
+        );
+        assert!(legacy_web_service_matches(&command, &platform));
+        retire_legacy_desktop_web_service(&platform).unwrap();
+        assert!(assets.join("user.txt").exists());
     }
 }

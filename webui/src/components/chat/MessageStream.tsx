@@ -1,5 +1,6 @@
-import { ChevronRight, ClipboardCheck, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { MarkdownContent } from "../common/MarkdownContent";
 import {
   blockKindLabel,
   conversationMessagePresentation,
@@ -14,7 +15,6 @@ import {
   isToolBlock,
   messageBlockText,
   roleLabel,
-  segmentInternalReferences,
   shouldRenderConversationMessage,
   toolBlockDetailText,
   toolBlockStatus,
@@ -54,8 +54,7 @@ export function MessageBlockView({
     );
   }
   if (isQuestionBlock(block)) {
-    if (activeQuestion) return <QuestionCell block={block} pendingSubmit={questionPending} />;
-    return <QuestionResultCell block={block} />;
+    return <QuestionCell block={block} />;
   }
   if (isQuestionResultBlock(block)) {
     return <QuestionResultCell block={block} />;
@@ -74,41 +73,8 @@ export function MessageBlockView({
         <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
       </div>
       <div className={presentation.bodyClassName}>
-        <MessageContent text={messageBlockText(block)} />
+        <MarkdownContent text={messageBlockText(block)} />
       </div>
-    </article>
-  );
-}
-
-export function ApprovalCard({ block, onDecision, pending }: { block: MessageBlock; onDecision: (decision: string) => void; pending: boolean }) {
-  return (
-    <article className="approval-card action-request">
-      <div className="message-meta">
-        <span>审批请求</span>
-        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
-      </div>
-      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
-      <div className="button-row">
-        <button className="primary-button" disabled={pending} onClick={() => onDecision("accept")}>
-          <ClipboardCheck size={17} />批准
-        </button>
-        <button className="danger-button soft" disabled={pending} onClick={() => onDecision("decline")}>
-          <X size={17} />拒绝
-        </button>
-      </div>
-    </article>
-  );
-}
-
-export function UnsupportedApprovalCard({ block }: { block: MessageBlock }) {
-  return (
-    <article className="approval-card action-request">
-      <div className="message-meta">
-        <span>审批请求</span>
-        <small>{block.call_id || block.item_id || block.turn_id || block.kind}</small>
-      </div>
-      <pre>{block.text || formatPayload(block.payload) || "Codex 正在等待权限审批。"}</pre>
-      <div className="muted-row">macOS App 当前不支持在此面板处理权限审批，请在 Codex 原生会话中处理。</div>
     </article>
   );
 }
@@ -132,36 +98,6 @@ function ToolBlockView({ block }: { block: MessageBlock }) {
   );
 }
 
-function MessageContent({ text }: { text: string }) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const segments = useMemo(() => segmentInternalReferences(text), [text]);
-  return (
-    <>
-      {segments.map((segment, index) => {
-        if (segment.type === "text") {
-          return <span key={`text-${index}`}>{segment.text}</span>;
-        }
-        return (
-          <button
-            key={`ref-${index}-${segment.text}`}
-            type="button"
-            className="internal-reference"
-            title="复制内部引用"
-            onClick={async () => {
-              const copyText = segment.copyText ?? segment.text;
-              await navigator.clipboard?.writeText(copyText);
-              setCopied(copyText);
-              window.setTimeout(() => setCopied((current) => current === copyText ? null : current), 1600);
-            }}
-          >
-            {segment.text}
-            {copied === (segment.copyText ?? segment.text) && <small>已复制</small>}
-          </button>
-        );
-      })}
-    </>
-  );
-}
 
 function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: MessageBlock; onShowHistory?: () => void; expanded: boolean }) {
   const kind = historyCollapseKind(block);
@@ -189,7 +125,7 @@ function ProposedPlanCell({ block, active, pending }: { block: MessageBlock; act
         <span>Proposed Plan</span>
         <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
       </div>
-      <div className="plan-body">{extractPlanText(block.text || "")}</div>
+      <div className="plan-body"><MarkdownContent text={extractPlanText(block.text || "")} /></div>
       {active && pending && <div className="action-inline-status">正在提交计划操作...</div>}
     </article>
   );
@@ -220,7 +156,7 @@ function QuestionResultCell({ block }: { block: MessageBlock }) {
   );
 }
 
-function QuestionCell({ block, pendingSubmit }: { block: MessageBlock; pendingSubmit: boolean }) {
+function QuestionCell({ block }: { block: MessageBlock }) {
   return (
     <article className="question-cell active-choice">
       <div className="message-meta">
@@ -230,23 +166,20 @@ function QuestionCell({ block, pendingSubmit }: { block: MessageBlock; pendingSu
       {block.questions.map((question) => (
         <div key={question.id} className="question-block">
           <strong>{question.question}</strong>
-          <div className="choice-grid">
+          <div className="choice-grid readonly-choices">
             {question.options.map((option, index) => (
-              <button
+              <div
                 key={`${question.id}-${option.label}`}
                 className="choice-option"
-                disabled
-                type="button"
               >
                 <span>{index + 1}</span>
                 <strong>{option.label}</strong>
                 {option.description && <small>{option.description}</small>}
-              </button>
+              </div>
             ))}
           </div>
         </div>
       ))}
-      {pendingSubmit && <div className="action-inline-status">正在提交选择...</div>}
     </article>
   );
 }

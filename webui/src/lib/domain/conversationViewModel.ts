@@ -1,5 +1,4 @@
 import type {
-  FollowUpQueueItem,
   MessageBlock,
   PendingElicitation,
   ThreadDetail,
@@ -252,22 +251,6 @@ export function currentActionKindFromBlocks(
   if (questionIndex === -1) return "plan";
   if (planIndex === -1) return "question";
   return questionIndex >= planIndex ? "question" : "plan";
-}
-
-export function followUpStatusLabel(status?: string | null): string {
-  if (status === "pending") return "待跟进";
-  if (status === "submitting") return "提交中";
-  if (status === "submitted") return "已提交";
-  if (status === "cancelled") return "已取消";
-  if (status === "error") return "失败";
-  return status || "未知";
-}
-
-export function followUpMessagePreview(item: Pick<FollowUpQueueItem, "message" | "error" | "status">): string {
-  const source = item.status === "error" && item.error ? item.error : item.message;
-  const compact = source.replace(/\s+/g, " ").trim();
-  if (compact.length <= 120) return compact || "空跟进";
-  return `${compact.slice(0, 120)}...`;
 }
 
 export function pendingFromBlocks(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined): PendingElicitation | null {

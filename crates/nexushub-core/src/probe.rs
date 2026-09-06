@@ -1930,7 +1930,7 @@ fn is_probe_stop_hook_system_message(text: &str) -> bool {
         || trimmed.starts_with("NexusHub Probe 检测到")
 }
 
-fn is_probe_machine_control_payload(text: &str) -> bool {
+pub fn is_probe_machine_control_payload(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() || !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
         return false;

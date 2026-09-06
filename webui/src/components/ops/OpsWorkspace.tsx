@@ -11,7 +11,6 @@ import {
 import { useState } from "react";
 import { JobList } from "../jobs/JobList";
 import { Metric, Panel } from "../common/Panel";
-import { DesktopWebUiPanel } from "./DesktopWebUiPanel";
 import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import {
@@ -28,7 +27,7 @@ import type {
   UpdateStatus
 } from "../../types";
 
-export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
+export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix; section?: "system" | "maintenance" }) {
   const { status, update, jobs } = useOpsQueries();
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
@@ -88,7 +87,7 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
 
   return (
     <div className="ops-grid">
-      <Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
+      {section === "system" && <><Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
         <div className="ops-status-overview">
           {opsView.systemMetrics.map((metric) => (
             <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} wide={metric.wide} />
@@ -109,7 +108,8 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           })}
         </div>
       </Panel>
-      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
+      </>}
+      {section === "maintenance" && capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
           <span className={`status-chip ${opsView.archivedCleanupStage.tone ? `tone-${opsView.archivedCleanupStage.tone}` : "tone-muted"}`}>{opsView.archivedCleanupStage.label}</span>
@@ -134,7 +134,7 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           )}
         </div>
       </Panel>}
-      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
+      {section === "maintenance" && capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 non-archived subagent/internal</span>
           <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
@@ -159,10 +159,9 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
           )}
         </div>
       </Panel>}
-      {capabilities.desktopWebuiControl && <DesktopWebUiPanel enabled={capabilities.desktopWebuiControl} />}
-      <Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
+      <details className="execution-history"><summary>执行记录</summary><Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
         <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
-      </Panel>
+      </Panel></details>
     </div>
   );
 }

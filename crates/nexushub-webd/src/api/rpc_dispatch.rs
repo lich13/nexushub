@@ -1,21 +1,17 @@
 use super::{
-    answer_approval, answer_elicitation, api_error, archive_delete_dry_run, archive_delete_execute,
-    archive_thread, cancel_followup, change_password, claude_code_overview, codex_config,
-    codex_goal_clear, codex_goal_get, codex_goal_pause, codex_goal_resume, codex_goal_set,
-    codex_models, codex_permission_profiles, create_thread, delete_upload_file, enqueue_followup,
-    fork_thread, get_probe_events, get_probe_logs_db_status, get_probe_settings, get_probe_status,
-    get_security, hidden_threads_delete_dry_run, hidden_threads_delete_execute, job_detail,
-    list_followups, list_jobs, list_plugins, list_providers, login, logout, me,
-    patch_probe_settings, patch_security, plan_accept, plan_revise, platform_overview,
-    public_settings, rename_thread, restore_thread, send_message, start_probe_action,
-    start_update_action, steer_thread, stop_thread, system_status, system_update_status,
-    system_version, thread_blocks, thread_detail, ApiResponse, GoalQuery, ProbeEventsQuery,
-    ProbeStatusQuery,
+    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread, change_password,
+    get_probe_events, get_probe_logs_db_status, get_probe_settings, get_probe_status, get_security,
+    grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
+    hidden_threads_delete_dry_run, hidden_threads_delete_execute, job_detail, list_jobs,
+    list_providers, login, logout, me, patch_probe_settings, patch_security, platform_overview,
+    public_settings, rename_thread, restore_thread, start_probe_action, start_update_action,
+    system_status, system_update_status, system_version, thread_blocks, thread_detail, ApiResponse,
+    GrokListQuery, ProbeEventsQuery, ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
-        rpc_nested_payload, rpc_nested_payload_or_empty, rpc_payload, rpc_payload_or_empty,
-        rpc_query_strings, rpc_required_string, rpc_string, rpc_wrapped_payload,
+        rpc_nested_payload, rpc_nested_payload_or_empty, rpc_payload, rpc_query_strings,
+        rpc_required_string, rpc_wrapped_payload,
     },
     rpc_surface::{is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command},
     state::AppState,
@@ -61,6 +57,41 @@ pub(super) async fn rpc_dispatch(
     }
 
     match command.as_str() {
+        rpc_commands::GROK_LIST => {
+            grok_list(
+                State(state),
+                headers,
+                axum::extract::Query(GrokListQuery {
+                    q: args
+                        .get("q")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    limit: args
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                }),
+            )
+            .await
+        }
+        rpc_commands::GROK_DETAIL => {
+            let id = rpc_required_string(&args, "id")?;
+            grok_detail(State(state), headers, axum::extract::Path(id)).await
+        }
+        rpc_commands::GROK_RENAME => {
+            grok_rename(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        rpc_commands::GROK_DELETE_PREVIEW => {
+            grok_delete_preview(
+                State(state),
+                headers,
+                Path(rpc_required_string(&args, "id")?),
+            )
+            .await
+        }
+        rpc_commands::GROK_DELETE_EXECUTE => {
+            grok_delete_execute(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
         rpc_commands::AUTH_PUBLIC_SETTINGS => public_settings(State(state)).await,
         rpc_commands::AUTH_LOGIN => {
             login(
@@ -86,11 +117,7 @@ pub(super) async fn rpc_dispatch(
             change_password(State(state), headers, Json(rpc_payload(&args)?)).await
         }
         rpc_commands::SYSTEM_PROVIDERS => list_providers(State(state), headers).await,
-        rpc_commands::SYSTEM_CLAUDE_CODE_OVERVIEW => {
-            claude_code_overview(State(state), headers).await
-        }
         rpc_commands::SYSTEM_PLATFORM => platform_overview(State(state), headers).await,
-        rpc_commands::SYSTEM_PLUGINS => list_plugins(State(state), headers).await,
         rpc_commands::PROBE_STATUS => {
             get_probe_status(
                 State(state),
@@ -204,69 +231,6 @@ pub(super) async fn rpc_dispatch(
             )
             .await
         }
-        rpc_commands::THREADS_CREATE => {
-            create_thread(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_SEND => {
-            send_message(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_STEER => {
-            steer_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_LIST => {
-            list_followups(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_ENQUEUE => {
-            enqueue_followup(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_FOLLOWUPS_CANCEL => {
-            cancel_followup(
-                State(state),
-                headers,
-                Path((
-                    rpc_required_string(&args, "threadId")?,
-                    rpc_required_string(&args, "followUpId")?,
-                )),
-            )
-            .await
-        }
-        rpc_commands::THREADS_STOP => {
-            stop_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Some(Json(rpc_nested_payload_or_empty(&args, "payload")?)),
-            )
-            .await
-        }
         rpc_commands::THREADS_ARCHIVE => {
             archive_thread(
                 State(state),
@@ -292,110 +256,8 @@ pub(super) async fn rpc_dispatch(
             )
             .await
         }
-        rpc_commands::THREADS_FORK => {
-            fork_thread(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_PLAN_ACCEPT => {
-            plan_accept(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_PLAN_REVISE => {
-            plan_revise(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_ELICITATION_ANSWER => {
-            answer_elicitation(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_payload(&args)?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_APPROVAL_ANSWER => {
-            answer_approval(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "threadId")?),
-                Json(rpc_nested_payload(&args, "payload")?),
-            )
-            .await
-        }
-        rpc_commands::UPLOADS_DELETE => {
-            delete_upload_file(
-                State(state),
-                headers,
-                Path(rpc_required_string(&args, "id")?),
-            )
-            .await
-        }
         rpc_commands::SYSTEM_STATUS => system_status(State(state), headers).await,
         rpc_commands::SYSTEM_VERSION => system_version(State(state), headers).await,
-        rpc_commands::SYSTEM_MODELS => codex_models(State(state), headers).await,
-        rpc_commands::SYSTEM_PERMISSION_PROFILES => {
-            codex_permission_profiles(State(state), headers, Query(rpc_payload_or_empty(&args)?))
-                .await
-        }
-        rpc_commands::SYSTEM_CODEX_CONFIG => {
-            codex_config(State(state), headers, Query(rpc_payload_or_empty(&args)?)).await
-        }
-        rpc_commands::THREADS_GOAL_GET => {
-            codex_goal_get(
-                State(state),
-                headers,
-                Query(GoalQuery {
-                    thread_id: rpc_string(&args, "threadId"),
-                }),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_SAVE => {
-            codex_goal_set(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_CLEAR => {
-            codex_goal_clear(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_PAUSE => {
-            codex_goal_pause(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
-        rpc_commands::THREADS_GOAL_RESUME => {
-            codex_goal_resume(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request", "payload"])?),
-            )
-            .await
-        }
         rpc_commands::JOBS_LIST => {
             list_jobs(
                 State(state),

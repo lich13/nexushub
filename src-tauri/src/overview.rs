@@ -247,14 +247,7 @@ fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::{
-        settings::{DesktopDeleteUploadRequest, DesktopUploadFile},
-        threads::DesktopSendMessageRequest,
-    };
-    use nexushub_core::{
-        services::{jobs as job_service, settings as settings_service},
-        uploads,
-    };
+    use nexushub_core::services::{jobs as job_service, settings as settings_service};
 
     fn test_desktop_state() -> (tempfile::TempDir, DesktopState) {
         let temp = tempfile::tempdir().unwrap();
@@ -365,138 +358,58 @@ mod tests {
     }
 
     #[test]
-    fn desktop_typed_uploads_store_under_local_codex_home() {
-        let (_temp, state) = test_desktop_state();
-
-        let outcome = crate::services::settings::store_uploads_with_state(
-            &state,
-            vec![DesktopUploadFile {
-                name: "note.md".to_string(),
-                mime: "text/markdown".to_string(),
-                bytes: b"# hello".to_vec(),
-            }],
-        )
-        .unwrap();
-
-        let id = outcome.files[0].id.clone();
-        let root = uploads::upload_root(&state.resolved_codex_paths().home);
-        assert!(root.join(&id).join("meta.json").is_file());
-
-        let deleted = crate::services::settings::test_delete_upload_with_state(
-            &state,
-            DesktopDeleteUploadRequest { id },
-        )
-        .unwrap();
-        assert!(deleted.ok);
-        assert!(deleted.deleted);
+    fn desktop_typed_uploads_store_under_local_codex_home_retired() {
+        let source = [
+            include_str!("commands/threads.rs"),
+            include_str!("services/threads.rs"),
+            include_str!("commands/settings.rs"),
+            include_str!("services/settings.rs"),
+        ]
+        .join("\n");
+        for forbidden in ["store_uploads_with_state", "DesktopUploadFile"] {
+            assert!(
+                !source.contains(forbidden),
+                "retired write chain remains: {forbidden}"
+            );
+        }
     }
 
     #[test]
-    fn desktop_typed_uploads_use_shared_batch_validation() {
-        let (_temp, state) = test_desktop_state();
-
-        let empty_error = crate::services::settings::store_uploads_with_state(&state, vec![])
-            .unwrap_err()
-            .to_string();
-        assert!(empty_error.contains("没有可上传的文件"));
-
-        let too_many = (0..6)
-            .map(|index| DesktopUploadFile {
-                name: format!("note-{index}.md"),
-                mime: "text/markdown".to_string(),
-                bytes: b"# hello".to_vec(),
-            })
-            .collect();
-        let too_many_error = crate::services::settings::store_uploads_with_state(&state, too_many)
-            .unwrap_err()
-            .to_string();
-        assert!(too_many_error.contains("一次最多上传 5 个文件"));
+    fn desktop_typed_uploads_use_shared_batch_validation_retired() {
+        let source = [
+            include_str!("commands/threads.rs"),
+            include_str!("services/threads.rs"),
+            include_str!("commands/settings.rs"),
+            include_str!("services/settings.rs"),
+        ]
+        .join("\n");
+        for forbidden in ["store_to_root", "DesktopDeleteUploadRequest"] {
+            assert!(
+                !source.contains(forbidden),
+                "retired write chain remains: {forbidden}"
+            );
+        }
     }
 
     #[test]
-    fn desktop_send_message_uses_shared_job_service_and_attachment_context() {
-        let (_temp, state) = test_desktop_state();
-        let outcome = crate::services::settings::store_uploads_with_state(
-            &state,
-            vec![DesktopUploadFile {
-                name: "plan.md".to_string(),
-                mime: "text/markdown".to_string(),
-                bytes: b"# Plan\nShip parity".to_vec(),
-            }],
-        )
-        .unwrap();
-        let cwd = state.config().paths.data_dir.join("custom-cwd");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let spec = crate::services::threads::codex_job_spec_for_request(
-            &state,
-            DesktopSendMessageRequest {
-                message: "请读取附件".to_string(),
-                attachments: vec![outcome.files[0].id.clone()],
-                model: Some("gpt-5.5".to_string()),
-                service_tier: Some("priority".to_string()),
-                reasoning_effort: Some("xhigh".to_string()),
-                cwd: Some(cwd.display().to_string()),
-                permission_profile: Some("danger-full-access".to_string()),
-                network_access: Some(true),
-                collaboration_mode: Some("async".to_string()),
-                ..DesktopSendMessageRequest::default()
-            },
-            job_service::CodexActionKind::Exec,
-        )
-        .unwrap();
-        assert_eq!(spec.title, "Codex new thread");
-        assert_eq!(spec.thread_id, None);
-        assert_eq!(spec.cwd, cwd);
-        assert!(spec.prompt.contains("请读取附件"), "{}", spec.prompt);
-        assert!(spec.prompt.contains("Ship parity"), "{}", spec.prompt);
-        assert!(
-            spec.args.windows(2).any(|pair| pair == ["-m", "gpt-5.5"]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "model_reasoning_effort=\"xhigh\""]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "model_service_tier=\"priority\""]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "sandbox_mode=\"danger-full-access\""]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "approval_policy=\"never\""]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "network_access=\"enabled\""]),
-            "{:?}",
-            spec.args
-        );
-        assert!(
-            spec.args
-                .windows(2)
-                .any(|pair| pair == ["-c", "features.collaboration_modes=true"]),
-            "{:?}",
-            spec.args
-        );
+    fn desktop_send_message_uses_shared_job_service_and_attachment_context_retired() {
+        let source = [
+            include_str!("commands/threads.rs"),
+            include_str!("services/threads.rs"),
+            include_str!("commands/settings.rs"),
+            include_str!("services/settings.rs"),
+        ]
+        .join("\n");
+        for forbidden in [
+            "codex_job_spec_for_request",
+            "start_codex_job",
+            "send_message_with_state",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "retired write chain remains: {forbidden}"
+            );
+        }
     }
 
     #[test]

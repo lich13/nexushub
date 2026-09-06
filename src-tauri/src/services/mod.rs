@@ -1,6 +1,4 @@
 pub(crate) mod actions;
-pub(crate) mod desktop_webui;
-pub(crate) mod goals;
 pub(crate) mod jobs;
 pub(crate) mod probe;
 pub(crate) mod settings;

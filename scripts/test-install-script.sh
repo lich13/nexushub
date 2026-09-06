@@ -185,18 +185,28 @@ required_top_level = [
     "capabilitiesByHostSurface",
     "visual",
     "actions",
+    "retiredActions",
     "dtoCatalog",
 ]
 if schema.get("$id") != "https://github.com/lich13/nexushub/contracts/nexushub-contract.schema.json":
     raise SystemExit("contract schema must have the canonical GitHub $id")
 if schema.get("required") != required_top_level:
     raise SystemExit("contract schema required keys must match the registry top-level shape")
-if list(schema.get("properties", {}).keys()) != required_top_level:
+if list(schema.get("properties", {}).keys()) != [
+    "retiredActions",
+    "schemaVersion",
+    "hostSurfaces",
+    "capabilities",
+    "capabilitiesByHostSurface",
+    "visual",
+    "actions",
+    "dtoCatalog",
+]:
     raise SystemExit("contract schema properties must stay in the canonical order")
 
 host_surfaces = registry.get("hostSurfaces", [])
-if host_surfaces != ["linux_server_webui", "desktop_embedded_tauri", "desktop_lan_webui"]:
-    raise SystemExit("contract registry host surfaces drifted from the accepted three-surface model")
+if host_surfaces != ["linux_server_webui", "desktop_embedded_tauri"]:
+    raise SystemExit("contract registry host surfaces drifted from the accepted two-surface model")
 for surface in host_surfaces:
     if surface not in registry.get("capabilitiesByHostSurface", {}):
         raise SystemExit(f"contract registry missing capability matrix for {surface}")
@@ -282,12 +292,12 @@ for needle in [
 print("contract schema and cc-switch architecture audit guards: ok")
 PY
 
-checklist_output="$(node "${CONTRACT_CHECKLIST}" threads.send)"
+checklist_output="$(node "${CONTRACT_CHECKLIST}" grok.rename)"
 for needle in \
   "NexusHub contract-driven next action checklist" \
   "scope: shared" \
-  "requestDto=ThreadsSendRequest" \
-  "responseDto=ThreadsSendResponse" \
+  "requestDto=GrokRenameRequest" \
+  "responseDto=GrokMutationResponse" \
   "core use-case/DTO" \
   "Linux RPC" \
   "Tauri command" \
@@ -595,9 +605,11 @@ kind = subprocess.check_output(["file", str(helper)], text=True)
 if "Mach-O" in kind or "ELF" in kind:
     raise SystemExit("src-tauri/resources/nexushub-webd must not be a binary in git")
 config = tauri_config.read_text()
-for needle in ['"resources/nexushub-webd": "nexushub-webd"', '"../webui/dist": "webui"', '"frontendDist": "../webui/dist"']:
+for needle in ['"resources/nexushub-webd": "nexushub-webd"', '"frontendDist": "../webui/dist"']:
     if needle not in config:
         raise SystemExit(f"tauri.conf.json missing {needle}")
+if '"../webui/dist": "webui"' in config:
+    raise SystemExit("tauri.conf.json must not bundle a retired desktop webui asset directory")
 for script in [mac_package, linux_package]:
     text = script.read_text()
     for needle in ["cargo build --release --package nexushub-webd", 'HELPER_RESOURCE="${TAURI_DIR}/resources/nexushub-webd"', "restore_helper_resource"]:

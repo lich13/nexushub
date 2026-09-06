@@ -48,8 +48,7 @@ describe("NexusHub runtime transport", () => {
       "buildRuntimeApiPath",
       "createRuntimeThreadEventSource",
       "runtimeContext",
-      "runtimeRpc",
-      "uploadRuntimeFiles"
+      "runtimeRpc"
     ]);
     expect(runtimeSource).not.toContain("selectRuntimeFallback");
     expect(runtimeSource).not.toContain("runtimeValue");
@@ -68,7 +67,6 @@ describe("NexusHub runtime transport", () => {
       "createRuntimeThreadEventSource",
       "runtimeContext",
       "runtimeRpc",
-      "uploadRuntimeFiles",
     ]);
   });
 
@@ -113,36 +111,6 @@ describe("NexusHub runtime transport", () => {
       command: "updates.check",
       args: undefined
     });
-  });
-
-  test("desktop upload helper delegates to native upload command", async () => {
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { uploadRuntimeFiles } = await loadRuntime(true);
-
-    const result = await uploadRuntimeFiles([new File(["#"], "note.md", { type: "text/markdown" })]);
-
-    expect(result).toEqual({
-      command: "uploadFiles",
-      args: { files: [{ name: "note.md", mime: "text/markdown", bytes: [35] }] }
-    });
-  });
-
-  test("web upload transport posts FormData to the RPC upload endpoint", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ files: [] }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    const { uploadRuntimeFiles } = await loadRuntime();
-
-    await uploadRuntimeFiles([new File(["# Plan"], "plan.md", { type: "text/markdown" })], "csrf-token");
-
-    const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { headers: Headers; body: FormData }];
-    expect(path).toBe("/api/rpc/uploadFiles");
-    expect(options.method).toBe("POST");
-    expect(options.body).toBeInstanceOf(FormData);
-    expect(options.headers.get("content-type")).toBeNull();
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
   });
 
   test("web thread event transport opens EventSource through the runtime RPC stream", async () => {

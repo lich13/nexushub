@@ -5,18 +5,14 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use nexushub_core::providers::ProviderRegistry;
 #[cfg(test)]
 use nexushub_core::services::updates::{self as update_service, UpdateAction};
-use nexushub_core::{
-    claude_code::{self, ClaudePaths},
-    local,
-    providers::ProviderRegistry,
-};
 use serde::Serialize;
 use serde_json::json;
 
 mod cleanup;
-mod goals;
+mod grok;
 mod jobs;
 mod payload;
 mod probe;
@@ -25,7 +21,6 @@ mod rpc_dispatch;
 mod security;
 mod system;
 mod threads;
-mod uploads;
 mod web_auth;
 
 #[cfg(test)]
@@ -41,9 +36,8 @@ pub(crate) use cleanup::{
     archive_delete_dry_run, archive_delete_execute, hidden_threads_delete_dry_run,
     hidden_threads_delete_execute,
 };
-pub(crate) use goals::{
-    codex_goal_clear, codex_goal_get, codex_goal_pause, codex_goal_resume, codex_goal_set,
-    GoalQuery,
+pub(crate) use grok::{
+    grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename, GrokListQuery,
 };
 pub(crate) use jobs::{job_detail, list_jobs};
 #[cfg(test)]
@@ -56,18 +50,14 @@ pub(crate) use probe::{
 pub(crate) use routes::router;
 pub(crate) use security::{change_password, get_security, patch_security, public_settings};
 pub(crate) use system::{
-    codex_config, codex_models, codex_permission_profiles, http_update_platform,
-    start_update_action, system_status, system_update_status, system_version,
+    http_update_platform, start_update_action, system_status, system_update_status, system_version,
 };
 pub(crate) use threads::{
-    answer_approval, answer_elicitation, archive_thread, cancel_followup, create_thread,
-    enqueue_followup, fork_thread, list_followups, list_threads, plan_accept, plan_revise,
-    rename_thread, restore_thread, send_message, steer_thread, stop_thread, thread_blocks,
-    thread_detail, thread_events,
+    archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,
+    thread_events,
 };
 #[cfg(test)]
 pub(crate) use threads::{block_changed, seed_thread_event_blocks, thread_event_block_key};
-pub(crate) use uploads::{delete_upload_file, upload_files};
 pub(crate) use web_auth::{login, logout, me};
 #[cfg(test)]
 pub(crate) use web_auth::{turnstile_login_action, LoginRequest, TurnstileLoginAction};
@@ -93,22 +83,9 @@ async fn list_providers(State(state): State<AppState>, headers: HeaderMap) -> Ap
     ok(ProviderRegistry::default().list())
 }
 
-async fn claude_code_overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let paths = std::env::var_os("NEXUSHUB_CLAUDE_HOME")
-        .map(ClaudePaths::new)
-        .unwrap_or_else(ClaudePaths::default_for_user);
-    ok(claude_code::claude_overview(&paths)?)
-}
-
 async fn platform_overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(state.platform().clone())
-}
-
-async fn list_plugins(State(state): State<AppState>, headers: HeaderMap) -> ApiResponse {
-    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(local::local_plugin_catalog())
 }
 
 fn ok<T: Serialize>(value: T) -> ApiResponse {

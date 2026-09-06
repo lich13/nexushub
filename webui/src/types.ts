@@ -1,5 +1,28 @@
 export type ThreadStatus = "Recent" | "Running" | "ReplyNeeded" | "Recoverable" | "Archived";
 
+export type GrokSessionSummary = {
+  id: string;
+  title: string;
+  cwd: string;
+  path: string;
+  updatedAt?: string | null;
+  messageCount: number;
+  lastMessage?: string | null;
+  status: string;
+};
+
+export type GrokHistoryEvent = {
+  timestamp?: string | null;
+  kind: string;
+  text?: string | null;
+  method?: string | null;
+};
+
+export type GrokSessionDetail = { summary: GrokSessionSummary; events: GrokHistoryEvent[] };
+export type GrokDeletePreview = { id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
+export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint: string };
+export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number };
+
 export type SessionUser = {
   id?: string;
   username: string;
@@ -150,25 +173,7 @@ export type UploadOutcome = {
   files: UploadRecord[];
 };
 
-export type FollowUpQueueItem = {
-  id: string;
-  thread_id: string;
-  status: "pending" | "submitting" | "submitted" | "cancelled" | "error" | string;
-  message: string;
-  options?: unknown;
-  created_at?: number | null;
-  updated_at?: number | null;
-  submitted_at?: number | null;
-  cancelled_at?: number | null;
-  result?: unknown;
-  error?: string | null;
-};
-
-export type FollowUpQueueState = {
-  items: FollowUpQueueItem[];
-};
-
-export type HostSurface = "linux_server_webui" | "desktop_embedded_tauri" | "desktop_lan_webui";
+export type HostSurface = "linux_server_webui" | "desktop_embedded_tauri";
 
 export type SystemCapabilities = {
   threads: boolean;
@@ -191,7 +196,6 @@ export type SystemCapabilities = {
   thread_cleanup?: boolean;
   probe_log_maintenance?: boolean;
   thread_archive_actions?: boolean;
-  desktop_webui_control?: boolean;
 };
 
 export type SystemStatus = {
@@ -249,41 +253,6 @@ export type SecuritySettings = {
   session_ttl_seconds: number;
   turnstile_expected_hostname?: string | null;
   turnstile_expected_action?: string | null;
-};
-
-export type DesktopWebUiSettings = {
-  enabled: boolean;
-  listen: string;
-  username: string;
-  sessionTtlSeconds: number;
-  cookieSecure: boolean;
-  publicBaseUrl?: string | null;
-  turnstileEnabled: boolean;
-  passwordConfigured: boolean;
-};
-
-export type DesktopWebUiSettingsPatch = {
-  enabled: boolean;
-  listen: string;
-  username: string;
-  sessionTtlSeconds: number;
-  cookieSecure: boolean;
-  publicBaseUrl?: string | null;
-};
-
-export type DesktopWebUiPasswordReset = {
-  username: string;
-  password: string;
-};
-
-export type DesktopWebUiStatus = {
-  configured: boolean;
-  enabled: boolean;
-  running: boolean;
-  pid?: number | null;
-  listen: string;
-  url: string;
-  message?: string | null;
 };
 
 export type JobRecord = {
@@ -360,83 +329,12 @@ export type OptionalResult<T> = {
 };
 
 export type AgentProviderInfo = {
-  id: "codex" | "claude_code" | "cursor" | "gemini" | string;
+  id: "codex" | "grok_build" | "cursor" | "gemini" | string;
   label: string;
   status: "ready" | "preview" | "planned" | string;
   description?: string;
   capabilities?: string[];
   safety?: string;
-};
-
-export type ClaudeSessionSummary = {
-  id: string;
-  title?: string | null;
-  updated_at?: string | null;
-  message_count: number;
-  file?: string | null;
-  last_message_preview?: string | null;
-};
-
-export type ClaudeProject = {
-  id: string;
-  display_name: string;
-  path_hint?: string | null;
-  session_count: number;
-  sessions: ClaudeSessionSummary[];
-};
-
-export type ClaudeRecentSession = ClaudeSessionSummary & {
-  project_id: string;
-  project_display_name: string;
-};
-
-export type ClaudeMcpSummary = {
-  config_files: string[];
-  server_count: number;
-  servers: Array<{
-    name: string;
-    command?: string | null;
-    transport?: string | null;
-    args_count: number;
-    env_keys: string[];
-    has_sensitive_env: boolean;
-    raw_config?: unknown;
-  }>;
-};
-
-export type ClaudeInstallationSummary = {
-  claude_home: string;
-  settings_file: string;
-  settings_exists: boolean;
-  settings_local_file: string;
-  settings_local_exists: boolean;
-  user_config_file?: string | null;
-  user_config_exists: boolean;
-  executable_candidates: string[];
-  version_hint?: string | null;
-  health_hints: string[];
-};
-
-export type ClaudeCacheLogStatus = {
-  cache_dir: string;
-  cache_exists: boolean;
-  cache_file_count: number;
-  cache_total_bytes: number;
-  log_dir: string;
-  log_exists: boolean;
-  log_file_count: number;
-  log_total_bytes: number;
-};
-
-export type ClaudeOverview = {
-  home: string;
-  settings_exists: boolean;
-  settings_preview?: unknown;
-  projects: ClaudeProject[];
-  recent_sessions?: ClaudeRecentSession[];
-  mcp?: ClaudeMcpSummary;
-  installation?: ClaudeInstallationSummary;
-  cache_status?: ClaudeCacheLogStatus;
 };
 
 export type PlatformOverview = {
@@ -691,23 +589,4 @@ export type CodexConfig = {
   sandbox_mode?: string | null;
   network_access?: boolean | null;
   collaboration_mode?: string | null;
-};
-
-export type CodexGoalStatus = "idle" | "active" | "paused" | "cleared" | "blocked" | "complete" | "completed" | "missing_thread" | "unavailable" | string;
-
-export type CodexGoal = {
-  available: boolean;
-  enabled: boolean;
-  thread_id?: string | null;
-  objective: string | null;
-  token_budget: number | null;
-  status: CodexGoalStatus;
-  completed_at?: number | null;
-  blocked_reason?: string | null;
-  raw?: unknown;
-};
-
-export type CodexGoalSaveInput = {
-  objective: string;
-  token_budget?: number | null;
 };

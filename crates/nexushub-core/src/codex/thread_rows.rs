@@ -287,7 +287,24 @@ pub(super) struct LocalThreadRow {
     pub(super) first_user_message: Option<String>,
 }
 
+fn thread_title_expression(columns: &HashSet<String>) -> String {
+    match (columns.contains("name"), columns.contains("title")) {
+        (true, true) => "COALESCE(NULLIF(TRIM(name), ''), title)",
+        (true, false) => "name",
+        (false, true) => "title",
+        (false, false) => "NULL",
+    }
+    .to_string()
+}
+
 pub(super) fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>> {
+    read_thread_rows_matching(paths, None)
+}
+
+pub(super) fn read_thread_rows_matching(
+    paths: &CodexPaths,
+    id: Option<&str>,
+) -> Result<Vec<LocalThreadRow>> {
     let db = paths.state_db();
     if !db.exists() {
         return Ok(Vec::new());
@@ -306,9 +323,7 @@ pub(super) fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>
     }
 
     let columns = table_columns(&conn, "threads")?;
-    let title_expr = first_existing(&columns, &["title", "name"])
-        .unwrap_or("NULL")
-        .to_string();
+    let title_expr = thread_title_expression(&columns);
     let updated_expr = first_existing(&columns, &["updated_at", "last_activity_at", "created_at"])
         .unwrap_or("NULL")
         .to_string();
@@ -356,10 +371,10 @@ pub(super) fn read_thread_rows(paths: &CodexPaths) -> Result<Vec<LocalThreadRow>
         .unwrap_or("NULL")
         .to_string();
     let sql = format!(
-        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {first_user_message_expr}, {preview_expr} FROM threads"
+        "SELECT id, {title_expr}, {updated_expr}, {archived_expr}, {archived_flag_expr}, {rollout_expr}, {cwd_expr}, {model_expr}, {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, {agent_nickname_expr}, {agent_role_expr}, {has_user_event_expr}, {first_user_message_expr}, {preview_expr} FROM threads WHERE (?1 IS NULL OR id = ?1)"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([id], |row| {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(1).ok();
         let updated_raw: Option<ValueCell> = row.get(2).ok();

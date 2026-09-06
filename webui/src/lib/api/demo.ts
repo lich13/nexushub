@@ -3,13 +3,8 @@ import type {
   ArchiveDeletePlan,
   ArchiveDeleteResult,
   BridgeActionResult,
-  ClaudeOverview,
   CodexConfig,
-  CodexGoal,
-  CodexGoalSaveInput,
   CodexModel,
-  FollowUpQueueItem,
-  FollowUpQueueState,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
@@ -144,76 +139,16 @@ export function demoProviders(): AgentProviderInfo[] {
       safety: "保留官方数据结构，不修改 Codex DB schema"
     },
     {
-      id: "claude_code",
-      label: "Claude Code",
-      status: "preview",
-      description: "只读发现 ~/.claude 项目、会话和配置摘要。",
-      capabilities: ["projects", "sessions", "settings_read"],
-      safety: "不写入 ~/.claude，不启动或恢复会话"
+      id: "grok_build",
+      label: "Grok Build",
+      status: "ready",
+      description: "只读浏览 Grok Build 会话、消息和工具活动。",
+      capabilities: ["sessions", "messages", "tools", "rename", "delete_local_session"],
+      safety: "改名走原生协议，删除仅限本地 session 目录"
     },
     { id: "cursor", label: "Cursor CLI", status: "planned", capabilities: [], safety: "未开放命令执行" },
     { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
   ];
-}
-
-export function demoClaudeCodeOverview(): OptionalResult<ClaudeOverview> {
-  const now = new Date().toISOString();
-  const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
-  return {
-    available: true,
-    data: {
-      home: "~/.claude",
-      settings_exists: true,
-      settings_preview: {
-        permissions: { allow: ["Read"], deny: ["Write"] },
-        mcpServers: {
-          github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: { GITHUB_TOKEN: "[redacted]" } }
-        },
-        apiKey: "[redacted]"
-      },
-      projects: [{
-        id: "-Users-gosu-demo",
-        display_name: "/Users/gosu/demo",
-        path_hint: "/Users/gosu/demo",
-        session_count: 2,
-        sessions: [
-          { id: "session-a", title: "NexusHub provider shell", updated_at: now, message_count: 18, last_message_preview: "Provider summary ready" },
-          { id: "session-b", title: "只读配置审计", updated_at: oneHourAgo, message_count: 7, last_message_preview: "Settings redacted" }
-        ]
-      }],
-      recent_sessions: [
-        { project_id: "-Users-gosu-demo", project_display_name: "/Users/gosu/demo", id: "session-a", title: "NexusHub provider shell", updated_at: now, message_count: 18, last_message_preview: "Provider summary ready" },
-        { project_id: "-Users-gosu-demo", project_display_name: "/Users/gosu/demo", id: "session-b", title: "只读配置审计", updated_at: oneHourAgo, message_count: 7, last_message_preview: "Settings redacted" }
-      ],
-      mcp: {
-        config_files: ["~/.claude/settings.json"],
-        server_count: 1,
-        servers: [{ name: "github", command: "npx", transport: null, args_count: 2, env_keys: ["GITHUB_TOKEN"], has_sensitive_env: true }]
-      },
-      installation: {
-        claude_home: "~/.claude",
-        settings_file: "~/.claude/settings.json",
-        settings_exists: true,
-        settings_local_file: "~/.claude/settings.local.json",
-        settings_local_exists: false,
-        user_config_file: "~/.claude.json",
-        user_config_exists: true,
-        executable_candidates: ["/usr/local/bin/claude"],
-        version_hint: "demo",
-        health_hints: []
-      },
-      cache_status: {
-        cache_dir: "~/.claude/cache",
-        cache_exists: true,
-        cache_file_count: 3,
-        cache_total_bytes: 4096,
-        log_dir: "~/.claude/logs",
-        log_exists: true,
-        log_file_count: 2,
-        log_total_bytes: 2048
-      }
-    }
-  };
 }
 
 export function demoPlugins(): PluginInfo[] {
@@ -235,13 +170,12 @@ export function demoPlugins(): PluginInfo[] {
       invocation_template: "@Probe "
     },
     {
-      id: "claude_code",
-      label: "Claude Code",
-      status: "preview",
+      id: "grok_build",
+      label: "Grok Build",
+      status: "ready",
       kind: "builtin",
-      description: "Claude Code 项目、会话和 MCP 只读预览",
-      unavailable_reason: "当前仅支持只读预览，暂不支持从 Web 端调用 Claude Code",
-      invocation_template: "@Claude Code "
+      description: "Grok Build 会话、消息和工具活动只读浏览",
+      invocation_template: "@Grok Build "
     },
     {
       id: "system_ops",
@@ -512,53 +446,6 @@ export function demoUpdateJobId(action: "check" | "install" | "prune"): { job_id
   return { job_id: `update-${action}-demo` };
 }
 
-export function demoCodexGoal(threadId: string): CodexGoal {
-  return {
-    available: true,
-    enabled: threadId === "019e95a0-demo",
-    objective: threadId === "019e95a0-demo" ? "修复 Plan Mode 右栏交互" : null,
-    token_budget: threadId === "019e95a0-demo" ? 18000 : null,
-    status: threadId === "019e95a0-demo" ? "active" : "idle",
-    raw: { source: "demo", thread_id: threadId }
-  };
-}
-
-export function demoSavedCodexGoal(threadId: string, goal: CodexGoalSaveInput): CodexGoal {
-  return {
-    ...demoCodexGoal(threadId),
-    enabled: true,
-    objective: goal.objective.trim(),
-    token_budget: goal.token_budget ?? null,
-    status: "active"
-  };
-}
-
-export function demoClearedCodexGoal(threadId: string): CodexGoal {
-  return {
-    ...demoCodexGoal(threadId),
-    enabled: false,
-    objective: null,
-    token_budget: null,
-    status: "cleared"
-  };
-}
-
-export function demoPausedCodexGoal(threadId: string): CodexGoal {
-  return {
-    ...demoCodexGoal(threadId),
-    enabled: true,
-    status: "paused"
-  };
-}
-
-export function demoResumedCodexGoal(threadId: string): CodexGoal {
-  return {
-    ...demoCodexGoal(threadId),
-    enabled: true,
-    status: "active"
-  };
-}
-
 export function demoThreads(status: string, q: string): ThreadSummary[] {
   const threads: ThreadSummary[] = [
     { id: "019e8c1f-demo", title: "活动库审阅链路", status: "Running", message_count: 18, latest_message: "正在逐项审计脚本输出。", updated_at: new Date().toISOString() },
@@ -652,21 +539,6 @@ export function demoBridgeActionResult(threadId: string): BridgeActionResult {
 
 export function demoCreatedThreadResult(): BridgeActionResult {
   return demoBridgeActionResult("019e-new-demo");
-}
-
-export function demoFollowUps(): FollowUpQueueState {
-  return { items: [] };
-}
-
-export function demoEnqueuedFollowUp(threadId: string, payload: { message: string; [key: string]: unknown }): FollowUpQueueItem {
-  return {
-    id: `follow-up-${Date.now()}`,
-    thread_id: threadId,
-    status: "pending",
-    message: payload.message,
-    options: payload,
-    created_at: Math.floor(Date.now() / 1000)
-  };
 }
 
 export function demoArchiveDeletePlan(): ArchiveDeletePlan {

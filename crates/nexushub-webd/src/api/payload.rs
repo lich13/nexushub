@@ -2,10 +2,9 @@ use super::{api_error, ApiError};
 use crate::rpc_payload::{
     rpc_nested_payload as parse_rpc_nested_payload,
     rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
-    rpc_payload as parse_rpc_payload, rpc_payload_or_empty as parse_rpc_payload_or_empty,
-    rpc_query_strings as parse_rpc_query_strings, rpc_required_string as parse_rpc_required_string,
-    rpc_string as parse_rpc_string, rpc_wrapped_payload as parse_rpc_wrapped_payload,
-    RpcPayloadError,
+    rpc_payload as parse_rpc_payload, rpc_query_strings as parse_rpc_query_strings,
+    rpc_required_string as parse_rpc_required_string,
+    rpc_wrapped_payload as parse_rpc_wrapped_payload, RpcPayloadError,
 };
 use axum::http::StatusCode;
 use serde::de::DeserializeOwned;
@@ -14,10 +13,6 @@ use std::collections::HashMap;
 
 pub(super) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
     api_rpc_payload(parse_rpc_payload(value))
-}
-
-pub(super) fn rpc_payload_or_empty<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_payload_or_empty(value))
 }
 
 pub(super) fn rpc_nested_payload<T: DeserializeOwned>(
@@ -53,10 +48,6 @@ pub(super) fn rpc_nested_payload_or_empty<T: DeserializeOwned>(
 
 pub(super) fn rpc_required_string(value: &Value, key: &str) -> Result<String, ApiError> {
     api_rpc_payload(parse_rpc_required_string(value, key))
-}
-
-pub(super) fn rpc_string(value: &Value, key: &str) -> Option<String> {
-    parse_rpc_string(value, key)
 }
 
 pub(super) fn rpc_query_strings(value: &Value, keys: &[&str]) -> HashMap<String, String> {
