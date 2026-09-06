@@ -7,12 +7,10 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use nexushub_core::codex::{
-    CodexGoalClient, MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary,
-};
+use nexushub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary};
 use nexushub_core::{
     config::Config,
-    db::{JobRecord, NewSession, PanelDb, ThreadFollowUp},
+    db::{JobRecord, NewSession, PanelDb},
     platform::{PlatformKind, PlatformPaths},
     services::{
         app_server_threads::{
@@ -20,22 +18,16 @@ use nexushub_core::{
             app_server_thread_summaries, apply_app_server_thread_detail, archived_filter,
             merge_thread_summaries, thread_title,
         },
-        goals::normalize_goal_response_value,
-        jobs as job_service,
-        jobs::ThreadMessageRequest,
         probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
         threads as thread_service,
     },
-    uploads::{PreparedAttachment, UploadKind},
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashSet;
-use std::time::Duration;
 use std::{
     collections::HashMap,
     env, fs,
-    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -168,80 +160,6 @@ fn authenticated_test_state_with_config_file(
     )
     .unwrap();
     (state, session_token, csrf_token, dir, config_path)
-}
-
-fn authenticated_test_state_with_goal_client(
-    script: &str,
-) -> (crate::state::AppState, String, String, PathBuf) {
-    let (state, session_token, csrf_token) = authenticated_test_state();
-    let home = temp_test_dir("nexushub-goal-client");
-    fs::create_dir_all(&home).unwrap();
-    mark_codex_home(&home);
-    let executable = home.join("codex");
-    fs::write(&executable, script).unwrap();
-    let mut permissions = fs::metadata(&executable).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&executable, permissions).unwrap();
-    let mut config = state.config();
-    config.codex.home = home.clone();
-    config.codex.workspace = home.clone();
-    let goal_client = CodexGoalClient::with_candidates(vec![executable], Duration::from_secs(10));
-    let state = crate::state::AppState::new_with_goal_client(config, state.db.clone(), goal_client);
-    (state, session_token, csrf_token, home)
-}
-
-fn stateful_goal_script() -> &'static str {
-    r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.2'
-  exit 0
-fi
-status_file="$CODEX_HOME/fake-goal-status"
-objective_file="$CODEX_HOME/fake-goal-objective"
-budget_file="$CODEX_HOME/fake-goal-budget"
-emit_goal() {
-  response_id="$1"
-  if [ ! -f "$status_file" ]; then
-    echo "{\"id\":$response_id,\"result\":{\"goal\":null}}"
-    return
-  fi
-  status=$(cat "$status_file")
-  objective=$(cat "$objective_file")
-  budget=$(cat "$budget_file")
-  echo "{\"id\":$response_id,\"result\":{\"goal\":{\"threadId\":\"thread-a\",\"objective\":\"$objective\",\"status\":\"$status\",\"tokenBudget\":$budget,\"tokensUsed\":10,\"timeUsedSeconds\":2,\"createdAt\":100,\"updatedAt\":200}}}"
-}
-while IFS= read -r line; do
-  response_id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      emit_goal "$response_id"
-      ;;
-    *'"method":"thread/goal/set"'*)
-      case "$line" in
-        *'"status":"paused"'*) echo 'paused' > "$status_file" ;;
-        *'"status":"active"'*) echo 'active' > "$status_file" ;;
-        *)
-          if [ ! -f "$status_file" ]; then echo 'active' > "$status_file"; fi
-          objective=$(printf '%s' "$line" | sed -n 's/.*"objective":"\([^"]*\)".*/\1/p')
-          budget=$(printf '%s' "$line" | sed -n 's/.*"tokenBudget":\([0-9][0-9]*\).*/\1/p')
-          if [ -n "$objective" ]; then echo "$objective" > "$objective_file"; fi
-          if [ -n "$budget" ]; then echo "$budget" > "$budget_file"; else echo 'null' > "$budget_file"; fi
-          ;;
-      esac
-      [ -f "$objective_file" ] || echo 'official objective' > "$objective_file"
-      [ -f "$budget_file" ] || echo 'null' > "$budget_file"
-      emit_goal "$response_id"
-      ;;
-    *'"method":"thread/goal/clear"'*)
-      rm -f "$status_file" "$objective_file" "$budget_file"
-      echo "{\"id\":$response_id,\"result\":{\"cleared\":true}}"
-      ;;
-  esac
-done
-"#
 }
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
@@ -420,163 +338,6 @@ async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "thread-a");
     assert_eq!(rows[0].title, "local title");
-    let _ = fs::remove_dir_all(home);
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_routes_use_official_app_server_state() {
-    let (state, session_token, csrf_token, home) =
-        authenticated_test_state_with_goal_client(stateful_goal_script());
-    let app = router(state);
-
-    let initial = request_rpc_json(
-        app.clone(),
-        "threads.goal.get",
-        r#"{"threadId":"thread-a"}"#,
-        &session_token,
-        None,
-    )
-    .await;
-    assert_eq!(initial["available"], true);
-    assert_eq!(initial["enabled"], false);
-    assert_eq!(initial["status"], "idle");
-
-    let set = request_rpc_json(
-        app.clone(),
-        "threads.goal.save",
-        r#"{"thread_id":"thread-a","objective":"ship official goal","token_budget":12345,"status":"paused","enabled":false}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(set["available"], true);
-    assert_eq!(set["enabled"], true);
-    assert_eq!(set["objective"], "ship official goal");
-    assert_eq!(set["token_budget"], 12345);
-    assert_eq!(set["status"], "active");
-
-    let get = request_rpc_json(
-        app.clone(),
-        "threads.goal.get",
-        r#"{"threadId":"thread-a"}"#,
-        &session_token,
-        None,
-    )
-    .await;
-    assert_eq!(get["available"], true);
-    assert_eq!(get["enabled"], true);
-    assert_eq!(get["objective"], "ship official goal");
-    assert_eq!(get["token_budget"], 12345);
-    assert_eq!(get["status"], "active");
-
-    let paused = request_rpc_json(
-        app.clone(),
-        "threads.goal.pause",
-        r#"{"thread_id":"thread-a"}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(paused["available"], true);
-    assert_eq!(paused["enabled"], true);
-    assert_eq!(paused["objective"], "ship official goal");
-    assert_eq!(paused["token_budget"], 12345);
-    assert_eq!(paused["status"], "paused");
-
-    let saved_while_paused = request_rpc_json(
-        app.clone(),
-        "threads.goal.save",
-        r#"{"thread_id":"thread-a","objective":"updated while paused","token_budget":6789}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(saved_while_paused["objective"], "updated while paused");
-    assert_eq!(saved_while_paused["token_budget"], 6789);
-    assert_eq!(saved_while_paused["status"], "paused");
-
-    let resumed = request_rpc_json(
-        app.clone(),
-        "threads.goal.resume",
-        r#"{"thread_id":"thread-a"}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(resumed["available"], true);
-    assert_eq!(resumed["enabled"], true);
-    assert_eq!(resumed["objective"], "updated while paused");
-    assert_eq!(resumed["token_budget"], 6789);
-    assert_eq!(resumed["status"], "active");
-
-    let cleared = request_rpc_json(
-        app.clone(),
-        "threads.goal.clear",
-        r#"{"thread_id":"thread-a"}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(cleared["available"], true);
-    assert_eq!(cleared["enabled"], false);
-    assert_eq!(cleared["objective"], serde_json::Value::Null);
-    assert_eq!(cleared["token_budget"], serde_json::Value::Null);
-    assert_eq!(cleared["status"], "idle");
-
-    let resumed_after_clear = request_rpc_status(
-        app,
-        "threads.goal.resume",
-        r#"{"thread_id":"thread-a"}"#,
-        Some(&session_token),
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(resumed_after_clear, StatusCode::BAD_REQUEST);
-    let _ = fs::remove_dir_all(home);
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn rpc_goal_wrapper_preserves_goal_dto_shape() {
-    let (state, session_token, csrf_token, home) =
-        authenticated_test_state_with_goal_client(stateful_goal_script());
-    let app = router(state);
-
-    let rpc_initial = request_rpc_json(
-        app.clone(),
-        "threads.goal.get",
-        r#"{"threadId":"thread-a"}"#,
-        &session_token,
-        None,
-    )
-    .await;
-    assert_eq!(rpc_initial["available"], true);
-    assert_eq!(rpc_initial["enabled"], false);
-    assert_eq!(rpc_initial["status"], "idle");
-
-    let rpc_saved = request_rpc_json(
-        app.clone(),
-        "threads.goal.save",
-        r#"{"request":{"threadId":"thread-a","objective":"ship rpc","tokenBudget":2048}}"#,
-        &session_token,
-        Some(&csrf_token),
-    )
-    .await;
-    assert_eq!(rpc_saved["available"], true);
-    assert_eq!(rpc_saved["enabled"], true);
-    assert_eq!(rpc_saved["objective"], "ship rpc");
-    assert_eq!(rpc_saved["token_budget"], 2048);
-
-    let rpc_after_save = request_rpc_json(
-        app,
-        "threads.goal.get",
-        r#"{"threadId":"thread-a"}"#,
-        &session_token,
-        None,
-    )
-    .await;
-    assert_eq!(rpc_after_save, rpc_saved);
     let _ = fs::remove_dir_all(home);
 }
 
@@ -859,566 +620,6 @@ async fn rpc_update_status_uses_shared_update_status_shape() {
 
     assert_eq!(rpc["method"], "linux_systemd_job");
     assert_eq!(rpc["state"], "idle");
-}
-
-#[tokio::test]
-#[ignore = "public follow-up RPC was retired in v0.1.157"]
-async fn rpc_enqueue_followup_accepts_thread_id_and_payload_wrappers() {
-    let (state, session_token, csrf_token) = authenticated_test_state();
-    let app = router(state.clone());
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.followups.enqueue")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("x-csrf-token", csrf_token.as_str())
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"payload":{"threadId":"thread-a","message":"continue","serviceTier":"priority"}}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["thread_id"], "thread-a");
-    assert_eq!(payload["message"], "continue");
-    assert_eq!(payload["options"]["service_tier"], "priority");
-}
-
-#[tokio::test]
-#[ignore = "public model/config RPC was retired in v0.1.157"]
-async fn local_codex_routes_do_not_require_app_server_socket() {
-    let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
-    seed_local_codex_thread(&home, "thread-a", "local title");
-    let app = router(state.clone());
-
-    for (command, body) in [
-        ("system.models", "{}"),
-        ("system.permissionProfiles", "{}"),
-        ("system.codexConfig", "{}"),
-        ("system.status", "{}"),
-    ] {
-        let value = request_rpc_json(app.clone(), command, body, &session_token, None).await;
-        let text = serde_json::to_string(&value).unwrap();
-        assert!(!text.contains("app-server"), "{command}");
-    }
-
-    let config_value = request_rpc_json(
-        app.clone(),
-        "system.codexConfig",
-        r#"{"cwd":"/tmp/workspace"}"#,
-        &session_token,
-        None,
-    )
-    .await;
-    assert_eq!(config_value["cwd"], "/tmp/workspace");
-    assert_eq!(config_value["raw"]["source"], "local");
-
-    for (command, body) in [
-        (
-            "threads.plan.accept",
-            r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"plan-a"}}"#,
-        ),
-        (
-            "threads.plan.revise",
-            r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"plan-a","instructions":"补充检查"}}"#,
-        ),
-        (
-            "threads.elicitation.answer",
-            r#"{"threadId":"thread-a","answers":{"q1":["继续"]}}"#,
-        ),
-    ] {
-        let value = request_rpc_json(
-            app.clone(),
-            command,
-            body,
-            &session_token,
-            Some(&csrf_token),
-        )
-        .await;
-        assert_eq!(value["bridge"], false, "{command}");
-        assert_eq!(value["fallback"], true, "{command}");
-        assert_eq!(value["message"], "已提交给 Codex", "{command}");
-        let message = value["message"].as_str().unwrap_or_default();
-        assert!(!message.contains("fallback"), "{command}");
-        assert!(!message.contains("bridge"), "{command}");
-        assert!(!message.contains("codex exec"), "{command}");
-        assert!(!message.contains("job"), "{command}");
-        assert!(
-            value["job_id"].as_str().is_some_and(|id| !id.is_empty()),
-            "{command}"
-        );
-    }
-
-    for (command, body) in [
-        ("threads.fork", r#"{"threadId":"thread-a"}"#),
-        (
-            "threads.approval.answer",
-            r#"{"threadId":"thread-a","payload":{"turn_id":"turn-a","item_id":"approval-a","decision":"approve"}}"#,
-        ),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/rpc/{command}"))
-                    .header("cookie", format!("nexushub_session={session_token}"))
-                    .header("x-csrf-token", csrf_token.as_str())
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{command}");
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let error = value["error"].as_str().unwrap();
-        assert!(!error.contains("app-server"), "{command}");
-    }
-    let _ = fs::remove_dir_all(home);
-}
-
-#[test]
-fn plan_resume_messages_match_tui_intent() {
-    assert_eq!(job_service::plan_accept_resume_message(), "是，实施此计划");
-
-    let revise = job_service::plan_revise_resume_message("  补充灰度验证  ");
-    assert_eq!(
-        revise,
-        "否，请告知 Codex 如何调整\n\n请保持 Plan Mode，只根据下面的修改要求重新给出计划，不要开始实施。\n\n修改要求：\n补充灰度验证"
-    );
-}
-
-#[test]
-fn plan_and_elicitation_resume_args_use_controlled_json_stdin_semantics() {
-    assert_eq!(
-        job_service::codex_resume_args("thread-a"),
-        vec!["exec", "resume", "--all", "--json", "thread-a", "-"]
-    );
-}
-
-#[test]
-fn elicitation_answer_resume_message_is_stable_user_answer_text() {
-    let answers = HashMap::from([
-        ("q2".to_string(), vec!["B".to_string(), "C".to_string()]),
-        ("q1".to_string(), vec!["A".to_string()]),
-    ]);
-
-    assert_eq!(
-        job_service::elicitation_answer_resume_message(&answers),
-        "q1: A\nq2: B, C"
-    );
-}
-
-#[test]
-fn followup_request_round_trips_attachment_options() {
-    let prepared_attachments = vec![
-        PreparedAttachment {
-            id: "upload-md".to_string(),
-            name: "notes.md".to_string(),
-            mime: "text/markdown".to_string(),
-            size: 42,
-            sha256: "sha-md".to_string(),
-            kind: UploadKind::Markdown,
-            text: Some("# Notes\n\n- keep context".to_string()),
-            local_image_path: None,
-            local_file_path: None,
-            truncated: false,
-        },
-        PreparedAttachment {
-            id: "upload-image".to_string(),
-            name: "screen.png".to_string(),
-            mime: "image/png".to_string(),
-            size: 12,
-            sha256: "sha-image".to_string(),
-            kind: UploadKind::Image,
-            text: None,
-            local_image_path: Some(PathBuf::from("/tmp/nexushub/uploads/screen.png")),
-            local_file_path: None,
-            truncated: false,
-        },
-    ];
-    let request = ThreadMessageRequest {
-        thread_id: None,
-        message: String::new(),
-        attachments: vec!["upload-md".to_string(), "upload-image".to_string()],
-        prepared_attachments: prepared_attachments.clone(),
-        model: Some("gpt-5.5".to_string()),
-        service_tier: Some("priority".to_string()),
-        reasoning_effort: Some("xhigh".to_string()),
-        cwd: Some("/tmp/workspace".to_string()),
-        permission_profile: Some("danger-full-access".to_string()),
-        approval_policy: Some("never".to_string()),
-        sandbox_mode: Some("danger-full-access".to_string()),
-        network_access: Some(true),
-        collaboration_mode: Some("async".to_string()),
-    };
-    let followup = ThreadFollowUp {
-        id: "follow-up-1".to_string(),
-        thread_id: "thread-a".to_string(),
-        status: "pending".to_string(),
-        message: job_service::effective_message(&request.message, &request.prepared_attachments),
-        options_json: request.options_json().to_string(),
-        created_at: 1,
-        updated_at: 1,
-        submitted_at: None,
-        cancelled_at: None,
-        result_json: None,
-        error: None,
-    };
-
-    let restored = job_service::followup_request(&followup);
-
-    assert_eq!(restored.message, "请根据以下附件内容继续处理。".to_string());
-    assert_eq!(restored.attachments, request.attachments);
-    assert_eq!(restored.prepared_attachments.len(), 2);
-    assert_eq!(
-        restored.prepared_attachments[0].text,
-        prepared_attachments[0].text
-    );
-    assert_eq!(
-        restored.prepared_attachments[1].local_image_path,
-        prepared_attachments[1].local_image_path
-    );
-    assert_eq!(restored.model.as_deref(), Some("gpt-5.5"));
-    assert_eq!(restored.service_tier.as_deref(), Some("priority"));
-    assert_eq!(restored.reasoning_effort.as_deref(), Some("xhigh"));
-    assert_eq!(restored.network_access, Some(true));
-}
-
-#[test]
-fn normalize_goal_response_maps_goal_statuses() {
-    for (status, enabled) in [
-        ("active", true),
-        ("running", true),
-        ("complete", true),
-        ("completed", true),
-        ("blocked", true),
-        ("paused", true),
-        ("idle", false),
-        ("missing_thread", false),
-        ("cleared", false),
-    ] {
-        let normalized = if enabled {
-            normalize_goal_response_value(&json!({
-                "goal": {
-                    "objective": "ship",
-                    "tokenBudget": 100,
-                    "status": status
-                }
-            }))
-        } else {
-            normalize_goal_response_value(&json!({
-                "goal": {
-                    "objective": null,
-                    "tokenBudget": null,
-                    "status": status
-                }
-            }))
-        };
-        assert_eq!(normalized["status"], status, "{status}");
-        assert_eq!(normalized["enabled"], enabled, "{status}");
-    }
-    let object_status = normalize_goal_response_value(&json!({
-        "goal": {
-            "objective": "ship",
-            "tokenBudget": 100,
-            "status": { "type": "Completed" }
-        }
-    }));
-    assert_eq!(object_status["status"], "completed");
-    assert_eq!(object_status["enabled"], true);
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_resume_route_requires_csrf_and_uses_official_goal() {
-    let (state, session_token, csrf_token, home) =
-        authenticated_test_state_with_goal_client(stateful_goal_script());
-    fs::write(home.join("fake-goal-status"), "paused").unwrap();
-    fs::write(home.join("fake-goal-objective"), "official paused goal").unwrap();
-    fs::write(home.join("fake-goal-budget"), "9876").unwrap();
-    let app = router(state.clone());
-
-    let missing_csrf = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.resume")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"thread_id":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
-
-    let app = router(state);
-    let resumed = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.resume")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("x-csrf-token", csrf_token.as_str())
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"thread_id":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resumed.status(), StatusCode::OK);
-    let body = to_bytes(resumed.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["available"], true);
-    assert_eq!(payload["enabled"], true);
-    assert_eq!(payload["status"], "active");
-    assert_eq!(payload["objective"], "official paused goal");
-    assert_eq!(payload["raw"]["source"], "codex_app_server");
-    fs::remove_dir_all(home).unwrap();
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_get_route_uses_app_server_instead_of_shadow_goal_store() {
-    let script = r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.2'
-  exit 0
-fi
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{"id":2,"result":{"goal":{"threadId":"thread-a","objective":"official objective","status":"budgetLimited","tokenBudget":5000,"tokensUsed":6000,"timeUsedSeconds":90,"createdAt":100,"updatedAt":200}}}'
-      ;;
-  esac
-done
-"#;
-    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
-    state
-        .db
-        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
-            thread_id: "thread-a",
-            objective: Some("stale shadow objective"),
-            token_budget: Some(1),
-            status: "paused",
-            completed_at: None,
-            blocked_reason: None,
-        })
-        .unwrap();
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.get")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"threadId":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["objective"], "official objective");
-    assert_eq!(payload["status"], "budgetLimited");
-    assert_eq!(payload["raw"]["source"], "codex_app_server");
-    fs::remove_dir_all(home).unwrap();
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_official_goal_is_null() {
-    let script = r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.2'
-  exit 0
-fi
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{"id":1,"result":{"userAgent":"fake"}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{"id":2,"result":{"goal":null}}'
-      ;;
-  esac
-done
-"#;
-    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
-    state
-        .db
-        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
-            thread_id: "thread-a",
-            objective: Some("stale shadow objective"),
-            token_budget: Some(1),
-            status: "paused",
-            completed_at: None,
-            blocked_reason: None,
-        })
-        .unwrap();
-    let shadow_db = state.db.clone();
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.get")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"threadId":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["enabled"], false);
-    assert_eq!(payload["objective"], serde_json::Value::Null);
-    assert_eq!(payload["status"], "idle");
-    let shadow = shadow_db.get_thread_goal("thread-a").unwrap().unwrap();
-    assert_eq!(shadow.objective.as_deref(), Some("stale shadow objective"));
-    assert_eq!(shadow.status, "paused");
-    fs::remove_dir_all(home).unwrap();
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_get_route_does_not_fall_back_to_shadow_goal_when_app_server_fails() {
-    let script = r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.2'
-  exit 0
-fi
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{"id":1,"result":{"userAgent":"fake"}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{"id":2,"error":{"code":-32603,"message":"goal control unavailable"}}'
-      ;;
-  esac
-done
-"#;
-    let (state, session_token, _, home) = authenticated_test_state_with_goal_client(script);
-    state
-        .db
-        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
-            thread_id: "thread-a",
-            objective: Some("stale shadow objective"),
-            token_budget: Some(1),
-            status: "paused",
-            completed_at: None,
-            blocked_reason: None,
-        })
-        .unwrap();
-    let shadow_db = state.db.clone();
-
-    let response = router(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.get")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"threadId":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(payload["error"]
-        .as_str()
-        .unwrap()
-        .contains("goal control unavailable"));
-    assert_ne!(payload["error"], "stale shadow objective");
-    let shadow = shadow_db.get_thread_goal("thread-a").unwrap().unwrap();
-    assert_eq!(shadow.objective.as_deref(), Some("stale shadow objective"));
-    assert_eq!(shadow.status, "paused");
-    fs::remove_dir_all(home).unwrap();
-}
-
-#[tokio::test]
-#[ignore = "public Goal RPC was retired in v0.1.157"]
-async fn goal_pause_route_requires_csrf_and_preserves_official_goal() {
-    let (state, session_token, csrf_token, home) =
-        authenticated_test_state_with_goal_client(stateful_goal_script());
-    fs::write(home.join("fake-goal-status"), "active").unwrap();
-    fs::write(home.join("fake-goal-objective"), "official active goal").unwrap();
-    fs::write(home.join("fake-goal-budget"), "9876").unwrap();
-    state
-        .db
-        .upsert_thread_goal(nexushub_core::db::ThreadGoalUpdate {
-            thread_id: "thread-a",
-            objective: Some("stale shadow goal"),
-            token_budget: Some(1),
-            status: "paused",
-            completed_at: None,
-            blocked_reason: None,
-        })
-        .unwrap();
-    let app = router(state.clone());
-
-    let missing_csrf = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.pause")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"thread_id":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
-
-    let app = router(state);
-    let paused = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/rpc/threads.goal.pause")
-                .header("cookie", format!("nexushub_session={session_token}"))
-                .header("x-csrf-token", csrf_token.as_str())
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"thread_id":"thread-a"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(paused.status(), StatusCode::OK);
-    let body = to_bytes(paused.into_body(), usize::MAX).await.unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["available"], true);
-    assert_eq!(payload["enabled"], true);
-    assert_eq!(payload["objective"], "official active goal");
-    assert_eq!(payload["token_budget"], 9876);
-    assert_eq!(payload["status"], "paused");
-    assert_eq!(payload["raw"]["source"], "codex_app_server");
-    fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test]
@@ -2140,35 +1341,6 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
     assert_eq!(job.kind, "probe_bark_test");
     let config_text = fs::read_to_string(&config_path).unwrap();
     assert!(config_text.contains("fresh-host"));
-}
-
-#[tokio::test]
-#[ignore = "composer provider RPC was retired in v0.1.157"]
-async fn plugin_list_exposes_descriptions_and_unavailable_reasons_for_composer_mentions() {
-    let (state, session_token, _csrf_token) = authenticated_test_state();
-    let app = router(state);
-
-    let plugins = request_rpc_json(app, "system.plugins", "{}", &session_token, None).await;
-    let rows = plugins.as_array().unwrap();
-
-    assert!(rows.iter().any(|plugin| {
-        plugin["id"] == "codex"
-            && plugin["description"].as_str().is_some_and(|value| {
-                value.contains("Codex 本地状态") && !value.contains("app-server")
-            })
-    }));
-    assert!(rows.iter().any(|plugin| {
-        plugin["id"] == "probe"
-            && plugin["description"]
-                .as_str()
-                .is_some_and(|value| value.contains("探针"))
-    }));
-    assert!(rows.iter().any(|plugin| {
-        plugin["id"] == "claude_code"
-            && plugin["unavailable_reason"]
-                .as_str()
-                .is_some_and(|value| value.contains("只读"))
-    }));
 }
 
 #[test]
@@ -3571,4 +2743,43 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         counter,
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ))
+}
+
+#[tokio::test]
+async fn retired_task_mutation_routes_return_not_found_even_with_valid_auth() {
+    let (state, session_token, csrf_token) = authenticated_test_state();
+    let app = router(state);
+    for command in [
+        "threads.create",
+        "threads.send",
+        "threads.steer",
+        "threads.stop",
+        "threads.fork",
+        "threads.followups.list",
+        "threads.followups.enqueue",
+        "threads.followups.cancel",
+        "threads.goal.get",
+        "threads.goal.save",
+        "threads.goal.clear",
+        "threads.goal.pause",
+        "threads.goal.resume",
+        "uploads.store",
+        "uploads.delete",
+        "claude.overview",
+        "desktopWebui.start",
+        "desktopWebui.stop",
+    ] {
+        assert_eq!(
+            request_rpc_status(
+                app.clone(),
+                command,
+                "{}",
+                Some(&session_token),
+                Some(&csrf_token)
+            )
+            .await,
+            StatusCode::NOT_FOUND,
+            "{command} must stay retired"
+        );
+    }
 }

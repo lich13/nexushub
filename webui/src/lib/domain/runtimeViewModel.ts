@@ -121,8 +121,8 @@ export function threadInspectorActionState(input?: RuntimeCapabilityInput): {
   };
 }
 
-export function resolvedSelectedThreadId(selectedId: string | "__new" | null): string | null {
-  return selectedId === "__new" ? null : selectedId;
+export function resolvedSelectedThreadId(selectedId: string | null): string | null {
+  return selectedId;
 }
 
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {

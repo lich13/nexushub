@@ -1026,28 +1026,8 @@ fn task_notification_suppression_reason(
     let paths = resolve_codex_paths(&config.codex.home).codex_paths();
     let identity = match nexushub_core::codex::codex_task_identity(&paths, id) {
         Ok(identity) => identity,
-        Err(_) => {
-            // A title/state lookup failure must not block a valid question hook.
-            // The hook remains fail-open while a readable state DB still gates identity.
-            return None;
-        }
+        Err(_) => return Some("unconfirmed_task_identity"),
     };
-    if matches!(identity, nexushub_core::codex::CodexTaskIdentity::Unknown)
-        && !paths.state_db().is_file()
-    {
-        // Unit tests that construct events directly do not need a Codex state DB.
-        // Production hooks remain fail-closed because this branch is test-only.
-        #[cfg(test)]
-        return None;
-    }
-    #[cfg(test)]
-    if matches!(identity, nexushub_core::codex::CodexTaskIdentity::Unknown)
-        && config.codex.home == Config::default().codex.home
-    {
-        // The legacy unit fixtures use synthetic IDs against the default home.
-        // Accuracy fixtures use an isolated home and continue to exercise the gate.
-        return None;
-    }
     identity.suppression_reason()
 }
 
@@ -3293,7 +3273,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_records_probe_event_but_returns_codex_stop_json_and_redacted_bark_state() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -3333,7 +3314,8 @@ last_error = "old nexushub request hook"
         let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
             .unwrap();
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-extra-key"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -3563,6 +3545,10 @@ last_error = "old nexushub request hook"
         fs::create_dir_all(&memory_root).unwrap();
         let mut config = Config::default();
         config.codex.home = codex_home;
+        notification_accuracy_tests::seed_main_task_identities(
+            &config.codex.home,
+            &["thread-user-question"],
+        );
 
         for transcript_path in [json!("/tmp/user-rollout.jsonl"), json!(42)] {
             let event_input = hook_request_user_input_event_input(
@@ -3659,7 +3645,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_records_stdin_compatible_context_fields() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["session-stdin"]);
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
@@ -3704,7 +3691,10 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_uses_transcript_latest_assistant_when_stdin_omits_body() {
-        let mut config = Config::default();
+        let (mut config, _identity) = notification_accuracy_tests::test_notification_config(&[
+            "thread-transcript",
+            "session-transcript",
+        ]);
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let dir = temp_test_dir("nexushub-hook-transcript-summary");
@@ -3833,7 +3823,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_dedupe_skips_duplicate_bark_without_leaking_device_key() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let db = PanelDb::open(":memory:").unwrap();
@@ -3886,7 +3877,10 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn passive_reply_needed_scan_uses_sent_marker_while_hook_window_stays_short() {
-        let mut config = Config::default();
+        let (mut config, _identity) = notification_accuracy_tests::test_notification_config(&[
+            "thread-passive",
+            "thread-hook",
+        ]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
         let db = PanelDb::open(":memory:").unwrap();
@@ -3951,7 +3945,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn notify_completion_uses_completion_bark_switch() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = false;
         let db = PanelDb::open(":memory:").unwrap();
@@ -3974,7 +3969,8 @@ last_error = "old nexushub request hook"
     #[tokio::test]
     async fn notify_completion_uses_complete_last_agent_message_from_rollout_without_storing_body()
     {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let dir = temp_test_dir("nexushub-notify-completion-rollout");
@@ -4041,7 +4037,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn notify_completion_prefers_transcript_final_message_over_stale_stdin_message() {
-        let config = Config::default();
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
         let dir = temp_test_dir("nexushub-notify-completion-stale-stdin");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -4080,7 +4077,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn notify_completion_waits_for_later_final_message_and_records_selection_diagnostics() {
-        let config = Config::default();
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-live"]);
         let dir = temp_test_dir("nexushub-notify-completion-waits-final");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -4151,7 +4149,8 @@ last_error = "old nexushub request hook"
     #[tokio::test]
     async fn notify_completion_uses_full_raw_assistant_message_when_task_complete_body_is_missing()
     {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let dir = temp_test_dir("nexushub-notify-completion-raw-assistant");
@@ -4203,7 +4202,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_uses_cli_turn_id_when_payload_turn_id_is_missing() {
-        let config = Config::default();
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-cli"]);
         let dir = temp_test_dir("nexushub-hook-cli-turn-id");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -4243,7 +4243,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn notify_completion_context_keeps_unresolved_plan_as_reply_needed() {
-        let config = Config::default();
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan"]);
         let dir = temp_test_dir("nexushub-notify-completion-plan-pending");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -4280,7 +4281,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn notify_completion_context_keeps_unresolved_question_as_reply_needed() {
-        let config = Config::default();
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-choice"]);
         let dir = temp_test_dir("nexushub-notify-completion-question-pending");
         fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("rollout.jsonl");
@@ -4533,7 +4535,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn passive_reply_needed_plan_dedupe_key_changes_with_plan_hash_and_no_ttl_resend() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4598,7 +4601,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn passive_reply_needed_plan_does_not_resend_after_ttl_expires() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan-ttl"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4648,7 +4652,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn passive_request_user_input_event_does_not_resend_after_ttl_expires() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-question-ttl"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4695,7 +4700,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn pre_tool_use_request_user_input_event_does_not_resend_after_ttl_expires() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-pre-tool-question"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4743,7 +4749,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn passive_request_user_input_marker_ignores_scan_time_changes() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-question-time"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
@@ -4909,7 +4916,8 @@ last_error = "old nexushub request hook"
             20,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-long"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = server.url();
@@ -5044,7 +5052,8 @@ last_error = "old nexushub request hook"
             20,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-safe-store"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_completion = true;
         config.probe.notifications.server_url = server.url();
@@ -5102,7 +5111,8 @@ last_error = "old nexushub request hook"
             1,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
         );
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan-stable"]);
         config.probe.notifications.enabled = true;
         config.probe.notifications.notify_reply_needed = true;
         config.probe.notifications.server_url = server.url();
@@ -5524,7 +5534,8 @@ last_error = "old nexushub request hook"
 
     #[tokio::test]
     async fn hook_stop_cli_payload_keeps_stdout_codex_only_and_stderr_diagnostics() {
-        let mut config = Config::default();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
         config.probe.notifications.enabled = false;
         let db = PanelDb::open(":memory:").unwrap();
         let result = handle_built_probe_event(

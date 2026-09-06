@@ -1,9 +1,9 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::collections::HashSet;
 
 use nexushub_core::{
     codex::{ThreadDetail, ThreadStatus, ThreadSummary},
     config::Config,
-    db::{JobRecord, ThreadFollowUp},
+    db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::{
         probe::{
@@ -18,7 +18,6 @@ use serde_json::json;
 #[test]
 fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
-    let pending = followup("followup-a", "idle-thread", "continue");
     let known_running_job = running_job("job-running", "known-thread", Some("turn-running"), 20);
     let new_running_job = running_job("job-new", "new-running-thread", None, 30);
 
@@ -45,8 +44,6 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             running_jobs: vec![known_running_job, new_running_job],
             hidden_thread_ids: HashSet::from(["hidden-thread".to_string()]),
             archived_thread_ids: HashSet::new(),
-            pending_followups: vec![pending.clone()],
-            default_workspace: PathBuf::from("/workspace"),
         },
         nexushub_core::services::threads::ThreadsQuery {
             status: Some("running".to_string()),
@@ -64,7 +61,10 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
     assert_eq!(ids.len(), 2);
     assert!(ids.contains(&"new-running-thread"));
     assert!(ids.contains(&"known-thread"));
-    assert!(view.autosubmit_effects.is_empty());
+    assert!(serde_json::to_value(&view)
+        .unwrap()
+        .get("autosubmitEffects")
+        .is_none());
 
     let idle_view = thread_list_read_model(
         &platform,
@@ -77,8 +77,6 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             running_jobs: vec![],
             hidden_thread_ids: HashSet::new(),
             archived_thread_ids: HashSet::new(),
-            pending_followups: vec![pending],
-            default_workspace: PathBuf::from("/workspace"),
         },
         nexushub_core::services::threads::ThreadsQuery {
             status: Some("recent".to_string()),
@@ -86,9 +84,12 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
             limit: Some(20),
         },
     )
-    .expect("idle follow-up should produce core autosubmit effect plan");
+    .expect("idle read model must remain read-only");
 
-    assert!(idle_view.autosubmit_effects.is_empty());
+    assert!(serde_json::to_value(&idle_view)
+        .unwrap()
+        .get("autosubmitEffects")
+        .is_none());
 }
 
 #[test]
@@ -108,17 +109,14 @@ fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effec
         before_cursor: None,
     };
 
-    let view = thread_detail_read_model(
-        &platform,
-        detail,
-        None,
-        Some(followup("followup-a", "idle-thread", "continue")),
-        PathBuf::from("/workspace"),
-    )
-    .expect("core should own detail read-model/autosubmit planning");
+    let view = thread_detail_read_model(&platform, detail, None)
+        .expect("core should own detail read-model");
 
     assert_eq!(view.detail.summary.status, ThreadStatus::Recent);
-    assert!(view.autosubmit_effects.is_empty());
+    assert!(serde_json::to_value(&view)
+        .unwrap()
+        .get("autosubmitEffects")
+        .is_none());
 }
 
 #[test]
@@ -189,22 +187,6 @@ fn running_job(id: &str, thread_id: &str, turn_id: Option<&str>, started_at: i64
         finished_at: None,
         exit_code: None,
         output: String::new(),
-        error: None,
-    }
-}
-
-fn followup(id: &str, thread_id: &str, message: &str) -> ThreadFollowUp {
-    ThreadFollowUp {
-        id: id.to_string(),
-        thread_id: thread_id.to_string(),
-        status: "pending".to_string(),
-        message: message.to_string(),
-        options_json: json!({}).to_string(),
-        created_at: 1,
-        updated_at: 1,
-        submitted_at: None,
-        cancelled_at: None,
-        result_json: None,
         error: None,
     }
 }

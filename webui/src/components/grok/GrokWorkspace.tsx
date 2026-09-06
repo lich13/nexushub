@@ -39,7 +39,7 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div className="provider-events">{(detail.data?.events ?? []).map((event, index) =>
-          event.kind.startsWith("tool_") ? <details className="grok-tool" key={index}><summary>{event.text ?? "工具活动"}</summary><span>{event.kind}</span></details>
+          event.kind.startsWith("tool_") ? <details className="grok-tool" key={event.callId ?? index}><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>
             : <article className={`provider-event ${event.kind}`} key={index}><div className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</div><MarkdownContent text={event.text ?? ""} /></article>
         )}{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
       </>}

@@ -1,63 +1,32 @@
 # NexusHub Design System
 
-NexusHub is a dense remote-operations console for cloud Codex local state and controlled jobs. Tencent Cloud Linux keeps the browser WebUI at `https://661313.xyz/nexushub/`; macOS uses the native Tauri App entry instead of a browser WebUI or LaunchAgent Web service. The macOS shell wraps the same main `webui` interface in a CC Switch style Tauri bundle, so native packaging alignment does not create a separate product surface. It should feel closer to a Linear/Raycast developer tool than a marketing page.
+## Direction
 
-## Visual Direction
+A task-reading workspace aligned with Codex Desktop: neutral light/dark themes, compact navigation, a narrow task list and one readable conversation column. No marketing surface, input composer, permanent inspector or duplicate status cards.
 
-- Keep the outer operations shell dark, compact, and predictable.
-- The thread detail surface is a light, conversation-first reading view inspired by Codex Desktop and claudecodeui: quiet background, centered message column, soft borders, comfortable line height, and no log-console feeling.
-- Plans, questions, approvals, and tool activity are protocol-specific cells. They must not be rendered as generic assistant text or raw event logs.
-- First screen is the usable console: no landing page, no hero section.
-- UI copy is operational and short; avoid feature explanations inside the app.
+## Tokens
 
-## Color Tokens
-
-```css
---canvas: #07111f;
---surface: #0b1726;
---surface-elevated: #102235;
---hairline: #1d3852;
---primary: #38bdf8;
---primary-hover: #7dd3fc;
---primary-soft: rgba(56, 189, 248, 0.14);
---success: #22c55e;
---warning: #f59e0b;
---danger: #ef4444;
---text: #eaf6ff;
---muted: #8fb3c8;
---chat-canvas: #f5f6f8;
---chat-surface: #ffffff;
---chat-surface-soft: #f8fafc;
---chat-border: #d9e1ea;
---chat-text: #18212f;
---chat-muted: #657386;
-```
+Light: canvas `#ffffff`, surface `#f6f6f6`, text `#242424`, muted `#717171`, border `#dedede`.
+Dark: canvas `#202020`, surface `#191919`, text `#ececec`, muted `#a3a3a3`, border `#3b3b3b`.
+Green identifies primary actions; semantic warning/error colors are reserved for actual state. Headers and conversation content use the same theme. No forced white panels inside dark mode.
 
 ## Layout
 
-- Desktop: 240px left navigation can collapse to maximize the conversation pane; thread list remains 320px when visible.
-- Operations and security pages use compact panels in a two-column grid.
-- Mobile under 768px: no sidebar; use top bar, bottom tab nav, full-screen content, and a thread drawer.
-- Composer remains stable at the bottom of the conversation area and uses compact Codex-style controls for Plan Mode, permissions, model, reasoning, and service tier.
-- Thread detail uses a centered message rail with a maximum readable width. The inspector is secondary and visually quieter than the conversation.
+- Navigation: Codex, Grok Build, Probe, settings.
+- Desktop: 152px navigation, 276px task list, flexible detail pane with a readable message column.
+- Task actions belong in an anchored menu. Rename is inline; destructive Grok deletion uses a scoped confirmation dialog.
+- Messages distinguish user input, assistant replies and folded tool activity. Updates for a tool call share one activity row.
+- Questions and plans are read-only. Internal collaboration messages and memory citation metadata are not user-visible replies.
+- Probe defaults to the event timeline; settings are collected separately. Bark and automatic Goal recovery have independent switches.
+- Settings group system/update, maintenance and server-only account/security controls. Execution history expands on demand.
+- Cleanup preserves dry-run, expected count, final confirmation, pending and visible failure states.
 
-## Components
+## Rendering
 
-- Border radius is 6-8px for most controls and panels; avoid large rounded cards.
-- Buttons use lucide icons plus short text.
-- State chips use sky-blue for running, green for recent/ok, yellow for reply-needed/warning, red for recoverable/danger.
-- Permission controls are a single concise menu matching Codex APP choices; do not split network into a checkbox.
-- Destructive actions use danger styling and button confirmation; archive cleanup does not require typed text.
-- Tool output and job logs use monospace `pre` blocks with wrapping and no horizontal overflow.
-- In thread detail, completed tools are grouped or folded by default. Current running/error tools stay visible as compact activity rows with expandable details.
-- Proposed Plan cells live in the message history and show the plan body plus `接受计划` / `修改计划` / `保持计划模式` actions only when still current. Historical plans are read-only.
-- Questions cells live in the message history and show option buttons, selected state, submit state, and answered history. Old answered questions must not appear as pending.
-- Historical chat/tool volume is collapsed behind `显示全部历史`; expanding must not move the composer or create horizontal overflow.
-- Rendered Linux WebUI release acceptance uses Chrome 插件验收 for current logged-in flows; macOS acceptance uses the native Tauri App.
+Use shared theme tokens, Lucide icons and hover labels. Border radius stays at 8px or below. Standard controls have stable dimensions; text wraps without overlaps. Markdown supports code, tables, links and copying. Tool details wrap; code blocks may scroll internally.
 
-## Mobile Rules
+Mobile uses the compact navigation and task list/detail transition, with a back action and no horizontal page overflow. Test narrow and wide screens in both themes, including long task titles, code, menus and errors.
 
-- All inputs and primary buttons should be at least 44px high.
-- Thread list becomes a drawer.
-- Long logs remain readable with wrapping; do not rely on horizontal scroll.
-- Settings pages become a single column.
+## Verification
+
+Browser checks cover the server and local development interface. Official macOS acceptance uses the installed Tauri App. Verify no composer or desktop Web service controls, no irrelevant server security on desktop, readable contrast, console health and both cleanup confirmation flows without deleting user data.

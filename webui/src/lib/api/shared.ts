@@ -1,4 +1,4 @@
-import type { CodexModel, OptionalResult, PermissionProfile } from "../../types";
+import type { OptionalResult } from "../../types";
 import { RuntimeUnavailableError } from "./transport";
 import type { DemoFixtureKey } from "../domain/demoCore";
 
@@ -89,63 +89,4 @@ export function normalizeOptionalResult<T>(payload: unknown): OptionalResult<T> 
 
 export function jobIdFromRuntimeResult(result: { job_id?: string | null; jobId?: string | null }, fallback: string): { job_id: string } {
   return { job_id: result.job_id ?? result.jobId ?? fallback };
-}
-
-export function normalizeModels(value: unknown): CodexModel[] {
-  const list = Array.isArray(value) ? value : typeof value === "object" && value && "models" in value && Array.isArray((value as { models: unknown }).models) ? (value as { models: unknown[] }).models : [];
-  return list.flatMap((item) => {
-    if (typeof item === "string") return [{ id: item }];
-    if (typeof item !== "object" || !item) return [];
-    const raw = item as Record<string, unknown>;
-    const id = String(raw.id ?? raw.name ?? raw.model ?? "").trim();
-    if (!id) return [];
-    return [{
-      id,
-      label: typeof raw.label === "string" ? raw.label : typeof raw.name === "string" ? raw.name : null,
-      description: typeof raw.description === "string" ? raw.description : null,
-      default: typeof raw.default === "boolean" ? raw.default : null,
-      service_tiers: normalizeServiceTiers(raw.service_tiers ?? raw.serviceTiers),
-      default_service_tier: typeof raw.default_service_tier === "string"
-        ? raw.default_service_tier
-        : typeof raw.defaultServiceTier === "string"
-          ? raw.defaultServiceTier
-          : null
-    }];
-  });
-}
-
-function normalizeServiceTiers(value: unknown): CodexModel["service_tiers"] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (typeof item === "string") return [{ id: item }];
-    if (typeof item !== "object" || !item) return [];
-    const raw = item as Record<string, unknown>;
-    const id = String(raw.id ?? raw.name ?? "").trim();
-    if (!id) return [];
-    return [{
-      id,
-      name: typeof raw.name === "string" ? raw.name : null,
-      description: typeof raw.description === "string" ? raw.description : null
-    }];
-  });
-}
-
-export function normalizePermissionProfiles(value: unknown): PermissionProfile[] {
-  const list = Array.isArray(value) ? value : typeof value === "object" && value && "profiles" in value && Array.isArray((value as { profiles: unknown }).profiles) ? (value as { profiles: unknown[] }).profiles : [];
-  return list.flatMap((item) => {
-    if (typeof item === "string") return [{ id: item }];
-    if (typeof item !== "object" || !item) return [];
-    const raw = item as Record<string, unknown>;
-    const id = String(raw.id ?? raw.name ?? raw.profile ?? "").trim();
-    if (!id) return [];
-    return [{
-      id,
-      label: typeof raw.label === "string" ? raw.label : typeof raw.name === "string" ? raw.name : null,
-      description: typeof raw.description === "string" ? raw.description : null,
-      approval_policy: typeof raw.approval_policy === "string" ? raw.approval_policy : null,
-      sandbox_mode: typeof raw.sandbox_mode === "string" ? raw.sandbox_mode : null,
-      network_access: typeof raw.network_access === "boolean" ? raw.network_access : null,
-      default: typeof raw.default === "boolean" ? raw.default : null
-    }];
-  });
 }

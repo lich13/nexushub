@@ -41,20 +41,20 @@ struct Entry<T> {
     bytes: u64,
 }
 
-pub(super) struct ReadCache<T> {
+pub(crate) struct ReadCache<T> {
     entries: Mutex<VecDeque<Entry<T>>>,
     max_bytes: u64,
 }
 
 impl<T: Clone> ReadCache<T> {
-    pub(super) const fn new(max_bytes: u64) -> Self {
+    pub(crate) const fn new(max_bytes: u64) -> Self {
         Self {
             entries: Mutex::new(VecDeque::new()),
             max_bytes,
         }
     }
 
-    pub(super) fn read(
+    pub(crate) fn read(
         &self,
         path: &Path,
         weight: impl Fn(&T, u64) -> u64,

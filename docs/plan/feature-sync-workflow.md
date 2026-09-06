@@ -1,9 +1,9 @@
 # NexusHub Feature Sync Workflow
 
-Last reviewed: 2026-06-30  
-Applies from: `v0.1.145`
+Last reviewed: 2026-09-06
+Applies from: `v0.1.158`
 
-This is the default flow for adding or changing shared NexusHub behavior across macOS Tauri, Linux Tauri, Tencent Cloud Linux WebUI, and desktop LAN WebUI.
+This is the default flow for adding or changing shared NexusHub behavior across macOS Tauri, Linux Tauri, Tencent Cloud Linux WebUI.
 
 ## 1. Contract First
 
@@ -60,6 +60,6 @@ bash scripts/test-install-script.sh
 For visible behavior, finish with the matching现场验收:
 
 - Browser 插件: Linux WebUI login, Turnstile, security save/reload, Probe, Ops, cleanup dry-run gating, scoped sensitive paths `404`
-- Computer Use: macOS Tauri shared pages, helper version, desktop `WebUI 服务`, no Linux-only surface leakage, desktop LAN WebUI when touched
+- Computer Use: macOS Tauri shared pages, helper version, no desktop Web listener or Linux-only surface leakage, official monitor preserved
 
 Do not treat a shared feature as complete until both the contract parity guards and the affected host-surface behavior pass fresh verification.

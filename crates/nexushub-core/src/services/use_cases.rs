@@ -1,29 +1,17 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codex::{ThreadDetail, ThreadStatus},
+    codex::ThreadDetail,
     config::{Config, SecurityConfig},
-    db::{JobRecord, PanelDb, ThreadFollowUp},
+    db::JobRecord,
     platform::PlatformPaths,
     services::{
         cleanup::{
             self, CleanupAction, CleanupActionPlan, CleanupExecuteRequest, CleanupOperationKind,
             CleanupOperationPlan, CleanupTarget,
         },
-        goals::{self, GoalCommandFacadePlan, GoalGetPlan, GoalGetRequest, GoalUpdateRequest},
-        jobs::{
-            self, ActionResponse, FollowUpAutoSubmitExecutionPlan, FollowUpCancelPlan,
-            FollowUpCancelRequest, FollowUpClaimPlan, FollowUpClaimRequest,
-            FollowUpEnqueueFacadePlan, FollowUpErrorPlan, FollowUpErrorRequest, FollowUpListPlan,
-            FollowUpListRequest, FollowUpSubmitPlan, FollowUpSubmitResultPlan,
-            FollowUpSubmitResultRequest, ThreadCommandExecutionPlan, ThreadCommandFacadePlan,
-            ThreadCommandKind, ThreadCommandRequest, ThreadMessageRequest, ThreadRenameRequest,
-            ThreadSendRequest, ThreadStateActionPlan, ThreadSteerRequest, ThreadStopJobPlan,
-            ThreadStopPlan, ThreadStopRequest,
-        },
+        jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
         probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
         security::{
             self, PasswordChangeFacadePlan, PasswordChangeRequest, PublicSecurityViewFacadePlan,
@@ -36,13 +24,8 @@ use crate::{
             ThreadListPlan, ThreadListReadPlan, ThreadsQuery,
         },
         updates::{UpdateUseCases, UpdateUseCases as CoreUpdateUseCases},
-        uploads::{
-            self, UploadBatchItem, UploadDeletePlan, UploadFacadePlan, UploadRetentionPlan,
-            UploadRetentionRequest, UploadStorePlan, UploadValidationPlan,
-        },
     },
     update::{analyze_job_failure, JobFailureAnalysis},
-    uploads::UploadOutcome,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,18 +110,6 @@ impl<'a> NexusHubUseCases<'a> {
 
     pub fn jobs(self) -> JobUseCases<'a> {
         JobUseCases {
-            platform: self.platform,
-        }
-    }
-
-    pub fn goals(self) -> GoalUseCases<'a> {
-        GoalUseCases {
-            platform: self.platform,
-        }
-    }
-
-    pub fn uploads(self) -> UploadUseCases<'a> {
-        UploadUseCases {
             platform: self.platform,
         }
     }
@@ -266,77 +237,6 @@ impl<'a> ThreadUseCases<'a> {
         threads::thread_blocks_page_for_plan(detail, plan)
     }
 
-    pub fn create(self, message: ThreadMessageRequest) -> Result<ThreadCommandFacadePlan> {
-        jobs::plan_thread_command_with_capability(
-            self.platform,
-            ThreadCommandRequest {
-                command: ThreadCommandKind::Create,
-                thread_id: None,
-                message,
-            },
-        )
-    }
-
-    pub fn create_job(
-        self,
-        message: ThreadMessageRequest,
-        default_workspace: PathBuf,
-    ) -> Result<ThreadCommandExecutionPlan> {
-        jobs::plan_thread_command_job_execution(
-            self.platform,
-            ThreadCommandRequest {
-                command: ThreadCommandKind::Create,
-                thread_id: None,
-                message,
-            },
-            default_workspace,
-        )
-    }
-
-    pub fn resume_job(
-        self,
-        message: ThreadMessageRequest,
-        default_workspace: PathBuf,
-    ) -> Result<ThreadCommandExecutionPlan> {
-        jobs::plan_thread_command_job_execution(
-            self.platform,
-            ThreadCommandRequest {
-                command: ThreadCommandKind::Resume,
-                thread_id: message.thread_id.clone(),
-                message,
-            },
-            default_workspace,
-        )
-    }
-
-    pub fn send(self, request: ThreadSendRequest) -> Result<ThreadCommandFacadePlan> {
-        jobs::plan_thread_send_with_capability(self.platform, request)
-    }
-
-    pub fn send_job(
-        self,
-        request: ThreadSendRequest,
-        default_workspace: PathBuf,
-    ) -> Result<ThreadCommandExecutionPlan> {
-        jobs::plan_thread_send_job_execution(self.platform, request, default_workspace)
-    }
-
-    pub fn steer(self, request: ThreadSteerRequest) -> Result<ThreadCommandFacadePlan> {
-        jobs::plan_thread_steer_with_capability(self.platform, request)
-    }
-
-    pub fn stop(self, request: ThreadStopRequest) -> Result<ThreadStopPlan> {
-        jobs::plan_thread_stop_with_capability(self.platform, request)
-    }
-
-    pub fn resolve_stop(
-        self,
-        plan: &ThreadStopPlan,
-        active_job_id: Option<String>,
-    ) -> Result<ThreadStopJobPlan> {
-        jobs::resolve_thread_stop_job(plan, active_job_id)
-    }
-
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
         jobs::plan_thread_archive_with_capability(self.platform, thread_id)
     }
@@ -347,113 +247,6 @@ impl<'a> ThreadUseCases<'a> {
 
     pub fn rename(self, request: ThreadRenameRequest) -> Result<ThreadStateActionPlan> {
         jobs::plan_thread_rename_with_capability(self.platform, request)
-    }
-
-    pub fn followups(self, request: FollowUpListRequest) -> Result<FollowUpListPlan> {
-        jobs::plan_followup_list_with_capability(self.platform, request)
-    }
-
-    pub fn list_followups(
-        self,
-        db: &PanelDb,
-        request: FollowUpListRequest,
-    ) -> Result<Vec<ThreadFollowUp>> {
-        jobs::list_followups_with_capability(db, self.platform, request)
-    }
-
-    pub fn pending_followup(self, db: &PanelDb, thread_id: &str) -> Result<Option<ThreadFollowUp>> {
-        let plan = self.followups(FollowUpListRequest {
-            thread_id: thread_id.to_string(),
-            limit: Some(1),
-        })?;
-        Ok(db
-            .list_followups(&plan.thread_id, plan.limit)?
-            .into_iter()
-            .find(|followup| followup.status == "pending"))
-    }
-
-    pub fn enqueue_followup(
-        self,
-        request: ThreadSteerRequest,
-    ) -> Result<FollowUpEnqueueFacadePlan> {
-        jobs::plan_followup_enqueue_with_capability(self.platform, request)
-    }
-
-    pub fn apply_enqueue_followup(
-        self,
-        db: &PanelDb,
-        request: ThreadSteerRequest,
-    ) -> Result<ThreadFollowUp> {
-        jobs::enqueue_followup_with_capability(db, self.platform, request)
-    }
-
-    pub fn claim_followup(self, request: FollowUpClaimRequest) -> Result<FollowUpClaimPlan> {
-        jobs::plan_followup_claim_with_capability(self.platform, request)
-    }
-
-    pub fn claim_next_followup(
-        self,
-        db: &PanelDb,
-        request: FollowUpClaimRequest,
-    ) -> Result<Option<ThreadFollowUp>> {
-        jobs::claim_next_followup_with_capability(db, self.platform, request)
-    }
-
-    pub fn submit_followup(self, followup: &ThreadFollowUp) -> Result<FollowUpSubmitPlan> {
-        jobs::plan_followup_submit_with_capability(self.platform, followup)
-    }
-
-    pub fn mark_followup_submitted(
-        self,
-        request: FollowUpSubmitResultRequest,
-    ) -> Result<FollowUpSubmitResultPlan> {
-        jobs::plan_followup_submitted_with_capability(self.platform, request)
-    }
-
-    pub fn apply_followup_submitted(
-        self,
-        db: &PanelDb,
-        request: FollowUpSubmitResultRequest,
-    ) -> Result<ActionResponse> {
-        jobs::mark_followup_submitted_with_capability(db, self.platform, request)
-    }
-
-    pub fn mark_followup_error(self, request: FollowUpErrorRequest) -> Result<FollowUpErrorPlan> {
-        jobs::plan_followup_error_with_capability(self.platform, request)
-    }
-
-    pub fn apply_followup_error(
-        self,
-        db: &PanelDb,
-        request: FollowUpErrorRequest,
-    ) -> Result<ActionResponse> {
-        jobs::mark_followup_error_with_capability(db, self.platform, request)
-    }
-
-    pub fn cancel_followup(self, request: FollowUpCancelRequest) -> Result<FollowUpCancelPlan> {
-        jobs::plan_followup_cancel_with_capability(self.platform, request)
-    }
-
-    pub fn apply_cancel_followup(
-        self,
-        db: &PanelDb,
-        request: FollowUpCancelRequest,
-    ) -> Result<ActionResponse> {
-        jobs::cancel_followup_with_capability(db, self.platform, request)
-    }
-
-    pub fn autosubmit_followup_job(
-        self,
-        thread_status: ThreadStatus,
-        followup: &ThreadFollowUp,
-        default_workspace: PathBuf,
-    ) -> Result<FollowUpAutoSubmitExecutionPlan> {
-        jobs::plan_followup_autosubmit_execution(
-            self.platform,
-            thread_status,
-            followup,
-            default_workspace,
-        )
     }
 }
 
@@ -489,72 +282,6 @@ impl<'a> JobUseCases<'a> {
 
     pub fn detail_response(self, job: Option<JobRecord>) -> Option<JobResponse> {
         job.map(job_response)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct GoalUseCases<'a> {
-    platform: &'a PlatformPaths,
-}
-
-impl<'a> GoalUseCases<'a> {
-    pub fn get(self, request: GoalGetRequest) -> Result<GoalGetPlan> {
-        goals::plan_goal_get_with_capability(self.platform, request)
-    }
-
-    pub fn save(self, request: GoalUpdateRequest) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_save_with_capability(self.platform, request)
-    }
-
-    pub fn clear(self, thread_id: Option<&str>) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_clear_with_capability(self.platform, thread_id)
-    }
-
-    pub fn pause(self, thread_id: &str) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_pause_with_capability(self.platform, thread_id)
-    }
-
-    pub fn resume(self, thread_id: &str) -> Result<GoalCommandFacadePlan> {
-        goals::plan_goal_resume_with_capability(self.platform, thread_id)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UploadUseCases<'a> {
-    platform: &'a PlatformPaths,
-}
-
-impl<'a> UploadUseCases<'a> {
-    pub fn validate(self, items: &[UploadBatchItem]) -> Result<UploadValidationPlan> {
-        uploads::plan_upload_validation_with_capability(self.platform, items)
-    }
-
-    pub fn store(self, items: Vec<UploadBatchItem>) -> Result<UploadFacadePlan> {
-        uploads::plan_store_uploads_with_capability(self.platform, items)
-    }
-
-    pub fn store_to_root(self, root: &Path, plan: UploadStorePlan) -> Result<UploadOutcome> {
-        uploads::store_upload_plan(root, plan)
-    }
-
-    pub fn delete(self, id: impl AsRef<str>) -> Result<UploadDeletePlan> {
-        uploads::plan_delete_upload_with_capability(self.platform, id)
-    }
-
-    pub fn delete_execute(self, id: impl AsRef<str>) -> Result<UploadDeletePlan> {
-        self.delete(id)
-    }
-
-    pub fn execute_delete(self, root: &Path, plan: &UploadDeletePlan) -> Result<bool> {
-        uploads::execute_delete_upload_plan(root, plan)
-    }
-
-    pub fn retention(self, request: UploadRetentionRequest) -> Result<UploadRetentionPlan> {
-        uploads::plan_upload_retention_with_capability(self.platform, request)
-    }
-
-    pub fn execute_retention(self, root: &Path, plan: &UploadRetentionPlan) -> Result<usize> {
-        uploads::execute_upload_retention_plan(root, plan)
     }
 }
 

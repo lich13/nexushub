@@ -30,8 +30,6 @@ export type InternalReferenceSegment = {
 };
 
 export type CurrentActionKind = "plan" | "question";
-export type CurrentActionQuestion = PendingElicitation["questions"][number];
-export type PlanActionSubmission = { action: "accept" } | { action: "revise"; instructions: string } | { action: "keep_plan" };
 
 export type ConversationMessagePresentation = {
   kind: "user" | "assistant";
@@ -94,20 +92,6 @@ function internalReferenceKind(value: string): InternalReferenceSegment["kind"] 
   return "job";
 }
 
-export function planModeButtonState(nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan = false, hasPendingQuestion = false): { pressed: boolean; label: string; statusText: string } {
-  if (threadStatus === "ReplyNeeded" && hasPendingPlan) {
-    return { pressed: nextMessagePlan, label: "Plan Mode", statusText: "当前线程正在等待计划确认" };
-  }
-  if (threadStatus === "ReplyNeeded" && hasPendingQuestion) {
-    return { pressed: nextMessagePlan, label: "Plan Mode", statusText: "当前线程正在等待问题回复" };
-  }
-  return {
-    pressed: nextMessagePlan,
-    label: "Plan Mode",
-    statusText: nextMessagePlan ? "下一条消息将使用 Plan Mode" : "下一条消息将直接发送"
-  };
-}
-
 export function latestAssistantCopyText(blocks: MessageBlock[]): string | null {
   const latest = [...blocks].reverse().find((block) =>
     block.role === "assistant" && shouldRenderConversationMessage(block)
@@ -136,10 +120,6 @@ export function mergeSavedThreadTitle(threads: ThreadSummary[], threadId: string
   return threads.map((thread) => thread.id === threadId ? { ...thread, title } : thread);
 }
 
-export function threadInspectorPanelTitles(): string[] {
-  return ["名称与归档", "Goal", "复制与路径"];
-}
-
 export function threadResumeCommand(threadId?: string | null): string | null {
   const id = threadId?.trim();
   return id ? `codex resume ${id}` : null;
@@ -165,76 +145,6 @@ export function currentActionKey(plan: MessageBlock | null | undefined, pending:
 
 export function shouldShowCurrentActionCard(actionKey: string | null | undefined, hiddenActionKey: string | null | undefined): boolean {
   return Boolean(actionKey && actionKey !== hiddenActionKey);
-}
-
-export function selectionFromDigitKey(key: string, total: number): number | null {
-  if (!/^[1-9]$/.test(key)) return null;
-  const index = Number(key) - 1;
-  return index >= 0 && index < total ? index : null;
-}
-
-export function moveActionSelection(current: number, total: number, delta: number): number {
-  if (total <= 0) return 0;
-  return (current + delta + total) % total;
-}
-
-export function currentPlanActionOptions(): { label: string; description: string }[] {
-  return [
-    { label: "接受计划", description: "按聊天记录里的 Proposed Plan 继续执行" },
-    { label: "修改计划", description: "补充修改要求后重新生成计划" },
-    { label: "保持计划模式", description: "不提交回复，继续让本线程使用 Plan Mode" }
-  ];
-}
-
-export function planActionSubmission(selected: number, revision: string): PlanActionSubmission | null {
-  if (selected === 0) return { action: "accept" };
-  if (selected === 1 && revision.trim()) return { action: "revise", instructions: revision.trim() };
-  if (selected === 2) return { action: "keep_plan" };
-  return null;
-}
-
-export function questionAnswersReady(questions: CurrentActionQuestion[], answers: Record<string, string | string[] | undefined>): boolean {
-  return questions.every((question) => {
-    const value = answers[question.id];
-    if (Array.isArray(value)) return value.some((item) => item.trim().length > 0);
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
-
-export function combinedQuestionAnswers(
-  questions: CurrentActionQuestion[],
-  answers: Record<string, string | string[] | undefined>,
-  notes: Record<string, string>
-): Record<string, string[]> {
-  return Object.fromEntries(questions.map((question) => {
-    const answer = answers[question.id];
-    const selected = Array.isArray(answer) ? answer : answer ? [answer] : [];
-    const note = notes[question.id]?.trim();
-    return [question.id, note ? [...selected, note] : selected];
-  }));
-}
-
-export function questionAnswerPayload(questions: CurrentActionQuestion[], answers: Record<string, string | string[] | undefined>): Record<string, string[]> {
-  return Object.fromEntries(questions.map((question) => {
-    const value = answers[question.id];
-    return [question.id, Array.isArray(value) ? value : value ? [value] : []];
-  }));
-}
-
-export function renderCurrentActionCardSnapshot(input: {
-  kind: CurrentActionKind;
-  questions?: CurrentActionQuestion[];
-}): { buttons: string[]; supplementalInput: boolean } {
-  if (input.kind === "plan") {
-    return {
-      buttons: currentPlanActionOptions().map((option) => option.label),
-      supplementalInput: false
-    };
-  }
-  return {
-    buttons: (input.questions ?? []).flatMap((question) => question.options.map((option) => option.label)),
-    supplementalInput: true
-  };
 }
 
 export function currentActionKindFromBlocks(

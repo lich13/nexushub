@@ -122,8 +122,6 @@ pub fn list_threads_read_model(
             running_jobs,
             hidden_thread_ids,
             archived_thread_ids,
-            pending_followups: Vec::new(),
-            default_workspace: state.config().codex.workspace.clone(),
         },
         plan.list.query,
     )?;
@@ -167,8 +165,6 @@ pub fn load_thread_detail_read_model(
             &PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux),
             detail,
             active_job,
-            None,
-            state.config().codex.workspace.clone(),
         )?;
         return Ok(Some(view.detail));
     }

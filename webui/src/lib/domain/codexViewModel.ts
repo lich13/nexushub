@@ -1,46 +1,9 @@
-import type {
-  BridgeActionResult,
-  CodexConfig,
-  CodexModel,
-  ThreadDetail,
-  ThreadStatus,
-  ThreadSummary,
-  UploadRecord
-} from "../../types";
+import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
 export type View = "codex" | "grok" | "probe" | "ops" | "security";
-export type SelectedThread = string | "__new" | null;
-export type PermissionPresetId = "ask" | "auto" | "full" | "custom";
-
-export type RunConfig = {
-  model: string;
-  serviceTier: string;
-  reasoning: string;
-  cwd: string;
-  permissionPreset: PermissionPresetId;
-  permissionProfile: string;
-  approvalPolicy: string;
-  sandboxMode: string;
-  networkAccess: boolean | null;
-  collaborationMode: string;
-};
-
-export type ThreadSendPayload = {
-  message: string;
-  attachments?: string[];
-  model?: string | null;
-  service_tier?: string | null;
-  reasoning_effort?: string | null;
-  cwd?: string | null;
-  permission_profile?: string | null;
-  approval_policy?: string | null;
-  sandbox_mode?: string | null;
-  network_access?: boolean | null;
-  collaboration_mode?: string | null;
-};
-
+export type SelectedThread = string | null;
 export type ThreadTitleLike = {
   title?: string | null;
   [key: string]: unknown;
@@ -56,11 +19,8 @@ export const codexLocalCopy = {
   threadListEyebrow: "Codex 本地线程"
 };
 
-export const reasoningOptions = ["", "low", "medium", "high", "xhigh"];
 export const defaultSessionTtlDays = 365;
 export const secondsPerDay = 86400;
-
-const defaultCwd = "";
 
 export function visibleNavigationItems<T extends { id: View }>(items: T[], input?: RuntimeCapabilityInput): T[] {
   return capabilitiesForInput(input).securitySettings
@@ -78,111 +38,6 @@ export function shouldShowLogoutForRuntime(input?: RuntimeCapabilityInput): bool
 
 export function shouldUseSavedSessionForRuntime(input?: RuntimeCapabilityInput): boolean {
   return capabilitiesForInput(input).webAuth;
-}
-
-export function makeRunConfig(config?: CodexConfig, summary?: ThreadSummary): RunConfig {
-  return {
-    model: summary?.model ?? config?.model ?? "gpt-5.5",
-    serviceTier: normalizeServiceTier(config?.service_tier),
-    reasoning: config?.reasoning_effort ?? "xhigh",
-    cwd: summary?.cwd ?? config?.cwd ?? defaultCwd,
-    permissionPreset: permissionPresetFromConfig(config),
-    permissionProfile: config?.permission_profile ?? "",
-    approvalPolicy: config?.approval_policy ?? "never",
-    sandboxMode: config?.sandbox_mode ?? "danger-full-access",
-    networkAccess: config?.network_access ?? true,
-    collaborationMode: ""
-  };
-}
-
-function normalizeServiceTier(value?: string | null): string {
-  if (value === "fast") return "priority";
-  return value?.trim() || "";
-}
-
-function permissionPresetFromConfig(config?: CodexConfig): PermissionPresetId {
-  if (!config?.approval_policy && !config?.sandbox_mode && !config?.permission_profile) return "custom";
-  if (config?.approval_policy === "on-request" && config?.sandbox_mode === "workspace-write") return "ask";
-  if (config?.approval_policy === "untrusted" && config?.sandbox_mode === "workspace-write") return "auto";
-  if (config?.approval_policy === "never" && config?.sandbox_mode === "danger-full-access") return "full";
-  return "custom";
-}
-
-export function defaultRunConfig(): RunConfig {
-  return makeRunConfig();
-}
-
-export function applyPermissionPreset(config: RunConfig, preset: PermissionPresetId): RunConfig {
-  if (preset === "custom") {
-    return {
-      ...config,
-      permissionPreset: preset,
-      permissionProfile: "",
-      approvalPolicy: "",
-      sandboxMode: "",
-      networkAccess: null
-    };
-  }
-  if (preset === "full") {
-    return {
-      ...config,
-      permissionPreset: preset,
-      permissionProfile: "",
-      approvalPolicy: "never",
-      sandboxMode: "danger-full-access",
-      networkAccess: true
-    };
-  }
-  return {
-    ...config,
-    permissionPreset: preset,
-    permissionProfile: "",
-    approvalPolicy: preset === "auto" ? "untrusted" : "on-request",
-    sandboxMode: "workspace-write",
-    networkAccess: true
-  };
-}
-
-export function buildPayload(message: string, config: RunConfig, attachments: Pick<UploadRecord, "id">[] = []): ThreadSendPayload {
-  const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
-  const payload: ThreadSendPayload = {
-    message,
-    model: config.model.trim() || null,
-    service_tier: config.serviceTier.trim() || null,
-    reasoning_effort: config.reasoning.trim() || null,
-    cwd: config.cwd.trim() || null,
-    permission_profile: config.permissionProfile.trim() || null,
-    approval_policy: config.approvalPolicy.trim() || null,
-    sandbox_mode: config.sandboxMode.trim() || null,
-    network_access: config.networkAccess,
-    collaboration_mode: config.collaborationMode.trim() || null
-  };
-  if (attachmentIds.length > 0) {
-    payload.attachments = attachmentIds;
-  }
-  return payload;
-}
-
-export function mergeRunConfigFromDefaults<T extends { collaborationMode: string }>(current: T, defaults: T): T {
-  return {
-    ...defaults,
-    collaborationMode: current.collaborationMode
-  };
-}
-
-export function runConfigAfterSuccessfulSend<T extends { collaborationMode: string }>(config: T): T {
-  return config;
-}
-
-export function modelSupportsServiceTier(models: CodexModel[], modelId: string, tierId: string): boolean {
-  const model = models.find((item) => item.id === modelId);
-  return Boolean(model?.service_tiers?.some((tier) => tier.id === tierId));
-}
-
-export function runConfigWithSupportedServiceTier(config: RunConfig, models: CodexModel[]): RunConfig {
-  if (!config.serviceTier.trim()) return config;
-  if (modelSupportsServiceTier(models, config.model, config.serviceTier.trim())) return config;
-  return { ...config, serviceTier: "" };
 }
 
 export function threadListItemText(thread: ThreadTitleLike): string {
@@ -376,20 +231,18 @@ export function shouldHydrateThreadDetail(threadId: string | null | undefined, d
 }
 
 export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
-  if (detail) return isThreadRunning(detail.summary, detail.blocks, null) ? 2000 : 5000;
-  return selectedSummary && isThreadRunning(selectedSummary, [], null) ? 2000 : 5000;
+  if (detail) return isThreadRunning(detail.summary) ? 2000 : 5000;
+  return selectedSummary && isThreadRunning(selectedSummary) ? 2000 : 5000;
 }
 
-export function isThreadRunning(summary: Partial<ThreadSummary>, blocks: unknown[] = [], lastResult?: Partial<BridgeActionResult> | null): boolean {
-  void blocks;
-  void lastResult;
+export function isThreadRunning(summary: Partial<ThreadSummary>): boolean {
   if (summary.status === "Running") return true;
   if (summary.status === "Recent" && Boolean(summary.active_job_id)) return true;
   return false;
 }
 
 export function isThreadListItemRunning(thread: Partial<ThreadSummary>): boolean {
-  return isThreadRunning(thread, [], null);
+  return isThreadRunning(thread);
 }
 
 export function threadStatusLabel(status?: ThreadStatus | string | null): string {
@@ -418,14 +271,7 @@ export function sourceCountsText(counts?: Record<string, number> | null): string
     .join(" ");
 }
 
-export function actionMessage(result: BridgeActionResult): string {
-  void result;
-  return "已提交给 Codex";
-}
 
-export function threadSettingsMetricLabels(): string[] {
-  return [];
-}
 
 export function extractPlanText(value: string): string {
   return value

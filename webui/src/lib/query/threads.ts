@@ -11,17 +11,14 @@ import {
   type ThreadDetailOptions
 } from "../api";
 import type {
-  BridgeActionResult,
   MessageBlock,
   ThreadBlockPage,
   ThreadDetail,
   ThreadStatus,
   ThreadSummary,
-  UploadOutcome
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../domain/capabilities";
 import {
-  actionMessage,
   archivedSelectedThreadCleanupView,
   clearLocalThreadTitleOverride,
   selectedThreadDetailView,

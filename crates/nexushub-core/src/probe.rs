@@ -2084,7 +2084,8 @@ fn extract_completion_final_reply_body(body: &str) -> Option<String> {
 }
 
 fn sanitize_probe_bark_body(body: &str) -> String {
-    body.lines()
+    let cleaned = strip_memory_citation_blocks(body)
+        .lines()
         .filter_map(|line| {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -2097,7 +2098,6 @@ fn sanitize_probe_bark_body(body: &str) -> String {
                 || lower.starts_with("turn_id:")
                 || lower.starts_with("time:")
                 || lower.starts_with("url:")
-                || lower.contains("://")
                 || trimmed.starts_with("线程 ID：")
                 || trimmed.starts_with("线程ID：")
                 || trimmed.starts_with("Turn ID：")
@@ -2121,9 +2121,34 @@ fn sanitize_probe_bark_body(body: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+        .join("\n");
+    let mut normalized = cleaned;
+    while normalized.contains("\n\n\n") {
+        normalized = normalized.replace("\n\n\n", "\n\n");
+    }
+    normalized.trim().to_string()
+}
+
+fn strip_memory_citation_blocks(body: &str) -> String {
+    let mut inside = false;
+    let mut fenced = false;
+    let mut kept = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+        }
+        if !fenced && trimmed.starts_with("<oai-mem-citation>") {
+            inside = true;
+        }
+        if !inside {
+            kept.push(line);
+        }
+        if inside && !fenced && trimmed.ends_with("</oai-mem-citation>") {
+            inside = false;
+        }
+    }
+    kept.join("\n")
 }
 
 fn probe_event_dedupe_body_component(
@@ -3262,6 +3287,28 @@ Authorization: Bearer secret-token";
         assert_eq!(event.bark_body, "最终回复第一行\n已完成用户要求。");
         assert_eq!(event.payload["body_summary"], event.bark_body);
         assert_probe_bark_body_is_safe(&event.bark_body);
+    }
+
+    #[test]
+    fn bark_body_drops_memory_citation_metadata_but_keeps_literal_code() {
+        let runtime = ProbeRuntime::new(
+            Config::default(),
+            PlatformPaths::for_kind(PlatformKind::Linux),
+        );
+        let body = "完成。\n\n<oai-mem-citation>\n<rollout_ids>\nprivate-id\n</rollout_ids>\n</oai-mem-citation>\n\n```xml\n<oai-mem-citation>literal</oai-mem-citation>\n```";
+        let event = runtime.build_event(ProbeEventInput::notify_completion_with_context(
+            Some("thread-memory-citation"),
+            Some("turn-memory-citation"),
+            None,
+            None,
+            Some(body),
+            Some("task_complete.last_agent_message"),
+        ));
+        assert_eq!(
+            event.bark_body,
+            "完成。\n\n```xml\n<oai-mem-citation>literal</oai-mem-citation>\n```"
+        );
+        assert!(!event.bark_body.contains("private-id"));
     }
 
     #[test]

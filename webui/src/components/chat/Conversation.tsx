@@ -1,22 +1,20 @@
 import { Archive, ArchiveRestore, Check, Copy, MoreHorizontal, Pencil, X } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
-import { latestAssistantCopyText, threadResumeCommand } from "../../lib/domain/conversationViewModel";
+import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { ThreadDetail } from "../../types";
 
 export {
   blockKindLabel,
   blocksWithCurrentPending,
-  combinedQuestionAnswers,
   compactConversationBlocks,
   conversationMessagePresentation,
   currentActionKey,
   currentActionKindFromBlocks,
   currentPendingElicitation,
-  currentPlanActionOptions,
   formatPayload,
   formatTime,
   historyCollapseKind,
@@ -35,26 +33,18 @@ export {
   latestAssistantCopyText,
   messageBlockText,
   mergeSavedThreadTitle,
-  moveActionSelection,
   nextRenameDraftValue,
   pendingFromBlocks,
-  planActionSubmission,
-  planModeButtonState,
   prioritizeCurrentActionBlocks,
-  questionAnswerPayload,
   questionAnswerLabels,
-  questionAnswersReady,
-  renderCurrentActionCardSnapshot,
   roleLabel,
   segmentInternalReferences,
-  selectionFromDigitKey,
   shouldAutoFollowMessageStream,
   shouldRenderActionStackBlock,
   shouldRenderConversationBlock,
   shouldRenderConversationMessage,
   shouldShowCurrentActionCard,
   threadCopyId,
-  threadInspectorPanelTitles,
   threadResumeCommand,
   threadRolloutPath,
   toolBlockDetailText,
@@ -66,11 +56,9 @@ export {
 export type {
   ConversationMessagePresentation,
   CurrentActionKind,
-  CurrentActionQuestion,
   InternalReferenceSegment,
   MessageBlockState,
   MessageScrollSnapshot,
-  PlanActionSubmission
 } from "../../lib/domain/conversationViewModel";
 
 
@@ -89,9 +77,39 @@ export function Conversation(props: {
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const stream = useRef<HTMLDivElement>(null);
+  const scrollState = useRef({ threadId: "", follow: true, prepend: null as number | null });
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
+  const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const actions = useReadOnlyThreadActions({ csrfToken, onSuccess: () => setRenaming(false) });
-  const older = useThreadBlockPageMutation({ onBeforeLoad: () => 0, onSuccess: ({ threadId, cursor, page }) => props.messageStore.applyBlockPage(threadId, page, cursor), onError: (error) => setFeedback(error.message) });
+  const older = useThreadBlockPageMutation({
+    onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
+    onSuccess: ({ threadId, cursor, page, beforeHeight }) => {
+      if (threadId === props.threadId) scrollState.current.prepend = beforeHeight;
+      props.messageStore.applyBlockPage(threadId, page, cursor);
+    },
+    onError: (error) => setFeedback(error.message)
+  });
+  useLayoutEffect(() => {
+    const element = stream.current;
+    if (!element) return;
+    const state = scrollState.current;
+    if (state.threadId !== props.threadId) {
+      state.threadId = props.threadId;
+      state.follow = true;
+      state.prepend = null;
+      setHistoryExpanded(false);
+      setRenaming(false);
+      setFeedback(null);
+    }
+    if (state.prepend !== null) {
+      element.scrollTop = element.scrollHeight - state.prepend;
+      state.prepend = null;
+    } else if (state.follow) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [props.threadId, blocks, historyExpanded]);
   const copy = async (text: string | null | undefined) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
@@ -123,10 +141,13 @@ export function Conversation(props: {
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-      <div className="message-stream readonly-message-stream">
+      <div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
         {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
         {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
-        {blocks.map((block) => <MessageBlockView key={block.id} block={block} />)}
+        {visibleBlocks.map((block) => <MessageBlockView key={block.id} block={block} historyExpanded={historyExpanded} onShowHistory={() => {
+          if (stream.current) scrollState.current.prepend = stream.current.scrollHeight - stream.current.scrollTop;
+          setHistoryExpanded(true);
+        }} />)}
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div>
     </main>

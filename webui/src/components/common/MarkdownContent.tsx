@@ -3,6 +3,19 @@ import { useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+function omitMemoryCitations() {
+  return (tree: { children: Array<{ type: string; value?: string }> }) => {
+    let inside = false;
+    tree.children = tree.children.filter((node) => {
+      const value = node.type === "html" ? node.value?.trim() : undefined;
+      if (value?.startsWith("<oai-mem-citation>")) inside = true;
+      if (!inside) return true;
+      if (value?.endsWith("</oai-mem-citation>")) inside = false;
+      return false;
+    });
+  };
+}
+
 function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
   const [copied, setCopied] = useState(false);
   return <div className="markdown-code"><button className="icon-button" title={copied ? "已复制代码" : "复制代码"} onClick={async (event) => {
@@ -14,7 +27,7 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
 }
 
 export function MarkdownContent({ text }: { text: string }) {
-  return <div className="markdown-content"><Markdown remarkPlugins={[remarkGfm]} components={{
+  return <div className="markdown-content"><Markdown remarkPlugins={[remarkGfm, omitMemoryCitations]} components={{
     pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
     a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />
   }}>{text}</Markdown></div>;

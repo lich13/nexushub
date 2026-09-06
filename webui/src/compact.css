@@ -17,9 +17,12 @@
 .search-box input { min-height: 34px; font-size: 13px; }
 .segmented button { border: 0; background: transparent; }
 .segmented button.active { background: var(--surface-elevated); color: var(--text); }
+.thread-list .segmented { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.thread-list .segmented button { padding: 8px 4px; white-space: nowrap; }
 .conversation-shell.compact-readonly-conversation { display: block; height: 100%; background: var(--canvas); }
 .compact-readonly-conversation .conversation-main { height: 100%; display: flex; flex-direction: column; min-width: 0; }
-.conversation-header { padding: 18px 26px; min-height: 76px; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 12px; }
+.conversation-header { background: var(--canvas); color: var(--text); backdrop-filter: none; padding: 18px 26px; min-height: 76px; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 12px; }
+.compact-readonly-conversation .conversation-main { background: var(--canvas); }
 .conversation-title-copy { min-width: 0; flex: 1; }
 .conversation-title { font-size: 17px; line-height: 1.45; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .conversation-title-copy .muted-text { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -28,8 +31,24 @@
 .chat-message, .chat-bubble, .chat-message-body, .message-body { background: transparent; box-shadow: none; color: var(--text); border: 0; }
 .chat-meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 .chat-meta small { display: none; }
+.conversation-shell .chat-meta span, .conversation-shell .message-meta span { background: transparent; border: 0; color: var(--muted); padding: 0; border-radius: 0; font-weight: 500; }
+.conversation-shell .chat-bubble { background: var(--surface-elevated); color: var(--text); border: 0; border-radius: 8px; box-shadow: none; }
 .tool-card, .plan-cell, .question-cell, .question-result-cell { border: 0; border-bottom: 1px solid var(--hairline); border-radius: 0; background: transparent; color: var(--text); padding: 12px 0; }
 .tool-card .tool-summary { font-size: 12px; color: var(--muted); }
+.compact-readonly-conversation { --chat-text: var(--text); --chat-border: var(--hairline); --chat-surface: var(--canvas); --chat-surface-soft: var(--surface); }
+.compact-readonly-conversation .tool-card,
+.compact-readonly-conversation .tool-card.running,
+.compact-readonly-conversation .plan-cell,
+.compact-readonly-conversation .question-cell,
+.compact-readonly-conversation .question-result-cell,
+.compact-readonly-conversation .history-collapse-cell { background: transparent; border: 0; border-bottom: 1px solid var(--hairline); border-radius: 0; box-shadow: none; padding: 14px 0; }
+.compact-readonly-conversation .tool-card summary { padding: 0; color: var(--text); }
+.compact-readonly-conversation .tool-card summary .tool-title { white-space: normal; overflow-wrap: anywhere; }
+.compact-readonly-conversation .tool-card pre { color: var(--text); background: var(--surface); }
+.compact-readonly-conversation .choice-grid { grid-template-columns: 1fr; }
+.compact-readonly-conversation .choice-option { background: transparent; border: 0; border-bottom: 1px solid var(--hairline); border-radius: 0; padding: 10px 0; }
+.compact-readonly-conversation .choice-option span { color: var(--muted); background: transparent; }
+.compact-readonly-conversation .answered-row { border-color: var(--hairline); background: var(--surface); border-radius: 4px; }
 .task-menu { position: relative; flex: none; }
 .task-menu > summary { list-style: none; }
 .task-menu > summary::-webkit-details-marker { display: none; }
@@ -68,6 +87,9 @@
 .provider-event { margin-bottom: 28px; }
 .provider-event.user_message_chunk { padding: 14px 18px; border-radius: 8px; background: var(--surface); }
 .grok-tool { padding: 10px 0; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--hairline); }
+.grok-tool summary { overflow-wrap: anywhere; cursor: pointer; }
+.grok-tool summary small { margin-left: 12px; }
+.grok-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .mobile-back { display: none; }
 .modal-backdrop { position: fixed; inset: 0; background: #0006; z-index: 100; display: grid; place-items: center; padding: 20px; }
 .confirm-dialog { background: var(--canvas); color: var(--text); border: 1px solid var(--hairline); border-radius: 8px; padding: 24px; width: min(520px, 100%); max-height: 90vh; overflow: auto; font-size: 14px; }

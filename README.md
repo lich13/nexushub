@@ -1,32 +1,22 @@
 # NexusHub
 
-`nexushub` is a Rust + React operations console for Codex local state with one shared `webui` frontend packaged for three host surfaces: Linux server WebUI, desktop embedded Tauri, and desktop LAN WebUI. On Tencent Cloud Linux it runs as a local-only daemon exposed through Nginx HTTPS at `https://661313.xyz/nexushub/`. On macOS and Linux desktop the supported entry is the Tauri App. The Tauri App can optionally start a default-off, independently authenticated LAN WebUI service from the bundled `nexushub-webd` helper.
+NexusHub is a compact Codex and Grok Build task browser with a shared React interface for Tauri desktop and the Tencent Cloud Linux WebUI at `https://661313.xyz/nexushub/`.
 
-The Tauri apps follow the CC Switch native packaging model: Tauri wraps the main `webui` interface directly. macOS produces `NexusHub.app`, `NexusHub-<version>-darwin-arm64.dmg`, `nexushub-darwin-arm64.tar.gz`, signed updater metadata `nexushub-darwin-arm64.tar.gz.sig`, and `latest.json` platform `darwin-aarch64`. Linux desktop produces `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, `.rpm`, and AppImage updater signature for `latest.json` platform `linux-x86_64`. The Linux server release chain builds the same `webui` into `/usr/share/nexushub-webd/webui/`, publishes `nexushub-webd-linux-x86_64.tar.gz`, and serves the hosted browser entry at `https://661313.xyz/nexushub/`.
+## Scope
 
-The two Linux release lines are intentional. `nexushub-webd-linux-x86_64.tar.gz` is the headless Tencent Cloud WebUI/systemd package; `NexusHub-<version>-Linux-x86_64.AppImage`, `.deb`, and `.rpm` are the Linux Tauri desktop packages. The Linux Tauri release job is expected to take longer because it installs WebKit/GTK dependencies, builds the Tauri bundle, produces AppImage/deb/rpm, signs the AppImage when release secrets are present, and runs an `xvfb` smoke test. The headless webd tarball is not a Tauri updater asset and must not appear in `latest.json`.
+- Codex: browse, search, filter, rename, archive/restore, and copy messages, IDs, paths or resume commands. Copying a command never executes it.
+- Grok Build: read native `summary.json` and `updates.jsonl`; merge tool updates by call identity; rename through fixed `grok agent stdio` and `x.ai/session/rename`.
+- Grok local-file deletion requires a preview and explicit confirmation. Identity, activity, path boundaries, symlinks and content fingerprints are rechecked. Workspaces, worktrees, settings and cloud tasks are never deleted.
+- No task creation, sending, follow-up queue execution, steer, stop, fork, uploads, approvals, question answers, plan acceptance or manual Goal controls.
+- Probe: main-task completion/question notifications, Hook status, an event timeline and independent Bark/Goal-recovery settings.
+- Settings: system/update status, maintenance and execution history; account/security settings appear only on the server WebUI.
+- Desktop runs the embedded interface and fixed Hook/monitor helper only. It does not serve a desktop LAN WebUI.
 
-Architecture parity with `cc-switch` is intentionally scoped. `cc-switch origin/main` is the desktop Tauri release reference and includes Windows plus Linux arm64; local `cc-switch feat/webd` branches are separate headless/FHS references. NexusHub keeps the accepted macOS + Tencent Cloud Linux target in this release, with Windows desktop and Linux arm64 recorded as P2 until they have explicit CI, Release, updater, and acceptance coverage.
+The task read model uses Codex local state, session index and rollout files. History reads are side-effect free. Existing jobs, followups and shadow Goal records remain in SQLite for compatibility but cannot restart retired task execution.
 
-Current scope:
+The two Linux release lines have distinct roles: `nexushub-webd-linux-x86_64.tar.gz` is the headless server package; AppImage/deb/rpm are Tauri desktop packages. `latest.json` contains signed desktop updater assets for `darwin-aarch64` and `linux-x86_64`, never the server tarball. Windows and Linux arm64 are not current release targets.
 
-- Login, HttpOnly session cookie, CSRF-protected mutating API, Turnstile settings.
-- Encrypted Turnstile secret storage compatible with legacy codex-cloud-panel and cc-switch-lite key import.
-- Desktop-style conversation workspace backed by Codex local state and controlled `codex exec --json` jobs.
-- Thread read model from the resolved Codex home, Codex `state_5.sqlite`, `session_index.jsonl`, rollout files, and `logs_2.sqlite`.
-- Running / reply-needed / recoverable / archived status cards.
-- Archive delete dry-run and button-confirmed execute path with integrity checks.
-- Shared update status and update jobs: Linux server uses `/usr/local/bin/nexushub-webd-update` through fixed systemd-health-checked jobs; macOS and Linux Tauri use the signed Tauri updater feed at `https://github.com/lich13/nexushub/releases/latest/download/latest.json`.
-- Job failure analysis for common release, checksum, systemd, Nginx, sudo, Codex auth, SQLite, network, and local-state failures.
-- Plan Mode, model, reasoning, and a compact Codex APP-style permission menu for the conversation workspace.
-- Network access defaults to enabled for generated sandbox policies; the WebUI does not expose a network checkbox.
-- Provider preview framework for Codex, Claude Code, future Cursor CLI, and future Gemini CLI. Codex is the only full-control provider in this release.
-- Claude Code preview is read-only: it discovers `~/.claude/projects`, session JSONL files, and redacted settings. It does not launch, resume, send, stop, or write Claude configuration.
-- Built-in Probe replaces the old `codex-sentinel-server` runtime path for cloud use: status, thread classification, Hook events, Bark testing, logs-db maintenance, and settings are handled inside NexusHub. It does not add hidden desktop control, automatic replies, Sentinel alias routes, or direct destructive deletion endpoints.
-- Desktop navigation can be hidden to give the conversation workspace more horizontal room.
-- System status, job history, Linux server WebUI, macOS/Linux Tauri App shells, and Tauri-controlled desktop LAN WebUI service status.
-
-Thread listing, thread details, status cards, Probe, archive deletion, Plan Mode state, and logs-db maintenance read or persist NexusHub state locally from the resolved Codex home plus the NexusHub panel DB: `state_5.sqlite`, `session_index.jsonl`, rollout files, `logs_2.sqlite`, and `nexushub.sqlite`. Conversation create/send actions use controlled `codex exec --json` jobs. Stop, fork, and approvals that cannot be operated reliably from local state return an explicit unavailable response instead of depending on a root app-server socket. Historical goal/plan/choice/approval items are only surfaced when they are still the latest unresolved action.
+The Linux desktop bundle requires WebKit/GTK build dependencies and is smoke-tested under `xvfb`; those desktop-only requirements do not belong on the headless Tencent Cloud host. The headless webd tarball is not a Tauri updater asset and is not put into `latest.json`.
 
 ## Runtime Layout
 
@@ -51,7 +41,6 @@ macOS ARM64 Tauri App layout:
 ~/Library/Application Support/NexusHub/config.toml
 ~/Library/Application Support/NexusHub/nexushub.sqlite
 ~/Library/Application Support/NexusHub/bin/nexushub-webd
-~/Library/Application Support/NexusHub/desktop-assets/
 ~/Library/Logs/NexusHub/
 ```
 
@@ -61,26 +50,10 @@ Linux desktop Tauri App layout:
 ~/.config/NexusHub/config.toml
 ~/.local/share/NexusHub/nexushub.sqlite
 ~/.local/share/NexusHub/bin/nexushub-webd
-~/.local/share/NexusHub/desktop-assets/
 ~/.local/state/NexusHub/logs/
 ```
 
-On desktop, open NexusHub from the installed Tauri App bundle. The App bundle carries the local `nexushub-webd` helper and syncs it into the desktop data directory on launch so Probe Bark tests, Hook installation, and optional LAN WebUI use the same controlled helper path. Do not document or ship a LaunchAgent Web service or Cloudflare Tunnel entry for desktop platforms.
-
-Desktop LAN WebUI is controlled only from embedded Tauri:
-
-```toml
-[desktop_webui]
-enabled = false
-listen = "0.0.0.0:15743"
-username = "admin"
-session_ttl_seconds = 86400
-cookie_secure = false
-public_base_url = null
-turnstile_enabled = false
-```
-
-The LAN WebUI password is never stored as plaintext in `config.toml`; Tauri writes an Argon2 hash in the independent `desktop-webui:<username>` admin realm. The helper starts only when `enabled=true`, a password is configured, and the listen port is available. Browser clients of the LAN WebUI get login and CSRF protection plus shared Codex/Claude Code/Probe/Ops pages, but cannot remotely start or stop the service and do not see Linux server surfaces such as systemd, Nginx, public endpoint, or Linux prune.
+On desktop, open the installed Tauri App. It synchronizes the bundled helper into the App Support data directory for Hooks and the monitor. Upgrade cleanup stops only a positively identified legacy desktop Web service and removes its dedicated static copy; shared databases, credentials and user configuration remain untouched.
 
 ## Codex State
 
@@ -103,7 +76,7 @@ Probe routes are canonical RPC commands under the daemon-local `/api/rpc/probe.*
 
 The old `codex-sentinel-server` cleanup was a one-time migration and is no longer shipped as a NexusHub runtime helper. Release packages should not install `nexushub-probe-legacy-cleanup`; the live Hook handler remains `nexushub-webd probe hook-stop`.
 
-On macOS, the native App maintains `com.lich13.nexushub.probe-error-monitor`, a background `LaunchAgent` that runs the App Support helper with the fixed `probe monitor-errors` command so terminal Codex errors can still be observed while the App is closed. This process is not a Web service: its plist has no `Sockets` entry, opens no listener, and does not enable the optional desktop LAN WebUI. On Tencent Cloud the existing `nexushub-webd` systemd process runs the same monitor loop without installing another daemon.
+On macOS, the native App maintains `com.lich13.nexushub.probe-error-monitor`, a background `LaunchAgent` that runs the App Support helper with the fixed `probe monitor-errors` command so terminal Codex errors can still be observed while the App is closed. This process is not a Web service: its plist has no `Sockets` entry, opens no listener, and never starts a desktop Web service. On Tencent Cloud the existing `nexushub-webd` systemd process runs the same monitor loop without installing another daemon.
 
 ## Local Build
 
@@ -111,7 +84,7 @@ On macOS, the native App maintains `com.lich13.nexushub.probe-error-monitor`, a 
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-corepack pnpm@11.0.8 --dir webui install
+corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/package-webd-linux-x86_64.sh
@@ -146,7 +119,7 @@ sudo NEXUSHUB_ADMIN_PASSWORD='<new-strong-password>' \
   /usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml admin reset-password --username admin
 ```
 
-Turnstile is configured after login in `安全 / Security`. The cloud defaults match cc-switch-lite semantics: 365-day sessions, Site Key `0x4AAAAAADPfCPB_O-N3j6ON`, action `login`, expected hostname `661313.xyz`, token replay protection, and enabled login verification. The `required` switch is a fail-closed guard when Turnstile is not enabled. Secret values are encrypted at rest, write-only, and never returned by the API.
+Turnstile is configured after login in `设置 / 账户与安全`. The cloud defaults match cc-switch-lite semantics: 365-day sessions, Site Key `0x4AAAAAADPfCPB_O-N3j6ON`, action `login`, expected hostname `661313.xyz`, token replay protection, and enabled login verification. The `required` switch is a fail-closed guard when Turnstile is not enabled. Secret values are encrypted at rest, write-only, and never returned by the API.
 
 ## macOS ARM64 Acceptance
 
@@ -158,7 +131,7 @@ open -a NexusHub
 tail -n 80 "$HOME/Library/Logs/NexusHub/nexushub.log"
 ```
 
-The app should open as a native macOS desktop experience. A LaunchAgent Web service and Cloudflare Tunnel are not supported macOS entry points. If desktop LAN WebUI is enabled from the Tauri Ops settings, validate `http://127.0.0.1:15743/healthz`, independent password login, CSRF-protected actions, and then turn the service back off for default acceptance.
+The App is the only desktop interface. Verify the official monitor remains running after the App closes, with no listener. The App plist, bundled helper and App Support helper must report the same release version.
 
 ## Linux Desktop Acceptance
 
@@ -222,7 +195,7 @@ shasum -a 256 -c dist/NexusHub-<version>-Linux-x86_64.deb.sha256
 shasum -a 256 -c dist/NexusHub-<version>-Linux-x86_64.rpm.sha256
 ```
 
-Current interactive acceptance requires Chrome 插件验收. Log in there and verify: thread list loads from local Codex state, system status shows the IP/public endpoint and resolved Codex state paths, conversation send works through controlled `codex exec --json` jobs, Plan Mode and the compact permission menu work, old goal/plan threads do not show stale pending prompts, Turnstile settings persist, the panel update card works, archive and hidden-thread delete dry-runs report `integrity=ok`, Probe uses `/api/rpc/probe.status`, old REST Probe paths return `404`, and both `/codex-cloud-panel/` and `/api/sentinel/status` remain `404`.
+Interactive acceptance checks task browsing, Markdown/code/link rendering, menus, long text, desktop/mobile layouts, visible errors, Grok native rename and isolated test-directory deletion. No sending or manual Goal controls may appear. Both cleanup workflows stop at final confirmation without deleting user data. On the server, verify security persistence and authenticated RPC behavior; all retired and sensitive paths must return `404`.
 
 After healthz, doctor, and public `/nexushub/` checks pass, old release-update backups can be deleted or pruned. Do not create an extra backup just to compact `logs_2.sqlite`; use the gated compact workflow and remove existing backups only after successful health verification.
 

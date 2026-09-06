@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { BridgeActionResult, MessageBlock, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, ThreadDetail, ThreadSummary } from "../types";
 import {
   applyRealtimeBlocksToThreadSlot,
   applyThreadBlockPageToSlot,
@@ -166,22 +166,13 @@ describe("thread message store", () => {
     expect(store.slots.get("thread-b")?.blocks.map((item) => item.id)).toEqual(["b1"]);
   });
 
-  test("stores mutation result and feedback per captured thread", () => {
+  test("stores feedback per captured thread", () => {
     const store = createThreadMessageStoreState();
-    const result: BridgeActionResult = {
-      bridge: true,
-      thread_id: "thread-a",
-      turn_id: "turn-a",
-      fallback: false
-    };
 
-    setThreadLastResult(store, "thread-a", result);
     setThreadFeedback(store, "thread-a", "submitted");
     setActiveThreadSlot(store, "thread-b");
 
-    expect(store.slots.get("thread-a")?.lastResult?.turn_id).toBe("turn-a");
     expect(store.slots.get("thread-a")?.feedback).toBe("submitted");
-    expect(store.slots.get("thread-b")?.lastResult).toBeNull();
     expect(store.slots.get("thread-b")?.feedback).toBeNull();
   });
 
@@ -204,12 +195,6 @@ describe("thread message store", () => {
     const initialFollowRevision = slot.bottomFollowRevision;
 
     setThreadFeedback(store, "thread-a", "status only");
-    setThreadLastResult(store, "thread-a", {
-      bridge: true,
-      thread_id: "thread-a",
-      turn_id: "turn-a",
-      fallback: false
-    });
     applyThreadBlockPageToSlot(store, "thread-a", {
       thread_id: "thread-a",
       blocks: [block("older")],

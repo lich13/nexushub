@@ -1,7 +1,7 @@
 # cc-switch Architecture Parity Audit
 
-Last reviewed: 2026-06-30
-NexusHub target: `v0.1.145`
+Last reviewed: 2026-09-06
+NexusHub target: `v0.1.158` (post-release acceptance repair)
 
 ## Boundary
 
@@ -9,13 +9,13 @@ NexusHub target: `v0.1.145`
 
 The local `cc-switch feat/webd` branch is a separate reference for `webd`, FHS paths, headless WebUI packaging, and server deployment ideas. It is not the same as `cc-switch origin/main`, and it should not be copied into NexusHub as a dispatcher style when NexusHub already has a stricter shared core/use-case/contract/adapter split.
 
-NexusHub v0.1.145 keeps the accepted product target: macOS Tauri, Linux Tauri x86_64, Tencent Cloud Linux headless WebUI, and desktop LAN WebUI all share one `webui` and the same contract registry.
+NexusHub v0.1.157 keeps the accepted product target: macOS Tauri, Linux Tauri x86_64, and Tencent Cloud Linux headless WebUI share one `webui` and the same contract registry. Desktop LAN WebUI is retired; macOS uses embedded Tauri plus fixed Hook/monitor helpers.
 
 NexusHub v0.1.144 remains the rollback baseline for this final sync-efficiency pass; `v0.1.145` adds checklist and DTO/schema drift guards without changing runtime behavior.
 
 ## Must-Have Parity
 
-- macOS Tauri wraps the shared `webui` directly, with official DMG/updater assets and Computer Use acceptance.
+- macOS Tauri wraps the shared `webui` directly, with official DMG/updater assets and Computer Use acceptance. It does not expose a LAN WebUI.
 - Tencent Cloud Linux uses `nexushub-webd-linux-x86_64.tar.gz` for headless WebUI/systemd deployment and Browser 插件验收.
 - Linux desktop uses `NexusHub-*-Linux-x86_64.AppImage`, `.deb`, and `.rpm`; GitHub Actions `xvfb` smoke is the GUI acceptance path.
 - Shared features must start in `contracts/nexushub-contract.json`, then core use-case/DTO, WebUI query/domain/runtime, and finally thin Linux RPC plus Tauri invoke adapters.
@@ -24,8 +24,8 @@ NexusHub v0.1.144 remains the rollback baseline for this final sync-efficiency p
 ## NexusHub Is Intentionally Stricter
 
 - `contracts/nexushub-contract.json` is the single parity registry for shared action ids, host surfaces, capabilities, visual rules, Linux RPC exposure, Tauri invoke exposure, and WebUI wrappers.
-- Linux server WebUI, desktop embedded Tauri, and desktop LAN WebUI are separate host surfaces; differences must come from the registry, `SystemCapabilities`, host policy, or runtime transport.
-- Browser clients of desktop LAN WebUI cannot start or stop the LAN service, and do not see Linux server systemd, Nginx, public endpoint, security admin, or prune surfaces.
+- Linux server WebUI and desktop embedded Tauri are separate host surfaces; differences come from the registry, `SystemCapabilities`, host policy, or runtime transport.
+- There is no desktop LAN WebUI control or listener. Browser clients only reach the Tencent Cloud server surface.
 - The headless server tarball is never a Tauri updater platform and must not appear in `latest.json`.
 
 ## Intentional Differences
@@ -39,7 +39,7 @@ NexusHub v0.1.144 remains the rollback baseline for this final sync-efficiency p
 
 - `cc-switch origin/main` still has Windows desktop and Linux arm64 release lines. They remain P2 for NexusHub because the current hard acceptance target is macOS local plus Tencent Cloud Linux.
 - The local `cc-switch feat/webd` branch has webd/FHS concepts, but NexusHub has already landed them with stricter host surfaces, `NexusHubUseCases`, contract registry parity, Release guards, and dual-end acceptance.
-- The remaining synchronization-risk area is feature drift during future additions, not a missing runtime architecture. `v0.1.145` addresses that by adding a contract-driven next-action checklist and lightweight DTO/schema guards.
+- The remaining synchronization-risk area is feature drift during future additions, not a missing runtime architecture. The contract-driven checklist and DTO/schema guards remain the prevention layer while retired execution paths stay out of production.
 
 ## Drift Guards
 

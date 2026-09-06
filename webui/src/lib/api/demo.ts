@@ -2,17 +2,13 @@ import type {
   AgentProviderInfo,
   ArchiveDeletePlan,
   ArchiveDeleteResult,
-  BridgeActionResult,
   CodexConfig,
-  CodexModel,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   JobRecord,
   MessageBlock,
   OptionalResult,
-  PermissionProfile,
   PlatformOverview,
-  PluginInfo,
   PublicSettings,
   ProbeEventsResponse,
   ProbeLogsDbStatus,
@@ -25,7 +21,6 @@ import type {
   ThreadBlockPage,
   ThreadDetail,
   ThreadSummary,
-  UploadOutcome,
   UpdateStatus
 } from "../../types";
 import {
@@ -151,66 +146,8 @@ export function demoProviders(): AgentProviderInfo[] {
   ];
 }
 
-export function demoPlugins(): PluginInfo[] {
-  return [
-    {
-      id: "codex",
-      label: "Codex",
-      status: "ready",
-      kind: "builtin",
-      description: "Codex 本地线程、状态和受控操作",
-      invocation_template: "@Codex "
-    },
-    {
-      id: "probe",
-      label: "Probe",
-      status: "ready",
-      kind: "builtin",
-      description: "云机探针状态、Hook、Bark 和日志库维护",
-      invocation_template: "@Probe "
-    },
-    {
-      id: "grok_build",
-      label: "Grok Build",
-      status: "ready",
-      kind: "builtin",
-      description: "Grok Build 会话、消息和工具活动只读浏览",
-      invocation_template: "@Grok Build "
-    },
-    {
-      id: "system_ops",
-      label: "System/Ops",
-      status: "ready",
-      kind: "builtin",
-      description: "固定系统运维动作和发布更新任务",
-      invocation_template: "@System/Ops "
-    }
-  ];
-}
 
-export function demoModels(): OptionalResult<CodexModel[]> {
-  return {
-    available: true,
-    data: [
-      { id: "gpt-5.5", label: "GPT-5.5", default: true },
-      { id: "gpt-5.5-codex", label: "GPT-5.5 Codex", service_tiers: [{ id: "priority", name: "Fast", description: "1.5x speed" }], default_service_tier: "default" },
-      { id: "gpt-5.4-mini", label: "GPT-5.4 mini" },
-      { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
-      { id: "o3", label: "o3" }
-    ]
-  };
-}
 
-export function demoPermissionProfiles(): OptionalResult<PermissionProfile[]> {
-  return {
-    available: true,
-    data: [
-      { id: "danger-full-access", label: "Danger full access", sandbox_mode: "danger-full-access", approval_policy: "never", network_access: true, default: true },
-      { id: "workspace-write", label: "Workspace write", sandbox_mode: "workspace-write", approval_policy: "on-request", network_access: true },
-      { id: "read-only", label: "Read only", sandbox_mode: "read-only", approval_policy: "on-request", network_access: false }
-    ]
-  };
-}
 
 export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeStatus {
   const platform = demoPlatformOverview(fixture);
@@ -511,35 +448,13 @@ export function demoThreadBlockPage(id: string): ThreadBlockPage {
   };
 }
 
-export function demoUploadOutcome(files: File[]): UploadOutcome {
-  return {
-    files: files.map((file, index) => ({
-      id: `upload-demo-${Date.now()}-${index}`,
-      name: file.name,
-      mime: file.type || "application/octet-stream",
-      size: file.size,
-      sha256: "demo",
-      kind: file.type.startsWith("image/") ? "image" : file.name.endsWith(".md") ? "markdown" : "text",
-      status: "ready"
-    }))
-  };
-}
 
-export function demoDeletedUpload(): { ok: boolean; deleted: boolean } {
-  return { ok: true, deleted: true };
-}
 
 export function demoOk(): { ok: boolean } {
   return { ok: true };
 }
 
-export function demoBridgeActionResult(threadId: string): BridgeActionResult {
-  return { bridge: false, thread_id: threadId, turn_id: "turn-demo", fallback: true, message: "已提交给 Codex" };
-}
 
-export function demoCreatedThreadResult(): BridgeActionResult {
-  return demoBridgeActionResult("019e-new-demo");
-}
 
 export function demoArchiveDeletePlan(): ArchiveDeletePlan {
   return { total_threads: 42, active_threads: 31, archived_threads: 11, session_index_lines: 44, rollout_files: 39, archived_ids: ["019e-demo-a", "019e-demo-b"], integrity: "ok" };

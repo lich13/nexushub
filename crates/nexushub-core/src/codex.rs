@@ -5,7 +5,6 @@ mod goal_client;
 mod identity;
 mod mutations;
 mod paths;
-mod read_cache;
 #[cfg(test)]
 mod rollout_accuracy_tests;
 mod rollout_events;

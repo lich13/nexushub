@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     env, fs,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -59,6 +60,12 @@ pub struct GrokHistoryEvent {
     pub kind: String,
     pub text: Option<String>,
     pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 pub fn list_grok_sessions(
@@ -74,6 +81,7 @@ pub fn list_grok_sessions(
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_ascii_lowercase);
+    let active = read_active_sessions(paths).ok();
     let mut result = Vec::new();
     for workspace in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
         let workspace = workspace?;
@@ -86,7 +94,7 @@ pub fn list_grok_sessions(
                 continue;
             }
             if let Ok(Some(mut summary)) = read_summary(&session.path()) {
-                summary.status = session_status(paths, &summary.id).to_string();
+                summary.status = status_from_snapshot(active.as_ref(), &summary.id).to_string();
                 if needle.as_ref().is_some_and(|needle| {
                     !summary.title.to_ascii_lowercase().contains(needle)
                         && !summary.id.to_ascii_lowercase().contains(needle)
@@ -114,9 +122,34 @@ pub fn grok_session_detail(
         "Grok workspace identity changed"
     );
     let history = summary.path.join("updates.jsonl");
+    static CACHE: crate::read_cache::ReadCache<Vec<GrokHistoryEvent>> =
+        crate::read_cache::ReadCache::new(8 * 1024 * 1024);
+    let events = CACHE.read(
+        &history,
+        |events, _| {
+            events
+                .iter()
+                .map(|event| {
+                    256 + event.text.as_ref().map_or(0, String::len) as u64
+                        + event.detail.as_ref().map_or(0, String::len) as u64
+                })
+                .sum()
+        },
+        || read_history(&history),
+    )?;
+    Ok(GrokSessionDetail { summary, events })
+}
+
+#[cfg(test)]
+thread_local! { static HISTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
+    #[cfg(test)]
+    HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
     let mut events = Vec::new();
+    let mut tool_indices: HashMap<String, usize> = HashMap::new();
     if history.is_file() {
-        let mut file = fs::File::open(&history)?;
+        let mut file = fs::File::open(history)?;
         let offset = file.metadata()?.len().saturating_sub(8 * 1024 * 1024);
         file.seek(SeekFrom::Start(offset))?;
         let mut reader = BufReader::new(file);
@@ -153,6 +186,43 @@ pub fn grok_session_detail(
                 .or_else(|| update.get("text").and_then(Value::as_str))
                 .or_else(|| update.get("title").and_then(Value::as_str))
                 .map(ToString::to_string);
+            let call_id = update
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let status = update
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let detail = update
+                .get("content")
+                .and_then(Value::as_array)
+                .map(|content| {
+                    content
+                        .iter()
+                        .filter_map(|item| item.pointer("/content/text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .filter(|text| !text.is_empty());
+            if kind.starts_with("tool_") {
+                if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
+                    let previous: &mut GrokHistoryEvent = &mut events[*index];
+                    if text.is_some() {
+                        previous.text = text;
+                    }
+                    if status.is_some() {
+                        previous.status = status;
+                    }
+                    if detail.is_some() {
+                        previous.detail = detail;
+                    }
+                    continue;
+                }
+                if let Some(id) = &call_id {
+                    tool_indices.insert(id.clone(), events.len());
+                }
+            }
             if kind.ends_with("message_chunk") {
                 if let Some(previous) = events
                     .last_mut()
@@ -178,10 +248,13 @@ pub fn grok_session_detail(
                     .get("method")
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
+                call_id,
+                status,
+                detail,
             });
         }
     }
-    Ok(GrokSessionDetail { summary, events })
+    Ok(events)
 }
 
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
@@ -197,7 +270,13 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         fs::metadata(&file)?.len() <= 1024 * 1024,
         "Grok summary exceeds size limit"
     );
-    let value: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
+    static CACHE: crate::read_cache::ReadCache<Value> =
+        crate::read_cache::ReadCache::new(2 * 1024 * 1024);
+    let value = CACHE.read(
+        &file,
+        |_, size| size.saturating_mul(4),
+        || Ok(serde_json::from_str::<Value>(&fs::read_to_string(&file)?)?),
+    )?;
     let id = path
         .file_name()
         .and_then(|v| v.to_str())
@@ -282,11 +361,21 @@ fn resolve_session(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
     found.context("Grok session not found")
 }
 
+fn read_active_sessions(paths: &GrokPaths) -> Result<Value> {
+    let path = paths.home.join("active_sessions.json");
+    ensure!(
+        fs::metadata(&path)?.len() <= 1024 * 1024,
+        "Grok active state exceeds size limit"
+    );
+    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+}
+
 fn session_status(paths: &GrokPaths, id: &str) -> &'static str {
-    let Ok(text) = fs::read_to_string(paths.home.join("active_sessions.json")) else {
-        return "unknown";
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+    status_from_snapshot(read_active_sessions(paths).ok().as_ref(), id)
+}
+
+fn status_from_snapshot(value: Option<&Value>, id: &str) -> &'static str {
+    let Some(value) = value else {
         return "unknown";
     };
     match value {

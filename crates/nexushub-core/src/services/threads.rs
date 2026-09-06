@@ -1,16 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSummary},
-    db::{JobRecord, ThreadFollowUp},
+    db::JobRecord,
     platform::PlatformPaths,
-    services::jobs::FollowUpAutoSubmitExecutionPlan,
     services::system::{require_capability, Capability},
 };
 
@@ -106,8 +102,6 @@ pub struct ThreadReadModelInputs {
     pub running_jobs: Vec<JobRecord>,
     pub hidden_thread_ids: HashSet<String>,
     pub archived_thread_ids: HashSet<String>,
-    pub pending_followups: Vec<ThreadFollowUp>,
-    pub default_workspace: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,14 +109,12 @@ pub struct ThreadReadModelInputs {
 pub struct ThreadListReadModelView {
     pub overview: ThreadsOverview,
     pub threads: Vec<ThreadSummary>,
-    pub autosubmit_effects: Vec<FollowUpAutoSubmitExecutionPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetailReadModelView {
     pub detail: ThreadDetail,
-    pub autosubmit_effects: Vec<FollowUpAutoSubmitExecutionPlan>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -176,11 +168,9 @@ pub fn thread_list_read_model(
         &inputs.hidden_thread_ids,
         &inputs.archived_thread_ids,
     );
-    let autosubmit_effects = Vec::new();
     Ok(ThreadListReadModelView {
         threads: overview.threads.clone(),
         overview,
-        autosubmit_effects,
     })
 }
 
@@ -188,17 +178,10 @@ pub fn thread_detail_read_model(
     platform: &PlatformPaths,
     detail: ThreadDetail,
     active_job: Option<JobRecord>,
-    pending_followup: Option<ThreadFollowUp>,
-    default_workspace: PathBuf,
 ) -> anyhow::Result<ThreadDetailReadModelView> {
     require_capability(platform, Capability::Threads)?;
     let detail = apply_thread_detail_runtime_state(detail, active_job.as_ref());
-    let _ = (pending_followup, default_workspace);
-    let autosubmit_effects = Vec::new();
-    Ok(ThreadDetailReadModelView {
-        detail,
-        autosubmit_effects,
-    })
+    Ok(ThreadDetailReadModelView { detail })
 }
 
 pub fn plan_threads_list_request(

@@ -62,8 +62,8 @@ fn api_rpc_payload<T>(result: Result<T, RpcPayloadError>) -> Result<T, ApiError>
 mod tests {
     use super::{rpc_required_string, rpc_wrapped_payload, rpc_wrapped_payload_or_empty};
     use crate::api::{ApiError, LoginRequest};
+    use nexushub_core::services::jobs::ThreadRenameRequest;
     use nexushub_core::services::settings as settings_service;
-    use nexushub_core::services::{goals as goal_service, jobs::ThreadMessageRequest};
     use serde_json::json;
 
     fn must<T>(result: Result<T, ApiError>) -> T {
@@ -89,64 +89,15 @@ mod tests {
     }
 
     #[test]
-    fn rpc_payload_compat_accepts_nested_and_top_level_thread_payloads() {
-        let nested: ThreadMessageRequest = must(rpc_wrapped_payload(
+    fn rpc_payload_compat_accepts_rename_request_wrapper_and_aliases() {
+        let payload: ThreadRenameRequest = must(rpc_wrapped_payload(
             &json!({
-                "payload": {
-                    "message": "start",
-                    "serviceTier": "priority",
-                    "reasoningEffort": "xhigh",
-                    "permissionProfile": "danger-full-access",
-                    "approvalPolicy": "never",
-                    "sandboxMode": "danger-full-access",
-                    "networkAccess": true,
-                    "collaborationMode": "async"
-                },
-                "csrfToken": "ignored"
-            }),
-            &["payload"],
-        ));
-        assert_eq!(nested.message, "start");
-        assert_eq!(nested.service_tier.as_deref(), Some("priority"));
-        assert_eq!(nested.reasoning_effort.as_deref(), Some("xhigh"));
-        assert_eq!(
-            nested.permission_profile.as_deref(),
-            Some("danger-full-access")
-        );
-        assert_eq!(nested.approval_policy.as_deref(), Some("never"));
-        assert_eq!(nested.sandbox_mode.as_deref(), Some("danger-full-access"));
-        assert_eq!(nested.network_access, Some(true));
-        assert_eq!(nested.collaboration_mode.as_deref(), Some("async"));
-
-        let top_level: ThreadMessageRequest = must(rpc_wrapped_payload(
-            &json!({
-                "message": "continue",
-                "preparedAttachments": [],
-                "serviceTier": "default"
-            }),
-            &["payload"],
-        ));
-        assert_eq!(top_level.message, "continue");
-        assert_eq!(top_level.service_tier.as_deref(), Some("default"));
-        assert!(top_level.prepared_attachments.is_empty());
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_goal_request_wrapper_and_aliases() {
-        let payload: goal_service::GoalUpdateRequest = must(rpc_wrapped_payload(
-            &json!({
-                "request": {
-                    "threadId": "thread-a",
-                    "objective": "ship",
-                    "tokenBudget": 4096
-                }
+                "request": { "thread_id": "thread-a", "name": "Task name" }
             }),
             &["request", "payload"],
         ));
-
-        assert_eq!(payload.thread_id.as_deref(), Some("thread-a"));
-        assert_eq!(payload.objective.as_deref(), Some("ship"));
-        assert_eq!(payload.token_budget, Some(4096));
+        assert_eq!(payload.thread_id, "thread-a");
+        assert_eq!(payload.name, "Task name");
     }
 
     #[test]

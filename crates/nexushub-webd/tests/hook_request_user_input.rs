@@ -135,7 +135,7 @@ fn hook_request_user_input_prefers_explicit_payload_thread_title() {
 }
 
 #[test]
-fn hook_request_user_input_fails_open_when_local_thread_state_is_invalid() {
+fn hook_request_user_input_allows_tool_but_suppresses_unconfirmed_task_identity() {
     let (root, config_path, config) = test_config("invalid-local-title-state");
     fs::write(
         config.codex.home.join("state_5.sqlite"),
@@ -159,10 +159,17 @@ fn hook_request_user_input_fails_open_when_local_thread_state_is_invalid() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].title.as_deref(), Some("需要回复"));
-    assert_eq!(events[0].payload["bark"]["title"], "等待回复：未命名线程");
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(db.list_probe_events(10).unwrap().is_empty());
+    let conn = rusqlite::Connection::open(db.path()).unwrap();
+    for table in ["probe_events", "probe_dedupe"] {
+        assert_eq!(
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 
     fs::remove_dir_all(root).unwrap();
 }

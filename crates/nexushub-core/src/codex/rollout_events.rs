@@ -171,8 +171,8 @@ pub struct RolloutMessageSelection {
 }
 
 pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
-    static CACHE: super::read_cache::ReadCache<RolloutScan> =
-        super::read_cache::ReadCache::new(4 * 1024 * 1024);
+    static CACHE: crate::read_cache::ReadCache<RolloutScan> =
+        crate::read_cache::ReadCache::new(4 * 1024 * 1024);
     CACHE.read(
         path,
         |scan, _| {

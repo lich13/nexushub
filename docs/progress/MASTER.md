@@ -2,8 +2,8 @@
 
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex read-only task browsing, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep Grok Build read-only with guarded local session management.
 > **Started**: 2026-06-13
-> **Last Updated**: 2026-09-06
-> **Mode**: V0.1.157_GOAL1_LOCAL_GREEN
+> **Last Updated**: 2026-09-07
+> **Mode**: V0.1.158_GOAL1_LOCAL_GREEN
 
 ## References
 
@@ -37,12 +37,12 @@
 ## Current Status
 
 **Active Phase**: `v0.1.157`精简重构与 Probe 通知准确性修复<br>
-**Active Task**: Goal 26 的 Goal 1 已完成本地实现与 gate。Codex 面板已收敛为只读浏览，发送/追加/steer/stop/fork/附件/问题作答/手动 Goal 入口已从前端和桌面调用链退休；Claude 面板替换为 Grok Build，加入原生改名和带身份重验的本地 session 文件删除；桌面 LAN WebUI 静态资源与命令已退休；Probe 完成通知只接受同一主 turn 的已确认终止正文，保留真实问题、memory/control suppression、Goal 自动恢复和 cleanup 确认边界。workspace/Tauri/WebUI/install/package/contract gate 已通过，Release、部署、双端验收和最终清理待执行。
+**Active Task**: Goal 26 的主体实现已进入 `v0.1.157`，并完成过该版本的 CI/Release；后续实机复核发现通知正文脱敏和暗色消息块仍有精度缺口，不能把 `v0.1.157` 标记为接受。当前补丁工作统一为 `v0.1.158`：补齐身份夹具、memory citation 通知抑制、暗色只读消息块和旧版本守卫，Codex/Grok/Probe/Ops 精简与桌面 LAN WebUI 退休保持不变。workspace/Tauri/WebUI/install/package/contract gate 已在本地通过；`v0.1.158` 的提交、CI/Release、腾讯云/macOS 验收和最终清理待执行。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.156` is the last accepted production checkpoint; `v0.1.157` remains unreleased until Goals 2-5 close.
+Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.156` is the last accepted production checkpoint; `v0.1.157` is published but remains unaccepted because post-release review found gaps. `v0.1.158` is the corrective release line.
 
 ## Deep Refactor Goal Tracker
 
@@ -71,7 +71,7 @@ Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows
 - [x] Goal 23: `v0.1.154` official Codex Goal control-plane repair and release acceptance - completed on 2026-07-13. Production Goal read/save/clear/pause/resume paths call official app-server methods with the resolved `CODEX_HOME`; shadow-table rows remain intact but are excluded from production reads, writes, and fallback. Targeted core/Web/Tauri/WebUI tests and the complete workspace/Tauri/WebUI/install/package gate passed, including official `null` and error authority, app-server process cleanup, no mutation retry, architecture enforcement, and stable Hook timing coverage. CI/Release, exact-tag deployment, dual-end real Goal CRUD acceptance, regression checks, evidence closure, and cleanup all passed.
 - [x] Goal 24: `v0.1.155` stale Codex turn activity repair and release acceptance - completed on 2026-07-13. The rollout scanner retires ordered active-turn boundaries and their pending tools for named `task_complete`, `turn_completed`, and `turn_aborted` events, keeps newer activity, preserves conservative anonymous semantics, and avoids unmatched global fallback. The real stale-wait rollout, complete local gates, CI/Release, exact-tag Tencent Cloud deployment, official macOS DMG acceptance, running-to-recent transition checks, regressions, and final cleanup all passed.
 - [x] Goal 25: `v0.1.156` Codex terminal-error monitoring and restricted Goal recovery - completed on 2026-07-15. TDD and the complete local gate cover exact terminal log identity, bounded composite cursors, first-run and database-replacement baselines, redaction and classification, permanent/concurrent incident claims, persisted pending delivery replay, independent Bark and Goal recovery, restricted-only official mutation, mutation-timeout state recheck, bounded `0/15/60/300` retries, final failure Bark, macOS no-listener `LaunchAgent`, Linux monitor integration, and WebUI settings/status. Commits `8badf1a` and `d2eb022` were published as exact tag `v0.1.156`; CI/Release, 15 assets, exact-tag Tencent Cloud and official macOS deployment, dual-end positive/negative/retry/dedupe fixtures, production health/UI/regressions, and post-acceptance timing stabilization all passed without starting failed turns or executing cleanup deletion.
-- [ ] Goal 26: `v0.1.157`精简重构与通知准确性修复 - Goal 1 本地实现和 gate 已通过：Codex/Grok/Probe/Ops 精简、桌面 LAN WebUI 退休、canonical 主 turn 通知选择、Grok 安全改名/删除和独立测试夹具已 GREEN；待完成提交、CI/Release、腾讯云/macOS 双端验收、性能/接口退休复核及最终清理。
+- [ ] Goal 26: `v0.1.157`/`v0.1.158` 精简重构与通知准确性修复 - `v0.1.157` 已发布但未接受；`v0.1.158` 已完成本地修正和完整 gate，待提交、CI/Release、腾讯云/macOS 双端验收、性能/接口退休复核及最终清理后统一关闭。
 
 ## Governance Status
 
@@ -85,7 +85,7 @@ Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.157_GOAL1_LOCAL_GREEN
+  mode: V0.1.158_GOAL1_LOCAL_GREEN
   strategy: "cc-switch style shared contract registry, read-only Codex/Grok webui, use-case layer with thin Linux server webd and macOS Tauri surfaces; desktop LAN WebUI retired"
   phases:
     phase_1:
@@ -408,7 +408,7 @@ The `v0.1.155` final cleanup removed the downloaded Release files and App rollba
 
 | Date | Session | Summary |
 |:--|:--|:--|
-| 2026-09-06 | v0.1.157-goal1-local-green | Implemented the read-only Codex and Grok Build surfaces, retired desktop LAN WebUI entrypoints and static asset syncing, narrowed Probe completion selection to the canonical main turn, and kept questions, memory/control suppression, restricted Goal recovery, Hook/monitor and cleanup confirmation boundaries. Local workspace/Tauri/WebUI/install/package/contract gates passed; webd fake app-server timing fixtures were stabilized at the production `10s` bound and the confirmation-window test now writes its resolution at `50ms`. Release, cloud/macOS acceptance, performance evidence, and cleanup remain pending. |
+| 2026-09-07 | v0.1.158-goal1-local-green | Preserved the `v0.1.157` tag and moved post-release corrections to `v0.1.158`: exact main-task identity fixtures now cover notification tests, Bark sanitization removes protocol-only memory citation blocks while retaining literal code, dark-theme read-only message blocks use shared theme tokens, and the install guard tracks the current architecture target. The complete workspace/Tauri/WebUI/install/package/contract gate passed: workspace `cargo test` and Clippy, Tauri fmt/test/Clippy, WebUI `189` tests/typecheck/build/desktop build, installer guards, Linux package `--check`, and `git diff --check`. Release, cloud/macOS acceptance, performance evidence, and cleanup remain pending. |
 | 2026-07-15 | v0.1.156-final-accepted | Closed Goal 25 after commits `8badf1a` and `d2eb022` passed the complete local gate, CI `29373865388`, Release `29374239076`, 15-asset metadata/signature/SHA verification, exact-tag Tencent Cloud deployment, and official macOS DMG installation. Both isolated harnesses produced `9 incidents / 9 events / 6 Bark captures / 6 Goal sets`, recovered only `blocked`/`usageLimited`/`budgetLimited`, preserved paused/complete/missing Goals, and passed dedupe plus Bark/app-server/mutation-timeout failures. Production monitor state, no-listener `LaunchAgent`, WebUI settings, Goal/Probe/Hook/completion/running/cleanup regressions, health, and scoped route guards passed without starting failed turns or deleting cleanup data. Test-stability commit `a9a785a` passed fresh local workspace gates and CI `29377523801`. |
 | 2026-07-15 | v0.1.156-goal1-local-gate | Completed Goal 1 after targeted terminal-error, incident, Goal recovery, `LaunchAgent`, and WebUI TDD plus the full workspace/Tauri/WebUI/install/Linux-package gate. A Tauri settings test exposed an unintended real `LaunchAgent` side effect; production save still performs and reports repair, while unit tests now inject a no-op repair boundary. Source audit confirmed no new public RPC, listener, shell, Codex socket, `/v1`, `/responses`, or metrics surface. |
 | 2026-07-15 | v0.1.156-terminal-error-monitor-start | Started Goal 25 after terminal Codex failures such as `Selected model is at capacity` persisted only in `logs_2.sqlite` and left official Goals restricted. The in-progress implementation monitors exact terminal rows, sends redacted Bark alerts, restores only `blocked`/`usageLimited`/`budgetLimited` Goals through app-server, keeps paused/complete/missing Goals unchanged, and adds a no-listener macOS `LaunchAgent`; full gate and release acceptance remain pending. |

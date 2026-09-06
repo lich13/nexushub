@@ -9,10 +9,7 @@ and the FHS-style runtime under `/usr/local/bin`, `/usr/share/nexushub-webd`,
 macOS or Linux Tauri desktop layouts.
 
 The Linux server chain remains the hosted WebUI deployment chain. macOS and
-Linux Tauri builds consume the same `webui` source as the main interface and can
-optionally expose a Tauri-controlled desktop LAN WebUI, but they do not add a
-LaunchAgent, systemd user service, Cloudflare Tunnel, or Tencent Cloud GUI
-requirement.
+Linux Tauri builds consume the same `webui` source as the embedded interface. There is no desktop LAN Web service or Cloudflare Tunnel. macOS keeps only the fixed, port-free error monitor LaunchAgent.
 
 Release assets intentionally keep separate Linux responsibilities. The cloud
 deployment uses only `nexushub-webd-linux-x86_64.tar.gz` and its `.sha256`; Linux
@@ -112,7 +109,7 @@ Then log in through Chrome 插件验收 and verify:
 
 - thread list loads;
 - system status shows resolved Codex state paths without requiring `codex-app-server-root.service`;
-- create/send starts controlled `codex exec --json` jobs and returns a job-backed response;
+- task browsing is side-effect free; retired create/send/Goal/followup RPCs return `404`;
 - system status shows `43.155.235.227` / `https://661313.xyz/nexushub/` instead of any removed SSH alias;
 - thread titles refresh from local state DB, `session_index.jsonl`, and rollout metadata without plan-body pollution;
 - Plan Mode and permission/model/config selectors load;
@@ -151,7 +148,6 @@ Expected macOS paths:
 ```text
 ~/Library/Application Support/NexusHub/
 ~/Library/Application Support/NexusHub/bin/nexushub-webd
-~/Library/Application Support/NexusHub/desktop-assets/
 ~/Library/Logs/NexusHub/
 ```
 
@@ -160,17 +156,12 @@ Expected Linux desktop paths:
 ```text
 ~/.config/NexusHub/config.toml
 ~/.local/share/NexusHub/bin/nexushub-webd
-~/.local/share/NexusHub/desktop-assets/
 ~/.local/state/NexusHub/logs/
 ```
 
 The Tauri App bundle carries the local `nexushub-webd` helper and syncs it into the
 desktop data directory on launch. This helper is used for Probe Bark tests, Hook
-installation, and the optional desktop LAN WebUI. The LAN WebUI is default-off,
-requires an independent `desktop-webui:<username>` password, disables Turnstile
-by default, and must be started or stopped only from embedded Tauri. Browser
-clients of the LAN WebUI must not see Linux server systemd, Nginx, public
-endpoint, or prune controls.
+installation and the port-free error monitor. Desktop must not show Linux server systemd, Nginx, public endpoint, security or prune controls.
 
 ## Cleanup
 

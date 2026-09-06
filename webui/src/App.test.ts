@@ -16,111 +16,7 @@ import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
-type AppExports = typeof import("./App") & {
-  buildPayload?: (message: string, config: Record<string, unknown>, attachments?: Array<{ id: string }>) => Record<string, unknown>;
-  composerFileInputAcceptValue?: () => string | undefined;
-  composerActionMode?: (running: boolean, draft: string, canStop: boolean, attachmentCount?: number) => string;
-  defaultRunConfig?: () => Record<string, unknown>;
-  segmentInternalReferences?: (text: string) => Array<{ type: "text" | "internal_reference"; text: string; copyText?: string; kind?: string }>;
-  slashCommands?: Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
-  slashCommandSuggestions?: (draft: string, cursor: number, hasThread?: boolean, capabilities?: RuntimeCapabilityMatrix) => Array<{ command: string; description: string; usageHint: string; requiresThread?: boolean }>;
-  applySlashCommandSelection?: (draft: string, cursor: number, command: string) => { value: string; cursor: number };
-  renderSlashCommandMenuHtml?: (draft: string, cursor: number, hasThread?: boolean, selected?: number) => string;
-  nextSlashCommandSelection?: (current: number, total: number, key: string) => number;
-  slashCommandKeyAction?: (input: {
-    key: string;
-    shiftKey?: boolean;
-    selected: number;
-    suggestions: Array<{ command: string }>;
-  }) => { action: "move"; selected: number } | { action: "insert"; command: string } | { action: "dismiss" } | { action: "none" };
-  pluginMentionSuggestions?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean) => Array<{ id: string; label: string; description: string; unavailableReason?: string | null }>;
-  applyPluginMentionSelection?: (draft: string, cursor: number, plugin: Pick<PluginInfo, "id" | "label" | "invocation_template">) => { value: string; cursor: number };
-  renderPluginMentionMenuHtml?: (draft: string, cursor: number, plugins?: PluginInfo[] | null, unavailable?: boolean, selected?: number) => string;
-  activeComposerMenuKind?: (draft: string, cursor: number, plugins?: PluginInfo[] | null) => "slash" | "plugin" | null;
-  exactSlashCommandFromDraft?: (draft: string, capabilities?: RuntimeCapabilityMatrix) => string | null;
-  slashCommandForComposerSubmit?: (draft: string, capabilities?: RuntimeCapabilityMatrix) => string | null;
-  composerSubmitDraftValue?: (stateValue: string, domValue?: string | null) => string;
-  composerMenuKeyAction?: (input: {
-    key: string;
-    shiftKey?: boolean;
-    composing?: boolean;
-    menuSelectionArmed?: boolean;
-    selected: number;
-    suggestions: Array<{ command?: string; id?: string }>;
-  }) => { action: "move"; selected: number } | { action: "insert"; index: number } | { action: "dismiss" } | { action: "none" };
-  slashCommandAction?: (command: string, hasThread?: boolean, capabilities?: RuntimeCapabilityMatrix) => { kind: string; message?: string; command?: string };
-  planModeButtonState?: (nextMessagePlan: boolean, threadStatus?: string, hasPendingPlan?: boolean, hasPendingQuestion?: boolean) => { pressed: boolean; label: string; statusText: string };
-  mergeRunConfigFromDefaults?: <T extends { collaborationMode: string }>(current: T, defaults: T) => T;
-  runConfigAfterSuccessfulSend?: <T extends { collaborationMode: string }>(config: T) => T;
-  latestAssistantCopyText?: (blocks: MessageBlock[]) => string | null;
-  nextRenameDraftValue?: (input: {
-    previousThreadId: string;
-    threadId: string;
-    currentDraft: string;
-    incomingTitle: string;
-    dirty: boolean;
-  }) => string;
-  mergeIncomingThreadSummary?: <T extends Partial<ThreadSummary>>(current: T, incoming: Partial<ThreadSummary>) => T & Partial<ThreadSummary>;
-  mergeSavedThreadTitle?: (threads: ThreadSummary[], threadId: string, title: string) => ThreadSummary[];
-  threadSettingsMetricLabels?: () => string[];
-  threadResumeCommand?: (threadId?: string | null) => string | null;
-  threadRolloutPath?: (rolloutPath?: string | null) => string | null;
-  probeRunningCountValue?: (status?: { running_count?: number; running_threads?: ThreadSummary[] } | null) => string;
-  probeSettingsAfterBarkSave?: <T extends { notifications: { device_key_configured?: boolean } }>(saved: T, submittedDeviceKey?: string | null) => T;
-  probeStatusThreads?: (status?: { running_threads?: ThreadSummary[]; reply_needed_threads?: ThreadSummary[]; recoverable_threads?: ThreadSummary[] } | null) => ThreadSummary[];
-  probeAvailabilityView?: (input: {
-    available?: boolean;
-    probeEnabled?: boolean;
-    loading?: boolean;
-    fetching?: boolean;
-    hasData?: boolean;
-    error?: boolean;
-  }) => { headline: string; metric: string; tone: "success" | "warning" | "danger" };
-  probeEventSummary?: (event: ProbeEvent) => string;
-  probeEventCard?: (event: ProbeEvent) => { headline: string; summary: string; details: Array<{ label: string; value: string }> };
-  shouldAutoScrollProbeFeed?: (
-    current: { scrollTop: number; clientHeight: number; scrollHeight: number },
-    previous?: { scrollTop: number; clientHeight: number; scrollHeight: number } | null
-  ) => boolean;
-  nextVisibleThreadIdAfterRemoval?: (threads: ThreadSummary[], removedThreadId: string) => string | null;
-  shouldHydrateThreadDetail?: (threadId: string | null | undefined, detail?: { summary: ThreadSummary } | null) => boolean;
-  resolvedSelectedThreadId?: (selectedId: string | "__new" | null) => string | null;
-  threadInspectorPanelTitles?: () => string[];
-  setLocalThreadTitleOverride?: (threadId: string, title: string, now?: number) => void;
-  clearLocalThreadTitleOverride?: (threadId: string) => void;
-  applyThreadTitleOverride?: <T extends Partial<ThreadSummary>>(summary: T, now?: number) => T;
-  codexVisibleCopy?: () => Record<string, string>;
-  failureCategoryLabel?: (category: string, capabilities?: RuntimeCapabilityMatrix) => string;
-  jobFailureAnalysisView?: (
-    analysis: NonNullable<import("./types").JobRecord["failure_analysis"]>,
-    capabilities?: RuntimeCapabilityMatrix
-  ) => { label: string; explanation: string; suggestions: string[] };
-  optionalUnavailableMessage?: (feature: string, result?: { available: boolean; reason?: string | null; error?: string | null } | null) => string;
-  renderConversationHeaderHtml?: (summary: ThreadSummary) => string;
-  preservePreviousQueryData?: <T>(previous: T | undefined) => T | undefined;
-  threadCopyId?: (threadId?: string | null) => string | null;
-  opsWorkspacePanelTitles?: (capabilities?: RuntimeCapabilityMatrix) => string[];
-  opsWorkspaceVisibleCopy?: (capabilities?: RuntimeCapabilityMatrix) => string[];
-  archivePlanAfterExecute?: (
-    current: import("./types").ArchiveDeletePlan | null,
-    result: Pick<import("./types").ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity">
-  ) => import("./types").ArchiveDeletePlan | null;
-  canStartUpdateInstall?: (status?: UpdateStatus | null) => boolean;
-  opsUpdateActionView?: (
-    status?: UpdateStatus | null,
-    capabilities?: RuntimeCapabilityMatrix
-  ) => Array<{ action: "check" | "install" | "prune"; label: string; disabled: boolean }>;
-  threadInspectorActionState?: (capabilities?: RuntimeCapabilityMatrix) => {
-    showFork: boolean;
-    showArchive: boolean;
-    approvalMode: "interactive" | "unsupported";
-  };
-  desktopRuntimeVisibleCopy?: () => string[];
-  runtimeCapabilitiesForRuntime?: (runtime?: boolean | "web" | "desktop") => RuntimeCapabilityMatrix;
-  navigationLabelsForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => string[];
-  shouldShowLogoutForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => boolean;
-  initialSessionForRuntime?: (capabilities?: RuntimeCapabilityMatrix) => import("./types").SessionUser | null;
-};
+type AppExports = typeof import("./App") & typeof import("./lib/domain/conversationViewModel") & typeof import("./lib/domain/runtimeViewModel") & typeof import("./lib/domain/codexViewModel");
 
 type ThreadQueryExports = typeof import("./lib/query/threads") & {
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
@@ -188,17 +84,9 @@ function extractFunctionSource(name: string): string {
           ? probeWorkspaceSource
           : name === "ChatWorkspace" || name === "ThreadList"
             ? chatWorkspaceSource
-            : name === "ThreadGoalPanel"
-              ? threadGoalPanelSource
-              : name === "ThreadInspectorPanels"
-                ? threadInspectorPanelsSource
-                : name === "RunConfigControls"
-                  ? runConfigControlsSource
-                  : name === "MessageBlockView"
+            : name === "MessageBlockView"
                     ? messageStreamSource
-                    : name === "CurrentActionCard"
-                      ? currentActionCardSource
-                      : [
+                    : [
                         "Conversation",
                         "EmptyConversation",
                         "StatusChip"
@@ -655,7 +543,7 @@ describe("conversation helpers", () => {
     const app = await loadApp();
 
     expect(app.resolvedSelectedThreadId?.(null)).toBeNull();
-    expect(app.resolvedSelectedThreadId?.("__new")).toBeNull();
+    expect(chatWorkspaceSource).not.toContain('"__new"');
     expect(app.resolvedSelectedThreadId?.("thread-a")).toBe("thread-a");
     expect(appSource).not.toContain("visibleThreads[0]?.id");
   });

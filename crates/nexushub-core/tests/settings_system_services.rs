@@ -1,15 +1,10 @@
 use nexushub_core::{
-    codex::CodexThreadGoal,
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     db::SecuritySettings,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        goals::{
-            goal_empty, goal_response_from_codex, plan_clear_goal, plan_pause_goal_update,
-            plan_resume_goal_update, plan_save_goal, GoalUpdateRequest,
-        },
         security::{
             plan_password_change, plan_password_change_with_capability, plan_security_patch,
             public_security_view, public_security_view_with_capability, security_view,
@@ -120,69 +115,6 @@ fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
     assert!(!capabilities.public_endpoint);
     assert!(!capabilities.linux_update_job);
     assert!(!capabilities.prune_backups);
-}
-
-#[test]
-fn goal_service_normalizes_status_and_shared_response_shape() {
-    let active = plan_save_goal(GoalUpdateRequest {
-        thread_id: Some("thread-a".to_string()),
-        objective: Some(" ship ".to_string()),
-        token_budget: Some(1000),
-        status: None,
-        enabled: None,
-    })
-    .unwrap();
-    assert_eq!(active.thread_id, "thread-a");
-    assert_eq!(active.objective, Some("ship".to_string()));
-    assert_eq!(active.token_budget, Some(1000));
-    assert_eq!(active.status, "active");
-
-    let disabled = plan_save_goal(GoalUpdateRequest {
-        thread_id: Some("thread-a".to_string()),
-        objective: None,
-        token_budget: Some(1000),
-        status: None,
-        enabled: Some(false),
-    })
-    .unwrap();
-    assert_eq!(disabled.status, "cleared");
-    assert_eq!(disabled.objective, None);
-    assert_eq!(disabled.token_budget, None);
-
-    let goal = CodexThreadGoal {
-        thread_id: "thread-a".to_string(),
-        objective: "ship".to_string(),
-        token_budget: Some(1000),
-        status: "complete".to_string(),
-        tokens_used: 900,
-        time_used_seconds: 30,
-        created_at: 1,
-        updated_at: 2,
-    };
-    let view = goal_response_from_codex(Some(&goal));
-    assert!(view.available);
-    assert!(view.enabled);
-    assert_eq!(view.thread_id.as_deref(), Some("thread-a"));
-    assert_eq!(view.status, "complete");
-    assert_eq!(view.completed_at, None);
-    assert_eq!(
-        view.raw.as_ref().and_then(|raw| raw.source.as_deref()),
-        Some("codex_app_server")
-    );
-
-    assert!(!goal_empty("missing_thread").available);
-    assert_eq!(goal_response_from_codex(None).status, "idle");
-
-    let cleared = plan_clear_goal(" thread-a ").unwrap();
-    assert_eq!(cleared.status, "cleared");
-    assert_eq!(
-        plan_pause_goal_update("thread-a").unwrap().update.status,
-        "paused"
-    );
-    assert_eq!(
-        plan_resume_goal_update("thread-a").unwrap().update.status,
-        "active"
-    );
 }
 
 #[test]

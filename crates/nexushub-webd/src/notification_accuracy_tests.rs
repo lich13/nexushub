@@ -1,6 +1,36 @@
 use super::*;
 use rusqlite::Connection;
 
+pub(super) struct TestTaskIdentity(PathBuf);
+
+impl Drop for TestTaskIdentity {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+pub(super) fn seed_main_task_identities(home: &Path, ids: &[&str]) {
+    fs::create_dir_all(home).unwrap();
+    let db = Connection::open(home.join("state_5.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, source TEXT, thread_source TEXT, agent_path TEXT);").unwrap();
+    for id in ids {
+        db.execute(
+            "INSERT INTO threads VALUES (?1, 'vscode', 'user', NULL)",
+            [id],
+        )
+        .unwrap();
+    }
+}
+
+pub(super) fn test_notification_config(ids: &[&str]) -> (Config, TestTaskIdentity) {
+    let root =
+        std::env::temp_dir().join(format!("nexushub-test-identity-{}", uuid::Uuid::new_v4()));
+    let mut config = Config::default();
+    config.codex.home = root.join(".codex");
+    seed_main_task_identities(&config.codex.home, ids);
+    (config, TestTaskIdentity(root))
+}
+
 struct Fixture {
     root: PathBuf,
     config: Config,
@@ -97,6 +127,54 @@ fn notify_completion_accuracy_requires_verified_final_body() {
         event.suppression_reason.as_deref(),
         Some("unconfirmed_final_body")
     );
+}
+
+#[test]
+fn notification_accuracy_unreadable_identity_never_allows_notifications_or_recovery() {
+    let fixture = Fixture::new(&[]);
+    fs::write(
+        fixture.config.codex.home.join("state_5.sqlite"),
+        "invalid sqlite",
+    )
+    .unwrap();
+    assert_eq!(
+        task_notification_suppression_reason(&fixture.config, Some("main")),
+        Some("unconfirmed_task_identity")
+    );
+}
+
+#[tokio::test]
+async fn hook_stop_accuracy_frozen_screenshot_turns_deliver_only_exact_terminal_answers() {
+    let events: Vec<Value> =
+        include_str!("../../nexushub-core/tests/fixtures/notification-screenshot-20260906.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    for boundary in [2, 7] {
+        let terminal = &events[boundary];
+        let turn = terminal["payload"]["turn_id"].as_str().unwrap();
+        let expected = terminal["payload"]["last_agent_message"].as_str().unwrap();
+        let mut fixture = Fixture::new(&events[..=boundary]);
+        let server = super::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
+        fixture.config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(fixture.root.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-key")
+            .unwrap();
+        let payload =
+            json!({"session_id":"main","turn_id":turn,"transcript_path":fixture.transcript});
+        let input = hook_stop_event_input(&fixture.config, Some(&payload), None, None, "hook-stop")
+            .unwrap();
+        let event = probe_runtime(&fixture.config).build_event(input);
+        assert_eq!(event.payload["body_selected_turn_id"], turn);
+        let (outcome, bark) = record_probe_event_with_bark(&fixture.config, &db, event)
+            .await
+            .unwrap();
+        assert!(outcome.recorded && bark.sent);
+        let request = server.request();
+        let capture: Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(capture["body"], expected);
+    }
 }
 
 #[tokio::test]

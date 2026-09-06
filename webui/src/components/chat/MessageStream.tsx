@@ -4,7 +4,6 @@ import { MarkdownContent } from "../common/MarkdownContent";
 import {
   blockKindLabel,
   conversationMessagePresentation,
-  formatPayload,
   formatTime,
   historyCollapseKind,
   isHistoryCollapsedBlock,
@@ -26,18 +25,10 @@ import type { MessageBlock } from "../../types";
 
 export function MessageBlockView({
   block,
-  activePlan = false,
-  planPending = false,
-  activeQuestion = false,
-  questionPending = false,
   onShowHistory,
   historyExpanded = false
 }: {
   block: MessageBlock;
-  activePlan?: boolean;
-  planPending?: boolean;
-  activeQuestion?: boolean;
-  questionPending?: boolean;
   onShowHistory?: () => void;
   historyExpanded?: boolean;
 }) {
@@ -45,13 +36,7 @@ export function MessageBlockView({
     return <HistoryCollapseCell block={block} onShowHistory={onShowHistory} expanded={historyExpanded} />;
   }
   if (isPlanBlock(block)) {
-    return (
-      <ProposedPlanCell
-        block={block}
-        active={activePlan}
-        pending={planPending}
-      />
-    );
+    return <ProposedPlanCell block={block} />;
   }
   if (isQuestionBlock(block)) {
     return <QuestionCell block={block} />;
@@ -118,15 +103,14 @@ function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: Messag
   );
 }
 
-function ProposedPlanCell({ block, active, pending }: { block: MessageBlock; active: boolean; pending: boolean }) {
+function ProposedPlanCell({ block }: { block: MessageBlock }) {
   return (
-    <article className={active ? "plan-cell active" : "plan-cell"}>
+    <article className="plan-cell">
       <div className="message-meta">
         <span>Proposed Plan</span>
         <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
       </div>
       <div className="plan-body"><MarkdownContent text={extractPlanText(block.text || "")} /></div>
-      {active && pending && <div className="action-inline-status">正在提交计划操作...</div>}
     </article>
   );
 }

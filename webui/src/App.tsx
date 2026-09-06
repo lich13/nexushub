@@ -82,7 +82,6 @@ export {
   threadInspectorActionState
 } from "./lib/domain/runtimeViewModel";
 export {
-  actionMessage,
   applyThreadTitleOverride,
   cleanThreadPreviewText,
   conversationTitleText,
@@ -93,7 +92,6 @@ export {
   lastEventKindText,
   mergeIncomingThreadSummary,
   mergeThreadDetailSummaryFromList,
-  modelSupportsServiceTier,
   nextVisibleThreadIdAfterRemoval,
   optionalUnavailableMessage,
   renderConversationHeaderHtml,
@@ -107,7 +105,6 @@ export {
   threadListItemStatusText,
   threadListItemText,
   threadMatchesListFilter,
-  threadSettingsMetricLabels
 } from "./lib/domain/codexViewModel";
 export { preservePreviousQueryData } from "./lib/query/shared";
 

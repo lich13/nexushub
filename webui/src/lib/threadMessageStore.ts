@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { BridgeActionResult, MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
 
 export type ThreadMessageSlot = {
   summary: ThreadSummary | null;
@@ -12,7 +12,6 @@ export type ThreadMessageSlot = {
   loadingEarlier: boolean;
   loadError: string | null;
   feedback: string | null;
-  lastResult: BridgeActionResult | null;
   showAllHistory: boolean;
   hiddenActionKey: string | null;
   fetchedAt: number | null;
@@ -35,7 +34,6 @@ export type ThreadMessageStoreController = {
   applyBlockPage: (threadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => void;
   setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
   setFeedback: (threadId: string, feedback: string | null) => void;
-  setLastResult: (threadId: string, result: BridgeActionResult | null) => void;
   setHistoryExpanded: (threadId: string, expanded: boolean) => void;
   setHiddenActionKey: (threadId: string, key: string | null) => void;
   clear: (threadId: string) => void;
@@ -60,7 +58,6 @@ export function createThreadMessageSlot(): ThreadMessageSlot {
     loadingEarlier: false,
     loadError: null,
     feedback: null,
-    lastResult: null,
     showAllHistory: false,
     hiddenActionKey: null,
     fetchedAt: null
@@ -138,10 +135,6 @@ export function useThreadMessageStoreController(
     setThreadFeedback(storeRef.current, nextThreadId, feedback);
     notify(nextThreadId);
   }, [notify]);
-  const setLastResultForThread = useCallback((nextThreadId: string, result: BridgeActionResult | null) => {
-    setThreadLastResult(storeRef.current, nextThreadId, result);
-    notify(nextThreadId);
-  }, [notify]);
   const setHistoryExpandedForThread = useCallback((nextThreadId: string, expanded: boolean) => {
     setThreadHistoryExpanded(storeRef.current, nextThreadId, expanded);
     notify(nextThreadId);
@@ -168,7 +161,6 @@ export function useThreadMessageStoreController(
     applyBlockPage,
     setLoadingEarlier: setLoadingEarlierForThread,
     setFeedback: setFeedbackForThread,
-    setLastResult: setLastResultForThread,
     setHistoryExpanded: setHistoryExpandedForThread,
     setHiddenActionKey: setHiddenActionKeyForThread,
     clear: clearThread
@@ -183,7 +175,6 @@ export function useThreadMessageStoreController(
     applyBlockPage,
     setLoadingEarlierForThread,
     setFeedbackForThread,
-    setLastResultForThread,
     setHistoryExpandedForThread,
     setHiddenActionKeyForThread,
     clearThread
@@ -304,16 +295,6 @@ export function applyThreadSummaryToSlot(
   return slot;
 }
 
-export function setThreadLastResult(
-  store: ThreadMessageStoreState,
-  threadId: string,
-  result: BridgeActionResult | null
-): ThreadMessageSlot {
-  const slot = getThreadSlot(store, threadId);
-  slot.lastResult = result;
-  slot.visibleUpdateRevision += 1;
-  return slot;
-}
 
 export function setThreadFeedback(
   store: ThreadMessageStoreState,

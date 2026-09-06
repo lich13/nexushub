@@ -12,6 +12,9 @@ export type GrokSessionSummary = {
 };
 
 export type GrokHistoryEvent = {
+  callId?: string;
+  status?: string;
+  detail?: string;
   timestamp?: string | null;
   kind: string;
   text?: string | null;
@@ -147,31 +150,9 @@ export type ThreadBlockPage = {
   before_cursor?: string | null;
 };
 
-export type BridgeActionResult = {
-  bridge: boolean;
-  thread_id?: string | null;
-  turn_id?: string | null;
-  job_id?: string | null;
-  fallback: boolean;
-  message?: string | null;
-};
 
-export type UploadKind = "text" | "markdown" | "spreadsheet" | "document" | "pdf" | "image" | "file";
 
-export type UploadRecord = {
-  id: string;
-  name: string;
-  mime: string;
-  size: number;
-  sha256: string;
-  kind: UploadKind;
-  status: string;
-  error_preview?: string | null;
-};
 
-export type UploadOutcome = {
-  files: UploadRecord[];
-};
 
 export type HostSurface = "linux_server_webui" | "desktop_embedded_tauri";
 
@@ -560,24 +541,7 @@ export type ProbeLogsDbStatus = {
   [key: string]: unknown;
 };
 
-export type CodexModel = {
-  id: string;
-  label?: string | null;
-  description?: string | null;
-  default?: boolean | null;
-  service_tiers?: Array<{ id: string; name?: string | null; description?: string | null }>;
-  default_service_tier?: string | null;
-};
 
-export type PermissionProfile = {
-  id: string;
-  label?: string | null;
-  description?: string | null;
-  approval_policy?: string | null;
-  sandbox_mode?: string | null;
-  network_access?: boolean | null;
-  default?: boolean | null;
-};
 
 export type CodexConfig = {
   model?: string | null;

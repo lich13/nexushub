@@ -5,18 +5,10 @@ use nexushub_core::{
     services::{
         cleanup::{plan_cleanup_action, CleanupAction, CleanupTarget},
         commands,
-        goals::{plan_goal_command_with_capability, GoalCommandKind, GoalUpdateRequest},
         jobs::{
-            archive_thread_response, cancel_followup_response,
-            plan_followup_cancel_with_capability, plan_followup_enqueue_with_capability,
-            plan_followup_list_with_capability, plan_thread_archive_with_capability,
-            plan_thread_command_with_capability, plan_thread_rename_with_capability,
-            plan_thread_restore_with_capability, plan_thread_send_with_capability,
-            plan_thread_steer_with_capability, plan_thread_stop_with_capability,
-            rename_thread_response, resolve_thread_stop_job, thread_state_action_response,
-            thread_stop_response, FollowUpCancelRequest, FollowUpListRequest, ThreadCommandKind,
-            ThreadCommandRequest, ThreadMessageRequest, ThreadRenameRequest, ThreadSendRequest,
-            ThreadSteerRequest, ThreadStopRequest,
+            archive_thread_response, plan_thread_archive_with_capability,
+            plan_thread_rename_with_capability, plan_thread_restore_with_capability,
+            rename_thread_response, thread_state_action_response, ThreadRenameRequest,
         },
         probe::{
             plan_probe_action, plan_probe_action_with_config_path, ProbeAction, ProbeExecutionKind,
@@ -34,10 +26,6 @@ use nexushub_core::{
             ThreadDetailRequest, ThreadsQuery,
         },
         updates::{plan_update_action, UpdateAction, UpdateExecutionMethod, UpdateUseCases},
-        uploads::{
-            plan_delete_upload_with_capability, plan_store_uploads_with_capability,
-            plan_upload_validation_with_capability, validate_attachment_id_count, UploadBatchItem,
-        },
     },
 };
 
@@ -374,7 +362,7 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
 }
 
 #[test]
-fn thread_detail_cleanup_followup_upload_facades_are_capability_gated() {
+fn thread_detail_cleanup_facades_are_capability_gated() {
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
     let windows = PlatformPaths::for_kind(PlatformKind::Windows);
 
@@ -413,96 +401,17 @@ fn thread_detail_cleanup_followup_upload_facades_are_capability_gated() {
     assert_eq!(cleanup.required_capability, Capability::ThreadCleanup);
     assert!(!cleanup.execute);
 
-    let followup = plan_thread_command_with_capability(
-        &linux,
-        ThreadCommandRequest {
-            command: ThreadCommandKind::FollowUp,
-            thread_id: Some(" thread-a ".to_string()),
-            message: ThreadMessageRequest {
-                message: "  queue this  ".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .unwrap();
-    assert_eq!(followup.required_capability, Capability::Jobs);
-    assert_eq!(
-        followup
-            .command
-            .followup
-            .as_ref()
-            .map(|plan| plan.thread_id.as_str()),
-        Some("thread-a")
-    );
-
-    let upload = plan_store_uploads_with_capability(
-        &linux,
-        vec![UploadBatchItem {
-            name: "notes.md".to_string(),
-            mime: None,
-            bytes: b"# Notes".to_vec(),
-        }],
-    )
-    .unwrap();
-    assert_eq!(upload.required_capability, Capability::Jobs);
-    assert_eq!(upload.plan.total_files, 1);
-    let delete_upload =
-        plan_delete_upload_with_capability(&linux, " 018f0a59-f18a-7fa9-98fb-3bd51964d001 ")
-            .unwrap();
-    assert_eq!(delete_upload.required_capability, Capability::Jobs);
-    assert_eq!(delete_upload.id, "018f0a59-f18a-7fa9-98fb-3bd51964d001");
-
-    let goal = plan_goal_command_with_capability(
-        &linux,
-        GoalUpdateRequest {
-            thread_id: Some(" thread-a ".to_string()),
-            objective: Some("  Ship it  ".to_string()),
-            token_budget: Some(512),
-            status: None,
-            enabled: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(goal.required_capability, Capability::Threads);
-    assert_eq!(goal.command.update.thread_id, "thread-a");
-    assert_eq!(goal.command.update.objective.as_deref(), Some("Ship it"));
-
     assert!(plan_thread_detail_request(
         &windows,
         ThreadDetailRequest {
-            id: "thread-a".to_string(),
-            limit: None,
-            full: None,
-            before: None,
-        },
+            id: "thread-a".into(),
+            ..ThreadDetailRequest::default()
+        }
     )
     .is_err());
     assert!(
         plan_thread_cleanup_action(&windows, ThreadCleanupAction::HiddenDeleteExecute).is_err()
     );
-    assert!(plan_thread_command_with_capability(
-        &windows,
-        ThreadCommandRequest {
-            command: ThreadCommandKind::FollowUp,
-            thread_id: Some("thread-a".to_string()),
-            message: ThreadMessageRequest {
-                message: "queue this".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .is_err());
-    assert!(plan_goal_command_with_capability(
-        &windows,
-        GoalUpdateRequest {
-            thread_id: Some("thread-a".to_string()),
-            objective: Some("ship".to_string()),
-            token_budget: None,
-            status: None,
-            enabled: None,
-        },
-    )
-    .is_err());
 }
 
 #[test]
@@ -535,227 +444,7 @@ fn thread_list_and_blocks_facades_return_adapter_ready_core_plans() {
 }
 
 #[test]
-fn thread_send_steer_stop_followup_and_state_actions_plan_without_host_dependencies() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-    let windows = PlatformPaths::for_kind(PlatformKind::Windows);
-
-    let create = plan_thread_send_with_capability(
-        &linux,
-        ThreadSendRequest {
-            thread_id: None,
-            message: ThreadMessageRequest {
-                message: "  start new work  ".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .unwrap();
-    assert_eq!(create.required_capability, Capability::Jobs);
-    assert_eq!(create.command.command, ThreadCommandKind::Create);
-    assert_eq!(
-        create
-            .command
-            .action
-            .as_ref()
-            .map(|action| action.thread_id.as_deref()),
-        Some(None)
-    );
-
-    let send = plan_thread_send_with_capability(
-        &linux,
-        ThreadSendRequest {
-            thread_id: Some(" thread-a ".to_string()),
-            message: ThreadMessageRequest {
-                message: " continue ".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .unwrap();
-    assert_eq!(send.command.command, ThreadCommandKind::Resume);
-    assert_eq!(send.command.thread_id.as_deref(), Some("thread-a"));
-    assert_eq!(
-        send.command
-            .action
-            .as_ref()
-            .and_then(|action| action.thread_id.as_deref()),
-        Some("thread-a")
-    );
-
-    let steer = plan_thread_steer_with_capability(
-        &linux,
-        ThreadSteerRequest {
-            thread_id: Some(" thread-a ".to_string()),
-            message: ThreadMessageRequest {
-                message: "  queue this  ".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .unwrap();
-    assert_eq!(steer.command.command, ThreadCommandKind::FollowUp);
-    assert!(steer.command.action.is_none());
-    assert_eq!(
-        steer
-            .command
-            .followup
-            .as_ref()
-            .map(|followup| followup.message.as_str()),
-        Some("queue this")
-    );
-
-    let list = plan_followup_list_with_capability(
-        &linux,
-        FollowUpListRequest {
-            thread_id: " thread-a ".to_string(),
-            limit: Some(999),
-        },
-    )
-    .unwrap();
-    assert_eq!(list.required_capability, Capability::Jobs);
-    assert_eq!(list.thread_id, "thread-a");
-    assert_eq!(list.limit, 200);
-
-    let enqueue = plan_followup_enqueue_with_capability(
-        &linux,
-        ThreadSteerRequest {
-            thread_id: Some(" thread-a ".to_string()),
-            message: ThreadMessageRequest {
-                message: "  later  ".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .unwrap();
-    assert_eq!(enqueue.required_capability, Capability::Jobs);
-    assert_eq!(enqueue.followup.thread_id, "thread-a");
-    assert_eq!(enqueue.followup.message, "later");
-
-    let cancel = plan_followup_cancel_with_capability(
-        &linux,
-        FollowUpCancelRequest {
-            thread_id: " thread-a ".to_string(),
-            followup_id: " followup-a ".to_string(),
-        },
-    )
-    .unwrap();
-    assert_eq!(cancel.thread_id, "thread-a");
-    assert_eq!(cancel.followup_id, "followup-a");
-
-    let stop = plan_thread_stop_with_capability(
-        &linux,
-        ThreadStopRequest {
-            thread_id: " thread-a ".to_string(),
-            turn_id: Some(" turn-a ".to_string()),
-            job_id: None,
-        },
-    )
-    .unwrap();
-    assert!(stop.requires_active_job_lookup);
-    let resolved = resolve_thread_stop_job(&stop, Some(" job-a ".to_string())).unwrap();
-    assert_eq!(resolved.job_id, "job-a");
-    let response = thread_stop_response(&resolved, true);
-    assert_eq!(response.command, commands::THREADS_STOP);
-    assert_eq!(response.thread_id.as_deref(), Some("thread-a"));
-    assert_eq!(response.job_id.as_deref(), Some("job-a"));
-
-    let archive = plan_thread_archive_with_capability(&linux, " thread-a ").unwrap();
-    assert_eq!(
-        archive.required_capability,
-        Capability::ThreadArchiveActions
-    );
-    assert_eq!(archive.command, commands::THREADS_ARCHIVE);
-    assert_eq!(archive.thread_id, "thread-a");
-    assert_eq!(archive.archived, Some(true));
-
-    let restore = plan_thread_restore_with_capability(&linux, " thread-a ").unwrap();
-    assert_eq!(restore.command, commands::THREADS_RESTORE);
-    assert_eq!(restore.archived, Some(false));
-
-    let rename = plan_thread_rename_with_capability(
-        &linux,
-        ThreadRenameRequest {
-            thread_id: " thread-a ".to_string(),
-            name: "  New name  ".to_string(),
-        },
-    )
-    .unwrap();
-    assert_eq!(rename.command, commands::THREADS_RENAME);
-    assert_eq!(rename.name.as_deref(), Some("New name"));
-
-    assert!(plan_thread_send_with_capability(
-        &windows,
-        ThreadSendRequest {
-            thread_id: Some("thread-a".to_string()),
-            message: ThreadMessageRequest {
-                message: "continue".to_string(),
-                ..ThreadMessageRequest::default()
-            },
-        },
-    )
-    .is_err());
-}
-
-#[test]
-fn goal_facades_cover_get_save_clear_pause_and_resume_as_core_plans() {
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-
-    let get = nexushub_core::services::goals::plan_goal_get_with_capability(
-        &linux,
-        nexushub_core::services::goals::GoalGetRequest {
-            thread_id: Some(" thread-a ".to_string()),
-        },
-    )
-    .unwrap();
-    assert_eq!(get.required_capability, Capability::Threads);
-    assert_eq!(get.thread_id.as_deref(), Some("thread-a"));
-    assert!(!get.missing_thread);
-
-    let missing = nexushub_core::services::goals::plan_goal_get_with_capability(
-        &linux,
-        nexushub_core::services::goals::GoalGetRequest { thread_id: None },
-    )
-    .unwrap();
-    assert!(missing.missing_thread);
-
-    let save = nexushub_core::services::goals::plan_goal_save_with_capability(
-        &linux,
-        GoalUpdateRequest {
-            thread_id: Some(" thread-a ".to_string()),
-            objective: Some("  Ship it  ".to_string()),
-            token_budget: Some(1024),
-            status: None,
-            enabled: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(save.command.command, GoalCommandKind::Save);
-
-    let clear =
-        nexushub_core::services::goals::plan_goal_clear_with_capability(&linux, Some(" thread-a "))
-            .unwrap();
-    assert_eq!(clear.command.command, GoalCommandKind::Clear);
-    assert_eq!(clear.command.update.status, "cleared");
-
-    let paused =
-        nexushub_core::services::goals::plan_goal_pause_with_capability(&linux, " thread-a ")
-            .unwrap();
-    assert_eq!(paused.command.command, GoalCommandKind::Pause);
-    assert_eq!(paused.command.update.objective, None);
-    assert_eq!(paused.command.update.token_budget, None);
-    assert_eq!(paused.command.update.status, "paused");
-
-    let resumed =
-        nexushub_core::services::goals::plan_goal_resume_with_capability(&linux, " thread-a ")
-            .unwrap();
-    assert_eq!(resumed.command.command, GoalCommandKind::Resume);
-    assert_eq!(resumed.command.update.objective, None);
-    assert_eq!(resumed.command.update.token_budget, None);
-    assert_eq!(resumed.command.update.status, "active");
-}
-
-#[test]
-fn cleanup_and_upload_facades_expose_validation_and_execution_boundaries() {
+fn cleanup_facades_expose_validation_and_execution_boundaries() {
     let linux = PlatformPaths::for_kind(PlatformKind::Linux);
     let windows = PlatformPaths::for_kind(PlatformKind::Windows);
 
@@ -796,27 +485,7 @@ fn cleanup_and_upload_facades_expose_validation_and_execution_boundaries() {
     assert_eq!(thread_reexport.target, CleanupTarget::Archived);
     assert!(!thread_reexport.execute);
 
-    let upload_validation = plan_upload_validation_with_capability(
-        &linux,
-        &[UploadBatchItem {
-            name: "notes.md".to_string(),
-            mime: None,
-            bytes: b"# Notes".to_vec(),
-        }],
-    )
-    .unwrap();
-    assert_eq!(upload_validation.required_capability, Capability::Jobs);
-    assert_eq!(upload_validation.total_files, 1);
-    assert_eq!(upload_validation.total_bytes, 7);
-    assert_eq!(upload_validation.max_files, 5);
-
     assert!(plan_cleanup_action(&windows, CleanupAction::ArchiveDeleteDryRun).is_err());
-    assert!(plan_upload_validation_with_capability(&windows, &[]).is_err());
-    assert!(
-        plan_delete_upload_with_capability(&windows, "018f0a59-f18a-7fa9-98fb-3bd51964d001")
-            .is_err()
-    );
-    assert!(plan_delete_upload_with_capability(&linux, "not-a-uuid").is_err());
 }
 
 #[test]
@@ -824,8 +493,6 @@ fn core_facade_sources_do_not_import_host_runtime_surfaces() {
     for (name, source) in [
         ("threads", include_str!("../src/services/threads.rs")),
         ("jobs", include_str!("../src/services/jobs.rs")),
-        ("goals", include_str!("../src/services/goals.rs")),
-        ("uploads", include_str!("../src/services/uploads.rs")),
         ("cleanup", include_str!("../src/services/cleanup.rs")),
     ] {
         for forbidden in [
@@ -846,7 +513,7 @@ fn core_facade_sources_do_not_import_host_runtime_surfaces() {
 }
 
 #[test]
-fn thread_limit_and_attachment_id_count_helpers_are_shared_core_contracts() {
+fn thread_limit_helpers_are_shared_core_contracts() {
     assert_eq!(normalize_thread_detail_block_limit(None, false), Some(120));
     assert_eq!(
         normalize_thread_detail_block_limit(Some(999), false),
@@ -858,23 +525,6 @@ fn thread_limit_and_attachment_id_count_helpers_are_shared_core_contracts() {
     assert_eq!(normalize_thread_block_limit(None), 120);
     assert_eq!(normalize_thread_block_limit(Some(0)), 1);
     assert_eq!(normalize_thread_block_limit(Some(999)), 500);
-
-    let ids = vec![
-        "a".to_string(),
-        "b".to_string(),
-        "c".to_string(),
-        "d".to_string(),
-        "e".to_string(),
-    ];
-    assert!(validate_attachment_id_count(&ids).is_ok());
-    let too_many = ids
-        .into_iter()
-        .chain(std::iter::once("f".to_string()))
-        .collect::<Vec<_>>();
-    assert!(validate_attachment_id_count(&too_many)
-        .unwrap_err()
-        .to_string()
-        .contains("一次最多发送 5 个附件"));
 }
 
 #[test]
@@ -934,45 +584,6 @@ fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
         thread_state_action_response(&rename_plan).unwrap().data,
         Some(serde_json::json!({"name": "new name"}))
     );
-
-    let cancelled = cancel_followup_response(
-        commands::THREADS_FOLLOWUPS_CANCEL,
-        "thread-a".to_string(),
-        "followup-a".to_string(),
-        true,
-    );
-    assert_eq!(cancelled.command, commands::THREADS_FOLLOWUPS_CANCEL);
-}
-
-#[test]
-fn goal_action_helpers_use_unified_thread_goal_commands() {
-    assert_eq!(
-        GoalCommandKind::Save.as_rpc_action(),
-        commands::THREADS_GOAL_SAVE
-    );
-    assert_eq!(
-        GoalCommandKind::Clear.as_rpc_action(),
-        commands::THREADS_GOAL_CLEAR
-    );
-    assert_eq!(
-        GoalCommandKind::Pause.as_rpc_action(),
-        commands::THREADS_GOAL_PAUSE
-    );
-    assert_eq!(
-        GoalCommandKind::Resume.as_rpc_action(),
-        commands::THREADS_GOAL_RESUME
-    );
-
-    for command in [
-        commands::THREADS_GOAL_GET,
-        commands::THREADS_GOAL_SAVE,
-        commands::THREADS_GOAL_CLEAR,
-        commands::THREADS_GOAL_PAUSE,
-        commands::THREADS_GOAL_RESUME,
-    ] {
-        assert!(!commands::is_allowed_rpc_command(command));
-        assert!(commands::is_retired_command(command));
-    }
 }
 
 #[test]

@@ -1579,17 +1579,10 @@ describe("archive delete API compatibility", () => {
     }
   });
 
-  test("bridge action copy hides fallback implementation wording", async () => {
-    const app = await import("../App");
-    const implementationCopy = ["started", "codex", "exec", "fallback", "job"].join(" ");
-
-    expect(app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: implementationCopy })).toBe("已提交给 Codex");
-    expect(app.actionMessage({ bridge: false, fallback: true, message: "已提交给 Codex" })).toBe("已提交给 Codex");
-    expect(app.actionMessage({ bridge: false, fallback: false, turn_id: "turn-12345678" })).toBe("已提交给 Codex");
-    expect([
-      app.actionMessage({ bridge: false, fallback: true, job_id: "job-12345678", message: implementationCopy }),
-      app.actionMessage({ bridge: false, fallback: false, turn_id: "turn-12345678" })
-    ].join(" ")).not.toContain(implementationCopy);
+  test("retired send payload and results have no production helpers", () => {
+    for (const token of ["function buildPayload(", "function actionMessage(", "function setThreadLastResult(", "function demoCreatedThreadResult("]) {
+      expectNoSourceMatches(productionSources, token, "retired sending helper");
+    }
   });
 
   test("does not surface pending blocks without reply-needed state or active turn", async () => {
@@ -1637,11 +1630,6 @@ describe("archive delete API compatibility", () => {
     expect(current?.id).toBe("plan-live");
     expect(app.isActionablePlanBlock(plan, current)).toBe(true);
     expect(app.currentActionKey(current, null)).toBe("plan:turn:plan-item");
-    expect(app.renderCurrentActionCardSnapshot({ kind: "plan" }).buttons).toEqual([
-      "接受计划",
-      "修改计划",
-      "保持计划模式"
-    ]);
   });
 
   test("reply-needed fallback does not revive resolved plans or plans followed by execution progress", async () => {
@@ -2198,13 +2186,9 @@ describe("archive delete API compatibility", () => {
     ]);
   });
 
-  test("question and hidden cleanup helpers expose readiness and disabled state", async () => {
+  test("hidden cleanup helpers expose readiness and disabled state", async () => {
     const app = await import("../App");
     const { hiddenThreadDeleteStats } = await import("./domain/runtimeViewModel");
-    const questions = [
-      { id: "q1", question: "选择方案", options: [{ label: "A" }, { label: "B" }] },
-      { id: "q2", question: "选择范围", options: [{ label: "小" }, { label: "大" }] }
-    ];
     const hiddenPlan = {
       total_threads: 9,
       visible_threads: 7,
@@ -2217,16 +2201,6 @@ describe("archive delete API compatibility", () => {
       integrity: "ok"
     };
 
-    expect(app.questionAnswersReady(questions, { q1: "A" })).toBe(false);
-    expect(app.questionAnswersReady(questions, { q1: "A", q2: "小" })).toBe(true);
-    expect(app.questionAnswerPayload(questions, { q1: "A", q2: ["大"] })).toEqual({
-      q1: ["A"],
-      q2: ["大"]
-    });
-    expect(app.renderCurrentActionCardSnapshot({ kind: "question", questions })).toMatchObject({
-      buttons: ["A", "B", "小", "大"],
-      supplementalInput: true
-    });
     expect(hiddenThreadDeleteStats(hiddenPlan)).toEqual({
       hidden: 2,
       visible: 7,

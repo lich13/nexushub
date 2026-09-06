@@ -38,16 +38,6 @@ impl AppState {
         Self::new_for_surface_with_goal_client(config, db, host_surface, CodexGoalClient::new())
     }
 
-    #[cfg(test)]
-    pub fn new_with_goal_client(config: Config, db: PanelDb, goal_client: CodexGoalClient) -> Self {
-        Self::new_for_surface_with_goal_client(
-            config,
-            db,
-            HostSurface::LinuxServerWebui,
-            goal_client,
-        )
-    }
-
     fn new_for_surface_with_goal_client(
         config: Config,
         db: PanelDb,

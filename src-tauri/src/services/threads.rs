@@ -56,8 +56,6 @@ pub(crate) fn thread_summaries_with_query(
             running_jobs,
             hidden_thread_ids,
             archived_thread_ids,
-            pending_followups: Vec::new(),
-            default_workspace: state.config().codex.workspace.clone(),
         },
         plan.list.query,
     )?;
@@ -161,13 +159,7 @@ fn load_thread_detail_read_model(
         return Ok(None);
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
-    let view = thread_service::thread_detail_read_model(
-        state.platform(),
-        detail,
-        active_job,
-        None,
-        state.config().codex.workspace.clone(),
-    )?;
+    let view = thread_service::thread_detail_read_model(state.platform(), detail, active_job)?;
     Ok(Some(view.detail))
 }
 
