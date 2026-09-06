@@ -42,7 +42,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{}}'
         .collect();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["method"], "initialize");
-    assert_eq!(requests[1]["method"], "x.ai/session/rename");
+    assert_eq!(requests[1]["method"], "_x.ai/session/rename");
     assert_eq!(
         requests[1]["params"],
         serde_json::json!({"sessionId":session.id,"cwd":session.cwd,"title":"A quoted \"title\""})

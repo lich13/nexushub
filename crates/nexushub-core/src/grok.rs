@@ -611,7 +611,7 @@ async fn rename_native(
             ),
             (
                 2,
-                "x.ai/session/rename",
+                "_x.ai/session/rename",
                 serde_json::json!({"sessionId":session.id,"cwd":session.cwd,"title":title}),
             ),
         ] {

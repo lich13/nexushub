@@ -5,7 +5,7 @@ NexusHub is a compact Codex and Grok Build task browser with a shared React inte
 ## Scope
 
 - Codex: browse, search, filter, rename, archive/restore, and copy messages, IDs, paths or resume commands. Copying a command never executes it.
-- Grok Build: read native `summary.json` and `updates.jsonl`; merge tool updates by call identity; rename through fixed `grok agent stdio` and `x.ai/session/rename`.
+- Grok Build: read native `summary.json` and `updates.jsonl`; merge tool updates by call identity; rename through fixed `grok agent stdio` and ACP extension `_x.ai/session/rename`.
 - Grok local-file deletion requires a preview and explicit confirmation. Identity, activity, path boundaries, symlinks and content fingerprints are rechecked. Workspaces, worktrees, settings and cloud tasks are never deleted.
 - No task creation, sending, follow-up queue execution, steer, stop, fork, uploads, approvals, question answers, plan acceptance or manual Goal controls.
 - Probe: main-task completion/question notifications, Hook status, an event timeline and independent Bark/Goal-recovery settings.
