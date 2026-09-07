@@ -152,6 +152,7 @@ jobs:
             xdotool \
             python3-gi \
             python3-pil \
+            fonts-noto-cjk \
             libgtk-3-dev \
             librsvg2-dev \
             libayatana-appindicator3-dev
