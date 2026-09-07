@@ -1,0 +1,39 @@
+{
+  "checkedAt": "2026-09-07T16:53:32.131Z",
+  "mode": "deleted-and-verified",
+  "records": [
+    {
+      "path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "resolved": "/private/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "files": 2893,
+      "logicalBytes": 945177523,
+      "allocatedKiB": 768544,
+      "ownership": "Target recreated for this final test correction and this cleanup script",
+      "absentAfter": true
+    },
+    {
+      "path": "/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-name-313fcb85-935c-4886-9880-a5b50c6fb3fa",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-name-313fcb85-935c-4886-9880-a5b50c6fb3fa",
+      "files": 1,
+      "logicalBytes": 157,
+      "allocatedKiB": 4,
+      "ownership": "Known failed native rename fixture; exact script SHA-256 verified before deletion",
+      "absentAfter": true
+    },
+    {
+      "path": "/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-name-e5900bf1-65e7-44a8-9cb9-0828473155bc",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-name-e5900bf1-65e7-44a8-9cb9-0828473155bc",
+      "files": 1,
+      "logicalBytes": 157,
+      "allocatedKiB": 4,
+      "ownership": "Known failed native rename fixture; exact script SHA-256 verified before deletion",
+      "absentAfter": true
+    }
+  ],
+  "totals": {
+    "files": 2895,
+    "logicalBytes": 945177837,
+    "allocatedKiB": 768552
+  },
+  "note": "Supplement to the earlier cleanup; logical bytes and pre-deletion allocation are distinct. The earlier fixture dates from the first v0.1.161 local gate, the later one from this final correction."
+}

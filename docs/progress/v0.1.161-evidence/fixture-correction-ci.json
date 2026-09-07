@@ -1,0 +1,23 @@
+{
+  "headSha": "11caea4dc6d9917090742fb80b8db1b9e73d9c53",
+  "conclusion": "success",
+  "url": "https://github.com/lich13/nexushub/actions/runs/34144853497",
+  "jobs": [
+    {
+      "name": "Backend checks",
+      "conclusion": "success"
+    },
+    {
+      "name": "Linux Tauri checks",
+      "conclusion": "success"
+    },
+    {
+      "name": "Frontend checks",
+      "conclusion": "success"
+    },
+    {
+      "name": "macOS Tauri checks",
+      "conclusion": "success"
+    }
+  ]
+}
