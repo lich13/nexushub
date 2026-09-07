@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex read-only task browsing, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep Grok Build read-only with guarded local session management.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-09-07
-> **Mode**: V0.1.160_CORRECTIVE_IN_PROGRESS
+> **Mode**: V0.1.160_RECORD_CI_PENDING
 
 ## References
 
@@ -36,17 +36,17 @@
 
 ## Current Status
 
-**Active Phase**: Goal 27: `v0.1.159` 精简交付的 `v0.1.160` 修复验收中<br>
-**Active Task**: `v0.1.159` 已通过 CI/Release、15 资产与双端部署，但正式截图复核发现 320px 传统滚动条造成 15px 横向溢出，不能接受。`v0.1.160` 移除 body 固定最小宽度，浏览器保留真实滚动条并按 clientWidth 验证；正在执行完整 gate，后续必须完成新 exact-tag Release、正式双端更新与验收。旧 tag 不改写，回滚及诊断保留。详见 [v0.1.160 acceptance record](./v0.1.160-acceptance.md)。历史 Goal 26 保持已完成。
+**Active Phase**: Goal 27: `v0.1.160` 正式验收与清理通过，最终记录 CI 待完成<br>
+**Active Task**: 修复实现 `19a43468e9d403451d7545abb526dde3cc32e41d` 的 CI `34124094954` 与 Release `34124777209` 全绿，15 资产和 updater 签名核验通过。正式 macOS、腾讯云已更新至 `0.1.160`；四工作区、双主题、320px 实际滚动条、Linux AppImage smoke、双端正式 helper 回放及精确清理通过。关闭 App 后 monitor 健康且无 listener。待本次最终记录 CI 和验收标记提交 CI 全绿后关闭 Goal 27。详见 [v0.1.160 acceptance record](./v0.1.160-acceptance.md)。历史 Goal 26 保持已完成。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.157` was published but not accepted because post-release review found gaps. `v0.1.158` is the accepted corrective production release; old tags were not rewritten.
+Rows through `v0.1.159` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.157` and `v0.1.159` were published but not accepted because post-release review found gaps. `v0.1.158` was the previously accepted baseline; current production is `v0.1.160`. Old tags were not rewritten.
 
 ## Deep Refactor Goal Tracker
 
-- [ ] Goal 27: `v0.1.159` theme, layout and build simplification, with corrective `v0.1.160` acceptance pending. The original baseline is `main@1ad2756a3b0bf12e8514196968e521f56921980a`. `v0.1.159` was published/deployed but failed final classic-scrollbar inspection; its tag remains intact. Complete the correction's gate, matching CI/Release, 15 assets, official macOS/cloud acceptance and cleanup before closure. All three runtimes and four workspaces remain supported.
+- [ ] Goal 27: Theme, layout, dependency and build simplification delivered as corrective `v0.1.160`; final record/marker CI pending. Baseline `1ad2756a3b0bf12e8514196968e521f56921980a`; implementation `19a43468e9d403451d7545abb526dde3cc32e41d`. Local gate, matching implementation CI/Release, 15 assets, official macOS/Tencent acceptance, Linux desktop smoke, dual-host helper replay and cleanup passed. All three runtimes and four workspaces remain supported. `v0.1.159` remains unaccepted and its tag intact.
 
 - [x] Goal 1: `v0.1.134` baseline acceptance - local, GitHub Release, Tencent Cloud Linux WebUI baseline, and installed macOS Tauri App baseline verified on 2026-06-26.
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.
@@ -87,7 +87,7 @@ Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.160_CORRECTIVE_IN_PROGRESS
+  mode: V0.1.160_RECORD_CI_PENDING
   strategy: "cc-switch style shared contract registry, read-only Codex/Grok webui, use-case layer with thin Linux server webd and macOS Tauri surfaces; desktop LAN WebUI retired"
   phases:
     phase_1:

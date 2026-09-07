@@ -1,0 +1,121 @@
+{
+  "checkedAt": "2026-09-07T13:44:48.812Z",
+  "implementationSha": "19a43468e9d403451d7545abb526dde3cc32e41d",
+  "tag": "v0.1.160",
+  "ci": {
+    "run": 34124094954,
+    "conclusion": "success",
+    "jobs": [
+      "Frontend",
+      "Backend",
+      "macOS Tauri",
+      "Linux Tauri"
+    ]
+  },
+  "release": {
+    "run": 34124777209,
+    "conclusion": "success",
+    "assetCount": 15,
+    "updaterSignaturesCryptographicallyVerified": [
+      "darwin-aarch64",
+      "linux-x86_64"
+    ],
+    "dmgMatchesUpdaterApp": true,
+    "installedAppMatchesDmg": true
+  },
+  "macos": {
+    "app": "/Applications/NexusHub.app",
+    "appVersion": "0.1.160",
+    "appSha256": "cd0a0e775e6d77fb253ea6a3f9d7cd3c2a1276011d00aa7a9d037bb64e010198",
+    "helperVersion": "0.1.160",
+    "bundledHelperSha256": "9e31e1d3c36da9473ce2b934fe3c388eae246089e8398a47890ae7d198bbd0eb",
+    "supportHelperSha256": "9e31e1d3c36da9473ce2b934fe3c388eae246089e8398a47890ae7d198bbd0eb",
+    "configSha256": "9bbe5e7a1352704d96090c876e4818e34f5b7758599058dd2ced7321a13fc348",
+    "appClosed": true,
+    "monitor": {
+      "pid": 20971,
+      "state": "running",
+      "scanStatus": "ok",
+      "lastError": null,
+      "updatedAt": 1788788673,
+      "tcpListeners": 0
+    },
+    "boot": {
+      "desktopRuntime": true,
+      "rootChildren": 1,
+      "hasWebLoginGate": false,
+      "hasDesktopNav": true,
+      "bodyTextLength": 6376,
+      "bootMounted": true,
+      "hasVisibleLinuxHostCopy": false,
+      "title": "NexusHub",
+      "rootClass": "app-shell ",
+      "readyState": "complete",
+      "hasMainShell": true
+    },
+    "visibleWorkspacesChecked": [
+      "Codex",
+      "Grok Build",
+      "Probe",
+      "Settings"
+    ],
+    "systemAppearanceRestored": "dark",
+    "signing": "Existing linker ad-hoc signature; no Developer ID or notarization. Actual App launch and updater signature verification passed."
+  },
+  "tencent": {
+    "version": "nexushub-webd 0.1.160",
+    "binarySha256": "ba2b1235b12e6d8f60744a9f492849a0a3d51fc54c1619eac4f59405ce740dde",
+    "service": "active",
+    "health": {
+      "ok": true
+    },
+    "doctor": {
+      "stateDbIntegrity": "ok",
+      "discoveryWarnings": [],
+      "codexHomeSource": "current_user"
+    },
+    "configuration": {
+      "config": "337531e5315daebc341519eda3a89775e6bb3600d40cfaf68b85864ba91b5398",
+      "environment": "bd10c8477e953d4464f09af267bd792a6457ff52730e6509ed24ca48cea455b0",
+      "unit": "234f86f462449fe1c3d33cdf4ceaa220a2f2c15b5cf7ee997f0c171ad45e09d0",
+      "nginx": "33d39cbf2bb4b5a93eb23701c5b807dc6a25697772f5c1c45d73cc58698aa169"
+    },
+    "exactTagHeadlessBinaryMatched": true,
+    "publicUrl": "https://661313.xyz/nexushub/",
+    "authenticatedWorkspacesChecked": [
+      "Codex",
+      "Grok Build",
+      "Probe",
+      "Settings"
+    ],
+    "configurationUnchanged": true
+  },
+  "browser": {
+    "plugin": true,
+    "authenticatedSessionPreserved": true,
+    "renderedAudit": "cloud-rendered.json",
+    "routeSweep": "public-routes.json",
+    "finalReload": {
+      "mounted": true,
+      "fatal": false,
+      "loginGate": false,
+      "failedNetworkRequests": 0,
+      "runtimeExceptions": 0,
+      "consoleErrors": 0
+    },
+    "restored": [
+      "viewport",
+      "media emulation",
+      "normal network caching"
+    ],
+    "transient": "The first cache-disabled reload reached the existing 3-second mount watchdog. A subsequent instrumented cold reload and a final normal reload loaded assets/RPC successfully without network failures or runtime exceptions. The route sweep independently saw a transient TLS connection failure and passed after bounded retry. No reproducible application failure remains; the initial cause is not proven."
+  },
+  "replay": {
+    "macos": "helper-macos.json",
+    "tencent": "helper-tencent.json",
+    "casesPerHost": 12,
+    "capturedRequestsPerHost": 12,
+    "isolation": "Fake dedicated data and loopback Bark receiver. No production notifications or history mutations.",
+    "limits": "This verifies official binary behavior, not a new phone delivery or actual Codex automatic Stop dispatch."
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "measuredAt": "2026-09-07T13:44:48.884Z",
+  "baselineSha": "1ad2756a3b0bf12e8514196968e521f56921980a",
+  "implementationSha": "19a43468e9d403451d7545abb526dde3cc32e41d",
+  "baseline": {
+    "sourceCssBytes": 58698,
+    "sourceCssLines": 1982,
+    "assets": [
+      {
+        "name": "index-CJSAw-Mt.css",
+        "bytes": 48620,
+        "gzip": 9361
+      },
+      {
+        "name": "index-CvmJlQEk.js",
+        "bytes": 468038,
+        "gzip": 142246
+      }
+    ]
+  },
+  "current": {
+    "sourceCssBytes": 26673,
+    "sourceCssLines": 338,
+    "assets": [
+      {
+        "name": "index-B8dVCcbY.js",
+        "bytes": 477163,
+        "gzip": 145144
+      },
+      {
+        "name": "index-DIhSBfkW.css",
+        "bytes": 23409,
+        "gzip": 5158
+      }
+    ]
+  },
+  "directDependencies": {
+    "workspace": [
+      27,
+      25
+    ],
+    "core": [
+      17,
+      16
+    ],
+    "webd": [
+      17,
+      17
+    ],
+    "tauri": [
+      13,
+      11
+    ],
+    "frontendRuntime": [
+      6,
+      6
+    ]
+  },
+  "lockPackages": {
+    "root": [
+      297,
+      297
+    ],
+    "tauri": [
+      562,
+      558
+    ]
+  },
+  "packagesBytes": {
+    "dmg": [
+      10984224,
+      10979279
+    ],
+    "appimage": [
+      88050168,
+      88050168
+    ],
+    "deb": [
+      14155870,
+      14154794
+    ],
+    "rpm": [
+      14160415,
+      14155093
+    ],
+    "darwinUpdater": [
+      11297751,
+      11291120
+    ],
+    "headlessWebd": [
+      6228983,
+      6228439
+    ]
+  },
+  "packagingUiBuilds": {
+    "macosTauri": 1,
+    "linuxTauri": 1,
+    "linuxHeadlessWebd": 1,
+    "evidenceRun": 34124777209,
+    "observedBuildUtc": {
+      "macosTauri": "2026-09-07T13:09:04Z",
+      "linuxTauri": "2026-09-07T13:07:21Z",
+      "linuxHeadlessWebd": "2026-09-07T13:13:36Z"
+    },
+    "note": "Independent guard and test builds are retained. Linux headless assets use their separate /nexushub/ base."
+  },
+  "browserFixture": {
+    "samplesAfterTwoWarmups": 10,
+    "sameChromiumAndMockFixture": true,
+    "observationMs": 31000,
+    "before": "measurement-before.json",
+    "after": "measurement-after.json",
+    "startupChangePercent": 7.035565354197537,
+    "readingChangePercent": 7.601355490280293,
+    "note": "Local rendered fixture timings exclude production network and Codex database variation. The temporary after-preview server initially omitted the deployment base and was restarted with --base /nexushub/ before sampling."
+  }
+}

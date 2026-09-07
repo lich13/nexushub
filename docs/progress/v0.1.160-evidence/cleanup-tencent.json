@@ -1,0 +1,26 @@
+{
+  "task": "01a07b11-778d-7fe2-a724-7f5549ececa8",
+  "host": "tencent-cloud",
+  "root": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+  "children": [
+    "nexushub-webd-linux-x86_64.tar.gz",
+    "nexushub-webd-linux-x86_64.tar.gz.sha256",
+    "notification-screenshot-20260906.jsonl",
+    "release-v159",
+    "release-v160",
+    "replay-official.mjs",
+    "replay-tencent-official",
+    "replay-tencent-v160"
+  ],
+  "logicalBytes": 54461777,
+  "allocatedBytes": 54685696,
+  "entries": 247,
+  "preview": false,
+  "retained": [
+    "installed 0.1.160 binary and WebUI",
+    "systemd service and monitor",
+    "production data, database, authentication and configuration"
+  ],
+  "completedAt": "2026-09-07T13:46:35.050Z",
+  "absentAfterCleanup": true
+}

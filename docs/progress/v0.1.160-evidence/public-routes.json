@@ -1,0 +1,272 @@
+[
+  {
+    "method": "GET",
+    "path": "/nexushub/",
+    "expected": 200,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/api/public/settings",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/auth.publicSettings",
+    "expected": 200,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/v1",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/responses",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/metrics",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/codex-cloud-panel/",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/api/sentinel/status",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/api/sentinel/status",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/api/probe/status",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/api/cleanup",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/nexushub/api/desktop-webui/status",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/system.plugins",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/system.models",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/system.permissionProfiles",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/system.codexConfig",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/system.claudeCodeOverview",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.create",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.send",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.steer",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.stop",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.fork",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.list",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.enqueue",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.claim",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.submit",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.error",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.followups.cancel",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.plan.accept",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.plan.revise",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.elicitation.answer",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.approval.answer",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.goal.get",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.goal.save",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.goal.clear",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.goal.pause",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/threads.goal.resume",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/uploads.delete",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/uploadFiles",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.settings.get",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.settings.save",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.status",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.start",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.stop",
+    "expected": 404,
+    "status": 404
+  },
+  {
+    "method": "POST",
+    "path": "/nexushub/api/rpc/desktopWebUi.password.reset",
+    "expected": 404,
+    "status": 404
+  }
+]

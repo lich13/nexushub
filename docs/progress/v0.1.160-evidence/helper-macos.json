@@ -1,0 +1,503 @@
+{
+  "binary": "/Applications/NexusHub.app/Contents/Resources/nexushub-webd",
+  "passed": true,
+  "cases": [
+    {
+      "case": "hook-stop-turn-3",
+      "title": "线程正常完成：Current native title",
+      "bytes": 1111,
+      "sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+      "payload": {
+        "auto_reply": false,
+        "bark": {
+          "body_candidate_count": 1,
+          "body_length": 1111,
+          "body_selected_line": 3,
+          "body_selected_turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d",
+          "body_selection_strategy": "task_complete.last_agent_message",
+          "body_sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+          "body_source": "task_complete.last_agent_message",
+          "body_truncated": false,
+          "chunk_count": 1,
+          "dedupe_hit": false,
+          "dedupe_key": "completion:main:01a074be-b3d2-71a0-bdd8-bd0913d1925d:completion:22afae82f0b2c7a5",
+          "dedupe_ttl_seconds": 300,
+          "device_key_configured": true,
+          "http_status": 200,
+          "notifications_enabled": true,
+          "reason": null,
+          "relevant_switch_enabled": true,
+          "request_count": 1,
+          "request_url": "[redacted]",
+          "scan_source": "hook-stop",
+          "sent": true,
+          "server_url": "http://127.0.0.1:49400",
+          "skipped": false,
+          "status": "pending",
+          "title": "线程正常完成：Current native title",
+          "transcript_size_after": 2014,
+          "transcript_size_before": 2014,
+          "transcript_stabilized": true
+        },
+        "bark_status": "sent",
+        "beijing_time": "2026-09-07 21:20:05 北京时间",
+        "body_candidate_count": 1,
+        "body_length": 1111,
+        "body_selected_line": 3,
+        "body_selected_turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d",
+        "body_selection_strategy": "task_complete.last_agent_message",
+        "body_sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+        "body_source": "task_complete.last_agent_message",
+        "body_summary": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。",
+        "body_truncated": false,
+        "call_id": null,
+        "dedupe": {
+          "claimed": true,
+          "duplicate": false,
+          "key": "completion:main:01a074be-b3d2-71a0-bdd8-bd0913d1925d:completion:22afae82f0b2c7a5",
+          "namespace": "probe_event",
+          "status": "claimed"
+        },
+        "dedupe_status": "claimed",
+        "dedupe_ttl_seconds": 300,
+        "event_type": "completion",
+        "hidden_desktop_control": false,
+        "host_label": "fixture",
+        "last_assistant_message": {
+          "classification": "completion",
+          "original_length": 1111,
+          "redacted_length": 1111,
+          "sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+          "summary": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。"
+        },
+        "legacy_sentinel_cli_runtime": false,
+        "notify_completion": false,
+        "platform": "macos",
+        "raw_kind": "hook-stop",
+        "reason_label": "Current native title",
+        "scan_source": "hook-stop",
+        "session_id": "main",
+        "source": "nexushub-webd probe hook-stop",
+        "thread_id": "main",
+        "thread_title": "Current native title",
+        "transcript_path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/replay-macos-v160/hook-stop/codex/sessions/rollout.jsonl",
+        "transcript_size_after": 2014,
+        "transcript_size_before": 2014,
+        "transcript_stabilized": true,
+        "turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d"
+      },
+      "deduplicated": true
+    },
+    {
+      "case": "hook-stop-turn-8",
+      "title": "线程正常完成：Current native title",
+      "bytes": 534,
+      "sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+      "payload": {
+        "auto_reply": false,
+        "bark": {
+          "body_candidate_count": 1,
+          "body_length": 534,
+          "body_selected_line": 8,
+          "body_selected_turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260",
+          "body_selection_strategy": "task_complete.last_agent_message",
+          "body_sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+          "body_source": "task_complete.last_agent_message",
+          "body_truncated": false,
+          "chunk_count": 1,
+          "dedupe_hit": false,
+          "dedupe_key": "completion:main:01a074ce-286a-75c3-a3c9-e5399e059260:completion:111f7400ecb73349",
+          "dedupe_ttl_seconds": 300,
+          "device_key_configured": true,
+          "http_status": 200,
+          "notifications_enabled": true,
+          "reason": null,
+          "relevant_switch_enabled": true,
+          "request_count": 1,
+          "request_url": "[redacted]",
+          "scan_source": "hook-stop",
+          "sent": true,
+          "server_url": "http://127.0.0.1:49400",
+          "skipped": false,
+          "status": "pending",
+          "title": "线程正常完成：Current native title",
+          "transcript_size_after": 4211,
+          "transcript_size_before": 4211,
+          "transcript_stabilized": true
+        },
+        "bark_status": "sent",
+        "beijing_time": "2026-09-07 21:20:06 北京时间",
+        "body_candidate_count": 1,
+        "body_length": 534,
+        "body_selected_line": 8,
+        "body_selected_turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260",
+        "body_selection_strategy": "task_complete.last_agent_message",
+        "body_sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+        "body_source": "task_complete.last_agent_message",
+        "body_summary": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。",
+        "body_truncated": false,
+        "call_id": null,
+        "dedupe": {
+          "claimed": true,
+          "duplicate": false,
+          "key": "completion:main:01a074ce-286a-75c3-a3c9-e5399e059260:completion:111f7400ecb73349",
+          "namespace": "probe_event",
+          "status": "claimed"
+        },
+        "dedupe_status": "claimed",
+        "dedupe_ttl_seconds": 300,
+        "event_type": "completion",
+        "hidden_desktop_control": false,
+        "host_label": "fixture",
+        "last_assistant_message": {
+          "classification": "completion",
+          "original_length": 534,
+          "redacted_length": 534,
+          "sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+          "summary": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。"
+        },
+        "legacy_sentinel_cli_runtime": false,
+        "notify_completion": false,
+        "platform": "macos",
+        "raw_kind": "hook-stop",
+        "reason_label": "Current native title",
+        "scan_source": "hook-stop",
+        "session_id": "main",
+        "source": "nexushub-webd probe hook-stop",
+        "thread_id": "main",
+        "thread_title": "Current native title",
+        "transcript_path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/replay-macos-v160/hook-stop/codex/sessions/rollout.jsonl",
+        "transcript_size_after": 4211,
+        "transcript_size_before": 4211,
+        "transcript_stabilized": true,
+        "turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260"
+      },
+      "deduplicated": true
+    },
+    {
+      "case": "notify-completion-turn-3",
+      "title": "线程正常完成：Current native title",
+      "bytes": 1111,
+      "sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+      "payload": {
+        "auto_reply": false,
+        "bark": {
+          "body_candidate_count": 1,
+          "body_length": 1111,
+          "body_selected_line": 3,
+          "body_selected_turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d",
+          "body_selection_strategy": "task_complete.last_agent_message",
+          "body_sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+          "body_source": "task_complete.last_agent_message",
+          "body_truncated": false,
+          "chunk_count": 1,
+          "dedupe_hit": false,
+          "dedupe_key": "completion:main:01a074be-b3d2-71a0-bdd8-bd0913d1925d:completion:22afae82f0b2c7a5",
+          "dedupe_ttl_seconds": 300,
+          "device_key_configured": true,
+          "http_status": 200,
+          "notifications_enabled": true,
+          "reason": null,
+          "relevant_switch_enabled": true,
+          "request_count": 1,
+          "request_url": "[redacted]",
+          "scan_source": "notify-completion",
+          "sent": true,
+          "server_url": "http://127.0.0.1:49400",
+          "skipped": false,
+          "status": "pending",
+          "title": "线程正常完成：Current native title",
+          "transcript_size_after": 2014,
+          "transcript_size_before": 2014,
+          "transcript_stabilized": true
+        },
+        "bark_status": "sent",
+        "beijing_time": "2026-09-07 21:20:06 北京时间",
+        "body_candidate_count": 1,
+        "body_length": 1111,
+        "body_selected_line": 3,
+        "body_selected_turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d",
+        "body_selection_strategy": "task_complete.last_agent_message",
+        "body_sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+        "body_source": "task_complete.last_agent_message",
+        "body_summary": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。",
+        "body_truncated": false,
+        "call_id": null,
+        "dedupe": {
+          "claimed": true,
+          "duplicate": false,
+          "key": "completion:main:01a074be-b3d2-71a0-bdd8-bd0913d1925d:completion:22afae82f0b2c7a5",
+          "namespace": "probe_event",
+          "status": "claimed"
+        },
+        "dedupe_status": "claimed",
+        "dedupe_ttl_seconds": 300,
+        "event_type": "completion",
+        "hidden_desktop_control": false,
+        "host_label": "fixture",
+        "last_assistant_message": {
+          "classification": "completion",
+          "original_length": 1111,
+          "redacted_length": 1111,
+          "sha256": "22afae82f0b2c7a528351b784c4ec6c95e07dc66fdf0486bebb429b722985c4e",
+          "summary": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。"
+        },
+        "legacy_sentinel_cli_runtime": false,
+        "notify_completion": true,
+        "platform": "macos",
+        "raw_kind": "completion",
+        "reason_label": "Current native title",
+        "scan_source": "notify-completion",
+        "session_id": null,
+        "source": "nexushub-webd probe notify-completion",
+        "thread_id": "main",
+        "thread_title": "Current native title",
+        "transcript_path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/replay-macos-v160/notify-completion/codex/sessions/rollout.jsonl",
+        "transcript_size_after": 2014,
+        "transcript_size_before": 2014,
+        "transcript_stabilized": true,
+        "turn_id": "01a074be-b3d2-71a0-bdd8-bd0913d1925d"
+      },
+      "deduplicated": true
+    },
+    {
+      "case": "notify-completion-turn-8",
+      "title": "线程正常完成：Current native title",
+      "bytes": 534,
+      "sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+      "payload": {
+        "auto_reply": false,
+        "bark": {
+          "body_candidate_count": 1,
+          "body_length": 534,
+          "body_selected_line": 8,
+          "body_selected_turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260",
+          "body_selection_strategy": "task_complete.last_agent_message",
+          "body_sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+          "body_source": "task_complete.last_agent_message",
+          "body_truncated": false,
+          "chunk_count": 1,
+          "dedupe_hit": false,
+          "dedupe_key": "completion:main:01a074ce-286a-75c3-a3c9-e5399e059260:completion:111f7400ecb73349",
+          "dedupe_ttl_seconds": 300,
+          "device_key_configured": true,
+          "http_status": 200,
+          "notifications_enabled": true,
+          "reason": null,
+          "relevant_switch_enabled": true,
+          "request_count": 1,
+          "request_url": "[redacted]",
+          "scan_source": "notify-completion",
+          "sent": true,
+          "server_url": "http://127.0.0.1:49400",
+          "skipped": false,
+          "status": "pending",
+          "title": "线程正常完成：Current native title",
+          "transcript_size_after": 4211,
+          "transcript_size_before": 4211,
+          "transcript_stabilized": true
+        },
+        "bark_status": "sent",
+        "beijing_time": "2026-09-07 21:20:06 北京时间",
+        "body_candidate_count": 1,
+        "body_length": 534,
+        "body_selected_line": 8,
+        "body_selected_turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260",
+        "body_selection_strategy": "task_complete.last_agent_message",
+        "body_sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+        "body_source": "task_complete.last_agent_message",
+        "body_summary": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。",
+        "body_truncated": false,
+        "call_id": null,
+        "dedupe": {
+          "claimed": true,
+          "duplicate": false,
+          "key": "completion:main:01a074ce-286a-75c3-a3c9-e5399e059260:completion:111f7400ecb73349",
+          "namespace": "probe_event",
+          "status": "claimed"
+        },
+        "dedupe_status": "claimed",
+        "dedupe_ttl_seconds": 300,
+        "event_type": "completion",
+        "hidden_desktop_control": false,
+        "host_label": "fixture",
+        "last_assistant_message": {
+          "classification": "completion",
+          "original_length": 534,
+          "redacted_length": 534,
+          "sha256": "111f7400ecb7334911cf6e876fc90e3ba0410c50eafd7f2faa5e2b6fda37d2cb",
+          "summary": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。"
+        },
+        "legacy_sentinel_cli_runtime": false,
+        "notify_completion": true,
+        "platform": "macos",
+        "raw_kind": "completion",
+        "reason_label": "Current native title",
+        "scan_source": "notify-completion",
+        "session_id": null,
+        "source": "nexushub-webd probe notify-completion",
+        "thread_id": "main",
+        "thread_title": "Current native title",
+        "transcript_path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/replay-macos-v160/notify-completion/codex/sessions/rollout.jsonl",
+        "transcript_size_after": 4211,
+        "transcript_size_before": 4211,
+        "transcript_stabilized": true,
+        "turn_id": "01a074ce-286a-75c3-a3c9-e5399e059260"
+      },
+      "deduplicated": true
+    },
+    {
+      "case": "question-answer-no-resend",
+      "requests": 1
+    },
+    {
+      "case": "answered-fresh-suppressed",
+      "requests": 0
+    },
+    {
+      "case": "internal",
+      "reason": "internal_task",
+      "requests": 0
+    },
+    {
+      "case": "unknown",
+      "reason": "unconfirmed_task_identity",
+      "requests": 0
+    },
+    {
+      "case": "memory",
+      "reason": "internal_memory_consolidation",
+      "requests": 0
+    },
+    {
+      "case": "suggestions",
+      "reason": "internal_control_payload",
+      "requests": 0
+    },
+    {
+      "case": "exclude",
+      "reason": "internal_control_payload",
+      "requests": 0
+    },
+    {
+      "case": "restricted-goal-matrix",
+      "incidents": [
+        {
+          "thread_id": "goal-active",
+          "turn_id": "turn-active",
+          "recovery_status": "active",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-blocked",
+          "turn_id": "turn-blocked",
+          "recovery_status": "active",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-budgetLimited",
+          "turn_id": "turn-budgetLimited",
+          "recovery_status": "active",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-complete",
+          "turn_id": "turn-complete",
+          "recovery_status": "not_applicable:complete",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-null",
+          "turn_id": "turn-null",
+          "recovery_status": "no_goal",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-paused",
+          "turn_id": "turn-paused",
+          "recovery_status": "not_applicable:paused",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        },
+        {
+          "thread_id": "goal-usageLimited",
+          "turn_id": "turn-usageLimited",
+          "recovery_status": "active",
+          "recovery_attempts": 1,
+          "bark_status": "sent"
+        }
+      ],
+      "setCount": 3,
+      "turnCommandCount": 0,
+      "duplicateScanRequests": 0
+    }
+  ],
+  "requestCount": 12,
+  "requests": [
+    {
+      "body": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。",
+      "device_key": "fixture-key",
+      "title": "线程正常完成：Current native title"
+    },
+    {
+      "body": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。",
+      "device_key": "fixture-key",
+      "title": "线程正常完成：Current native title"
+    },
+    {
+      "body": "已参考[帖子](https://linux.do/t/topic/2578075)，结合本机 Codex `0.153.4` 完成优化：\n\n- [AGENTS.md](/home/test/.codex/AGENTS.md:15)：强制 `fork_turns:\"none\"`、自包含委派、证据化汇报和避免重复检索；保留两个 `max` worker、Goal、双版本回滚及自动清理。现为 **75 行 / 7,158 bytes**，仅增加 16 bytes。\n- [config.toml](/home/test/.codex/config.toml:55)：开放显式推理参数，等待设置为默认 30 秒、范围 10–60 秒；移除当前版本无效或不适用于 V2 的两项配置。\n- [default.toml](/home/test/.codex/agents/default.toml)：新增只读核验角色，继承主线程模型、使用 `max`，要求禁止再次委派并返回准确出处。\n\n严格配置检查和新 ephemeral run 验收通过。模型、服务商及其他配置保持原值。当前版本的角色“只读、禁止再委派”属于指令约束，不能当作独立沙箱隔离。\n\n临时副本和测试记录已清理，共删除 **16,112 bytes**，无临时残留；保留上述三个正式文件。重启 Codex 后继续原有任务即可加载新配置。",
+      "device_key": "fixture-key",
+      "title": "线程正常完成：Current native title"
+    },
+    {
+      "body": "已将 [AGENTS.md](/home/test/.codex/AGENTS.md) 从 **75 行 / 7,158 bytes** 压缩为 **41 行 / 4,483 bytes**，体积减少 **37.4%**。\n\n按[帖子](https://linux.do/t/topic/2578075)的职责分层思路，删除了与子代理角色重复的报告细则，合并交付、验收、安全和清理条款。保留 Goal、最少 `max` worker、空白上下文派生、双版本回滚及自动清理。\n\n加载和权限检查通过，配置与角色文件未改动。唯一临时备份已删除，清理 **7,158 bytes**，无残留。",
+      "device_key": "fixture-key",
+      "title": "线程正常完成：Current native title"
+    },
+    {
+      "body": "问题 1：Choose?\n选项 1：A\n选项 2：B",
+      "device_key": "fixture-key",
+      "title": "等待回复：Current native title"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal blocked"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal usageLimited"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal budgetLimited"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal active"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal paused"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal complete"
+    },
+    {
+      "body": "Selected model is at capacity. Please try a different model.",
+      "device_key": "fixture-key",
+      "title": "线程异常停止：Goal null"
+    }
+  ]
+}

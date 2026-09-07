@@ -1,0 +1,152 @@
+{
+  "completedAt": "2026-09-07T13:46:37.937Z",
+  "task": "01a07b11-778d-7fe2-a724-7f5549ececa8",
+  "removed": [
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/target",
+      "relative": "target",
+      "purpose": "root Rust build output",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/target",
+      "bytes": 3633306143,
+      "allocated": 3693596672,
+      "entries": 13805
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/target",
+      "relative": "src-tauri/target",
+      "purpose": "independent Tauri build output",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/target",
+      "bytes": 4642041839,
+      "allocated": 4695543808,
+      "entries": 13016
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/gen",
+      "relative": "src-tauri/gen",
+      "purpose": "generated Tauri schemas",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/gen",
+      "bytes": 336361,
+      "allocated": 348160,
+      "entries": 6
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/node_modules",
+      "relative": "webui/node_modules",
+      "purpose": "task-installed frontend dependencies",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/node_modules",
+      "bytes": 152698564,
+      "allocated": 175767552,
+      "entries": 10533
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/dist",
+      "relative": "webui/dist",
+      "purpose": "generated frontend bundle",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/dist",
+      "bytes": 502905,
+      "allocated": 512000,
+      "entries": 6
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/tsconfig.app.tsbuildinfo",
+      "relative": "webui/tsconfig.app.tsbuildinfo",
+      "purpose": "generated TypeScript build state",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/tsconfig.app.tsbuildinfo",
+      "bytes": 1701,
+      "allocated": 4096,
+      "entries": 1
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/dist",
+      "relative": "dist",
+      "purpose": "macOS-only webd smoke archive; never deployed",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/dist",
+      "bytes": 4931574,
+      "allocated": 5255168,
+      "entries": 3
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/chromium-1243",
+      "purpose": "browser runtime installed by this task at 2026-09-07 18:21",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/chromium-1243",
+      "bytes": 375667558,
+      "allocated": 376762368,
+      "entries": 683
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/chromium_headless_shell-1243",
+      "purpose": "browser runtime installed by this task at 2026-09-07 18:21",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/chromium_headless_shell-1243",
+      "bytes": 204663192,
+      "allocated": 204705792,
+      "entries": 26
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/webkit-2359",
+      "purpose": "browser runtime installed by this task at 2026-09-07 18:21",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/webkit-2359",
+      "bytes": 296980818,
+      "allocated": 310673408,
+      "entries": 7118
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/ffmpeg-1011",
+      "purpose": "browser runtime installed by this task at 2026-09-07 18:21",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/ffmpeg-1011",
+      "bytes": 2607030,
+      "allocated": 2609152,
+      "entries": 5
+    },
+    {
+      "path": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "purpose": "task-scoped runtime temporary data",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "bytes": 17466,
+      "allocated": 36864,
+      "entries": 15
+    },
+    {
+      "path": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-grok-50e57afa-f1e6-4e0a-98a3-f3e104212267",
+      "purpose": "failed timeout fixture, created 2026-09-07T12:32:15.602Z; fake-grok matched test",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-grok-50e57afa-f1e6-4e0a-98a3-f3e104212267",
+      "bytes": 685,
+      "allocated": 12288,
+      "entries": 8
+    },
+    {
+      "path": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-grok-7c58a973-f639-4543-afbf-dbc9563e52f2",
+      "purpose": "failed fixed-protocol fixture, created 2026-09-07T12:32:17.164Z; fake-grok matched test",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/nexushub-grok-7c58a973-f639-4543-afbf-dbc9563e52f2",
+      "bytes": 1029,
+      "allocated": 12288,
+      "entries": 8
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub_v0.1.159_rollback",
+      "purpose": "verified v0.1.158 task rollback; delete only after corrective acceptance",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub_v0.1.159_rollback",
+      "bytes": 17174110,
+      "allocated": 17477632,
+      "entries": 6
+    },
+    {
+      "path": "/private/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "purpose": "task downloads, screenshots copied to evidence, fixture data, logs and verifier build",
+      "resolved": "/private/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "bytes": 470272317,
+      "allocated": 505176064,
+      "entries": 1776
+    }
+  ],
+  "logicalBytes": 9801203292,
+  "allocatedBytes": 9988493312,
+  "note": "Entry sizes are summed without following symlinks; APFS clones and shared cache hardlinks mean allocated bytes are not an exact physical free-space claim.",
+  "retained": [
+    "source and Git history",
+    "formal acceptance evidence",
+    "installed 0.1.160 App/helper and production monitor",
+    "production data, configuration and credentials",
+    "pre-existing shared pnpm/Cargo caches and unknown .DS_Store"
+  ],
+  "rollbackCopiesRetained": 0
+}

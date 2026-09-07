@@ -1,0 +1,55 @@
+{
+  "version": "0.1.158",
+  "createdAt": "2026-09-07T11:48:05.205Z",
+  "task": "01a07b11-778d-7fe2-a724-7f5549ececa8",
+  "archive": {
+    "path": "/Users/gosu/Documents/程序开发/NexusHub_v0.1.159_rollback/NexusHub-0.1.158.app.zip",
+    "bytes": 10942399,
+    "sha256": "2594ae1366c28c4be709b605be9c3cedd47e4f68dfb5736a911a6792156548a3"
+  },
+  "appFiles": [
+    {
+      "path": "Contents/Info.plist",
+      "bytes": 968,
+      "sha256": "f9b733e0669fa131aa6e28e65e41472e0604e1f453b38b8ab9dc510df30149de"
+    },
+    {
+      "path": "Contents/MacOS/nexushub",
+      "bytes": 18659600,
+      "sha256": "207a872641f8288b38fa57b64ae140eea056e65245dd3e5ee8a044ad499187b2"
+    },
+    {
+      "path": "Contents/Resources/icon.icns",
+      "bytes": 75689,
+      "sha256": "d8417248a236b04b1f9e83a7baa743da57099e279f2ab47e84c260ac3dde869a"
+    },
+    {
+      "path": "Contents/Resources/nexushub-webd",
+      "bytes": 11345776,
+      "sha256": "10ca9469a77eaddf09f51db006d6ed5ba8f94bc600a08311d6ab205ccbdc608d"
+    }
+  ],
+  "supportHelper": {
+    "path": "/Users/gosu/Library/Application Support/NexusHub/bin/nexushub-webd",
+    "sha256": "10ca9469a77eaddf09f51db006d6ed5ba8f94bc600a08311d6ab205ccbdc608d",
+    "restoreFrom": "NexusHub.app/Contents/Resources/nexushub-webd"
+  },
+  "restore": "Quit NexusHub, extract the verified archive, replace /Applications/NexusHub.app and the App Support helper from the bundled helper, then reopen NexusHub.",
+  "tencent": {
+    "host": "tencent-cloud",
+    "version": "0.1.158",
+    "release": "https://github.com/lich13/nexushub/releases/tag/v0.1.158",
+    "binarySha256": "6053e74b26aa6d7acd21cfd5ce7a87aed18356d6512bd42f9eddad8a0e926ddb",
+    "configSha256": "337531e5315daebc341519eda3a89775e6bb3600d40cfaf68b85864ba91b5398",
+    "environmentSha256": "bd10c8477e953d4464f09af267bd792a6457ff52730e6509ed24ca48cea455b0",
+    "unitSha256": "234f86f462449fe1c3d33cdf4ceaa220a2f2c15b5cf7ee997f0c171ad45e09d0",
+    "nginxSnippetSha256": "33d39cbf2bb4b5a93eb23701c5b807dc6a25697772f5c1c45d73cc58698aa169",
+    "rollbackArchive": "nexushub-webd-linux-x86_64.tar.gz",
+    "rollbackVerification": "Release checksum verified; packaged binary matches current production binary.",
+    "restore": "Copy the retained v0.1.158 archive to the task-specific cloud staging directory, verify its checksum, extract and run its deploy/install.sh --archive with existing config, then verify version, systemd and healthz.",
+    "archiveBytes": 6228983,
+    "archiveSha256": "cad6ab74394f64eeb655d11ba40fd0f58f28516bc878306945cef13b03b2eeec"
+  },
+  "status": "Verified materials held through corrective functional acceptance. Task copies removed by the linked cleanup records after evidence archival.",
+  "exactTagRestore": "https://github.com/lich13/nexushub/releases/tag/v0.1.158"
+}
