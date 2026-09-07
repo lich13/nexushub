@@ -12,7 +12,6 @@ pub mod probe_error_monitor;
 pub mod providers;
 mod read_cache;
 pub mod security;
-pub mod sentinel;
 pub mod services;
 pub mod system;
 pub mod update;

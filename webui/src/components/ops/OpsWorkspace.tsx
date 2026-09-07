@@ -12,6 +12,7 @@ import { useState } from "react";
 import { JobList } from "../jobs/JobList";
 import { Metric, Panel } from "../common/Panel";
 import { useOpsActions, useOpsQueries } from "../../lib/query/ops";
+import { isTerminalJob, useStartedJob } from "../../lib/query/jobs";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import {
   OPS_PANEL_TITLES,
@@ -28,7 +29,8 @@ import type {
 } from "../../types";
 
 export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix; section?: "system" | "maintenance" }) {
-  const { status, update, jobs } = useOpsQueries();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const { status, update, jobs } = useOpsQueries({ section, historyOpen });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
@@ -57,6 +59,8 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
     }
   });
   const jobMutation = opsActions.updateJob;
+  const startedJob = useStartedJob(jobMutation.data?.job_id);
+  const jobBusy = jobMutation.isPending || Boolean(jobMutation.data?.job_id && !isTerminalJob(startedJob.data?.status));
   const dryRun = opsActions.archiveDryRun;
   const executeDelete = opsActions.archiveExecute;
   const hiddenDryRun = opsActions.hiddenDryRun;
@@ -88,6 +92,7 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
   return (
     <div className="ops-grid">
       {section === "system" && <><Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
+        {status.error && <div role="alert" className="form-error">{status.error.message}</div>}
         <div className="ops-status-overview">
           {opsView.systemMetrics.map((metric) => (
             <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} wide={metric.wide} />
@@ -95,13 +100,17 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
         </div>
       </Panel>
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
+        {update.error && <div role="alert" className="form-error">{update.error.message}</div>}
+        {jobMutation.error && <div role="alert" className="form-error">{jobMutation.error.message}</div>}
+        {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
+        {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
         <UpdateMetrics status={update.data} />
         <div className="button-row ops-action-row">
           {opsView.updateActions.map((action) => {
             const className = action.tone === "primary" ? "primary-button" : action.tone === "danger" ? "danger-button soft" : "secondary-button";
             const icon = action.action === "check" ? <CheckCircle2 size={17} /> : action.action === "install" ? <Play size={17} /> : <Trash2 size={17} />;
             return (
-              <button key={action.action} className={className} disabled={jobMutation.isPending || action.disabled} onClick={() => jobMutation.mutate({ action: action.action })}>
+              <button key={action.action} className={className} disabled={jobBusy || action.disabled} onClick={() => jobMutation.mutate({ action: action.action })}>
                 {icon}{action.label}
               </button>
             );
@@ -159,7 +168,8 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
           )}
         </div>
       </Panel>}
-      <details className="execution-history"><summary>执行记录</summary><Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
+      <details className="execution-history" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>执行记录</summary><Panel title={OPS_PANEL_TITLES.jobs} icon={<TerminalSquare size={18} />} className="wide-panel">
+        {jobs.error && <div role="alert" className="form-error">{jobs.error.message}</div>}
         <JobList jobs={jobs.data ?? []} capabilities={capabilities} />
       </Panel></details>
     </div>

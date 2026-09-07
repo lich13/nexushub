@@ -506,6 +506,16 @@ describe("Probe UI helpers", () => {
     });
   });
 
+  test("a configured Device Key does not override an explicit Bark disable", () => {
+    const draft = buildProbeSettingsDraft(settings);
+    draft.notifications.enabled = false;
+    draft.notifications.device_key = "";
+    draft.probe.error_monitor.auto_resume_goals = true;
+    const payload = buildProbeSettingsPayload(draft, settings);
+    expect(payload.probe.notifications?.enabled).toBe(false);
+    expect(payload.probe.error_monitor?.auto_resume_goals).toBe(true);
+  });
+
   test("uses the submitted Bark Device Key when the React draft is stale", () => {
     const unconfiguredSettings = {
       ...settings,

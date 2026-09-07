@@ -2,7 +2,6 @@ import type {
   MessageBlock,
   PendingElicitation,
   ThreadDetail,
-  ThreadStatus,
   ThreadSummary
 } from "../../types";
 import { mergeIncomingThreadSummary } from "./codexViewModel";
@@ -28,8 +27,6 @@ export type InternalReferenceSegment = {
   copyText?: string;
   kind?: "path" | "thread" | "turn" | "job";
 };
-
-export type CurrentActionKind = "plan" | "question";
 
 export type ConversationMessagePresentation = {
   kind: "user" | "assistant";
@@ -133,71 +130,6 @@ export function threadRolloutPath(rolloutPath?: string | null): string | null {
   return rolloutPath?.trim() || null;
 }
 
-export function currentActionKey(plan: MessageBlock | null | undefined, pending: PendingElicitation | null | undefined): string | null {
-  if (plan) {
-    return `plan:${plan.turn_id ?? "turn"}:${plan.item_id ?? plan.call_id ?? plan.id}`;
-  }
-  if (pending) {
-    return `question:${pending.turn_id ?? "turn"}:${pending.item_id ?? pending.questions[0]?.id ?? "request"}`;
-  }
-  return null;
-}
-
-export function shouldShowCurrentActionCard(actionKey: string | null | undefined, hiddenActionKey: string | null | undefined): boolean {
-  return Boolean(actionKey && actionKey !== hiddenActionKey);
-}
-
-export function currentActionKindFromBlocks(
-  blocks: MessageBlock[],
-  plan: MessageBlock | null | undefined,
-  pending: PendingElicitation | null | undefined
-): CurrentActionKind | null {
-  if (!plan && !pending) return null;
-  if (plan && !pending) return "plan";
-  if (!plan && pending) return "question";
-  const planIndex = blocks.findIndex((block) => isActionablePlanBlock(block, plan));
-  const questionIndex = blocks.findIndex((block) => isActionableQuestionBlock(block, pending));
-  if (planIndex === -1 && questionIndex === -1) return plan ? "plan" : "question";
-  if (questionIndex === -1) return "plan";
-  if (planIndex === -1) return "question";
-  return questionIndex >= planIndex ? "question" : "plan";
-}
-
-export function pendingFromBlocks(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined): PendingElicitation | null {
-  void status;
-  if (!activeTurnId) return null;
-  const block = [...blocks].reverse().find((item) => item.turn_id === activeTurnId && isQuestionBlock(item) && !isResolvedActionBlock(item));
-  if (!block) return null;
-  return {
-    turn_id: block.turn_id,
-    item_id: block.item_id ?? block.call_id,
-    questions: block.questions
-  };
-}
-
-export function latestActionBlock(blocks: MessageBlock[], status: ThreadStatus, activeTurnId: string | null | undefined, predicate: (block: MessageBlock) => boolean): MessageBlock | null {
-  const reversed = [...blocks].reverse();
-  if (activeTurnId) {
-    const active = reversed.find((block) => block.turn_id === activeTurnId && predicate(block) && !isResolvedActionBlock(block));
-    if (active) return active;
-    return null;
-  }
-  if (status !== "ReplyNeeded") return null;
-  if (!reversed.some((block) => predicate(block) && isPlanBlock(block))) return null;
-
-  for (const block of reversed) {
-    if (predicate(block) && isPlanBlock(block) && !isResolvedActionBlock(block)) return block;
-    if (isExternalProgressAfterPlan(block)) return null;
-  }
-  return null;
-}
-
-export function currentPendingElicitation(pending: PendingElicitation | null | undefined, activeTurnId: string | null | undefined): PendingElicitation | null {
-  if (!pending || !activeTurnId) return null;
-  if (pending.turn_id !== activeTurnId) return null;
-  return pending;
-}
-
 export function isPlanBlock(block: MessageBlock): boolean {
   const kind = normalizedBlockKind(block);
   const displayKind = normalizedDisplayKind(block);
@@ -252,10 +184,6 @@ export function shouldRenderConversationBlock(block: MessageBlock): boolean {
   if (isApprovalBlock(block)) return false;
   if (isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block)) return true;
   return isToolBlock(block) || shouldRenderConversationMessage(block);
-}
-
-export function shouldRenderActionStackBlock(block: MessageBlock): boolean {
-  return isApprovalBlock(block) && !isResolvedActionBlock(block);
 }
 
 export function isResolvedActionBlock(block: MessageBlock): boolean {
@@ -313,13 +241,6 @@ function sameActionBlock(left: MessageBlock, right: MessageBlock): boolean {
   if (!sameId) return false;
   if (left.turn_id && right.turn_id) return left.turn_id === right.turn_id;
   return true;
-}
-
-function isExternalProgressAfterPlan(block: MessageBlock): boolean {
-  if (isPlanBlock(block) || isQuestionBlock(block) || isQuestionResultBlock(block) || isApprovalBlock(block)) return false;
-  if (isHistoryCollapsedBlock(block)) return false;
-  if (isToolBlock(block)) return true;
-  return shouldRenderConversationMessage(block);
 }
 
 function normalizedBlockKind(block: Pick<MessageBlock, "kind">): string {

@@ -16,7 +16,7 @@ import threadQuerySource from "./lib/query/threads.ts?raw";
 import type { RuntimeCapabilityMatrix } from "./lib/api";
 import type { MessageBlock, PluginInfo, ProbeEvent, ThreadSummary, UpdateStatus } from "./types";
 
-type AppExports = typeof import("./App") & typeof import("./lib/domain/conversationViewModel") & typeof import("./lib/domain/runtimeViewModel") & typeof import("./lib/domain/codexViewModel");
+type AppExports = typeof import("./test/domain") & typeof import("./lib/domain/conversationViewModel") & typeof import("./lib/domain/runtimeViewModel") & typeof import("./lib/domain/codexViewModel");
 
 type ThreadQueryExports = typeof import("./lib/query/threads") & {
   clearArchivedThreadClientState?: (qc: QueryClient, messageStore: { clear: (threadId: string) => void }, threadId: string) => void;
@@ -51,7 +51,7 @@ type ThreadQueryExports = typeof import("./lib/query/threads") & {
 };
 
 async function loadApp(): Promise<AppExports> {
-  return { ...await import("./lib/domain/conversationViewModel"), ...await import("./lib/domain/runtimeViewModel"), ...await import("./lib/domain/codexViewModel"), ...await import("./App") } as AppExports;
+  return { ...await import("./lib/domain/conversationViewModel"), ...await import("./lib/domain/runtimeViewModel"), ...await import("./lib/domain/codexViewModel"), ...await import("./test/domain") } as AppExports;
 }
 
 async function loadThreadQuery(): Promise<ThreadQueryExports> {
@@ -566,7 +566,7 @@ describe("conversation helpers", () => {
 
     expect(scrollBody).toContain("{threads.map((thread) => {");
     expect(scrollBody).toContain("className={`thread-item ");
-    expect(scrollBody).toContain("没有匹配线程");
+    expect(scrollBody).toContain("没有匹配任务");
     expect(scrollBody).not.toContain('className="section-title thread-title-row"');
     expect(scrollBody).not.toContain('className="search-box"');
     expect(scrollBody).not.toContain('className="segmented"');
@@ -791,27 +791,16 @@ describe("conversation helpers", () => {
     expect(visibleCopy).not.toContain(retiredMissingCopy);
   });
 
-  test("desktop runtime copy hides login and security setup while preserving core Codex controls", async () => {
-    const app = await loadApp();
-    const copy = app.desktopRuntimeVisibleCopy?.().join("\n") ?? "";
-
-    expect(copy).toContain("Codex 本地线程");
-    expect(copy).toContain("Goal");
-    expect(copy).toContain("Plan Mode");
-    expect(copy).toContain("名称与归档");
-    expect(copy).toContain("线程标题");
-    expect(copy).toContain("重命名");
-    expect(copy).toContain("归档");
-    expect(copy).toContain("复制与路径");
-    expect(copy).toContain("复制 ID");
-    expect(copy).toContain("复制文件路径");
-    expect(copy).toContain("复制 codex resume+ID");
-    expect(copy).not.toContain("管理员");
-    expect(copy).not.toContain("登录");
-    expect(copy).not.toContain("Turnstile");
-    expect(copy).not.toContain("CSRF");
-    expect(copy).not.toContain("Codex Home");
-    expect(copy).not.toContain("State DB");
+  test("desktop read-only task surface retains copy and archive without web authentication controls", async () => {
+    const { runtimeCapabilitiesFromSystemStatus } = await import("./lib/domain/capabilities");
+    const { demoSystemStatus } = await import("./lib/api/demo");
+    const capabilities = runtimeCapabilitiesFromSystemStatus(demoSystemStatus("macos-tauri"));
+    expect(capabilities.webAuth).toBe(false);
+    expect(capabilities.securitySettings).toBe(false);
+    expect(capabilities.threadArchiveActions).toBe(true);
+    expect(conversationSource).toContain("复制 ID");
+    expect(conversationSource).toContain("取消归档");
+    expect(conversationSource).not.toMatch(/管理员|Turnstile|setGoal|sendMessage|approvalAction/);
   });
 
   test("probe workspace labels the paired lifecycle hooks as Codex Hook", () => {

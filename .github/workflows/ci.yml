@@ -30,10 +30,19 @@ jobs:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
-      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
       - run: corepack pnpm@11.0.8 --dir webui typecheck
       - run: corepack pnpm@11.0.8 --dir webui test
       - run: corepack pnpm@11.0.8 --dir webui build
+      - run: corepack pnpm@11.0.8 --dir webui exec playwright install --with-deps chromium webkit
+      - run: corepack pnpm@11.0.8 --dir webui test:browser
+        env:
+          NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: frontend-browser-failures
+          path: ${{ runner.temp }}/nexushub-browser
 
   backend:
     name: Backend checks
@@ -41,21 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.0.8
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Get pnpm store path
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-
       - uses: actions/cache@v4
         with:
           path: |
@@ -67,7 +64,6 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: corepack pnpm@11.0.8 --dir webui install
       - run: bash scripts/test-install-script.sh
 
   tauri:
@@ -101,7 +97,7 @@ jobs:
           key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-tauri-
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: corepack pnpm@11.0.8 --dir webui install
+      - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
       - run: corepack pnpm@11.0.8 --dir webui test
       - run: corepack pnpm@11.0.8 --dir webui build:tauri
       - run: cargo test --manifest-path src-tauri/Cargo.toml
@@ -153,6 +149,9 @@ jobs:
             rpm \
             xdg-utils \
             xvfb \
+            xdotool \
+            python3-gi \
+            python3-pil \
             libgtk-3-dev \
             librsvg2-dev \
             libayatana-appindicator3-dev
@@ -164,26 +163,19 @@ jobs:
             || sudo apt-get install -y --no-install-recommends libfuse2t64 \
             || true
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: corepack pnpm@11.0.8 --dir webui install
-      - run: corepack pnpm@11.0.8 --dir webui build:tauri
+      - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
       - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo test --manifest-path src-tauri/Cargo.toml
       - run: TAURI_CONFIG='{"bundle":{"resources":["resources/nexushub-webd"]}}' cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-      - run: ALLOW_UNSIGNED_TAURI_UPDATER=1 bash scripts/package-linux-tauri-x86_64.sh
+      - run: SKIP_WEBUI_INSTALL=1 ALLOW_UNSIGNED_TAURI_UPDATER=1 bash scripts/package-linux-tauri-x86_64.sh
       - name: Smoke Linux Tauri AppImage with xvfb
         shell: bash
         run: |
           set -euo pipefail
           appimage="$(find dist -maxdepth 1 -name 'NexusHub-*-Linux-x86_64.AppImage' -print | sort | tail -n 1)"
           test -x "${appimage}"
-          set +e
-          xvfb-run -a env \
-            APPIMAGE_EXTRACT_AND_RUN=1 \
-            WEBKIT_DISABLE_COMPOSITING_MODE=1 \
-            WEBKIT_DISABLE_DMABUF_RENDERER=1 \
-            timeout 20s "${appimage}"
-          status="$?"
-          set -e
-          if [[ "${status}" != "0" && "${status}" != "124" ]]; then
-            echo "Linux Tauri smoke failed with status ${status}" >&2
-            exit "${status}"
-          fi
+          xvfb-run -a -s "-screen 0 1440x900x24" /usr/bin/python3 scripts/smoke-linux-tauri.py "${appimage}" "${RUNNER_TEMP}/linux-tauri-smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-tauri-smoke
+          path: ${{ runner.temp }}/linux-tauri-smoke

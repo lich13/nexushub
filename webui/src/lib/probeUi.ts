@@ -161,7 +161,7 @@ export function buildProbeSettingsPayload(
   }
   const deviceKey = (submittedDeviceKey ?? draft.notifications.device_key).trim();
   const notifications: NonNullable<ProbeSettingsPayload["probe"]["notifications"]> & { device_key?: string } = {
-    enabled: draft.notifications.enabled || Boolean(deviceKey) || draft.notifications.device_key_configured,
+    enabled: draft.notifications.enabled || Boolean(deviceKey),
     server_url: draft.notifications.server_url.trim(),
     sound: optionalString(draft.notifications.sound),
     group: draft.notifications.group.trim(),

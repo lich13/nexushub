@@ -1,65 +1,13 @@
-import { Archive, ArchiveRestore, Check, Copy, MoreHorizontal, Pencil, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
+import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { ThreadDetail } from "../../types";
 
-export {
-  blockKindLabel,
-  blocksWithCurrentPending,
-  compactConversationBlocks,
-  conversationMessagePresentation,
-  currentActionKey,
-  currentActionKindFromBlocks,
-  currentPendingElicitation,
-  formatPayload,
-  formatTime,
-  historyCollapseKind,
-  initialMessageBlockState,
-  isActionablePlanBlock,
-  isActionableQuestionBlock,
-  isApprovalBlock,
-  isHistoryCollapsedBlock,
-  isPlanBlock,
-  isQuestionBlock,
-  isQuestionResultBlock,
-  isResolvedActionBlock,
-  isRunningToolBlock,
-  isToolBlock,
-  latestActionBlock,
-  latestAssistantCopyText,
-  messageBlockText,
-  mergeSavedThreadTitle,
-  nextRenameDraftValue,
-  pendingFromBlocks,
-  prioritizeCurrentActionBlocks,
-  questionAnswerLabels,
-  roleLabel,
-  segmentInternalReferences,
-  shouldAutoFollowMessageStream,
-  shouldRenderActionStackBlock,
-  shouldRenderConversationBlock,
-  shouldRenderConversationMessage,
-  shouldShowCurrentActionCard,
-  threadCopyId,
-  threadResumeCommand,
-  threadRolloutPath,
-  toolBlockDetailText,
-  toolBlockStatus,
-  toolBlockSummary,
-  toolBlockTitle,
-  visibleConversationBlocksForHistory
-} from "../../lib/domain/conversationViewModel";
-export type {
-  ConversationMessagePresentation,
-  CurrentActionKind,
-  InternalReferenceSegment,
-  MessageBlockState,
-  MessageScrollSnapshot,
-} from "../../lib/domain/conversationViewModel";
 
 
 export function Conversation(props: {
@@ -72,6 +20,7 @@ export function Conversation(props: {
   onPanelSelect: (view: View) => void;
   nextThreadAfterArchive: string | null;
   capabilities: RuntimeCapabilityMatrix;
+  onBack?: () => void;
 }) {
   const { detail, slot, csrfToken } = props;
   const [renaming, setRenaming] = useState(false);
@@ -119,19 +68,18 @@ export function Conversation(props: {
   return <div className="conversation-shell compact-readonly-conversation">
     <main className="conversation-main">
       <header className="conversation-header">
+        <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
         <div className="conversation-title-copy"><h1 className="conversation-title">{detail.summary.title}</h1><span className="muted-text">{detail.summary.cwd ?? detail.summary.id}</span></div>
         <div className="conversation-header-actions">
           <span className={`status-chip ${detail.summary.status}`}>{threadStatusLabel(detail.summary.status)}</span>
-          <details className="task-menu"><summary className="icon-button" aria-label="任务操作" title="任务操作"><MoreHorizontal size={18} /></summary>
-            <div className="task-menu-items">
+          <TaskMenu>
               <button onClick={() => { setTitle(detail.summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
               <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
               <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
               <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
               <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
               <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
-            </div>
-          </details>
+          </TaskMenu>
         </div>
       </header>
       {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>

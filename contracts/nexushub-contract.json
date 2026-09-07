@@ -63,6 +63,10 @@
     ]
   },
   "visual": {
+    "theme": "system prefers-color-scheme; root-only semantic tokens; text >=4.5:1 and essential controls/focus >=3:1",
+    "layout": "152px navigation; 48px collapsed rail; 276px list; 780px reading column; one 767px mobile breakpoint",
+    "taskFilters": ["全部", "运行中", "待回复", "异常", "归档"],
+    "interaction": "read-only history; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
     "navigation": [
       "Codex",
       "Grok Build",

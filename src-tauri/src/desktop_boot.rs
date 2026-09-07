@@ -5,7 +5,7 @@ use std::{
 
 use tauri::{PhysicalPosition, PhysicalSize, Runtime, Size, WebviewWindow};
 
-use crate::overview::nexus_paths_for_home;
+use nexushub_core::platform::PlatformPaths;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const DESKTOP_RUNTIME_MARKER_SCRIPT: &str = r#"
@@ -25,7 +25,9 @@ const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
     rootClass: root && root.firstElementChild ? root.firstElementChild.className : "",
     bodyTextLength: bodyText.length,
     hasMainShell: Boolean(document.querySelector(".app-shell")),
-    hasDesktopNav: bodyText.indexOf("Codex") >= 0 && bodyText.indexOf("探针") >= 0 && bodyText.indexOf("运维") >= 0,
+    hasDesktopNav: ["Codex", "Grok Build", "Probe", "设置"].every(function (label) {
+      return Boolean(document.querySelector('.side-nav button[aria-label="' + label + '"]'));
+    }),
     hasWebLoginGate: Boolean(document.querySelector(".login-shell")),
     hasVisibleLinuxHostCopy: Boolean(document.querySelector(".security-workspace, .turnstile-box"))
   };
@@ -74,17 +76,14 @@ pub(crate) fn schedule_delayed_main_window_reveal<R: Runtime>(window: &WebviewWi
 }
 
 fn append_desktop_app_log(message: &str) {
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
-    let paths = nexus_paths_for_home(home);
+    let paths = PlatformPaths::desktop_current();
     if std::fs::create_dir_all(&paths.log_dir).is_err() {
         return;
     }
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(paths.app_log_file)
+        .open(paths.log_dir.join("nexushub.log"))
     else {
         return;
     };

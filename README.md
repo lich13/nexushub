@@ -86,6 +86,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
 corepack pnpm@11.0.8 --dir webui test
+corepack pnpm@11.0.8 --dir webui exec playwright install chromium webkit
+corepack pnpm@11.0.8 --dir webui test:browser
 corepack pnpm@11.0.8 --dir webui build
 bash scripts/package-webd-linux-x86_64.sh
 bash scripts/package-darwin-arm64.sh
@@ -96,6 +98,7 @@ bash scripts/package-linux-tauri-x86_64.sh
 `scripts/package-darwin-arm64.sh` intentionally refuses to produce the macOS ARM64 release assets on non-Darwin ARM64 hosts. It uses `webui` as the Tauri frontend and writes `dist/nexushub-darwin-arm64.tar.gz`, `dist/nexushub-darwin-arm64.tar.gz.sig`, `dist/NexusHub-<version>-darwin-arm64.dmg`, and matching `.sha256` files in signed release builds. The release workflow publishes `latest.json` for `darwin-aarch64`.
 `scripts/package-linux-tauri-x86_64.sh` intentionally refuses to produce Linux desktop Tauri assets on non-Linux x86_64 hosts. It writes `dist/NexusHub-<version>-Linux-x86_64.AppImage`, `.AppImage.sig` in signed release builds, `.deb`, `.rpm`, and matching `.sha256` files. The release workflow publishes the AppImage in `latest.json` for `linux-x86_64`.
 The desktop packaging scripts build the release `nexushub-webd` helper, inject it into the Tauri resources for packaging, and restore the tracked `src-tauri/resources/nexushub-webd` placeholder before exit.
+Tauri's `beforeBuildCommand` builds the shared frontend once. `SKIP_WEBUI_BUILD=1` explicitly disables that hook and validates the existing relative-base output; server-base assets cannot be reused as desktop output. `SKIP_WEBUI_INSTALL=1` reuses a completed frozen installation.
 `ALLOW_HOST_MISMATCH=1` is only for local smoke archives and is not a canonical release path.
 
 ## Server Install

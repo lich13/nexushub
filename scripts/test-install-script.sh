@@ -58,6 +58,7 @@ for path in \
 done
 
 bash -n "${INSTALL_SH}" "${UPDATE_SH}" "${ROLLBACK_SH}" "${WEB_UPDATE_SH}" "${PACKAGE_WEBD_SH}" "${PACKAGE_LINUX_SH}" "${DEPLOY_CLOUD_SH}"
+PYTHONDONTWRITEBYTECODE=1 python3 "${ROOT}/scripts/test-tauri-build-config.py"
 
 python3 - "${CONFIG_EXAMPLE}" "${ENV_EXAMPLE}" "${SYSTEMD_SERVICE}" "${NGINX_CONF}" "${INSTALL_SH}" "${UPDATE_SH}" "${DEPLOY_CLOUD_SH}" "${PACKAGE_WEBD_SH}" "${PACKAGE_LINUX_SH}" "${README}" "${CLOUD_RUNBOOK}" "${AGENTS}" <<'PY'
 from pathlib import Path
@@ -238,7 +239,7 @@ for needle in [
     "cc-switch origin/main",
     "cc-switch feat/webd",
     "NexusHub v0.1.144",
-    "NexusHub target: `v0.1.158",
+    "NexusHub target: `v0.1.159",
     "Windows desktop",
     "Linux arm64",
     "nexushub-webd-linux-x86_64.tar.gz",

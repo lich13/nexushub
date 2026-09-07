@@ -80,47 +80,6 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
   ];
 }
 
-export function desktopRuntimeVisibleCopy(): string[] {
-  return [
-    "Codex 本地线程",
-    "Goal",
-    "Plan Mode",
-    "线程工具",
-    "名称与归档",
-    "线程标题",
-    "重命名",
-    "归档",
-    "恢复",
-    "复制与路径",
-    "线程 ID",
-    "会话文件",
-    "复制 ID",
-    "复制文件路径",
-    "复制 codex resume+ID"
-  ];
-}
-
-export function canShowForkAction(input?: RuntimeCapabilityInput): boolean {
-  return false;
-}
-
-export function approvalActionMode(input?: RuntimeCapabilityInput): "interactive" | "unsupported" {
-  return "unsupported";
-}
-
-export function threadInspectorActionState(input?: RuntimeCapabilityInput): {
-  showFork: boolean;
-  showArchive: boolean;
-  approvalMode: "interactive" | "unsupported";
-} {
-  const capabilities = capabilitiesForInput(input);
-  return {
-    showFork: canShowForkAction(capabilities),
-    showArchive: capabilities.threadArchiveActions,
-    approvalMode: approvalActionMode(capabilities)
-  };
-}
-
 export function resolvedSelectedThreadId(selectedId: string | null): string | null {
   return selectedId;
 }

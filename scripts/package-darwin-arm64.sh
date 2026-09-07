@@ -13,7 +13,7 @@ TMP=""
 HELPER_RESOURCE=""
 HELPER_RESOURCE_BACKUP=""
 HELPER_RESOURCE_HAD_ORIGINAL=0
-UNSIGNED_TAURI_CONFIG=""
+TEMP_TAURI_CONFIG=""
 
 restore_helper_resource() {
   if [[ -n "${HELPER_RESOURCE}" && -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]]; then
@@ -29,7 +29,7 @@ cleanup() {
   [[ -n "${TMP}" && -d "${TMP}" ]] && rm -rf "${TMP}"
   restore_helper_resource
   [[ -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]] && rm -f "${HELPER_RESOURCE_BACKUP}"
-  [[ -n "${UNSIGNED_TAURI_CONFIG}" && -f "${UNSIGNED_TAURI_CONFIG}" ]] && rm -f "${UNSIGNED_TAURI_CONFIG}"
+  [[ -n "${TEMP_TAURI_CONFIG}" && -f "${TEMP_TAURI_CONFIG}" ]] && rm -f "${TEMP_TAURI_CONFIG}"
   return 0
 }
 
@@ -179,11 +179,7 @@ if [[ -f "${HELPER_RESOURCE}" ]]; then
 fi
 
 if [[ "${SKIP_WEBUI_INSTALL:-0}" != "1" ]]; then
-  corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" install
-fi
-
-if [[ "${SKIP_WEBUI_BUILD:-0}" != "1" ]]; then
-  corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" build:tauri
+  corepack pnpm@11.0.8 --dir "${WEBUI_DIR}" install --frozen-lockfile
 fi
 
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
@@ -197,24 +193,11 @@ HELPER_BINARY="${ROOT}/target/release/nexushub-webd"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"
 
-TAURI_BUILD_CONFIG="${TAURI_DIR}/tauri.conf.json"
-if [[ "${SIGNED_RELEASE_CONTEXT}" != "1" ]]; then
-  UNSIGNED_TAURI_CONFIG="$(mktemp)"
-  python3 - "${TAURI_DIR}/tauri.conf.json" "${UNSIGNED_TAURI_CONFIG}" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:]
-with open(source, "r", encoding="utf-8") as fh:
-    config = json.load(fh)
-config.setdefault("bundle", {})["createUpdaterArtifacts"] = False
-config.get("plugins", {}).pop("updater", None)
-with open(target, "w", encoding="utf-8") as fh:
-    json.dump(config, fh, ensure_ascii=False, indent=2)
-    fh.write("\n")
-PY
-  TAURI_BUILD_CONFIG="${UNSIGNED_TAURI_CONFIG}"
-fi
+TEMP_TAURI_CONFIG="$(mktemp)"
+python3 "${ROOT}/scripts/tauri-build-config.py" \
+  "${TAURI_DIR}/tauri.conf.json" "${TEMP_TAURI_CONFIG}" "${WEBUI_DIR}" \
+  "${SIGNED_RELEASE_CONTEXT}" "${SKIP_WEBUI_BUILD:-0}"
+TAURI_BUILD_CONFIG="${TEMP_TAURI_CONFIG}"
 
 if [[ "${SKIP_TAURI_BUILD:-0}" != "1" ]]; then
   "${TAURI_CLI}" build --config "${TAURI_BUILD_CONFIG}" --bundles app,dmg

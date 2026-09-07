@@ -14,6 +14,7 @@ import {
 import type { ProbeJobAction, ProbeSettings } from "../../types";
 import type { RuntimeCapabilityMatrix } from "../api";
 import { preservePreviousQueryData } from "./shared";
+import { backgroundJobKey } from "./jobs";
 
 export const probeQueryKeys = {
   status: ["probe-status"] as const,
@@ -23,11 +24,12 @@ export const probeQueryKeys = {
   jobs: ["jobs"] as const
 };
 
-export function useProbeQueries() {
+export function useProbeQueries({ section, historyOpen }: { section: "events" | "settings" | "maintenance"; historyOpen: boolean }) {
   return {
     status: useQuery({
       queryKey: probeQueryKeys.status,
       queryFn: getProbeStatus,
+      enabled: section !== "maintenance",
       refetchInterval: 15000,
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
@@ -35,6 +37,7 @@ export function useProbeQueries() {
     settings: useQuery({
       queryKey: probeQueryKeys.settings,
       queryFn: getProbeSettings,
+      enabled: section === "settings",
       refetchInterval: 30000,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
@@ -42,6 +45,7 @@ export function useProbeQueries() {
     logsDbStatus: useQuery({
       queryKey: probeQueryKeys.logsDbStatus,
       queryFn: getProbeLogsDbStatus,
+      enabled: section !== "events",
       refetchInterval: 30000,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
@@ -49,6 +53,7 @@ export function useProbeQueries() {
     events: useQuery({
       queryKey: probeQueryKeys.events,
       queryFn: () => getProbeEvents(10),
+      enabled: section === "events",
       refetchInterval: 15000,
       staleTime: 10000,
       placeholderData: preservePreviousQueryData
@@ -56,6 +61,7 @@ export function useProbeQueries() {
     jobs: useQuery({
       queryKey: probeQueryKeys.jobs,
       queryFn: listJobs,
+      enabled: section === "settings" && historyOpen,
       refetchInterval: 5000,
       placeholderData: preservePreviousQueryData
     })
@@ -91,6 +97,8 @@ export function useProbeActions(input: {
       qc.invalidateQueries({ queryKey: probeQueryKeys.settings });
     },
     job: useMutation({
+      mutationKey: backgroundJobKey,
+      gcTime: Infinity,
       mutationFn: (action: ProbeJobAction) => {
         if ((action === "logs-db-dry-run" || action === "logs-db-execute") && !input.capabilities.probeLogMaintenance) {
           throw new Error("当前运行时不支持探针日志库维护");

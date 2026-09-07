@@ -44,12 +44,12 @@ export function threadListItemText(thread: ThreadTitleLike): string {
   return thread.title?.trim() || "未命名线程";
 }
 
-export function filterVisibleThreadSummaries<T extends Partial<ThreadSummary>>(threads: T[]): T[] {
-  return threads.filter(isVisibleMainThread);
+export function filterVisibleThreadSummaries<T extends Partial<ThreadSummary>>(threads: T[], includeArchived = false): T[] {
+  return threads.filter((thread) => isVisibleMainThread(thread, includeArchived));
 }
 
-export function isVisibleMainThread(thread: Partial<ThreadSummary>): boolean {
-  if (thread.status === "Archived" || thread.archived_at) return false;
+export function isVisibleMainThread(thread: Partial<ThreadSummary>, includeArchived = false): boolean {
+  if (!includeArchived && (thread.status === "Archived" || thread.archived_at)) return false;
   if (nonEmptyString(thread.parentThreadId ?? thread.parent_thread_id)) return false;
   if (nonEmptyString(thread.agentPath ?? thread.agent_path)) return false;
   if (nonEmptyString(thread.agentNickname ?? thread.agent_nickname)) return false;
@@ -148,12 +148,13 @@ export function mergeThreadDetailSummaryFromList(detail: ThreadDetail, incoming:
 }
 
 export function threadMatchesListFilter(thread: Partial<ThreadSummary>, status = "all", q = ""): boolean {
-  if (!isVisibleMainThread(thread)) return false;
+  if (!isVisibleMainThread(thread, status === "archived")) return false;
   if (status !== "all") {
     if (status === "running" && !isThreadListItemRunning(thread)) return false;
     if (status === "reply-needed" && thread.status !== "ReplyNeeded") return false;
     if (status === "recoverable" && thread.status !== "Recoverable") return false;
-    if (!["running", "reply-needed", "recoverable"].includes(status) && thread.status !== status) return false;
+    if (status === "archived" && thread.status !== "Archived") return false;
+    if (!["running", "reply-needed", "recoverable", "archived"].includes(status) && thread.status !== status) return false;
   }
   const needle = q.trim().toLowerCase();
   if (!needle) return true;
@@ -183,8 +184,9 @@ export type ThreadSelectionView = {
 export function threadSelectionView(input: {
   threads: ThreadSummary[];
   selectedId: SelectedThread;
+  includeArchived?: boolean;
 }): ThreadSelectionView {
-  const visibleThreads = filterVisibleThreadSummaries(input.threads);
+  const visibleThreads = filterVisibleThreadSummaries(input.threads, input.includeArchived);
   const resolvedSelected = resolvedSelectedThreadId(input.selectedId);
   const selectedThreadSummary = visibleThreads.find((thread) => thread.id === resolvedSelected) ?? null;
   return {
@@ -198,11 +200,12 @@ export function threadSelectionView(input: {
 export function selectedThreadDetailView(input: {
   threadId: string | null | undefined;
   detail?: ThreadDetail | null;
+  includeArchived?: boolean;
 }): { rawSelectedDetail: ThreadDetail | null; selectedDetail: ThreadDetail | null } {
   const rawSelectedDetail = input.detail && input.detail.summary.id === input.threadId ? input.detail : null;
   return {
     rawSelectedDetail,
-    selectedDetail: shouldHydrateThreadDetail(input.threadId, rawSelectedDetail) ? rawSelectedDetail : null
+    selectedDetail: shouldHydrateThreadDetail(input.threadId, rawSelectedDetail, input.includeArchived) ? rawSelectedDetail : null
   };
 }
 
@@ -226,8 +229,8 @@ export function archivedSelectedThreadCleanupView(input: {
   };
 }
 
-export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null): detail is ThreadDetail {
-  return Boolean(threadId && detail?.summary.id === threadId && detail.summary.status !== "Archived");
+export function shouldHydrateThreadDetail(threadId: string | null | undefined, detail?: Pick<ThreadDetail, "summary"> | null, includeArchived = false): detail is ThreadDetail {
+  return Boolean(threadId && detail?.summary.id === threadId && (includeArchived || detail.summary.status !== "Archived"));
 }
 
 export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {

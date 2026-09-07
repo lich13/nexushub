@@ -1,15 +1,10 @@
 use anyhow::{anyhow, Result};
 use nexushub_core::{
-    codex::{resolve_codex_paths, CodexGoalClient, CodexPaths},
+    codex::{resolve_codex_paths, CodexPaths},
     config::Config,
     crypto::SecretBox,
     db::PanelDb,
     jobs::JobRunner,
-    local::{
-        default_codex_models, default_permission_profiles, local_codex_config,
-        local_plugin_catalog, CodexModelInfo, CodexPermissionProfile, LocalCodexConfig,
-        LocalPluginInfo,
-    },
     platform::{PlatformKind, PlatformPaths},
     services::system::HostSurface,
 };
@@ -29,40 +24,11 @@ pub struct NexusPaths {
     pub app_log_file: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopOverview {
-    pub product_name: String,
-    pub version: String,
-    pub identifier: String,
-    pub os: String,
-    pub arch: String,
-    pub paths: NexusPaths,
-    pub app_support_dir_ready: bool,
-    pub log_dir_ready: bool,
-    pub config_file_exists: bool,
-    pub database_file_exists: bool,
-    pub codex_home: PathBuf,
-    pub codex_home_source: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopHome {
-    pub overview: DesktopOverview,
-    pub plugins: Vec<LocalPluginInfo>,
-    pub models: Vec<CodexModelInfo>,
-    pub permission_profiles: Vec<CodexPermissionProfile>,
-    pub codex_config: LocalCodexConfig,
-    pub warnings: Vec<String>,
-}
-
 #[derive(Clone)]
 pub struct DesktopState {
     config: Arc<RwLock<Config>>,
     pub db: PanelDb,
     pub jobs: JobRunner,
-    pub(crate) goal_client: CodexGoalClient,
     platform: PlatformPaths,
     host_surface: HostSurface,
 }
@@ -83,31 +49,11 @@ impl DesktopState {
     }
 
     pub fn new(config: Config, db: PanelDb, platform: PlatformPaths) -> Self {
-        Self::new_inner(config, db, platform, CodexGoalClient::new())
-    }
-
-    #[cfg(test)]
-    pub fn new_with_goal_client(
-        config: Config,
-        db: PanelDb,
-        platform: PlatformPaths,
-        goal_client: CodexGoalClient,
-    ) -> Self {
-        Self::new_inner(config, db, platform, goal_client)
-    }
-
-    fn new_inner(
-        config: Config,
-        db: PanelDb,
-        platform: PlatformPaths,
-        goal_client: CodexGoalClient,
-    ) -> Self {
         let jobs = JobRunner::new(db.clone());
         Self {
             config: Arc::new(RwLock::new(config)),
             db,
             jobs,
-            goal_client,
             platform,
             host_surface: HostSurface::DesktopEmbeddedTauri,
         }
@@ -162,58 +108,6 @@ fn nexus_paths_for_platform(platform: &PlatformPaths) -> NexusPaths {
     }
 }
 
-pub fn build_desktop_overview() -> Result<DesktopOverview> {
-    let platform = PlatformPaths::desktop_current();
-    let paths = nexus_paths_for_platform(&platform);
-    let config = load_desktop_config(&platform);
-    build_desktop_overview_for_config(paths, &config)
-}
-
-fn build_desktop_overview_for_config(
-    paths: NexusPaths,
-    config: &Config,
-) -> Result<DesktopOverview> {
-    let resolved = resolve_codex_paths(&config.codex.home);
-
-    Ok(DesktopOverview {
-        product_name: "NexusHub".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        identifier: "com.lich13.nexushub".to_string(),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        app_support_dir_ready: paths.app_support_dir.is_dir(),
-        log_dir_ready: paths.log_dir.is_dir(),
-        config_file_exists: paths.config_file.is_file(),
-        database_file_exists: paths.database_file.is_file(),
-        codex_home: resolved.home,
-        codex_home_source: resolved.codex_home_source,
-        paths,
-    })
-}
-
-pub async fn build_desktop_home() -> Result<DesktopHome> {
-    let state = DesktopState::current()?;
-    build_desktop_home_with_state(&state).await
-}
-
-pub async fn build_desktop_home_with_state(state: &DesktopState) -> Result<DesktopHome> {
-    let config = state.config();
-    let overview =
-        build_desktop_overview_for_config(nexus_paths_for_platform(state.platform()), &config)?;
-    let mut warnings = overview_warning(&overview);
-    let resolved = resolve_codex_paths(&config.codex.home);
-    warnings.extend(resolved.discovery_warnings.clone());
-
-    Ok(DesktopHome {
-        overview,
-        plugins: local_plugin_catalog(),
-        models: default_codex_models(),
-        permission_profiles: default_permission_profiles(),
-        codex_config: local_codex_config(&config, None),
-        warnings,
-    })
-}
-
 fn load_desktop_config(platform: &PlatformPaths) -> Config {
     if platform.config_file.is_file() {
         Config::load(&platform.config_file)
@@ -228,20 +122,6 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
         .secret_box()
         .unwrap_or_else(|_| SecretBox::deterministic_dev());
     PanelDb::open_with_secret_box(&config.paths.db_path, secret_box)
-}
-
-fn overview_warning(overview: &DesktopOverview) -> Vec<String> {
-    let mut warnings = Vec::new();
-    if !overview.app_support_dir_ready {
-        warnings.push("配置目录尚未创建".to_string());
-    }
-    if !overview.log_dir_ready {
-        warnings.push("日志目录尚未创建".to_string());
-    }
-    if !overview.config_file_exists {
-        warnings.push("未找到 config.toml，将使用内置默认配置".to_string());
-    }
-    warnings
 }
 
 #[cfg(test)]
@@ -293,33 +173,6 @@ mod tests {
             paths.app_log_file,
             PathBuf::from("/Users/example/Library/Logs/NexusHub/nexushub.log")
         );
-    }
-
-    #[test]
-    fn desktop_overview_exposes_native_paths_without_external_entry_fields() {
-        let overview = build_desktop_overview().unwrap();
-
-        assert_eq!(overview.product_name, "NexusHub");
-        #[cfg(target_os = "macos")]
-        {
-            assert!(overview
-                .paths
-                .app_support_dir
-                .ends_with("Library/Application Support/NexusHub"));
-            assert!(overview.paths.log_dir.ends_with("Library/Logs/NexusHub"));
-        }
-        #[cfg(target_os = "linux")]
-        {
-            assert!(overview
-                .paths
-                .app_support_dir
-                .ends_with(".local/share/NexusHub"));
-            assert!(overview
-                .paths
-                .log_dir
-                .ends_with(".local/state/NexusHub/logs"));
-            assert!(!overview.paths.app_support_dir.starts_with("/opt/nexushub"));
-        }
     }
 
     #[test]
@@ -423,21 +276,6 @@ mod tests {
         assert!(response
             .message
             .contains("fork uses Codex app-server state"));
-    }
-
-    #[test]
-    fn desktop_home_does_not_carry_cleanup_or_goal_business_fields() {
-        let source = include_str!("overview.rs")
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("overview source must include production section");
-
-        for forbidden in ["archive_plan", "hidden_plan", "goal:"] {
-            assert!(
-                !source.contains(forbidden),
-                "DesktopHome must stay a thin desktop summary and not carry {forbidden}"
-            );
-        }
     }
 
     #[test]

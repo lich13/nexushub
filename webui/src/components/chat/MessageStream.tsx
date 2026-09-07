@@ -38,11 +38,11 @@ export function MessageBlockView({
   if (isPlanBlock(block)) {
     return <ProposedPlanCell block={block} />;
   }
-  if (isQuestionBlock(block)) {
-    return <QuestionCell block={block} />;
-  }
   if (isQuestionResultBlock(block)) {
     return <QuestionResultCell block={block} />;
+  }
+  if (isQuestionBlock(block)) {
+    return <QuestionCell block={block} />;
   }
   if (isToolBlock(block)) {
     return <ToolBlockView block={block} />;

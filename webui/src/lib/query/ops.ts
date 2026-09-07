@@ -14,6 +14,7 @@ import {
 import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
 import { systemQueryKeys } from "./system";
 import { preservePreviousQueryData } from "./shared";
+import { backgroundJobKey } from "./jobs";
 
 export const opsQueryKeys = {
   systemStatus: systemQueryKeys.status,
@@ -22,11 +23,12 @@ export const opsQueryKeys = {
   threads: ["threads"] as const
 };
 
-export function useOpsQueries() {
+export function useOpsQueries({ section, historyOpen }: { section: "system" | "maintenance"; historyOpen: boolean }) {
   return {
     status: useQuery({
       queryKey: opsQueryKeys.systemStatus,
       queryFn: getSystemStatus,
+      enabled: section === "system",
       refetchInterval: 8000,
       staleTime: 5000,
       placeholderData: preservePreviousQueryData
@@ -34,6 +36,7 @@ export function useOpsQueries() {
     update: useQuery({
       queryKey: opsQueryKeys.updateStatus,
       queryFn: getUpdateStatus,
+      enabled: section === "system",
       refetchInterval: 30000,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
@@ -41,6 +44,7 @@ export function useOpsQueries() {
     jobs: useQuery({
       queryKey: opsQueryKeys.jobs,
       queryFn: listJobs,
+      enabled: historyOpen,
       refetchInterval: 5000,
       placeholderData: preservePreviousQueryData
     })
@@ -68,6 +72,8 @@ export function useOpsActions(input: {
 
   return {
     updateJob: useMutation({
+      mutationKey: backgroundJobKey,
+      gcTime: Infinity,
       mutationFn: ({ action }: { action: UnifiedUpdateAction }) => {
         if (action === "check") return updates.check(csrfToken);
         if (action === "install") return updates.install(csrfToken);

@@ -73,7 +73,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: SessionUser) => void }) {
         widgetRef.current = window.turnstile.render(turnstileRef.current, {
           sitekey: publicSettings.data.turnstile_site_key,
           action: turnstileAction,
-          theme: "dark",
+          theme: "auto",
           callback: (token) => {
             setTurnstileToken(token);
             setTurnstileStatus("verified");
@@ -181,4 +181,3 @@ function ensureTurnstileScript(): Promise<void> {
     document.head.appendChild(script);
   });
 }
-

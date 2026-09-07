@@ -1,8 +1,7 @@
-import { MessageSquare, RefreshCw, Search, X } from "lucide-react";
+import { MessageSquare, RefreshCw, Search } from "lucide-react";
 import { useState } from "react";
 import { threadDetailFromSlot, useConversationController } from "../../hooks/useConversationController";
 import {
-  codexLocalCopy,
   isThreadListItemRunning,
   threadListItemPreviewText,
   threadListItemStatusText,
@@ -18,7 +17,8 @@ export const statusTabs = [
   { id: "all", label: "全部" },
   { id: "running", label: "运行中" },
   { id: "reply-needed", label: "待回复" },
-  { id: "recoverable", label: "异常" }
+  { id: "recoverable", label: "异常" },
+  { id: "archived", label: "归档" }
 ];
 
 
@@ -60,20 +60,13 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
       onSelect={selectThread}
       onRefresh={() => threadCache.invalidateThreads()}
       loading={threads.isLoading}
+      error={threads.error?.message}
     />
   );
 
   return (
-    <div className="chat-layout">
-      <aside className="thread-column desktop-only">{list}</aside>
-      {mobileThreadsOpen && (
-        <div className="drawer-backdrop" onClick={() => setMobileThreadsOpen(false)}>
-          <aside className="thread-drawer" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button drawer-close" onClick={() => setMobileThreadsOpen(false)} title="关闭"><X size={18} /></button>
-            {list}
-          </aside>
-        </div>
-      )}
+    <div className={`chat-layout ${!mobileThreadsOpen && resolvedSelected ? "has-selection" : ""}`}>
+      <aside className="thread-column">{list}</aside>
       <section className="conversation-column">
         {resolvedSelected && (selectedDetail || messageStore.getSlot(resolvedSelected).summary) ? (
           <Conversation
@@ -86,6 +79,7 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
             onPanelSelect={setView}
             nextThreadAfterArchive={nextThreadAfterRemoval}
             capabilities={capabilities}
+            onBack={() => setMobileThreadsOpen(true)}
           />
         ) : (
           <div className="empty-state"><MessageSquare size={28} /><strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong></div>
@@ -95,7 +89,7 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
   );
 }
 
-function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading }: {
+function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading, error }: {
   status: string;
   q: string;
   setQ: (value: string) => void;
@@ -105,16 +99,16 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
   onSelect: (id: SelectedThread) => void;
   onRefresh: () => void;
   loading: boolean;
+  error?: string;
 }) {
   return (
     <div className="thread-list">
       <div className="section-title thread-title-row">
         <div>
-          <span>{codexLocalCopy.threadListEyebrow}</span>
-          <strong>线程</strong>
+          <strong>Codex</strong>
         </div>
         <div className="thread-title-actions">
-          <button className="icon-button compact" onClick={onRefresh} title="刷新线程"><RefreshCw size={16} /></button>
+          <button className="icon-button compact" onClick={onRefresh} title="刷新任务"><RefreshCw size={16} /></button>
         </div>
       </div>
       <label className="search-box">
@@ -127,6 +121,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
         ))}
       </div>
       <div className="thread-scroll">
+        {error && <div className="form-error" role="alert">{error}</div>}
         {loading && <div className="muted-row">正在读取 Codex 状态...</div>}
         {threads.map((thread) => {
           const title = threadListItemText(thread);
@@ -150,7 +145,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
             </button>
           );
         })}
-        {!loading && threads.length === 0 && <div className="muted-row">没有匹配线程</div>}
+        {!loading && !error && threads.length === 0 && <div className="muted-row">没有匹配任务</div>}
       </div>
     </div>
   );

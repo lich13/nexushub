@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex read-only task browsing, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep Grok Build read-only with guarded local session management.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-09-07
-> **Mode**: V0.1.158_ACCEPTED
+> **Mode**: V0.1.159_IN_PROGRESS
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.158` 精简重构与 Probe 通知准确性修复已接受<br>
-**Active Task**: Goal 26 完成。纠正版本 `v0.1.158` 精确指向 `3ff8eda234568de6ccdb5d9fca027736caf62ab7`；完整 gate、实现 CI `34058768220`、Release `34059109362`、15 资产/签名/SHA 校验、双端正式部署及界面验收通过。真实主任务“构建音乐播放器”的三批问题均准确发送一次，用户确认手机实收内容对应；全部回答后，Stop Hook 只选择同一主 turn 第 166 行 `final_answer` 的最终计划，正文 2,820 bytes 逐字匹配，没有重发已回答问题。截图历史与正反例通过双端正式 helper 隔离回放。已清理构建缓存、下载、隔离配置/数据库、脚本、挂载和临时 App 回滚；用户历史、未知 `.DS_Store`、正式 monitor 与云端服务保留。最终记录提交的 CI 作为关闭运行中 Goal 的最后门禁，不重跑无变更的本地 gate。
+**Active Phase**: Goal 27: `v0.1.159` 主题修复、代码与构建精简实施中<br>
+**Active Task**: Goal 27 实现与本地 gate 已完成，详见 [v0.1.159 acceptance record](./v0.1.159-acceptance.md)。正在准备实现提交和匹配 SHA 的四项 CI；Release、正式 macOS 安装、腾讯云部署、正式 helper 回放与清理尚未验收。历史 Goal 26 保持已完成。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
@@ -45,6 +45,8 @@
 Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.157` was published but not accepted because post-release review found gaps. `v0.1.158` is the accepted corrective production release; old tags were not rewritten.
 
 ## Deep Refactor Goal Tracker
+
+- [ ] Goal 27: `v0.1.159` theme, layout and build simplification. Baseline is clean `main@1ad2756a3b0bf12e8514196968e521f56921980a`; installed macOS App/helper and Tencent Cloud webd report `0.1.158`, service is active and healthz is healthy. Implementation, full gate, matching CI/Release, 15 assets, official macOS/cloud acceptance and cleanup are pending. All three runtimes and four workspaces remain supported. Task evidence: `/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8`.
 
 - [x] Goal 1: `v0.1.134` baseline acceptance - local, GitHub Release, Tencent Cloud Linux WebUI baseline, and installed macOS Tauri App baseline verified on 2026-06-26.
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.
@@ -85,7 +87,7 @@ Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.158_ACCEPTED
+  mode: V0.1.159_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, read-only Codex/Grok webui, use-case layer with thin Linux server webd and macOS Tauri surfaces; desktop LAN WebUI retired"
   phases:
     phase_1:

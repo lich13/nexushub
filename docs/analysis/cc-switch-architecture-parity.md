@@ -1,7 +1,7 @@
 # cc-switch Architecture Parity Audit
 
 Last reviewed: 2026-09-06
-NexusHub target: `v0.1.158` (post-release acceptance repair)
+NexusHub target: `v0.1.159` (theme and build simplification)
 
 ## Boundary
 

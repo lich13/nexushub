@@ -33,7 +33,8 @@ export function useConversationController(input: {
     q: input.q,
     select: applyThreadTitleOverrides
   });
-  const selection = useSelectedThreadState(threads.data ?? []);
+  const includeArchived = input.status === "archived";
+  const selection = useSelectedThreadState(threads.data ?? [], includeArchived);
   const {
     selectedId,
     selectThread: setSelectedId,
@@ -50,7 +51,8 @@ export function useConversationController(input: {
   });
   const { rawSelectedDetail, selectedDetail } = useThreadDetailHydration({
     threadId: resolvedSelected,
-    detail: detail.data
+    detail: detail.data,
+    includeArchived
   });
 
   useArchivedSelectedThreadCleanup({
@@ -60,7 +62,8 @@ export function useConversationController(input: {
     visibleThreads,
     messageStore,
     threadCache,
-    onSelect: setSelectedId
+    onSelect: setSelectedId,
+    includeArchived
   });
 
   useEffect(() => {

@@ -1,8 +1,6 @@
 use nexushub_core::{
     config::Config,
-    local::{
-        default_codex_models, default_permission_profiles, local_codex_config, local_plugin_catalog,
-    },
+    local::local_plugin_catalog,
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
@@ -223,51 +221,6 @@ fn local_plugin_catalog_matches_existing_builtin_surface() {
     assert_eq!(plugin_json[2]["status"], "ready");
     assert_eq!(plugin_json[2]["invocation_template"], "@Grok Build ");
     assert_eq!(plugin_json[3]["id"], "system_ops");
-}
-
-#[test]
-fn local_codex_helpers_are_serializable_for_desktop_commands() {
-    let models = serde_json::to_value(default_codex_models()).unwrap();
-    assert_eq!(models[0]["id"], "gpt-5.5");
-    assert_eq!(models[0]["default"], true);
-    assert!(models.as_array().unwrap().len() >= 5);
-
-    let profiles = serde_json::to_value(default_permission_profiles()).unwrap();
-    assert_eq!(profiles[0]["id"], "danger-full-access");
-    assert_eq!(profiles[0]["sandbox_mode"], "danger-full-access");
-    assert_eq!(profiles[0]["approval_policy"], "never");
-    assert_eq!(profiles[0]["network_access"], true);
-    assert_eq!(profiles[1]["id"], "workspace-write");
-    assert_eq!(profiles[2]["id"], "read-only");
-    assert_eq!(profiles[2]["network_access"], false);
-}
-
-#[test]
-fn local_codex_config_uses_trimmed_cwd_or_workspace_without_side_effects() {
-    let home = temp_dir("nexushub-local-config-home");
-    fs::create_dir_all(&home).unwrap();
-    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    config.codex.workspace = home.join("workspace");
-
-    let default_response = serde_json::to_value(local_codex_config(&config, Some("   "))).unwrap();
-    assert_eq!(
-        default_response["cwd"].as_str().unwrap(),
-        home.join("workspace").to_string_lossy()
-    );
-    assert_eq!(default_response["permission_profile"], "danger-full-access");
-    assert_eq!(default_response["approval_policy"], "never");
-    assert_eq!(default_response["sandbox_mode"], "danger-full-access");
-    assert_eq!(default_response["network_access"], true);
-    assert_eq!(default_response["raw"]["source"], "local");
-    assert_eq!(default_response["raw"]["available"], true);
-    assert!(default_response["model"].is_null());
-    assert!(default_response["reasoning_effort"].is_null());
-
-    let cwd_response =
-        serde_json::to_value(local_codex_config(&config, Some("  /tmp/nexushub  "))).unwrap();
-    assert_eq!(cwd_response["cwd"], "/tmp/nexushub");
-
-    fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test]

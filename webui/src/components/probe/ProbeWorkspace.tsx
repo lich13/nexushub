@@ -25,6 +25,7 @@ import {
   type ProbeSettingsDraft
 } from "../../lib/probeUi";
 import { useProbeActions, useProbeQueries } from "../../lib/query/probe";
+import { isTerminalJob, useStartedJob } from "../../lib/query/jobs";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import {
   codexHomeStatusValue,
@@ -59,12 +60,13 @@ import type {
 type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
 
 export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix; maintenance?: boolean }) {
-  const { status, settings, logsDbStatus, events, jobs } = useProbeQueries();
+  const [activeSection, setActiveSection] = useState<ProbeSectionId>("events");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const { status, settings, logsDbStatus, events, jobs } = useProbeQueries({ section: maintenance ? "maintenance" : activeSection, historyOpen });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
   const [saveStatus, setSaveStatus] = useState<ProbeSaveStatus>(null);
   const [actionStatus, setActionStatus] = useState<ProbeSaveStatus>(null);
   const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
-  const [activeSection, setActiveSection] = useState<ProbeSectionId>("events");
   const data = status.data?.data;
   const available = status.data?.available ?? false;
   const currentSettings = settings.data?.data;
@@ -94,7 +96,6 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
     },
     onJobSuccess: (action) => {
       setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
-      if (action === "logs-db-dry-run") setLogsDbExecuteArmed(true);
       if (action === "logs-db-execute") setLogsDbExecuteArmed(false);
     },
     onJobError: (err, action) => {
@@ -114,8 +115,12 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
     }
   });
   const probeJobMutation = probeActions.job;
+  const startedJob = useStartedJob(probeJobMutation.data?.job_id);
+  const jobRunning = Boolean(probeJobMutation.data?.job_id && !isTerminalJob(startedJob.data?.status));
+  const jobBusy = probeJobMutation.isPending || jobRunning;
+  const dryRunReady = probeJobMutation.variables === "logs-db-dry-run" && startedJob.data?.status === "succeeded";
   const saveMutation = probeActions.save;
-  const pendingProbeAction = probeJobMutation.isPending ? probeJobMutation.variables : null;
+  const pendingProbeAction = jobBusy ? probeJobMutation.variables : null;
 
   useEffect(() => {
     if (!currentSettings || draft) return;
@@ -124,14 +129,19 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
 
   if (maintenance) return (
           <Panel title="Codex 日志库维护" icon={<Database size={18} />}>
+            {actionStatus && <div role="status" className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
+            {logsDbStatus.error && <div role="alert" className="form-error">{logsDbStatus.error.message}</div>}
+            {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
+            {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
             <ProbeLogsDbCard
               logsDb={logsDb}
-              busy={probeJobMutation.isPending || !capabilities.probeLogMaintenance}
+              busy={jobBusy || !capabilities.probeLogMaintenance}
+              dryRunReady={dryRunReady}
               executeArmed={logsDbExecuteArmed}
-              onDryRun={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-dry-run")}
-              onArmExecute={() => capabilities.probeLogMaintenance && setLogsDbExecuteArmed(true)}
+              onDryRun={() => { setLogsDbExecuteArmed(false); if (capabilities.probeLogMaintenance) probeJobMutation.mutate("logs-db-dry-run"); }}
+              onArmExecute={() => capabilities.probeLogMaintenance && dryRunReady && setLogsDbExecuteArmed(true)}
               onCancelExecute={() => setLogsDbExecuteArmed(false)}
-              onExecute={() => capabilities.probeLogMaintenance && probeJobMutation.mutate("logs-db-execute")}
+              onExecute={() => capabilities.probeLogMaintenance && dryRunReady && probeJobMutation.mutate("logs-db-execute")}
             />
           </Panel>
         );
@@ -140,6 +150,7 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
       case "events":
         return (
           <Panel title="最近事件" icon={<TerminalSquare size={18} />} className="wide-panel">
+            {events.error && <div role="alert" className="form-error">{events.error.message}</div>}
             <ProbeEventsCard events={recentEvents} available={events.data?.available ?? false} loading={events.isLoading} />
           </Panel>
         );
@@ -147,7 +158,10 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
         return (
           <>
             <Panel title="设置" icon={<SlidersHorizontal size={18} />} className="wide-panel">
+              {settings.error && <div role="alert" className="form-error">{settings.error.message}</div>}
               {actionStatus && <div className={actionStatus.tone === "success" ? "form-success" : "form-error"}>{actionStatus.message}</div>}
+              {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
+              {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
               {draft ? (
                 <ProbeRuntimeSettingsCard
                   draft={draft}
@@ -158,7 +172,6 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
                   status={data}
                   settings={currentSettings}
                   logsDb={logsDb}
-                  configuredDeviceKey={probeView.barkConfigured}
                   capabilities={capabilities}
                   onSave={() => saveMutation.mutate(undefined)}
                 />
@@ -167,12 +180,12 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
               )}
             </Panel>
             <Panel title="Codex Hook" icon={<GitFork size={18} />}>
-              <ProbeHookCard status={data} draft={draft} busy={probeJobMutation.isPending} onInstall={() => probeJobMutation.mutate("hooks-install")} />
+              <ProbeHookCard status={data} draft={draft} busy={jobBusy} onInstall={() => probeJobMutation.mutate("hooks-install")} />
             </Panel>
             <Panel title="Bark" icon={<Cloud size={18} />}>
               {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={(key) => saveMutation.mutate(key)} onTest={() => probeJobMutation.mutate("bark-test")} />}
             </Panel>
-            <details className="execution-history"><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
+            <details className="execution-history" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
           </>
         );
       default:
@@ -187,8 +200,7 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
           <h1>{PROBE_NAV_LABEL}</h1>
         </div>
         <div className="button-row">
-          <button className="secondary-button" onClick={probeActions.refresh}><RefreshCw size={17} />刷新</button>
-          <button className="secondary-button" onClick={() => probeJobMutation.mutate("bark-test")} disabled={!probeView.barkConfigured || probeJobMutation.isPending}><Cloud size={17} />测试 Bark</button>
+          <button className="icon-button" title="刷新 Probe" onClick={probeActions.refresh}><RefreshCw size={17} /></button>
         </div>
       </div>
 
@@ -247,7 +259,7 @@ function ProbeBarkCard({
   const setNotifications = (patch: Partial<ProbeSettingsDraft["notifications"]>) => setDraft({ ...draft, notifications: { ...draft.notifications, ...patch } });
   const handleSave = () => onSave(deviceKeyInputRef.current?.value ?? draft.notifications.device_key);
   return (
-    <div className="probe-card-stack">
+    <fieldset className="probe-card-stack" disabled={saving}>
       <Metric label="配置状态" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
       <label className="field-label">
         Device Key
@@ -264,7 +276,7 @@ function ProbeBarkCard({
         <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
       </div>
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-    </div>
+    </fieldset>
   );
 }
 
@@ -277,7 +289,6 @@ function ProbeRuntimeSettingsCard({
   status,
   settings,
   logsDb,
-  configuredDeviceKey,
   capabilities,
   onSave
 }: {
@@ -289,7 +300,6 @@ function ProbeRuntimeSettingsCard({
   status?: ProbeStatus;
   settings?: ProbeSettings;
   logsDb?: ProbeLogsDbStatus;
-  configuredDeviceKey: boolean;
   capabilities: RuntimeCapabilityMatrix;
   onSave: () => void;
 }) {
@@ -300,10 +310,9 @@ function ProbeRuntimeSettingsCard({
   const setObservability = (patch: Partial<ProbeSettingsDraft["observability"]>) => setDraft({ ...draft, observability: { ...draft.observability, ...patch } });
   const setLogsDb = (patch: Partial<ProbeSettingsDraft["logs_db"]>) => setDraft({ ...draft, logs_db: { ...draft.logs_db, ...patch } });
   return (
-    <div className="probe-card-stack">
+    <fieldset className="probe-card-stack" disabled={saving}>
       <div className="settings-meta-grid">
         <Metric label="通知" value={draft.notifications.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled ? "success" : "warning"} />
-        <Metric label="Device Key" value={configuredDeviceKey ? "已配置" : "未配置"} tone={configuredDeviceKey ? "success" : "warning"} />
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="Logs DB" value={probeStateLabel(logsDb?.logs_db_status ?? logsDb?.status)} tone={probeLogsDbTone(logsDb?.logs_db_status ?? logsDb?.status)} />
         <Metric label="错误监控" value={probeStateLabel(status?.error_monitor_status ?? (draft.probe.error_monitor.enabled ? "enabled" : "disabled"))} tone={draft.probe.error_monitor.enabled ? "success" : "warning"} />
@@ -338,13 +347,14 @@ function ProbeRuntimeSettingsCard({
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
       <button className="primary-button" disabled={saving || errors.length > 0} onClick={onSave}><CheckCircle2 size={17} />保存设置</button>
-    </div>
+    </fieldset>
   );
 }
 
 function ProbeLogsDbCard({
   logsDb,
   busy,
+  dryRunReady,
   onDryRun,
   executeArmed,
   onArmExecute,
@@ -353,6 +363,7 @@ function ProbeLogsDbCard({
 }: {
   logsDb?: ProbeLogsDbStatus;
   busy?: boolean;
+  dryRunReady?: boolean;
   onDryRun?: () => void;
   executeArmed?: boolean;
   onArmExecute?: () => void;
@@ -375,8 +386,8 @@ function ProbeLogsDbCard({
       {(onDryRun || onExecute) && (
         <div className="button-row">
           {onDryRun && <button className="secondary-button" disabled={busy} onClick={onDryRun}><Database size={17} />Dry-run</button>}
-          {onExecute && !executeArmed && <button className="secondary-button" disabled={busy} onClick={onArmExecute}><Play size={17} />准备执行</button>}
-          {onExecute && executeArmed && <button className="primary-button" disabled={busy} onClick={onExecute}><Play size={17} />确认执行</button>}
+          {onExecute && !executeArmed && <button className="secondary-button" disabled={busy || !dryRunReady} onClick={onArmExecute}><Play size={17} />准备执行</button>}
+          {onExecute && executeArmed && <button className="primary-button" disabled={busy || !dryRunReady} onClick={onExecute}><Play size={17} />确认执行</button>}
           {executeArmed && onCancelExecute && <button className="secondary-button" disabled={busy} onClick={onCancelExecute}>取消</button>}
         </div>
       )}

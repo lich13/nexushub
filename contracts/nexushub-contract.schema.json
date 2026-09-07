@@ -44,6 +44,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "theme",
+        "layout",
+        "taskFilters",
+        "interaction",
         "navigation",
         "corePanelTitles",
         "actionLabels",
@@ -53,6 +57,10 @@
         "forbidden"
       ],
       "properties": {
+        "theme": { "$ref": "#/$defs/nonEmptyString" },
+        "layout": { "$ref": "#/$defs/nonEmptyString" },
+        "taskFilters": { "$ref": "#/$defs/stringList" },
+        "interaction": { "$ref": "#/$defs/nonEmptyString" },
         "navigation": { "$ref": "#/$defs/stringList" },
         "corePanelTitles": { "$ref": "#/$defs/stringList" },
         "actionLabels": {

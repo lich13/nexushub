@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.158"
+version = "0.1.159"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/lich13/nexushub"
@@ -22,7 +22,6 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 dirs = "5.0"
-futures = "0.3"
 hex = "0.4"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate"] }
@@ -32,7 +31,6 @@ serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "process", "sync", "io-util"] }
-tokio-stream = "0.1"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header", "trace"] }
 toml = "0.8"

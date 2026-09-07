@@ -832,7 +832,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("status path display helpers prefer resolved backend paths and source labels", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const status: SystemStatus = {
       host_label: "cloud",
       codex_home: "/root/.codex",
@@ -1048,7 +1048,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("Job History labels read-only filesystem failures in Chinese", async () => {
-    const app = await import("../App") as typeof import("../App") & {
+    const app = await import("../test/domain") as typeof import("../test/domain") & {
       failureCategoryLabel?: (category: string) => string;
     };
 
@@ -1585,118 +1585,42 @@ describe("archive delete API compatibility", () => {
     }
   });
 
-  test("does not surface pending blocks without reply-needed state or active turn", async () => {
-    const app = await import("../App");
-    const oldChoice = {
-      id: "choice-old",
-      role: "assistant",
-      kind: "request_user_input",
-      turn_id: "turn-old",
-      questions: [{ id: "q1", question: "旧选择", options: [{ label: "1" }] }]
-    };
-    const oldPlan = {
-      id: "plan-old",
-      role: "assistant",
-      kind: "plan",
-      turn_id: "turn-old",
-      text: "<proposed_plan>旧计划</proposed_plan>",
-      questions: []
-    };
-
-    expect(app.pendingFromBlocks([oldChoice], "Recent", null)).toBeNull();
-    expect(app.latestActionBlock([oldPlan], "Recent", null, app.isPlanBlock)).toBeNull();
-    expect(app.pendingFromBlocks([oldChoice], "ReplyNeeded", "turn-old")?.questions[0].question).toBe("旧选择");
-    expect(app.latestActionBlock([oldPlan], "ReplyNeeded", "turn-old", app.isPlanBlock)?.id).toBe("plan-old");
-    expect(app.pendingFromBlocks([oldChoice], "Running", "turn-old")?.questions[0].question).toBe("旧选择");
-    expect(app.latestActionBlock([oldPlan], "Running", "turn-old", app.isPlanBlock)?.id).toBe("plan-old");
-    expect(app.latestActionBlock([oldPlan], "ReplyNeeded", "turn-new", app.isPlanBlock)).toBeNull();
+  test("plan, pending question and answered history render read-only without reviving actions", async () => {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { MessageBlockView } = await import("../components/chat/MessageStream");
+    const blocks: MessageBlock[] = [
+      { id: "plan", role: "assistant", kind: "plan", text: "<proposed_plan>Current plan</proposed_plan>", status: "pending", questions: [] },
+      { id: "question", role: "assistant", kind: "request_user_input", turn_id: "turn-current", questions: [{ id: "q1", question: "Current question", options: [{ label: "Option A" }] }] },
+      { id: "answer", role: "assistant", kind: "request_user_input_result", turn_id: "turn-old", status: "completed", questions: [], answers: [{ question_id: "q1", answers: ["Option B"] }] }
+    ];
+    const rendered = blocks.map(block => renderToStaticMarkup(createElement(MessageBlockView, { block }))).join("\n");
+    for (const text of ["Current plan", "Current question", "Option A", "Option B", "turn-current"]) expect(rendered).toContain(text);
+    expect(rendered).not.toMatch(/<(button|input|textarea|form)\b/);
+    expect(renderToStaticMarkup(createElement(MessageBlockView, { block: { id: "approval", role: "assistant", kind: "approval", text: "Retired approval", questions: [] } }))).toBe("");
   });
 
-  test("reply-needed fallback surfaces the latest unresolved plan when active turn is missing", async () => {
-    const app = await import("../App");
-    const plan = {
-      id: "plan-live",
-      role: "assistant",
-      kind: "plan",
-      item_id: "plan-item",
-      status: "pending",
-      resolved: false,
-      text: "<proposed_plan>当前计划</proposed_plan>",
-      questions: []
-    } satisfies MessageBlock;
-
-    const current = app.latestActionBlock([plan], "ReplyNeeded", null, app.isPlanBlock);
-
-    expect(current?.id).toBe("plan-live");
-    expect(app.isActionablePlanBlock(plan, current)).toBe(true);
-    expect(app.currentActionKey(current, null)).toBe("plan:turn:plan-item");
-  });
-
-  test("reply-needed fallback does not revive resolved plans or plans followed by execution progress", async () => {
-    const app = await import("../App");
-    const plan = {
-      id: "plan-live",
-      role: "assistant",
-      kind: "plan",
-      item_id: "plan-item",
-      status: "pending",
-      resolved: false,
-      text: "<proposed_plan>当前计划</proposed_plan>",
-      questions: []
-    } satisfies MessageBlock;
-    const resolvedPlan = {
-      ...plan,
-      id: "plan-resolved",
-      status: "completed",
-      resolved: true
-    } satisfies MessageBlock;
-    const assistantProgress = {
-      id: "assistant-progress",
-      role: "assistant",
-      kind: "message",
-      text: "开始执行计划",
-      questions: []
-    } satisfies MessageBlock;
-
-    expect(app.latestActionBlock([resolvedPlan], "ReplyNeeded", null, app.isPlanBlock)).toBeNull();
-    expect(app.latestActionBlock([plan, assistantProgress], "ReplyNeeded", null, app.isPlanBlock)).toBeNull();
-  });
-
-  test("summary pending elicitation must belong to the active turn", async () => {
-    const app = await import("../App");
-    const pending = {
-      item_id: "choice-1",
-      questions: [{ id: "q1", question: "选择方案", options: [{ label: "A" }] }]
-    };
-
-    expect(app.currentPendingElicitation(pending, "turn-live")).toBeNull();
-    expect(app.currentPendingElicitation({ ...pending, turn_id: "turn-old" }, "turn-live")).toBeNull();
-    expect(app.currentPendingElicitation({ ...pending, turn_id: "turn-live" }, "turn-live")).toMatchObject({
-      turn_id: "turn-live",
-      item_id: "choice-1"
-    });
-  });
-
-  test("thread status tabs do not expose archived list entries", async () => {
-    const app = await import("../App");
+  test("thread status tabs include an explicit archive restoration view", async () => {
+    const app = await import("../test/domain");
 
     expect(app.statusTabs.map((tab: { id: string }) => tab.id)).toEqual([
       "all",
       "running",
       "reply-needed",
-      "recoverable"
+      "recoverable",
+      "archived"
     ]);
   });
 
   test("NexusHub navigation exposes the slim provider workspaces", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "grok", "probe", "ops"]);
     expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Grok Build", "Probe", "设置"]);
   });
 
   test("thread list item text only exposes the title", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.threadListItemText({
       id: "thread-a",
@@ -1710,7 +1634,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("thread list metadata shows status and preview without contaminating title", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const thread = {
       id: "thread-a",
       title: "wanka",
@@ -1746,7 +1670,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("thread list cache helper inserts and removes rows for running filter", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const existing = {
       id: "thread-a",
       title: "wanka",
@@ -1779,7 +1703,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("thread list visibility filters archived and every known subagent marker", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const rows = [
       { id: "main", title: "wanka", status: "Running", message_count: 1 },
       { id: "archived", title: "old", status: "Archived", message_count: 1 },
@@ -1815,7 +1739,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation title text ignores latest message previews", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.conversationTitleText({
       title: " wanka ",
@@ -1830,7 +1754,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("incoming realtime summary keeps an existing title when the update has only a placeholder", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const current = {
       id: "thread-a",
       title: "wanka",
@@ -1862,7 +1786,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("thread detail summary merges fresh list status without losing title", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const detail = {
       summary: {
         id: "thread-a",
@@ -1896,7 +1820,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("thread detail refetch keeps polling idle selections and speeds up running threads", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const idleDetail = {
       summary: {
         id: "thread-a",
@@ -1919,7 +1843,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("tool block helpers expose compact title, summary, and detail text", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const block = {
       id: "tool-1",
       role: "tool",
@@ -1952,7 +1876,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("upsert message block appends, replaces changed blocks, and keeps identical references", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const current = [{
       id: "tool-1",
       role: "tool",
@@ -1988,7 +1912,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("merge message blocks appends, prepends, updates, and preserves unchanged references", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const current = [
       { id: "b2", role: "assistant", kind: "message", text: "middle", questions: [] },
       { id: "b3", role: "assistant", kind: "message", text: "old", questions: [] }
@@ -2017,7 +1941,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation block compaction collapses old completed tools but keeps running tools", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const completed = Array.from({ length: 5 }, (_, index) => ({
       id: `tool-${index}`,
       role: "tool",
@@ -2048,7 +1972,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation block compaction defaults to compact completed tool history", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const completed = Array.from({ length: 18 }, (_, index) => ({
       id: `tool-${index}`,
       role: "tool",
@@ -2067,7 +1991,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation message presentation uses light chat rows", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.conversationMessagePresentation({ role: "user" })).toEqual({
       kind: "user",
@@ -2082,7 +2006,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("plan and question blocks render in the conversation stream but not the action stack", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const plan = {
       id: "plan-1",
       role: "assistant",
@@ -2119,14 +2043,11 @@ describe("archive delete API compatibility", () => {
     expect(app.shouldRenderConversationBlock(plan)).toBe(true);
     expect(app.shouldRenderConversationBlock(question)).toBe(true);
     expect(app.shouldRenderConversationBlock(approval)).toBe(false);
-    expect(app.shouldRenderActionStackBlock(plan)).toBe(false);
-    expect(app.shouldRenderActionStackBlock(question)).toBe(false);
-    expect(app.shouldRenderActionStackBlock(approval)).toBe(true);
     expect(app.compactConversationBlocks([plan, question])).toEqual([plan, question]);
   });
 
-  test("only unresolved active-turn plans and questions expose stream actions", async () => {
-    const app = await import("../App");
+  test("history ordering retains current plans and questions without promoting answered history", async () => {
+    const app = await import("../test/domain");
     const currentPlan = {
       id: "plan-live",
       role: "assistant",
@@ -2173,7 +2094,6 @@ describe("archive delete API compatibility", () => {
     expect(app.isActionableQuestionBlock(answeredQuestion, currentQuestion)).toBe(false);
     expect(app.questionAnswerLabels(answeredQuestion, "q1")).toEqual(["B"]);
     expect(app.isResolvedActionBlock(answeredQuestion)).toBe(true);
-    expect(app.pendingFromBlocks([answeredQuestion], "ReplyNeeded", "turn-old")).toBeNull();
 
     expect(app.prioritizeCurrentActionBlocks(
       [currentPlan, answeredQuestion, currentQuestion],
@@ -2187,7 +2107,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("hidden cleanup helpers expose readiness and disabled state", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const { hiddenThreadDeleteStats } = await import("./domain/runtimeViewModel");
     const hiddenPlan = {
       total_threads: 9,
@@ -2213,7 +2133,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation block compaction collapses old chat messages but keeps recent chat and running tools", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const chat = Array.from({ length: 6 }, (_, index) => ({
       id: `chat-${index}`,
       role: index % 2 === 0 ? "user" : "assistant",
@@ -2243,7 +2163,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation block compaction collapses historical plans while preserving the current plan", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const historicalPlans = Array.from({ length: 8 }, (_, index) => ({
       id: `plan-${index}`,
       role: "assistant",
@@ -2289,7 +2209,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("visible conversation history can expand from compacted to full renderable blocks", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const chat = Array.from({ length: 70 }, (_, index) => ({
       id: `chat-${index}`,
       role: index % 2 === 0 ? "user" : "assistant",
@@ -2310,7 +2230,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation block compaction does not duplicate server history collapse cards", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
     const serverCollapsed = {
       id: "chat-history-collapsed",
       role: "tool",
@@ -2418,7 +2338,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation message helper hides internal rollout roles", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.shouldRenderConversationMessage({
       id: "developer-1",
@@ -2444,7 +2364,7 @@ describe("archive delete API compatibility", () => {
   });
 
   test("conversation message helper hides plan mode action and subagent context blocks", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.shouldRenderConversationMessage({
       id: "choice-1",
@@ -2470,14 +2390,14 @@ describe("archive delete API compatibility", () => {
   });
 
   test("plan helper exposes proposed plan body without transcript tags", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.extractPlanText("<proposed_plan>\n# Summary\n- Fix it\n</proposed_plan>")).toBe("# Summary\n- Fix it");
     expect(app.extractPlanText("")).toBe("Plan 内容等待 Codex 写入。");
   });
 
   test("message stream only follows when already near the bottom", async () => {
-    const app = await import("../App");
+    const app = await import("../test/domain");
 
     expect(app.shouldAutoFollowMessageStream({
       scrollTop: 900,

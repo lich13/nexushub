@@ -1,7 +1,6 @@
 mod commands;
 mod desktop_boot;
-// 业务命令入口按领域放在 commands/*；overview 仅保留桌面状态、首页汇总和启动初始化。
-#[allow(dead_code)]
+// Domain commands live in commands/*; overview owns desktop state and startup paths.
 mod overview;
 mod resources;
 mod services;

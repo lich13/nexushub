@@ -410,11 +410,11 @@ export function useThreadCacheActions() {
   }), [qc]);
 }
 
-export function useSelectedThreadState(threads: ThreadSummary[] = []) {
+export function useSelectedThreadState(threads: ThreadSummary[] = [], includeArchived = false) {
   const [selectedId, setSelectedId] = useState<SelectedThread>(null);
   const selection = useMemo(
-    () => threadSelectionView({ threads, selectedId }),
-    [threads, selectedId]
+    () => threadSelectionView({ threads, selectedId, includeArchived }),
+    [threads, selectedId, includeArchived]
   );
   const selectThread = useCallback((id: SelectedThread) => {
     setSelectedId(id);
@@ -435,10 +435,11 @@ export function useSelectedThreadState(threads: ThreadSummary[] = []) {
 export function useThreadDetailHydration(input: {
   threadId: string | null;
   detail?: ThreadDetail | null;
+  includeArchived?: boolean;
 }) {
   return useMemo(
     () => selectedThreadDetailView(input),
-    [input.detail, input.threadId]
+    [input.detail, input.threadId, input.includeArchived]
   );
 }
 
@@ -450,6 +451,7 @@ export function useArchivedSelectedThreadCleanup(input: {
   messageStore: ThreadMessageStoreClear;
   threadCache: ArchivedThreadCleanupCacheActions;
   onSelect: (threadId: SelectedThread) => void;
+  includeArchived?: boolean;
 }) {
   const {
     threadId,
@@ -458,7 +460,8 @@ export function useArchivedSelectedThreadCleanup(input: {
     visibleThreads,
     messageStore,
     threadCache,
-    onSelect
+    onSelect,
+    includeArchived
   } = input;
 
   useEffect(() => {
@@ -468,12 +471,12 @@ export function useArchivedSelectedThreadCleanup(input: {
       detail: rawSelectedDetail,
       visibleThreads
     });
-    if (!threadId || !cleanup.shouldClearClientState) return;
+    if (includeArchived || !threadId || !cleanup.shouldClearClientState) return;
     threadCache.clearArchivedThreadClientState(messageStore, threadId);
     if (cleanup.nextSelectedId !== selectedId) {
       onSelect(cleanup.nextSelectedId);
     }
-  }, [messageStore, onSelect, rawSelectedDetail, selectedId, threadCache, threadId, visibleThreads]);
+  }, [messageStore, onSelect, rawSelectedDetail, selectedId, threadCache, threadId, visibleThreads, includeArchived]);
 }
 
 export function useHydrateThreadMessageStore(input: {

@@ -42,5 +42,6 @@ export function JobList({ jobs, capabilities }: { jobs: JobRecord[]; capabilitie
 }
 
 function StatusDot({ status }: { status: string }) {
-  return <span className={`status-dot ${status}`} />;
+  const label = ({ succeeded: "成功", failed: "失败", running: "进行中", queued: "排队中", cancelled: "已取消" } as Record<string, string>)[status] ?? status;
+  return <><span className={`status-dot ${status}`} aria-hidden="true" /><small>{label}</small></>;
 }
