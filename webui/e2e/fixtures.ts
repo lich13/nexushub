@@ -14,6 +14,7 @@ export async function mockApi(page: Page, signedIn = true) {
     const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/api/rpc/")[1]);
     if (name.startsWith("threadEvents/")) return route.fulfill({ contentType: "text/event-stream", body: ": ready\n\n" });
     calls.push(name);
+    if (name === "grok.detail" && !grok.length) return route.fulfill({ status: 500, json: { error: "Grok session not found" } });
     const args = route.request().postDataJSON() ?? {};
     const responses: Record<string, () => unknown> = {
       "auth.publicSettings": demo.demoPublicSettings,

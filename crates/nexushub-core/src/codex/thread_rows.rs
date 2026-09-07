@@ -289,6 +289,9 @@ pub(super) struct LocalThreadRow {
 
 fn thread_title_expression(columns: &HashSet<String>) -> String {
     match (columns.contains("name"), columns.contains("title")) {
+        (true, true) if columns.contains("history_mode") => {
+            "CASE WHEN history_mode = 'legacy' THEN title ELSE COALESCE(NULLIF(TRIM(name), ''), title) END"
+        }
         (true, true) => "COALESCE(NULLIF(TRIM(name), ''), title)",
         (true, false) => "name",
         (false, true) => "title",

@@ -405,7 +405,7 @@ async fn call<T: DeserializeOwned>(
     read_response(stdout, id).await
 }
 
-async fn write_message(stdin: &mut ChildStdin, value: &Value) -> Result<()> {
+pub(super) async fn write_message(stdin: &mut ChildStdin, value: &Value) -> Result<()> {
     let mut encoded = serde_json::to_vec(value)?;
     encoded.push(b'\n');
     stdin.write_all(&encoded).await?;
@@ -413,7 +413,7 @@ async fn write_message(stdin: &mut ChildStdin, value: &Value) -> Result<()> {
     Ok(())
 }
 
-async fn read_response<T: DeserializeOwned>(
+pub(super) async fn read_response<T: DeserializeOwned>(
     stdout: &mut (impl tokio::io::AsyncBufRead + Unpin),
     expected_id: i64,
 ) -> Result<T> {
@@ -439,13 +439,13 @@ async fn read_response<T: DeserializeOwned>(
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown Codex app-server error");
-            return Err(anyhow!("Codex Goal request failed: {message}"));
+            return Err(anyhow!("Codex app-server request failed: {message}"));
         }
         let result = value
             .get("result")
             .cloned()
             .ok_or_else(|| anyhow!("Codex app-server response did not include result"))?;
-        return serde_json::from_value(result).context("decode Codex Goal response");
+        return serde_json::from_value(result).context("decode Codex app-server response");
     }
 }
 
@@ -997,7 +997,7 @@ done
             (
                 "server-error",
                 Some(r#"{"id":2,"error":{"code":-32602,"message":"unknown thread"}}"#),
-                "Codex Goal request failed: unknown thread",
+                "Codex app-server request failed: unknown thread",
             ),
         ] {
             let root = temp_dir(&format!("goal-protocol-{name}"));

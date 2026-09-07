@@ -105,6 +105,8 @@ test("menus support keyboard, rename, archive and restore from their visible ent
   await page.locator(".thread-list .segmented").getByRole("button", { name: "归档", exact: true }).click();
   await page.locator(".thread-item").first().click();
   await menu.click();
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveAttribute("title", "取消归档后可改名");
   await page.getByRole("button", { name: "取消归档", exact: true }).click();
   await expect.poll(() => calls.filter(name => name === "threads.restore").length).toBe(1);
   expect(calls.filter(name => name === "threads.archive")).toHaveLength(1);

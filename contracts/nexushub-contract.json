@@ -89,6 +89,7 @@
       "hiddenConfirm": "确认清理隐藏"
     },
     "disabledStates": {
+      "renameArchivedThread": "取消归档后可改名",
       "updateInstallWithoutAvailableVersion": "Install/Update disabled until update_available is true",
       "cleanupArmBeforeDryRun": "cleanup arm disabled until dry-run returns candidates",
       "cleanupConfirmBeforeArmed": "cleanup execute disabled until confirmation is armed",

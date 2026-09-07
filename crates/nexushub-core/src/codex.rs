@@ -4,6 +4,7 @@ use std::{fs, path::Path};
 mod goal_client;
 mod identity;
 mod mutations;
+mod name_client;
 mod paths;
 #[cfg(test)]
 mod rollout_accuracy_tests;
@@ -18,7 +19,8 @@ mod types;
 
 pub use goal_client::{CodexGoalAction, CodexGoalClient, CodexThreadGoal};
 pub use identity::{codex_task_identity, CodexTaskIdentity};
-pub use mutations::{db_integrity, set_thread_archived, set_thread_title};
+pub use mutations::{db_integrity, set_thread_archived};
+pub use name_client::set_thread_title;
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,

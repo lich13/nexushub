@@ -354,7 +354,7 @@ fn file_signature(path: &FsPath) -> Option<FileSignature> {
     })
 }
 
-pub fn apply_thread_state_action_plan(
+pub async fn apply_thread_state_action_plan(
     state: &AppState,
     auth: &AuthContext,
     plan: &job_service::ThreadStateActionPlan,
@@ -376,7 +376,10 @@ pub fn apply_thread_state_action_plan(
         )?;
     }
     if let Some(name) = plan.name.as_deref() {
-        codex::set_thread_title(&paths, &plan.thread_id, name)?;
+        state
+            .goal_client
+            .rename_thread(&paths, &plan.thread_id, name)
+            .await?;
         state.db.record_audit(
             Some(&auth.admin_id),
             "thread.renamed",

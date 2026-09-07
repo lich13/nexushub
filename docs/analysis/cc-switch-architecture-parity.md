@@ -1,7 +1,7 @@
 # cc-switch Architecture Parity Audit
 
 Last reviewed: 2026-09-06
-NexusHub target: `v0.1.160` (theme and build simplification)
+NexusHub target: `v0.1.161` (theme/build simplification, native task naming and Grok freshness)
 
 ## Boundary
 

@@ -4,6 +4,8 @@
 
 A task-reading workspace aligned with Codex Desktop: neutral light/dark themes, compact navigation, a narrow task list and one readable conversation column. No marketing surface, input composer, permanent inspector or duplicate status cards.
 
+Grok details refresh every second while running and every two seconds otherwise. Hidden narrow-screen details do not poll. Entering a conversation starts at the latest message; subsequent updates follow only while the reader remains near the bottom. Refresh reloads both the visible list and detail.
+
 ## Tokens
 
 Light: canvas `#ffffff`, surface `#f6f6f6`, selected `#ededed`, text `#242424`, muted `#626262`, decorative border `#dedede`, control border `#858585`.

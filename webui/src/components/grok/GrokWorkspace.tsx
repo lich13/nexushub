@@ -1,6 +1,7 @@
 import { Check, ChevronLeft, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
+import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { TaskMenu } from "../common/TaskMenu";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -8,19 +9,38 @@ import type { GrokDeletePreview, GrokSessionSummary } from "../../types";
 
 export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const menuTrigger = useRef<HTMLElement>(null);
+  const stream = useRef<HTMLDivElement>(null);
+  const scrollState = useRef({ id: "", follow: true });
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<GrokDeletePreview | null>(null);
   const sessions = useGrokSessions(query);
   const selected = sessions.data?.find((item) => item.id === selectedId) ?? sessions.data?.[0];
-  const detail = useGrokDetail(selected?.id);
+  const detailVisible = !narrow || Boolean(selectedId);
+  const detail = useGrokDetail(detailVisible ? selected?.id : undefined);
   const actions = useGrokActions(csrfToken);
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setNarrow(media.matches);
+    media.addEventListener("change", update);
+    update();
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useLayoutEffect(() => {
+    const element = stream.current;
+    if (!element || !element.getClientRects().length) return;
+    if (scrollState.current.id !== selected?.id) {
+      scrollState.current = { id: selected?.id ?? "", follow: true };
+    }
+    if (scrollState.current.follow) element.scrollTop = element.scrollHeight;
+  }, [selected?.id, selectedId, detailVisible, detail.data?.events]);
   return <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>
     <aside className="provider-list">
-      <header className="workspace-heading"><h1>Grok Build</h1><button className="icon-button" onClick={() => sessions.refetch()} title="刷新任务"><RefreshCw size={16} /></button></header>
+      <header className="workspace-heading"><h1>Grok Build</h1><button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={16} /></button></header>
       <label className="search-box"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" /></label>
       <div className="provider-list-scroll">
         {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
@@ -42,7 +62,7 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         </header>
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div className="provider-events">{(detail.data?.events ?? []).map((event, index) =>
+        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>{(detail.data?.events ?? []).map((event, index) =>
           event.kind.startsWith("tool_") ? <details className="grok-tool" key={event.callId ?? index}><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>
             : <article className={`provider-event ${event.kind}`} key={index}><div className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</div><MarkdownContent text={event.text ?? ""} /></article>
         )}{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>

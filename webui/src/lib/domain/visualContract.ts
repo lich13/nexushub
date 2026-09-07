@@ -27,6 +27,7 @@ export const sharedActionLabels = contractVisual.actionLabels as {
 };
 
 export const sharedDisabledStates = contractVisual.disabledStates as {
+  renameArchivedThread: string;
   updateInstallWithoutAvailableVersion: string;
   cleanupArmBeforeDryRun: string;
   cleanupConfirmBeforeArmed: string;

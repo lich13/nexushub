@@ -2,10 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension};
 
-use super::{
-    thread_rows::{first_existing, table_columns},
-    CodexPaths,
-};
+use super::{thread_rows::table_columns, CodexPaths};
 
 pub fn set_thread_archived(paths: &CodexPaths, id: &str, archived: bool) -> Result<()> {
     let db = paths.state_db();
@@ -30,25 +27,6 @@ pub fn set_thread_archived(paths: &CodexPaths, id: &str, archived: bool) -> Resu
             rusqlite::params![id, archived_at],
         )?;
     }
-    Ok(())
-}
-
-pub fn set_thread_title(paths: &CodexPaths, id: &str, title: &str) -> Result<()> {
-    let name = title.trim();
-    if name.is_empty() {
-        anyhow::bail!("thread title cannot be empty");
-    }
-    let db = paths.state_db();
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
-    let columns = table_columns(&conn, "threads")?;
-    let Some(title_column) = first_existing(&columns, &["name", "title"]) else {
-        anyhow::bail!("threads title/name column not found");
-    };
-    let sql = format!("UPDATE threads SET {title_column}=?2 WHERE id=?1");
-    anyhow::ensure!(
-        conn.execute(&sql, rusqlite::params![id, name])? == 1,
-        "thread not found"
-    );
     Ok(())
 }
 

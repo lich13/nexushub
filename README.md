@@ -12,7 +12,7 @@ NexusHub is a compact Codex and Grok Build task browser with a shared React inte
 - Settings: system/update status, maintenance and execution history; account/security settings appear only on the server WebUI.
 - Desktop runs the embedded interface and fixed Hook/monitor helper only. It does not serve a desktop LAN WebUI.
 
-The task read model uses Codex local state, session index and rollout files. History reads are side-effect free. Existing jobs, followups and shadow Goal records remain in SQLite for compatibility but cannot restart retired task execution.
+The task read model uses Codex local state, session index and rollout files. History reads are side-effect free. Codex names follow the native history format: legacy `title` and paginated `name`. Explicit rename uses the installed Codex CLI (0.144.2 or newer), fixed `thread/name/set`, and a verified `thread/read`; no task is started. Archived tasks must be explicitly restored before renaming, matching the native API boundary. A separate app-server cannot guarantee live notification of an already-open Codex Desktop window. Existing jobs, followups and shadow Goal records remain in SQLite for compatibility but cannot restart retired task execution.
 
 The two Linux release lines have distinct roles: `nexushub-webd-linux-x86_64.tar.gz` is the headless server package; AppImage/deb/rpm are Tauri desktop packages. `latest.json` contains signed desktop updater assets for `darwin-aarch64` and `linux-x86_64`, never the server tarball. Windows and Linux arm64 are not current release targets.
 

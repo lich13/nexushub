@@ -4,6 +4,7 @@ import { MessageBlockView } from "./MessageStream";
 import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
+import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { ThreadDetail } from "../../types";
@@ -73,7 +74,7 @@ export function Conversation(props: {
         <div className="conversation-header-actions">
           <span className={`status-chip ${detail.summary.status}`}>{threadStatusLabel(detail.summary.status)}</span>
           <TaskMenu>
-              <button onClick={() => { setTitle(detail.summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
+              <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(detail.summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
               <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
               <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
               <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
@@ -82,7 +83,7 @@ export function Conversation(props: {
           </TaskMenu>
         </div>
       </header>
-      {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
+      {renaming && !archived && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
         <input aria-label="任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
         <button className="icon-button" title="保存名称" disabled={actions.isPending || !title.trim()}><Check size={17} /></button>
         <button type="button" className="icon-button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button>

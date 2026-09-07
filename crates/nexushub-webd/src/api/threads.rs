@@ -111,9 +111,7 @@ pub(crate) async fn archive_thread(
         .threads()
         .archive(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_thread_state_action_plan(
-        &state, &auth, &plan,
-    )?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
 pub(crate) async fn restore_thread(
@@ -128,9 +126,7 @@ pub(crate) async fn restore_thread(
         .threads()
         .restore(&id)
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_thread_state_action_plan(
-        &state, &auth, &plan,
-    )?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,9 +150,7 @@ pub(crate) async fn rename_thread(
             name: payload.name,
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::apply_thread_state_action_plan(
-        &state, &auth, &plan,
-    )?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
 }
 
 pub(crate) async fn thread_events(

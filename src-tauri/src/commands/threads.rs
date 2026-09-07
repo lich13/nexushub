@@ -101,7 +101,7 @@ pub fn restoreThread(
 }
 
 #[tauri::command(rename = "threads.rename")]
-pub fn renameThread(
+pub async fn renameThread(
     state: tauri::State<'_, DesktopState>,
     threadId: String,
     name: String,
@@ -113,5 +113,6 @@ pub fn renameThread(
             name,
         },
     )
+    .await
     .map_err(|err| err.to_string())
 }

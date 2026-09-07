@@ -239,7 +239,7 @@ for needle in [
     "cc-switch origin/main",
     "cc-switch feat/webd",
     "NexusHub v0.1.144",
-    "NexusHub target: `v0.1.160",
+    "NexusHub target: `v0.1.161",
     "Windows desktop",
     "Linux arm64",
     "nexushub-webd-linux-x86_64.tar.gz",

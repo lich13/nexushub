@@ -3076,19 +3076,55 @@ fn scan_rollout_completed_tool_call_without_turn_started_is_recent() {
     assert!(scan.active_turn_id.is_none());
 }
 
-#[test]
-fn set_thread_title_updates_title_column_as_rename_fallback() {
+#[tokio::test]
+async fn set_thread_title_rejects_blank_without_touching_native_state() {
     let root = unique_temp_dir("set-title");
     fs::create_dir_all(&root).unwrap();
     let rollout = root.join("rollout-thread-a.jsonl");
     fs::write(&rollout, "").unwrap();
     write_thread_db(&root, "thread-a", &rollout, 1, 0);
 
-    set_thread_title(&CodexPaths::new(&root), "thread-a", "wanka").unwrap();
+    let before = fs::read(root.join("state_5.sqlite")).unwrap();
+    assert!(set_thread_title(&CodexPaths::new(&root), "thread-a", "   ")
+        .await
+        .is_err());
+    assert_eq!(fs::read(root.join("state_5.sqlite")).unwrap(), before);
+    assert!(!root.join("session_index.jsonl").exists());
 
-    let rows = list_threads(&CodexPaths::new(&root), None, Some("thread-a"), 10).unwrap();
-    assert_eq!(rows[0].title, "wanka");
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn thread_names_follow_native_history_mode() {
+    for (mode, expected) in [
+        ("legacy", "Native legacy name"),
+        ("paginated", "Native paginated name"),
+    ] {
+        let root = unique_temp_dir("history-mode-title");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-thread-a.jsonl");
+        fs::write(&rollout, "").unwrap();
+        write_thread_db(&root, "thread-a", &rollout, 1, 0);
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute_batch("ALTER TABLE threads ADD COLUMN name TEXT; ALTER TABLE threads ADD COLUMN history_mode TEXT;").unwrap();
+        conn.execute("UPDATE threads SET title='Native legacy name', name='Native paginated name', history_mode=?1", [mode]).unwrap();
+        drop(conn);
+        let rows = list_threads(&CodexPaths::new(&root), None, Some("thread-a"), 10).unwrap();
+        assert_eq!(rows[0].title, expected, "{mode}");
+        if mode == "legacy" {
+            let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+            conn.execute("UPDATE threads SET title=''", []).unwrap();
+            drop(conn);
+            fs::write(
+                root.join("session_index.jsonl"),
+                json!({"id":"thread-a","thread_name":"Canonical index name"}).to_string(),
+            )
+            .unwrap();
+            let rows = list_threads(&CodexPaths::new(&root), None, Some("thread-a"), 10).unwrap();
+            assert_eq!(rows[0].title, "Canonical index name");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn scan_fixture(events: &[serde_json::Value]) -> super::RolloutScan {

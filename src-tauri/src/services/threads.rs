@@ -135,7 +135,7 @@ pub(crate) fn restore_thread_with_state(
     Ok(job_service::thread_state_action_response(&plan)?.into())
 }
 
-pub(crate) fn rename_thread_with_state(
+pub(crate) async fn rename_thread_with_state(
     state: &DesktopState,
     request: DesktopRenameThreadRequest,
 ) -> Result<DesktopActionResponse> {
@@ -146,7 +146,7 @@ pub(crate) fn rename_thread_with_state(
         },
     )?;
     let name = plan.name.as_deref().unwrap_or_default();
-    set_thread_title(&state.codex_paths(), &plan.thread_id, name)?;
+    set_thread_title(&state.codex_paths(), &plan.thread_id, name).await?;
     job_service::thread_state_action_response(&plan).map(Into::into)
 }
 

@@ -283,9 +283,36 @@ async fn request_rpc_status(
 
 #[tokio::test]
 async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
-    let (state, session_token, csrf_token, home) = app_server_missing_socket_state();
+    let (mut state, session_token, csrf_token, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
-    let app = router(state);
+    use std::os::unix::fs::PermissionsExt;
+    let executable = home.join("native-codex-fixture");
+    fs::write(&executable, r#"#!/usr/bin/env node
+if (process.argv[2] === '--version') { console.log('codex-cli 0.153.4'); process.exit(0); }
+const fs = require('node:fs');
+const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync(path.join(process.env.CODEX_HOME, 'state_5.sqlite'));
+require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  fs.appendFileSync(path.join(process.env.CODEX_HOME, 'native-requests.jsonl'), line + '\n');
+  const request = JSON.parse(line);
+  if (request.id == null) return;
+  let result = {};
+  if (request.method === 'thread/name/set') {
+    db.prepare('UPDATE threads SET title=? WHERE id=?').run(request.params.name, request.params.threadId);
+    fs.appendFileSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), JSON.stringify({ id:request.params.threadId, thread_name:request.params.name }) + '\n');
+  } else if (request.method === 'thread/read') {
+    result = { thread: db.prepare('SELECT id,title AS name FROM threads WHERE id=?').get(request.params.threadId) };
+  } else if (request.method !== 'initialize') process.exit(2);
+  console.log(JSON.stringify({ id: request.id, result }));
+});
+"#).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    state.goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+        vec![executable],
+        std::time::Duration::from_secs(5),
+    );
+    let app = router(state.clone());
 
     let list = request_rpc_json(
         app.clone(),
@@ -308,6 +335,30 @@ async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     .await;
     assert_eq!(detail["summary"]["title"], "local title");
 
+    assert_eq!(
+        request_rpc_status(
+            app.clone(),
+            "threads.rename",
+            r#"{"threadId":"thread-a","name":"unauthorized"}"#,
+            None,
+            None
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request_rpc_status(
+            app.clone(),
+            "threads.rename",
+            r#"{"threadId":"thread-a","name":"missing csrf"}"#,
+            Some(&session_token),
+            None
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    assert!(!home.join("native-requests.jsonl").exists());
+
     let _ = request_rpc_json(
         app,
         "threads.rename",
@@ -325,6 +376,47 @@ async fn thread_routes_use_local_state_when_app_server_socket_is_missing() {
     )
     .unwrap();
     assert_eq!(rows[0].title, "local renamed");
+    let requests: Vec<serde_json::Value> = fs::read_to_string(home.join("native-requests.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["method"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "initialize",
+            "initialized",
+            "thread/name/set",
+            "thread/read"
+        ]
+    );
+    state.goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+        vec![],
+        std::time::Duration::from_secs(2),
+    );
+    assert_eq!(
+        request_rpc_status(
+            router(state),
+            "threads.rename",
+            r#"{"threadId":"thread-a","name":"must not use SQL"}"#,
+            Some(&session_token),
+            Some(&csrf_token)
+        )
+        .await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT title FROM threads WHERE id='thread-a'", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "local renamed"
+    );
+    drop(conn);
     let _ = fs::remove_dir_all(home);
 }
 
