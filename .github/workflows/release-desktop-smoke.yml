@@ -20,7 +20,7 @@ jobs:
       - name: Install desktop rendering dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xdotool python3-gi python3-pil fonts-noto-cjk libgtk-3-0t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1
+          sudo apt-get install -y --no-install-recommends xvfb xdotool python3-gi python3-pil gir1.2-gtk-3.0 fonts-noto-cjk libgtk-3-0t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1
       - name: Download and verify published AppImage
         env:
           GH_TOKEN: ${{ github.token }}
