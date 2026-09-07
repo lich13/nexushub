@@ -7,14 +7,16 @@ fn fixture(script: &str) -> (std::path::PathBuf, CodexGoalClient) {
     let executable = root.join("codex");
     fs::write(&executable, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.153.4'; exit 0; fi\n{script}")).unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    // CLI discovery has separate tests; protocol fixtures start with a resolved executable.
     (
         root,
-        CodexGoalClient::with_candidates(vec![executable], Duration::from_secs(2)),
+        CodexGoalClient::with_resolved_executable(executable, Duration::from_secs(2)),
     )
 }
 
 #[tokio::test]
 async fn native_rename_uses_fixed_protocol_and_rejects_unverified_success() {
+    let _guard = super::super::goal_client::process_test_guard().await;
     for (returned_id, returned_name, success) in [
         ("fixture", "A quoted \"title\"", true),
         ("fixture", "Wrong name", false),
@@ -34,7 +36,6 @@ esac
 done
 "#
         ));
-        client.resolve_executable().await.unwrap();
         let result = rename_with_client(
             &CodexPaths::new(&root),
             "fixture",
@@ -76,16 +77,16 @@ done
 
 #[tokio::test]
 async fn native_rename_timeout_reaps_child_and_does_not_fall_back_to_sql() {
+    let _guard = super::super::goal_client::process_test_guard().await;
     let (root, client) = fixture(
         "printf '%s' $$ > \"$CODEX_HOME/pid\"\nwhile read -r request; do read -r next; done\n",
     );
-    client.resolve_executable().await.unwrap();
     let error = rename_with_client(
         &CodexPaths::new(&root),
         "fixture",
         "New name",
         &client,
-        Duration::from_millis(700),
+        Duration::from_secs(2),
     )
     .await
     .unwrap_err();

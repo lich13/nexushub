@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: `V0.1.161_ACCEPTED`<br>
-**Active Task**: `v0.1.161` 实现 `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b` 的完整本地 gate、四项 CI、正式 Release/15 资产、三端及四工作区验收均通过；用户确认 Codex 桌面显示 `Char`，Grok 原生消息三次耗时上限 2,086/1,051/1,088ms（含 SSH）。证据提交及最终清理记录 `2b2a49711430466b8663a8ee155924c9530025a0` 的 CI `34143320828` 四项全绿后写入接受标记。精确清理本机 10,539,322,980、腾讯云 41,286,129 bytes 逻辑文件，旧版任务回滚已在验收后删除；正式服务、monitor、用户数据及未知 `.DS_Store` 保留，清理后健康检查通过。主任务确认本标记提交 CI 后关闭运行中 Goal。详见 [v0.1.161 acceptance record](./v0.1.161-acceptance.md)。历史 Goal 26 保持已完成。
+**Active Phase**: Goal 27 final test-fixture correction<br>
+**Active Task**: 正式 `v0.1.161` 的实现/Release/三端四工作区、真实改名/Grok 延迟、清理及记录 CI 均已通过。随后接受标记提交的 Backend CI 在超时测试的假 CLI 发现步骤失败，未进入被测协议；本机全 core 回归也复现 700ms 内假进程尚未写出 PID。现将命名协议测试接入已有的测试可执行文件构造器和子进程互斥锁，超时夹具改用已有的 2 秒窗口，保留所有协议、回收和禁止 SQL 回退断言。改动均为 `cfg(test)` 或测试模块，正式运行代码和资产不变。正在完成定向验证、匹配 CI 与补充构建目录清理，Goal 27 保持打开。详见 [v0.1.161 acceptance record](./v0.1.161-acceptance.md)。历史 Goal 26 保持已完成。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
@@ -46,7 +46,7 @@ Rows through `v0.1.160` are historical execution records. Old `P/R pending` rows
 
 ## Deep Refactor Goal Tracker
 
-- [x] Goal 27: `V0.1.161_ACCEPTED`. Theme, layout, dependency and build simplification plus reported runtime defects. Baseline `1ad2756a3b0bf12e8514196968e521f56921980a`; released implementation `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b`. Full gates, Release, all three runtimes, four workspaces, native rename/user Desktop confirmation, Grok freshness, evidence/final-record CI and measured cleanup passed. Existing tags and historical accepted checks remain intact.
+- [ ] Goal 27: Runtime acceptance passed; final marker CI exposed a fake-CLI discovery failure before the timeout regression entered its subject. Correct the test fixture, verify unchanged runtime code and fresh CI, then close. Baseline `1ad2756a3b0bf12e8514196968e521f56921980a`; released implementation `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b`. Passed release, three-runtime/four-workspace, native rename, Grok freshness and cleanup evidence remains intact.
 
 - [x] Goal 1: `v0.1.134` baseline acceptance - local, GitHub Release, Tencent Cloud Linux WebUI baseline, and installed macOS Tauri App baseline verified on 2026-06-26.
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.

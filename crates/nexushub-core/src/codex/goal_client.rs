@@ -88,7 +88,7 @@ impl CodexGoalClient {
     }
 
     #[cfg(test)]
-    fn with_resolved_executable(executable: PathBuf, request_timeout: Duration) -> Self {
+    pub(super) fn with_resolved_executable(executable: PathBuf, request_timeout: Duration) -> Self {
         Self {
             inner: Arc::new(CodexGoalClientInner {
                 candidates: Some(vec![executable.clone()]),
@@ -575,25 +575,23 @@ fn parse_codex_version(value: &str) -> Option<ParsedVersion> {
 }
 
 #[cfg(test)]
+pub(super) async fn process_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{CodexGoalAction, CodexGoalClient};
+    use super::{process_test_guard, CodexGoalAction, CodexGoalClient};
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
         process::{Command as StdCommand, Stdio as StdStdio},
-        sync::OnceLock,
         time::Duration,
     };
-
-    static PROCESS_TEST_GATE: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-    async fn process_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-        PROCESS_TEST_GATE
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await
-    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(

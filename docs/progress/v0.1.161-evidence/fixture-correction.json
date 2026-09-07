@@ -1,0 +1,26 @@
+{
+  "releaseImplementationSha": "b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b",
+  "failedMarkerSha": "adcab685fb8d8b1bb116c8b8de41f19bd5717640",
+  "failedCi": "https://github.com/lich13/nexushub/actions/runs/34143934113",
+  "failedJobId": 101811749956,
+  "failedTest": "codex::name_client::tests::native_rename_timeout_reaps_child_and_does_not_fall_back_to_sql",
+  "ciFailureStage": "Fake CLI discovery before the rename protocol",
+  "ciError": "Codex CLI 0.144.2 or newer is required for thread Goal support",
+  "localFullSuiteReproduction": "After resolving the fake executable directly, the 700ms deadline expired before its PID file existed; focused tests passed",
+  "fix": [
+    "Reuse existing cfg(test) resolved-executable constructor",
+    "Share existing Goal subprocess test mutex with rename protocol tests",
+    "Use the existing Goal timeout fixture's 2-second window"
+  ],
+  "assertionsRemoved": 0,
+  "productionBehaviorChanged": false,
+  "releaseAssetsChanged": false,
+  "verification": {
+    "focusedTestsPassed": 3,
+    "fullCoreTestsPerRun": 272,
+    "consecutiveFullCoreRunsPassed": 3,
+    "fullCoreDurationsSeconds": [18.65, 18.75, 18.35],
+    "fmtCheck": "passed",
+    "clippyAllTargetsDenyWarnings": "passed"
+  }
+}
