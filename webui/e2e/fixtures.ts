@@ -6,6 +6,7 @@ export async function mockApi(page: Page, signedIn = true) {
   const titles = new Map<string, string>();
   const archived = new Set<string>();
   let probeSettings = demo.demoProbeSettings();
+  probeSettings.notifications = { ...probeSettings.notifications, enabled: true, device_key_configured: true };
   let jobReads = 0;
   let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "recent" }];
   if (signedIn) await page.addInitScript((session) => localStorage.setItem("nexushub-session", JSON.stringify(session)), demo.demoSessionUser());
@@ -36,7 +37,17 @@ export async function mockApi(page: Page, signedIn = true) {
       "updates.check": () => ({ job_id: "fixture-job" }),
       "probe.status": () => ({ available: true, data: demo.demoProbeStatus() }),
       "probe.settings.get": () => ({ available: true, data: probeSettings }),
-      "probe.settings.save": () => { probeSettings = demo.demoSavedProbeSettings(args.settings); return probeSettings; },
+      "probe.settings.save": () => {
+        const input = args.settings;
+        probeSettings = {
+          ...probeSettings,
+          codex: { ...probeSettings.codex, ...input.codex },
+          probe: { ...probeSettings.probe, ...input.probe },
+          notifications: { ...probeSettings.notifications, ...input.probe.notifications },
+          logs_db: { ...probeSettings.logs_db, ...input.probe.logs_db }
+        };
+        return probeSettings;
+      },
       "probe.barkTest": () => ({ job_id: "fixture-job" }),
       "probe.logsDbDryRun": () => ({ job_id: "fixture-job" }),
       "probe.logsDbExecute": () => ({ job_id: "fixture-job" }),
@@ -86,5 +97,6 @@ export async function assertContrast(page: Page, selector: string, minimum = 4.5
 }
 
 export async function assertNoOverflow(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, available: document.documentElement.clientWidth }));
+  expect(widths.scroll, `document width ${widths.scroll}, available width ${widths.available}`).toBeLessThanOrEqual(widths.available);
 }

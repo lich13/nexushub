@@ -1,7 +1,7 @@
 # NexusHub Feature Sync Workflow
 
 Last reviewed: 2026-09-06
-Applies from: `v0.1.159`
+Applies from: `v0.1.160`
 
 This is the default flow for adding or changing shared NexusHub behavior across macOS Tauri, Linux Tauri, Tencent Cloud Linux WebUI.
 

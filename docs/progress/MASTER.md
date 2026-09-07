@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex read-only task browsing, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep Grok Build read-only with guarded local session management.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-09-07
-> **Mode**: V0.1.159_IN_PROGRESS
+> **Mode**: V0.1.160_CORRECTIVE_IN_PROGRESS
 
 ## References
 
@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: Goal 27: `v0.1.159` 主题修复、代码与构建精简实施中<br>
-**Active Task**: Goal 27 实现与本地 gate 已完成，详见 [v0.1.159 acceptance record](./v0.1.159-acceptance.md)。正在准备实现提交和匹配 SHA 的四项 CI；Release、正式 macOS 安装、腾讯云部署、正式 helper 回放与清理尚未验收。历史 Goal 26 保持已完成。
+**Active Phase**: Goal 27: `v0.1.159` 精简交付的 `v0.1.160` 修复验收中<br>
+**Active Task**: `v0.1.159` 已通过 CI/Release、15 资产与双端部署，但正式截图复核发现 320px 传统滚动条造成 15px 横向溢出，不能接受。`v0.1.160` 移除 body 固定最小宽度，浏览器保留真实滚动条并按 clientWidth 验证；正在执行完整 gate，后续必须完成新 exact-tag Release、正式双端更新与验收。旧 tag 不改写，回滚及诊断保留。详见 [v0.1.160 acceptance record](./v0.1.160-acceptance.md)。历史 Goal 26 保持已完成。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
@@ -46,7 +46,7 @@ Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows
 
 ## Deep Refactor Goal Tracker
 
-- [ ] Goal 27: `v0.1.159` theme, layout and build simplification. Baseline is clean `main@1ad2756a3b0bf12e8514196968e521f56921980a`; installed macOS App/helper and Tencent Cloud webd report `0.1.158`, service is active and healthz is healthy. Implementation, full gate, matching CI/Release, 15 assets, official macOS/cloud acceptance and cleanup are pending. All three runtimes and four workspaces remain supported. Task evidence: `/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8`.
+- [ ] Goal 27: `v0.1.159` theme, layout and build simplification, with corrective `v0.1.160` acceptance pending. The original baseline is `main@1ad2756a3b0bf12e8514196968e521f56921980a`. `v0.1.159` was published/deployed but failed final classic-scrollbar inspection; its tag remains intact. Complete the correction's gate, matching CI/Release, 15 assets, official macOS/cloud acceptance and cleanup before closure. All three runtimes and four workspaces remain supported.
 
 - [x] Goal 1: `v0.1.134` baseline acceptance - local, GitHub Release, Tencent Cloud Linux WebUI baseline, and installed macOS Tauri App baseline verified on 2026-06-26.
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.
@@ -87,7 +87,7 @@ Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.159_IN_PROGRESS
+  mode: V0.1.160_CORRECTIVE_IN_PROGRESS
   strategy: "cc-switch style shared contract registry, read-only Codex/Grok webui, use-case layer with thin Linux server webd and macOS Tauri surfaces; desktop LAN WebUI retired"
   phases:
     phase_1:

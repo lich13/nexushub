@@ -49,6 +49,10 @@ for (const colorScheme of ["light", "dark"] as const) {
       await assertContrast(page, ".probe-status-banner strong, .probe-status-banner span, .probe-event-card .status-chip");
       await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
       await expect(page.getByText("Bark", { exact: true })).toBeVisible();
+      await expect(page.getByLabel("主机标签", { exact: true })).toBeVisible();
+      if (info.project.name === "chromium") {
+        await expect.poll(() => page.evaluate(() => innerWidth - document.documentElement.clientWidth), { message: "classic scrollbar gutter is present" }).toBeGreaterThan(0);
+      }
       await assertContrast(page, ".field-label, .metric span, .metric strong");
       await assertNoOverflow(page);
       await page.screenshot({ path: info.outputPath("probe.png"), fullPage: true });

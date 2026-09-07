@@ -64,6 +64,8 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
   const [historyOpen, setHistoryOpen] = useState(false);
   const { status, settings, logsDbStatus, events, jobs } = useProbeQueries({ section: maintenance ? "maintenance" : activeSection, historyOpen });
   const [draft, setDraft] = useState<ProbeSettingsDraft | null>(null);
+  const submittedDraft = useRef<ProbeSettingsDraft | null>(null);
+  const saveInFlight = useRef(false);
   const [saveStatus, setSaveStatus] = useState<ProbeSaveStatus>(null);
   const [actionStatus, setActionStatus] = useState<ProbeSaveStatus>(null);
   const [logsDbExecuteArmed, setLogsDbExecuteArmed] = useState(false);
@@ -92,6 +94,7 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
       if (!draft) throw new Error("探针设置尚未载入");
       const errors = probeSettingsValidation(draft);
       if (errors.length) throw new Error(errors[0]);
+      submittedDraft.current = draft;
       return buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey);
     },
     onJobSuccess: (action) => {
@@ -108,7 +111,9 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
         return;
       }
       setSaveStatus({ tone: "success", message: "设置已保存" });
-      setDraft(buildProbeSettingsDraft(nextSettings));
+      // A completed request must not replace edits made before its callback renders.
+      const savedDraft = submittedDraft.current;
+      setDraft((current) => current === savedDraft ? buildProbeSettingsDraft(nextSettings) : current);
     },
     onSaveError: (err) => {
       setSaveStatus({ tone: "error", message: err.message });
@@ -120,6 +125,12 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
   const jobBusy = probeJobMutation.isPending || jobRunning;
   const dryRunReady = probeJobMutation.variables === "logs-db-dry-run" && startedJob.data?.status === "succeeded";
   const saveMutation = probeActions.save;
+  const saveSettings = (deviceKey?: string) => {
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
+    setSaveStatus(null);
+    saveMutation.mutate(deviceKey, { onSettled: () => { saveInFlight.current = false; } });
+  };
   const pendingProbeAction = jobBusy ? probeJobMutation.variables : null;
 
   useEffect(() => {
@@ -173,7 +184,7 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
                   settings={currentSettings}
                   logsDb={logsDb}
                   capabilities={capabilities}
-                  onSave={() => saveMutation.mutate(undefined)}
+                  onSave={() => saveSettings()}
                 />
               ) : (
                 <div className="muted-row">{settings.isLoading ? "正在读取设置" : "设置不可用"}</div>
@@ -183,7 +194,7 @@ export function ProbeWorkspace({ csrfToken, capabilities, maintenance = false }:
               <ProbeHookCard status={data} draft={draft} busy={jobBusy} onInstall={() => probeJobMutation.mutate("hooks-install")} />
             </Panel>
             <Panel title="Bark" icon={<Cloud size={18} />}>
-              {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={(key) => saveMutation.mutate(key)} onTest={() => probeJobMutation.mutate("bark-test")} />}
+              {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={saveSettings} onTest={() => probeJobMutation.mutate("bark-test")} />}
             </Panel>
             <details className="execution-history" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
           </>

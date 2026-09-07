@@ -14,6 +14,8 @@ test("Probe saves Bark and restricted recovery independently and retains drafts 
   await expect.poll(() => saved.length).toBe(1);
   expect(saved[0].probe.notifications.enabled).toBe(false);
   expect(saved[0].probe.error_monitor.auto_resume_goals).toBe(true);
+  await expect(page.locator(".form-success").first()).toHaveText("设置已保存");
+  await expect(page.getByLabel("启用 Bark", { exact: true })).not.toBeChecked();
   await expect(page.getByRole("button", { name: "保存设置", exact: true })).toBeEnabled();
   await page.getByLabel("启用 Bark", { exact: true }).check();
   await page.getByLabel("受限 Goal 自动恢复", { exact: true }).uncheck();
@@ -26,8 +28,36 @@ test("Probe saves Bark and restricted recovery independently and retains drafts 
   await page.getByLabel("主机标签", { exact: true }).fill("retained-draft");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(page.locator(".form-error").first()).toContainText("Fixture save failed");
+  expect(saved).toHaveLength(3);
+  expect(saved[2].codex.host_label).toBe("retained-draft");
   await expect(page.getByLabel("主机标签", { exact: true })).toHaveValue("retained-draft");
   await assertContrast(page, ".form-error");
+});
+
+test("Probe rejects duplicate save events before pending state renders", async ({ page }) => {
+  await mockApi(page);
+  let saves = 0;
+  let releaseSave!: () => void;
+  const responseGate = new Promise<void>(resolve => { releaseSave = resolve; });
+  await page.route("**/probe.settings.save", async route => {
+    saves++;
+    await responseGate;
+    await route.fallback();
+  });
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
+  await page.getByRole("button", { name: "通知配置", exact: true }).click();
+  const save = page.getByRole("button", { name: "保存设置", exact: true });
+  await expect(save).toBeEnabled();
+  // Dispatch both events in one turn, before React Query's pending notification.
+  await save.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+  await expect.poll(() => saves).toBe(1);
+  await expect(save).toBeDisabled();
+  await expect(page.getByLabel("主机标签", { exact: true })).toBeDisabled();
+  releaseSave();
+  await expect(page.locator(".form-success").first()).toHaveText("设置已保存");
+  await expect(save).toBeEnabled();
+  expect(saves).toBe(1);
 });
 
 test("archive and hidden cleanup require previews, explicit confirmation, and visible failure", async ({ page }) => {

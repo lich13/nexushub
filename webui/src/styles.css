@@ -59,7 +59,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: var(--canvas); }
+body { margin: 0; min-width: 0; background: var(--canvas); }
 button, input, textarea, select { font: inherit; letter-spacing: 0; }
 button, summary { cursor: pointer; }
 button { overflow-wrap: anywhere; }

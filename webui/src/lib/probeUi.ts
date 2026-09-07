@@ -109,7 +109,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       manage_stop_hook: probe.hooks?.manage_stop_hook !== false
     },
     notifications: {
-      enabled: Boolean(notifications.enabled || notifications.device_key_configured),
+      enabled: Boolean(notifications.enabled),
       device_key: "",
       device_key_configured: Boolean(notifications.device_key_configured),
       server_url: notifications.server_url ?? "https://api.day.app",

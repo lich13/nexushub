@@ -514,6 +514,12 @@ describe("Probe UI helpers", () => {
     const payload = buildProbeSettingsPayload(draft, settings);
     expect(payload.probe.notifications?.enabled).toBe(false);
     expect(payload.probe.error_monitor?.auto_resume_goals).toBe(true);
+    const reloaded = buildProbeSettingsDraft({
+      ...settings,
+      notifications: { ...settings.notifications, enabled: false, device_key_configured: true }
+    });
+    expect(reloaded.notifications.enabled).toBe(false);
+    expect(reloaded.notifications.device_key_configured).toBe(true);
   });
 
   test("uses the submitted Bark Device Key when the React draft is stale", () => {

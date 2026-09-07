@@ -97,7 +97,7 @@ Linux systemd and public HTTPS checks:
 ssh 43.155.235.227 'sudo -n systemctl is-active nexushub-webd'
 ssh 43.155.235.227 'curl -fsS http://127.0.0.1:15742/healthz'
 curl -fsS https://661313.xyz/nexushub/
-curl -fsS https://661313.xyz/nexushub/api/public/settings
+curl -fsS -H 'Content-Type: application/json' -d '{}' https://661313.xyz/nexushub/api/rpc/auth.publicSettings
 curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/codex-cloud-panel/
 curl -sS -o /dev/null -w '%{http_code}\n' https://661313.xyz/api/sentinel/status
 curl -sS -i https://661313.xyz/api/v1/models | head -n 20
@@ -112,7 +112,7 @@ Then log in through Chrome 插件验收 and verify:
 - task browsing is side-effect free; retired create/send/Goal/followup RPCs return `404`;
 - system status shows `43.155.235.227` / `https://661313.xyz/nexushub/` instead of any removed SSH alias;
 - thread titles refresh from local state DB, `session_index.jsonl`, and rollout metadata without plan-body pollution;
-- Plan Mode and permission/model/config selectors load;
+- read-only plans, questions, answers and tool history render without retired task-start or approval controls;
 - Turnstile Site Key / Secret Key can be saved, action is `login`, expected hostname is `661313.xyz`, session TTL is 365 days, and token replay protection is active;
 - archive delete dry-run returns counts and `integrity=ok`;
 - archive delete execute uses button confirmation only, with no typed confirmation text;
