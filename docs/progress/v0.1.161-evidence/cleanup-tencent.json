@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-09-07T16:24:14.311Z",
+  "mode": "deleted-and-verified",
+  "host": "tencent-cloud",
+  "records": [
+    {
+      "path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161",
+      "resolved": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161",
+      "classification": "task-owned temporary artifacts",
+      "files": 68,
+      "logicalBytes": 41286129,
+      "allocatedKiB": 40624,
+      "absentAfter": true
+    }
+  ],
+  "totals": {
+    "files": 68,
+    "logicalBytes": 41286129,
+    "allocatedKiB": 40624
+  },
+  "preserved": [
+    "formal systemd service and active runtime",
+    "installed binary and WebUI",
+    "configuration, credentials and all user history"
+  ],
+  "note": "Logical file bytes and pre-deletion du allocation are distinct metrics. No claim of exact free-disk delta."
+}

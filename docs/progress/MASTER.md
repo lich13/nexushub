@@ -36,8 +36,8 @@
 
 ## Current Status
 
-**Active Phase**: Goal 27 final evidence CI and cleanup<br>
-**Active Task**: `v0.1.161` 实现 `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b` 的完整本地 gate、四项 CI、正式 Release/15 资产、macOS 与腾讯云 exact-tag 部署及 Linux AppImage smoke 均通过。用户已确认 Codex 桌面显示 `Char`；正式 Grok 原生文件到界面的三次耗时上限为 2,086/1,051/1,088ms（含 SSH），底部跟随与上翻位置保持通过。双主题、四工作区、45 路由、正式 helper 回放、App 退出后的 monitor 也已验证。正在提交证据并执行精确清理，最终记录 CI 通过前 Goal 27 保持未完成。详见 [v0.1.161 acceptance record](./v0.1.161-acceptance.md)。历史 Goal 26 保持已完成。
+**Active Phase**: Goal 27 final record CI<br>
+**Active Task**: `v0.1.161` 实现 `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b` 的完整本地 gate、四项 CI、正式 Release/15 资产、三端及四工作区验收均通过；用户确认 Codex 桌面显示 `Char`，Grok 原生消息三次耗时上限 2,086/1,051/1,088ms（含 SSH）。证据提交 `55b173df3557898ea2a6d10c4d814d6e46b0b239` 的 CI `34142546998` 四项全绿。随后精确清理本机 10,539,322,980、腾讯云 41,286,129 bytes 逻辑文件，旧版任务回滚已在验收后删除；正式服务、monitor、用户数据及未知 `.DS_Store` 保留，清理后健康检查通过。最终记录 CI 通过后写入接受标记并关闭 Goal 27。详见 [v0.1.161 acceptance record](./v0.1.161-acceptance.md)。历史 Goal 26 保持已完成。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
@@ -46,7 +46,7 @@ Rows through `v0.1.160` are historical execution records. Old `P/R pending` rows
 
 ## Deep Refactor Goal Tracker
 
-- [ ] Goal 27: Theme, layout, dependency and build simplification plus reported runtime defects. Baseline `1ad2756a3b0bf12e8514196968e521f56921980a`; current released implementation `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b`. Full gates, Release, all three runtimes, four workspaces, real native rename/user Desktop confirmation and Grok freshness passed. Final evidence CI and cleanup remain. Existing tags and historical accepted checks remain intact.
+- [ ] Goal 27: Theme, layout, dependency and build simplification plus reported runtime defects. Baseline `1ad2756a3b0bf12e8514196968e521f56921980a`; current released implementation `b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b`. Full gates, Release, all three runtimes, four workspaces, real native rename/user Desktop confirmation, Grok freshness, evidence CI and measured cleanup passed. Final record CI and acceptance marker remain. Existing tags and historical accepted checks remain intact.
 
 - [x] Goal 1: `v0.1.134` baseline acceptance - local, GitHub Release, Tencent Cloud Linux WebUI baseline, and installed macOS Tauri App baseline verified on 2026-06-26.
 - [x] Goal 2: shared contract layer closure, code slice 1 - shared Goal/thread/settings/Probe/security/cleanup/upload entry points now route through `NexusHubUseCases`; fresh Rust/Tauri tests and Clippy pass.

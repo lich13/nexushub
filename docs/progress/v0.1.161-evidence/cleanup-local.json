@@ -1,0 +1,150 @@
+{
+  "checkedAt": "2026-09-07T16:24:34.123Z",
+  "mode": "deleted-and-verified",
+  "host": "macOS",
+  "records": [
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/target",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/target",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 20746,
+      "logicalBytes": 5198343135,
+      "allocatedKiB": 4039144,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/target",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/target",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 10427,
+      "logicalBytes": 4014644595,
+      "allocatedKiB": 3506220,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/gen",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/src-tauri/gen",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 4,
+      "logicalBytes": 336073,
+      "allocatedKiB": 340,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/node_modules",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/node_modules",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 9362,
+      "logicalBytes": 152283014,
+      "allocatedKiB": 171636,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/dist",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/dist",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 4,
+      "logicalBytes": 525141,
+      "allocatedKiB": 520,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/webui/tsconfig.app.tsbuildinfo",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/webui/tsconfig.app.tsbuildinfo",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 1,
+      "logicalBytes": 1701,
+      "allocatedKiB": 4,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Documents/程序开发/NexusHub/dist",
+      "resolved": "/Users/gosu/Documents/程序开发/NexusHub/dist",
+      "classification": "ignored, recreated by this task; no tracked files",
+      "files": 2,
+      "logicalBytes": 4935469,
+      "allocatedKiB": 4824,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/chromium-1243",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/chromium-1243",
+      "classification": "browser revision installed by this task on 2026-09-07; no longer required after browser acceptance",
+      "files": 353,
+      "logicalBytes": 375624614,
+      "allocatedKiB": 367932,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/chromium_headless_shell-1243",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/chromium_headless_shell-1243",
+      "classification": "browser revision installed by this task on 2026-09-07; no longer required after browser acceptance",
+      "files": 20,
+      "logicalBytes": 204662008,
+      "allocatedKiB": 199908,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/webkit-2359",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/webkit-2359",
+      "classification": "browser revision installed by this task on 2026-09-07; no longer required after browser acceptance",
+      "files": 6963,
+      "logicalBytes": 296743154,
+      "allocatedKiB": 303392,
+      "absentAfter": true
+    },
+    {
+      "path": "/Users/gosu/Library/Caches/ms-playwright/ffmpeg-1011",
+      "resolved": "/Users/gosu/Library/Caches/ms-playwright/ffmpeg-1011",
+      "classification": "browser revision installed by this task on 2026-09-07; no longer required after browser acceptance",
+      "files": 4,
+      "logicalBytes": 2606838,
+      "allocatedKiB": 2548,
+      "absentAfter": true
+    },
+    {
+      "path": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "resolved": "/private/var/folders/4v/1stk_4014qx2q181k_rz5szm0000gn/T/codex-01a07b11-778d-7fe2-a724-7f5549ececa8",
+      "classification": "task-owned temporary artifacts",
+      "files": 83,
+      "logicalBytes": 6862904,
+      "allocatedKiB": 6892,
+      "absentAfter": true
+    },
+    {
+      "path": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161",
+      "resolved": "/private/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161",
+      "classification": "task-owned temporary artifacts",
+      "files": 625,
+      "logicalBytes": 281754334,
+      "allocatedKiB": 291856,
+      "absentAfter": true
+    }
+  ],
+  "totals": {
+    "files": 48594,
+    "logicalBytes": 10539322980,
+    "allocatedKiB": 8895216
+  },
+  "preserved": [
+    "formal App and App Support helper/monitor",
+    "Git source, history and committed evidence",
+    "user configuration and Codex/Grok history",
+    "unknown .DS_Store",
+    "shared Cargo/pnpm and unrelated browser caches"
+  ],
+  "note": "Logical file bytes and pre-deletion du allocation are distinct metrics. No claim of exact free-disk delta.",
+  "retiredRollback": {
+    "version": "0.1.160",
+    "archive": {
+      "files": 3,
+      "logicalBytes": 17165481
+    },
+    "replacedApp": {
+      "files": 4,
+      "logicalBytes": 30048497
+    },
+    "hashes": "rollback-provenance.json",
+    "reason": "Formal replacement acceptance and evidence CI passed; exact-tag release retained for recovery"
+  }
+}

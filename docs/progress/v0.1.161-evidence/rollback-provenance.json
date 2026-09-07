@@ -17,5 +17,20 @@
   "exactTagRecovery": "https://github.com/lich13/nexushub/releases/tag/v0.1.160",
   "replacedApp": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161/replaced-v160.app",
   "configurationAndDatabaseMigration": false,
-  "cleanupRecord": "cleanup-local.json (added only after deletion is verified)"
+  "cleanupRecord": "cleanup-local.json",
+  "status": "Removed after formal replacement acceptance and evidence CI 34142546998 success",
+  "deletedAt": "2026-09-07T16:24:34.123Z",
+  "removed": {
+    "version": "0.1.160",
+    "archive": {
+      "files": 3,
+      "logicalBytes": 17165481
+    },
+    "replacedApp": {
+      "files": 4,
+      "logicalBytes": 30048497
+    },
+    "hashes": "rollback-provenance.json",
+    "reason": "Formal replacement acceptance and evidence CI passed; exact-tag release retained for recovery"
+  }
 }
