@@ -1,0 +1,72 @@
+{
+  "checkedAt": "2026-09-07T16:12:50.993Z",
+  "tag": "v0.1.161",
+  "implementationSha": "b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b",
+  "implementationCi": 34136989571,
+  "releaseRun": 34137680146,
+  "releaseAttempt": 2,
+  "macos": {
+    "appVersion": "0.1.161",
+    "appSha256": "11c917c1db1efb7910d58cfe3ef862cebc07839a634a6d73c122211bef555055",
+    "bundleHelperSha256": "254995de80ad5e431dd500b3bd1f21c8cacab45588d0a0441a7374a8b02f9f67",
+    "supportHelperSha256": "254995de80ad5e431dd500b3bd1f21c8cacab45588d0a0441a7374a8b02f9f67",
+    "configSha256": "9bbe5e7a1352704d96090c876e4818e34f5b7758599058dd2ced7321a13fc348",
+    "configUnchanged": true,
+    "appClosed": true,
+    "monitorPid": 67249,
+    "monitorRunning": true,
+    "monitorStatus": "ok",
+    "lastScanAt": 1788797555,
+    "scanAgeSeconds": 11,
+    "tcpListenerCount": 0,
+    "originalDarkAppearanceRestored": true,
+    "nativeWorkspacesVisuallyChecked": [
+      "Codex",
+      "Grok Build",
+      "Probe",
+      "Settings"
+    ],
+    "nativeSettingsThemesChecked": [
+      "light",
+      "dark"
+    ]
+  },
+  "cloud": {
+    "version": "nexushub-webd 0.1.161",
+    "service": "active",
+    "health": {
+      "ok": true
+    },
+    "binarySha256": "0c07387a3f8d321c7e27d571f51950849a66b0af5a9e3581348e41e0ba35051e",
+    "configurationSha256": "337531e5315daebc341519eda3a89775e6bb3600d40cfaf68b85864ba91b5398  /etc/nexushub-webd/config.toml\nbd10c8477e953d4464f09af267bd792a6457ff52730e6509ed24ca48cea455b0  /etc/nexushub-webd/env\n234f86f462449fe1c3d33cdf4ceaa220a2f2c15b5cf7ee997f0c171ad45e09d0  /etc/systemd/system/nexushub-webd.service\n33d39cbf2bb4b5a93eb23701c5b807dc6a25697772f5c1c45d73cc58698aa169  /etc/nginx/snippets/nexushub.conf",
+    "configurationUnchanged": true,
+    "authenticatedWorkspacesChecked": [
+      "Codex",
+      "Grok Build",
+      "Probe",
+      "Settings"
+    ],
+    "pageReloadAuthenticated": true,
+    "runtimeExceptionsObserved": 0,
+    "doctor": {
+      "discoveryWarnings": [],
+      "stateDbIntegrity": "ok",
+      "discoverySource": "current_user"
+    }
+  },
+  "release": {
+    "assetCount": 15,
+    "checksumCount": 6,
+    "updaterSignaturesVerified": 2,
+    "dmgMatchesUpdaterApp": true,
+    "installedAppMatchesDmg": true,
+    "installedCloudBinaryAndWebuiMatchArchive": true,
+    "signing": "Existing ad-hoc macOS signing; updater signatures cryptographically verified",
+    "retry": "Attempt 1 was cancelled during prolonged Ubuntu package downloads. Only the Linux job and dependent release were rerun; successful macOS output was retained."
+  },
+  "testServicesStopped": {
+    "isolatedCloudWebd15961": true,
+    "localRelay15962": true,
+    "sshRelay": true
+  }
+}

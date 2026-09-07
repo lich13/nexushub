@@ -1,0 +1,21 @@
+{
+  "appimage": "NexusHub-0.1.161-Linux-x86_64.AppImage",
+  "width": 1440,
+  "height": 900,
+  "edgePixels": 4281,
+  "colors": 205,
+  "nonblank": true,
+  "boot": {
+    "rootClass": "app-shell ",
+    "hasVisibleLinuxHostCopy": false,
+    "desktopRuntime": true,
+    "bodyTextLength": 71,
+    "readyState": "complete",
+    "hasWebLoginGate": false,
+    "bootMounted": true,
+    "title": "NexusHub",
+    "hasMainShell": true,
+    "hasDesktopNav": true,
+    "rootChildren": 1
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "binary": "/usr/local/bin/nexushub-webd",
+  "version": "nexushub-webd 0.1.161",
+  "binarySha256": "0c07387a3f8d321c7e27d571f51950849a66b0af5a9e3581348e41e0ba35051e",
+  "passed": true,
+  "cases": [
+    {
+      "historyMode": "legacy",
+      "expectedTitle": "Native legacy title",
+      "actualTitle": "线程正常完成：Native legacy title",
+      "bodySha256": "061b89212cdbbd45ab278b6f37065dbab99a49498524437b8bebbed1bba0ea6b",
+      "requests": 1,
+      "duplicateSuppressed": true
+    },
+    {
+      "historyMode": "paginated",
+      "expectedTitle": "Native paginated title",
+      "actualTitle": "线程正常完成：Native paginated title",
+      "bodySha256": "8bb9051b92c9fe64c340a6ea73cf81ddfaa9ac2ded637206dc4aecf469fcbd56",
+      "requests": 1,
+      "duplicateSuppressed": true
+    }
+  ],
+  "externalNotifications": 0
+}

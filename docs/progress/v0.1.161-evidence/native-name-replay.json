@@ -1,0 +1,18 @@
+[
+  {
+    "after": "Native legacy verified name",
+    "before": "Original native title",
+    "elapsedMs": 305,
+    "historyMode": "legacy",
+    "indexName": "Native legacy verified name",
+    "nativeReadVerified": true
+  },
+  {
+    "after": "Native paginated verified name",
+    "before": "SQL-only stale name",
+    "elapsedMs": 46,
+    "historyMode": "paginated",
+    "indexName": "Native paginated verified name",
+    "nativeReadVerified": true
+  }
+]

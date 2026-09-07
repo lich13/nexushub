@@ -1,0 +1,38 @@
+[
+  {
+    "theme": "light",
+    "width": 1440,
+    "clientWidth": 1440,
+    "scrollWidth": 1440,
+    "textSamples": 37,
+    "minContrast": 5.644177913511436,
+    "failures": []
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "clientWidth": 1440,
+    "scrollWidth": 1440,
+    "textSamples": 37,
+    "minContrast": 6.459152222634938,
+    "failures": []
+  },
+  {
+    "theme": "dark",
+    "width": 320,
+    "clientWidth": 305,
+    "scrollWidth": 305,
+    "textSamples": 34,
+    "minContrast": 6.459152222634938,
+    "failures": []
+  },
+  {
+    "theme": "light",
+    "width": 320,
+    "clientWidth": 305,
+    "scrollWidth": 305,
+    "textSamples": 34,
+    "minContrast": 5.644177913511436,
+    "failures": []
+  }
+]

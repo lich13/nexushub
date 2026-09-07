@@ -1,0 +1,107 @@
+{
+  "checkedAt": "2026-09-07T15:51:32.583Z",
+  "tag": "v0.1.161",
+  "implementationSha": "b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b",
+  "releaseUrl": "https://github.com/lich13/nexushub/releases/tag/v0.1.161",
+  "assets": [
+    {
+      "name": "latest.json",
+      "bytes": 1277,
+      "sha256": "7ac5e6de748583c7eb5b1ddbb55c3828f71cd551916a1beb6a1832dac09028ea"
+    },
+    {
+      "name": "NexusHub-0.1.161-darwin-arm64.dmg",
+      "bytes": 11040713,
+      "sha256": "0e16fdc80f88814b3e6588e14feb074ca2c31ce9e86af6fb7feb98e743029db4"
+    },
+    {
+      "name": "NexusHub-0.1.161-darwin-arm64.dmg.sha256",
+      "bytes": 100,
+      "sha256": "7ebb328edcfd2e27aba78786d13220ae32937099590b66c230af906c14c70bb5"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.AppImage",
+      "bytes": 88111608,
+      "sha256": "2aeceb763c3d4348196d25f480346473ead6e4f89947ff688a9163c054a9d01c"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.AppImage.sha256",
+      "bytes": 105,
+      "sha256": "8883a1559a01f7d75a55313ae2bd4eb87bccb7146dc2592622b831d4fe65052e"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.AppImage.sig",
+      "bytes": 424,
+      "sha256": "75bc08803d76f0812b7afba42c86bb0fb3869e8f8809fa5d6056e1dc8633643a"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.deb",
+      "bytes": 14226616,
+      "sha256": "dfe995e4ec826e51e4c4b47dd79b39dd270f4109fe46903806de865142eb051f"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.deb.sha256",
+      "bytes": 100,
+      "sha256": "4e6493c3b85f4ad5f6e83ec8f7dd20af9468039e40b37d2d037e2bfd1ff2807c"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.rpm",
+      "bytes": 14222784,
+      "sha256": "fedfcbf6b541fdf49f94a7c6a8fb68a1d94b412e1c4b0e6653a42d4457dbfab6"
+    },
+    {
+      "name": "NexusHub-0.1.161-Linux-x86_64.rpm.sha256",
+      "bytes": 100,
+      "sha256": "c3eea22f6c246ec7969945faf3c40afa9c969320bf98138c1fccc9e223d68005"
+    },
+    {
+      "name": "nexushub-darwin-arm64.tar.gz",
+      "bytes": 11365385,
+      "sha256": "0d0e0d022a041f012b0982562ae27b09adbf6bc1494446d483277f2d7237d130"
+    },
+    {
+      "name": "nexushub-darwin-arm64.tar.gz.sha256",
+      "bytes": 95,
+      "sha256": "788717620fc43d81b665e78554f75c0e103084b60b72057f67a61e90d6991ff6"
+    },
+    {
+      "name": "nexushub-darwin-arm64.tar.gz.sig",
+      "bytes": 408,
+      "sha256": "83c7073b4a4d1475f2dcb9d4d21499df5673f6cbcedd0d14c2cab8223b209a3d"
+    },
+    {
+      "name": "nexushub-webd-linux-x86_64.tar.gz",
+      "bytes": 6241810,
+      "sha256": "04fd0f588b87b082fe247f1db08a633577c9c3faff1407991a3154d60b1031cf"
+    },
+    {
+      "name": "nexushub-webd-linux-x86_64.tar.gz.sha256",
+      "bytes": 100,
+      "sha256": "e9810fef4f82d0689f3f35016261e2f488ed796b8feacd731f9e323b6e5799d9"
+    }
+  ],
+  "checksums": [
+    "NexusHub-0.1.161-darwin-arm64.dmg",
+    "NexusHub-0.1.161-Linux-x86_64.AppImage",
+    "NexusHub-0.1.161-Linux-x86_64.deb",
+    "NexusHub-0.1.161-Linux-x86_64.rpm",
+    "nexushub-darwin-arm64.tar.gz",
+    "nexushub-webd-linux-x86_64.tar.gz"
+  ],
+  "signatures": [
+    {
+      "platform": "darwin-aarch64",
+      "name": "nexushub-darwin-arm64.tar.gz",
+      "verified": true
+    },
+    {
+      "platform": "linux-x86_64",
+      "name": "NexusHub-0.1.161-Linux-x86_64.AppImage",
+      "verified": true
+    }
+  ],
+  "updaterPlatforms": [
+    "darwin-aarch64",
+    "linux-x86_64"
+  ]
+}

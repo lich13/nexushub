@@ -1,0 +1,21 @@
+{
+  "version": "0.1.160",
+  "root": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161/rollback",
+  "protectedUntil": "Replacement acceptance and evidence CI success",
+  "artifacts": [
+    {
+      "name": "NexusHub-v0.1.160-installed.tar.gz",
+      "bytes": 10936942,
+      "sha256": "0cdd38ef4f0920763f0a86328c24843107e7b56eef8a6f2f30dec34b5f32b59d"
+    },
+    {
+      "name": "nexushub-webd-linux-x86_64.tar.gz",
+      "bytes": 6228439,
+      "sha256": "c829d01c1f827fdbd48ea9f841038b164431cedb729d41c7315b59aca606b6ab"
+    }
+  ],
+  "exactTagRecovery": "https://github.com/lich13/nexushub/releases/tag/v0.1.160",
+  "replacedApp": "/tmp/codex-01a07b11-778d-7fe2-a724-7f5549ececa8/v161/replaced-v160.app",
+  "configurationAndDatabaseMigration": false,
+  "cleanupRecord": "cleanup-local.json (added only after deletion is verified)"
+}

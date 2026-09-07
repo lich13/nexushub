@@ -1,0 +1,25 @@
+{
+  "measuredAt": "2026-09-07T16:12:51.020Z",
+  "sourceCssBytes": 26673,
+  "assets": [
+    {
+      "name": "index-DIhSBfkW.css",
+      "bytes": 23409,
+      "gzip": 5158
+    },
+    {
+      "name": "index-DcnfeN9b.js",
+      "bytes": 499829,
+      "gzip": 149646
+    }
+  ],
+  "packageManifest": "assets.json",
+  "comparisonBaseline": "../v0.1.160-evidence/measurements.json",
+  "packagingUiBuilds": {
+    "macosTauri": 1,
+    "linuxTauri": 1,
+    "linuxHeadlessWebd": 1,
+    "releaseRun": 34137680146
+  },
+  "note": "Formal server assets. Separate headless build uses /nexushub/; Tauri uses relative base. Historical same-toolchain baseline remains in v0.1.160 evidence."
+}

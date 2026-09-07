@@ -1,0 +1,26 @@
+{
+  "taskIdSha256": "36b565c991c54e823968312ada1059847f3a9bcf8b694299afbb4ab48d52b9db",
+  "before": {
+    "checkedAt": "2026-09-07T15:23:25.640Z",
+    "cli": "codex-cli 0.153.4",
+    "historyMode": "legacy",
+    "title": "chr",
+    "name": "Char",
+    "indexName": "chr",
+    "nativeName": "chr"
+  },
+  "after": {
+    "checkedAt": "2026-09-07T15:58:09.602Z",
+    "cli": "codex-cli 0.153.4",
+    "historyMode": "legacy",
+    "title": "Char",
+    "name": "Char",
+    "indexName": "Char",
+    "nativeName": "Char"
+  },
+  "mutation": "Authenticated formal NexusHub UI threads.rename -> native thread/name/set -> thread/read",
+  "uiHeadingAfter": "Char",
+  "userConfirmedOfficialDesktopName": "Char",
+  "userConfirmationDate": "2026-09-08",
+  "officialDesktopAutomation": false
+}

@@ -1,0 +1,52 @@
+{
+  "source": "native updates.jsonl -> exact installed Linux webd -> authenticated browser UI",
+  "isolated": true,
+  "old": {
+    "version": "0.1.160",
+    "initial": {
+      "scrollTop": 0,
+      "bottomGap": 2700
+    },
+    "elapsedIncludingSshMs": 15058,
+    "measurementClock": "One client wall clock; remote timestamp not used",
+    "position": {
+      "scrollTop": 0,
+      "bottomGap": 2740
+    },
+    "errors": []
+  },
+  "current": {
+    "version": "0.1.161",
+    "timing": "Local monotonic upper bound, including SSH dispatch; remote timestamp is informational only",
+    "initial": {
+      "scrollTop": 2861,
+      "bottomGap": 0
+    },
+    "samples": [
+      {
+        "upperBoundMs": 2086,
+        "position": {
+          "scrollTop": 2901,
+          "bottomGap": 0
+        }
+      },
+      {
+        "upperBoundMs": 1051,
+        "position": {
+          "scrollTop": 2942,
+          "bottomGap": 0
+        }
+      },
+      {
+        "upperBoundMs": 1088,
+        "position": {
+          "scrollTop": 100,
+          "bottomGap": 2882
+        }
+      }
+    ],
+    "errors": []
+  },
+  "passed": true,
+  "note": "Both versions use the same synthetic native-file fixture and installed binary. New measurements include SSH dispatch and use a local monotonic clock. Cross-machine timestamps are not subtracted."
+}

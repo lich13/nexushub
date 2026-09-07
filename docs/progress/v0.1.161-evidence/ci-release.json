@@ -1,0 +1,52 @@
+[
+  {
+    "id": 34136989571,
+    "headSha": "b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b",
+    "conclusion": "success",
+    "attempt": 1,
+    "url": "https://github.com/lich13/nexushub/actions/runs/34136989571",
+    "jobs": [
+      {
+        "name": "Backend checks",
+        "conclusion": "success"
+      },
+      {
+        "name": "Linux Tauri checks",
+        "conclusion": "success"
+      },
+      {
+        "name": "macOS Tauri checks",
+        "conclusion": "success"
+      },
+      {
+        "name": "Frontend checks",
+        "conclusion": "success"
+      }
+    ]
+  },
+  {
+    "id": 34137680146,
+    "headSha": "b4bd670cc6cf1fc8abb80d16e2708e88ccb5202b",
+    "conclusion": "success",
+    "attempt": 2,
+    "url": "https://github.com/lich13/nexushub/actions/runs/34137680146",
+    "jobs": [
+      {
+        "name": "Linux x86_64 desktop and webd assets",
+        "conclusion": "success"
+      },
+      {
+        "name": "guard",
+        "conclusion": "success"
+      },
+      {
+        "name": "macos-darwin-arm64",
+        "conclusion": "success"
+      },
+      {
+        "name": "release",
+        "conclusion": "success"
+      }
+    ]
+  }
+]
