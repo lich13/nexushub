@@ -3,7 +3,7 @@
 > **Task**: Continue NexusHub from the codex-cloud-panel base, preserve Codex read-only task browsing, replace the cloud Sentinel runtime with built-in Probe surfaces, and keep Grok Build read-only with guarded local session management.
 > **Started**: 2026-06-13
 > **Last Updated**: 2026-09-07
-> **Mode**: V0.1.158_DEPLOYED_LIVE_NOTIFICATION_PENDING
+> **Mode**: V0.1.158_ACCEPTED
 
 ## References
 
@@ -36,13 +36,13 @@
 
 ## Current Status
 
-**Active Phase**: `v0.1.157`精简重构与 Probe 通知准确性修复<br>
-**Active Task**: Goal 26 的实现与完整 gate 已完成。`v0.1.158` 精确指向 `3ff8eda234568de6ccdb5d9fca027736caf62ab7`，CI `34058768220` 和 Release `34059109362` 四项任务均成功，15 个资产及 updater 元数据、签名和三个下载包 SHA-256 均通过。腾讯云已部署，macOS 官方 App、bundle helper、App Support helper 均为 `0.1.158`；双端正式 helper 的 11 场景隔离回放和云端界面/26 路径验收通过。macOS 已完成原生只读菜单、Grok 改名与限定测试文件删除、两个 cleanup 确认流程和独立开关检查。真实主任务“构建音乐播放器”的三批问题均准确发送一次，用户已确认手机实收内容对应；前两批已回答，第三批仍待用户选择。仅最终计划/答复通知对照与依赖它的最终接受、清理待完成，不把 commentary 或回放冒充完成通知。
+**Active Phase**: `v0.1.158` 精简重构与 Probe 通知准确性修复已接受<br>
+**Active Task**: Goal 26 完成。纠正版本 `v0.1.158` 精确指向 `3ff8eda234568de6ccdb5d9fca027736caf62ab7`；完整 gate、实现 CI `34058768220`、Release `34059109362`、15 资产/签名/SHA 校验、双端正式部署及界面验收通过。真实主任务“构建音乐播放器”的三批问题均准确发送一次，用户确认手机实收内容对应；全部回答后，Stop Hook 只选择同一主 turn 第 166 行 `final_answer` 的最终计划，正文 2,820 bytes 逐字匹配，没有重发已回答问题。截图历史与正反例通过双端正式 helper 隔离回放。已清理构建缓存、下载、隔离配置/数据库、脚本、挂载和临时 App 回滚；用户历史、未知 `.DS_Store`、正式 monitor 与云端服务保留。最终记录提交的 CI 作为关闭运行中 Goal 的最后门禁，不重跑无变更的本地 gate。
 **Blockers**: None. Continue to avoid entering or requesting the admin password, bypassing Turnstile/CAPTCHA, clearing server-side login/rate-limit state without explicit authorization, or exposing NexusHub-scoped `/v1`, `/responses`, metrics, Codex socket, or arbitrary shell surfaces. Host-root `/responses` and `/metrics` are owned by another gateway service, not NexusHub; NexusHub acceptance verifies the `/nexushub/...` scoped paths stay unavailable.
 
 ## Current Record Boundary
 
-Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.156` is the last accepted production checkpoint; `v0.1.157` is published but remains unaccepted because post-release review found gaps. `v0.1.158` is the corrective release line.
+Rows through `v0.1.157` are historical execution records. Old `P/R pending` rows, superseded releases, the `v0.1.43` deployment note, and previous final-accepted records describe their own past checkpoints and must not be read as active work. `v0.1.157` was published but not accepted because post-release review found gaps. `v0.1.158` is the accepted corrective production release; old tags were not rewritten.
 
 ## Deep Refactor Goal Tracker
 
@@ -71,7 +71,7 @@ Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows
 - [x] Goal 23: `v0.1.154` official Codex Goal control-plane repair and release acceptance - completed on 2026-07-13. Production Goal read/save/clear/pause/resume paths call official app-server methods with the resolved `CODEX_HOME`; shadow-table rows remain intact but are excluded from production reads, writes, and fallback. Targeted core/Web/Tauri/WebUI tests and the complete workspace/Tauri/WebUI/install/package gate passed, including official `null` and error authority, app-server process cleanup, no mutation retry, architecture enforcement, and stable Hook timing coverage. CI/Release, exact-tag deployment, dual-end real Goal CRUD acceptance, regression checks, evidence closure, and cleanup all passed.
 - [x] Goal 24: `v0.1.155` stale Codex turn activity repair and release acceptance - completed on 2026-07-13. The rollout scanner retires ordered active-turn boundaries and their pending tools for named `task_complete`, `turn_completed`, and `turn_aborted` events, keeps newer activity, preserves conservative anonymous semantics, and avoids unmatched global fallback. The real stale-wait rollout, complete local gates, CI/Release, exact-tag Tencent Cloud deployment, official macOS DMG acceptance, running-to-recent transition checks, regressions, and final cleanup all passed.
 - [x] Goal 25: `v0.1.156` Codex terminal-error monitoring and restricted Goal recovery - completed on 2026-07-15. TDD and the complete local gate cover exact terminal log identity, bounded composite cursors, first-run and database-replacement baselines, redaction and classification, permanent/concurrent incident claims, persisted pending delivery replay, independent Bark and Goal recovery, restricted-only official mutation, mutation-timeout state recheck, bounded `0/15/60/300` retries, final failure Bark, macOS no-listener `LaunchAgent`, Linux monitor integration, and WebUI settings/status. Commits `8badf1a` and `d2eb022` were published as exact tag `v0.1.156`; CI/Release, 15 assets, exact-tag Tencent Cloud and official macOS deployment, dual-end positive/negative/retry/dedupe fixtures, production health/UI/regressions, and post-acceptance timing stabilization all passed without starting failed turns or executing cleanup deletion.
-- [ ] Goal 26: `v0.1.157`/`v0.1.158` 精简重构与通知准确性修复 - `v0.1.158` 已通过完整 gate、CI/Release、15 资产校验、双端部署、正式 helper 回放、云端及 macOS 原生界面验收；等待真实主任务问题/完成通知对照，再记录最终接受和清理。
+- [x] Goal 26: `v0.1.157`/`v0.1.158` 精简重构与通知准确性修复 - 2026-09-07 接受 `v0.1.158`。完整 gate、CI/Release、15 资产校验、双端正式部署、截图正文/正反例回放、真实三批问题实收及最终计划正文对照、Grok 改名/限定测试删除、只读界面、cleanup 确认态、安全路径、性能和最终清理通过。只读任务页面不执行退休发送链，历史数据保留；未知 `.DS_Store` 与正式 monitor/云端服务保留。
 
 ## Governance Status
 
@@ -85,7 +85,7 @@ Rows through `v0.1.156` are historical execution records. Old `P/R pending` rows
 
 ```yaml
 adaptive:
-  mode: V0.1.158_DEPLOYED_LIVE_NOTIFICATION_PENDING
+  mode: V0.1.158_ACCEPTED
   strategy: "cc-switch style shared contract registry, read-only Codex/Grok webui, use-case layer with thin Linux server webd and macOS Tauri surfaces; desktop LAN WebUI retired"
   phases:
     phase_1:
@@ -409,10 +409,11 @@ The `v0.1.155` final cleanup removed the downloaded Release files and App rollba
 | 范围 | 已验证证据 | 状态 |
 |:--|:--|:--|
 | 实现与 gate | `d7613319eef12c10d28b5653d0721e8a66de5e4c` 精简及准确性修正；`3ff8eda234568de6ccdb5d9fca027736caf62ab7` 修正真实 ACP `_x.ai/session/rename`。workspace/Tauri fmt、test、Clippy；WebUI frozen install、typecheck、189 tests、build/build:tauri；install/package/contract/parity/diff 检查通过。最后协议修正的 Grok 10 tests、Clippy、fmt、diff 通过。 | PASS |
-| GitHub | 实现 CI `34058768220` 四项成功；Release `34059109362` 四项成功；tag 精确匹配实现提交，15 个资产，`latest.json=0.1.158`，`darwin-aarch64`/`linux-x86_64` URL 和非空签名均匹配。 | PASS |
+| GitHub | 实现 CI `34058768220` 四项成功；Release `34059109362` 四项成功；tag 精确匹配实现提交，15 个资产，`latest.json=0.1.158`，`darwin-aarch64`/`linux-x86_64` URL 和非空签名均匹配。文档 checkpoint CI `34060498472`、原生验收 CI `34074657296`、真实问题验收 CI `34075351261` 均四项成功。 | PASS |
 | 下载 SHA-256 | Linux server `cad6ab74394f64eeb655d11ba40fd0f58f28516bc878306945cef13b03b2eeec`；DMG `1488d28e6d76c7cb8ecdabf60449905f8fedc3d93eafe4abe30c66662a2644f8`；darwin updater `ad64d94edaf6c9fed75fecdd949a0886b29b4ce052be414e05edaac4c1358dc4`。 | PASS |
 | 双端通知正文 | 每端 11 个隔离场景，3 次 Bark、3 条事件；两次截图最终正文和一个 pending question 的标题/正文/选项逐字相等，重复调用不重发。commentary、内部报告、子任务、未知身份、memory、suggestions、exclude、已解决问题均为 0 事件/0 dedupe/0 Bark。正式数据库无 `thread_id=main` 夹具事件。 | PASS |
-| 真实问题通知 | 用户提供主任务 `01a07993-2f5c-7f33-91db-77f17bf2886a`，标题“构建音乐播放器”，turn `01a07993-43c9-7c90-a8b0-baf0990d1dab`。三批共 7 题的 call 分别为 `call_FUHk1MHpMIZWWNvX2xGu3LQE`、`call_DoRFVFcUFa8tPVCUSGcN2Foh`、`call_6iC3dpS5dqy1RRI1qzrk8vle`，各一条事件/一次 Bark HTTP 200，标题均“等待回复：构建音乐播放器”；1 秒确认诊断正确。前两批存在真实回答记录，第三批仍 waitingOnUserInput，三批均未重复。用户确认“已收到，内容对应”。 | PASS |
+| 真实问题通知 | 用户提供主任务 `01a07993-2f5c-7f33-91db-77f17bf2886a`，标题“构建音乐播放器”，turn `01a07993-43c9-7c90-a8b0-baf0990d1dab`。三批共 7 题的 call 分别为 `call_FUHk1MHpMIZWWNvX2xGu3LQE`、`call_DoRFVFcUFa8tPVCUSGcN2Foh`、`call_6iC3dpS5dqy1RRI1qzrk8vle`，各一条事件/一次 Bark HTTP 200，标题均“等待回复：构建音乐播放器”；1 秒确认诊断正确。三批都有真实回答记录，最终任务 completed/idle 后仍各一条事件，没有重发。用户确认“已收到，内容对应”。 | PASS |
+| 真实最终正文 | 同一任务于 `2026-09-07T02:10:21.996Z` 写入 `task_complete`；Stop 选择第 166 行 assistant `phase=final_answer` 的 `proposed_plan`，而非 commentary 或已回答问题。新增事件 `09d86685-3e73-46f0-a6d2-a77ba113c872`，正文 2,820 bytes 与真实最终计划逐字相等，SHA-256 `058c0856633f0aeb6aaebd0623a0635031a36e9e9a2657eb51cb84a0790c2df4`，两段 Bark 请求均 HTTP 200，未误标正常完成。该实机样本是最终计划；普通 completion 正文由双端截图回放及完整回归覆盖，不将计划通知冒充普通 completion。 | PASS |
 | 正文 hash 语义 | 现有 `body_sha256` 是脱敏前正文 hash，不冒充最终发送字节 hash。三批原文 hash 依次 `402c9828fe1d452f0b149f70b0e9655f85bba6d4d609861ef08e0fdc5bd14a8b`、`96db2ce99647b465156935687b9a64bcd711d519a92f3584a1f69a704bbd058a`、`104453fd554c3c98950631d7f13c2c326459e6ef63489e9a2275ea7ab4cd2a8a`。后两批摘要与真实题目/选项逐字一致；第一批沿用既有 secret-line 规则，省略一条含 `OPENAI_API_KEY` 的说明，题目/选项未变，预期脱敏正文 hash 为 `f03db47e15603635c23c44202d5db95707e7980e3727aa39c738cf6341533616`。 | PASS |
 | 腾讯云 | exact-tag server `0.1.158`、systemd active、loopback healthz ok、doctor state DB integrity ok、发现告警为空；公网入口 200，25 个敏感/退休路径 404。部署后本机 TLS 曾中断一次，保留证书校验重新检查通过，没有重复部署。 | PASS |
 | 云端界面 | Brave 已登录正式入口；任务消息只读、0 textarea、操作菜单无发送；390x844 无横向溢出，浅暗主题可读；设置分组、Probe 时间线及独立自动恢复开关、两项 dry-run/最终确认态均通过并取消，console 无相关 warning/error。 | PASS |
@@ -421,12 +422,14 @@ The `v0.1.155` final cleanup removed the downloaded Release files and App rollba
 | macOS 安装/后台 | 官方 DMG 原子替换 App；plist、bundle/helper 均 `0.1.158`；正常环境重启验收后退出 App，正式 monitor PID `65090` 仍 running，固定 `probe monitor-errors`，无 TCP/UDP listener。两端 Hook managed、stale=0，保留 macOS 第三方 Orca Hook。 | PASS |
 | 体积/读取 | 相对 `v0.1.156`：154 files，+4,730/-19,948 行，净减 15,218 行；DMG 13,693,982 -> 10,984,224 bytes，server 7,136,840 -> 6,228,983 bytes，updater 14,101,344 -> 11,297,751 bytes。本机真实 15 任务列表冷读 5,193 ms、重复 6/6 ms；527,745-byte 详情冷读 1,286 ms、重复 150/152 ms。缓存单测确认不变文件读两次只加载一次，文件改变后重新加载。 | PASS |
 | 阶段清理 | 云端隔离数据及 staging 删除 7,885,781 bytes；旧 Release 下载、本地预演及中间文件删除 33,510,439 bytes；旧桌面 LAN 静态副本核对 boot SHA 后删除 431,724 bytes；两个 Grok 专用测试目录分别删除 13,372 和 14,051 bytes。合计 41,855,367 bytes；DMG 已卸载，App 已关闭，正式 monitor 与云端服务保留。 | PASS |
-| 剩余验收/保留 | 真实任务仍待“音乐库保存 / 导入方式”选择，尚无最终计划/答复；等待用户回答，不能代选或拿中途说明验收完成正文。生产库旧 completion 不重放到生产。保留 `/tmp/codex-019f191f-57e8-7de0-b82a-9dd0eeaa1529`（约 60 MiB）中的验收脚本、正式下载及唯一回滚；`target` 10,787,512 KiB、`src-tauri/target` 5,598,920 KiB 及 WebUI 依赖/产物待最后验收无须修正后精确清理。未知 `.DS_Store` 不删除。回滚 App 为 `0.1.157`、30,482,941 bytes、8 文件，文件清单 SHA-256 `d92eec182480d5c46b1b5dc4c2da5be60436e060a491ba42d5e9f8b28abe38ac`。 | PENDING |
+| 最终清理 | 经 tracked/ignored/路径审计，精确删除本轮 `target`、`src-tauri/target`、`src-tauri/gen`、WebUI 依赖和构建产物、`dist` 与七个测试日志，逻辑文件总计 22,835,009,804 bytes，清理前 `du` 占用 16,535,928 KiB。随后删除已审计任务临时目录 139 文件、61,519,574 bytes、61,148 KiB；包含下载、隔离数据库、测试脚本及唯一旧 App 回滚。加上阶段清理，累计逻辑文件 22,938,384,745 bytes；逻辑字节数与文件系统实际释放空间不混用。 | PASS |
+| 回滚/保留边界 | 安装和全部功能验收通过后移除临时 `0.1.157` App 回滚（8 文件、30,482,941 bytes，文件清单 SHA-256 `d92eec182480d5c46b1b5dc4c2da5be60436e060a491ba42d5e9f8b28abe38ac`）。保留 Git 历史和正式 Release，可重新下载安装；无本轮临时回滚残留。`git clean -fdX -n` 仅列出未知 `.DS_Store`，有意保留，不为了空输出删除用户/未知文件。用户原始截图、Codex/Grok 历史、共享数据库及配置均未清理。 | PASS |
 
 ## Session Log
 
 | Date | Session | Summary |
 |:--|:--|:--|
+| 2026-09-07 | v0.1.158-final-accepted | Goal 26 完成：精简重构及通知准确性修复经全部 gate、正式 Release、双端部署、云端/原生 UI、Grok 原生管理、安全退休路径、截图回放和真实主任务三批问题/最终计划正文验收。用户确认问题 Bark 实收对应，最终计划精确正文 hash 匹配，回答后无重发。清理本轮构建产物、隔离验收数据、下载、挂载与旧 App 临时回滚，累计逻辑文件 22,938,384,745 bytes；保留未知 `.DS_Store`、正式服务/monitor 及用户数据。最终文档提交的 CI 成功后关闭运行中 Goal。 |
 | 2026-09-07 | v0.1.158-real-question-accepted | 真实“构建音乐播放器”主任务三批问题各发送一次，题目/选项、准确标题、turn/call、1 秒确认及前两批回答后未重复均核对；用户确认手机 Bark 内容对应。分开记录原文 hash 与脱敏预期，不误用摘要 hash 证明发送字节。原生验收文档 `86c9b2a` 的 CI `34074657296` 四项全绿。仍等待第三批回答后的最终计划/答复通知，不提前关闭 Goal。 |
 | 2026-09-07 | v0.1.158-native-accepted-live-notification-pending | 解锁后完成正式 Tauri 的只读菜单、两个 cleanup 最终确认/取消、独立通知开关、Grok 官方改名与限定测试目录删除；恢复正常环境，真实 Grok 历史显示正常，关闭 App 后 monitor 仍运行且无 listener。腾讯云复查 `0.1.158`、active、healthz ok、公网 200；前一文档提交 `6000967` 的 CI `34060498472` 四项成功。真实 Plan 问题/完成通知对照尚缺，已请求任务 ID，未提前接受或清理必要回滚。阶段释放量更新为 41,855,367 bytes。 |
 | 2026-09-07 | v0.1.158-deployed-awaiting-native-acceptance | CI `34058768220`、Release `34059109362` 全绿，15 资产和 SHA/signature 校验通过；腾讯云与 macOS 正式 helper 均 `0.1.158`，双端 11 场景通知正文对照、云端 26 路径、正式 WebUI 桌面/移动/浅暗主题及 cleanup 确认态通过。Grok 原生 core 改名/测试目录删除通过。macOS 锁屏阻断剩余原生交互验收，因此 Goal 26 保持未完成；阶段清理释放 41,841,316 bytes，保留回滚与必要验收材料。 |
