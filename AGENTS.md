@@ -21,7 +21,7 @@
 - Pi activity is conservative without an installed extension. Unknown activity disables writes. Reading does not start Pi, migrate files or write configuration. No automatic provider installation or credential copying.
 - Cleanup requires dry-run plus confirmation and count/fingerprint checks. Fixed maintenance jobs retain authorization, CSRF, audit, redaction and failure classification; no arbitrary shell API.
 - Codex Probe notifies only confirmed main tasks using the canonical turn's final reply or unresolved question identity. Restricted Goal recovery has its own switch and never starts a turn; unknown/internal identities are suppressed before mutation or notification.
-- Retired task execution, historical jobs/followups, manual Goal controls and desktop LAN WebUI stay retired. Preserve historical DB rows without re-execution. Keep only the fixed port-free desktop Hook/monitor helper.
+- Retired task execution, followups, manual Goal controls and desktop LAN WebUI stay retired. Upgrade cleanup removes only the obsolete log-maintenance job/state records; provider data and unrelated jobs remain. Keep only the fixed port-free desktop Hook/monitor helper.
 - No public Codex socket, `/nexushub/v1`, `/nexushub/responses` or `/nexushub/metrics`. `/codex-cloud-panel/` and legacy Probe REST routes remain unavailable. Host-root gateway routes belong to other services.
 - Preserve users' data, configuration and secrets; do not reset login, bypass Turnstile or modify unrelated hosts to complete acceptance. CLAUDE.md was deliberately removed; do not restore it or introduce repository-local memory.
 
