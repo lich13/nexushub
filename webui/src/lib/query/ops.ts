@@ -1,0 +1,129 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  dryRunArchiveDelete,
+  dryRunHiddenThreadDelete,
+  getSystemStatus,
+  getUpdateStatus,
+  listJobs,
+  startArchiveDelete,
+  startHiddenThreadDelete,
+  updates,
+  type RuntimeCapabilityMatrix,
+  type UnifiedUpdateAction
+} from "../api";
+import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
+import { systemQueryKeys } from "./system";
+import { preservePreviousQueryData } from "./shared";
+import { backgroundJobKey } from "./jobs";
+
+export const opsQueryKeys = {
+  systemStatus: systemQueryKeys.status,
+  updateStatus: ["update-status"] as const,
+  jobs: ["jobs"] as const,
+  threads: ["threads"] as const
+};
+
+export function useOpsQueries({ section, historyOpen }: { section: "system" | "maintenance"; historyOpen: boolean }) {
+  return {
+    status: useQuery({
+      queryKey: opsQueryKeys.systemStatus,
+      queryFn: getSystemStatus,
+      enabled: section === "system",
+      refetchInterval: 8000,
+      staleTime: 5000,
+      placeholderData: preservePreviousQueryData
+    }),
+    update: useQuery({
+      queryKey: opsQueryKeys.updateStatus,
+      queryFn: getUpdateStatus,
+      enabled: section === "system",
+      refetchInterval: 30000,
+      staleTime: 15000,
+      placeholderData: preservePreviousQueryData
+    }),
+    jobs: useQuery({
+      queryKey: opsQueryKeys.jobs,
+      queryFn: listJobs,
+      enabled: historyOpen,
+      refetchInterval: 5000,
+      placeholderData: preservePreviousQueryData
+    })
+  };
+}
+
+export function useOpsActions(input: {
+  csrfToken?: string | null;
+  capabilities: RuntimeCapabilityMatrix;
+  onArchiveDryRun: (plan: ArchiveDeletePlan) => void;
+  onArchiveExecute: (result: ArchiveDeleteResult) => void;
+  onHiddenDryRun: (plan: HiddenThreadDeletePlan) => void;
+  onHiddenExecute: (result: HiddenThreadDeleteResult) => void;
+}) {
+  const qc = useQueryClient();
+  const { csrfToken, capabilities } = input;
+  const invalidateJobs = () => qc.invalidateQueries({ queryKey: opsQueryKeys.jobs });
+  const invalidateSystem = () => qc.invalidateQueries({ queryKey: opsQueryKeys.systemStatus });
+  const invalidateThreads = () => qc.invalidateQueries({ queryKey: opsQueryKeys.threads });
+  const requireThreadCleanup = () => {
+    if (!capabilities.threadCleanup) {
+      throw new Error("当前运行时不支持线程清理动作");
+    }
+  };
+
+  return {
+    updateJob: useMutation({
+      mutationKey: backgroundJobKey,
+      gcTime: Infinity,
+      mutationFn: ({ action }: { action: UnifiedUpdateAction }) => {
+        if (action === "check") return updates.check(csrfToken);
+        if (action === "install") return updates.install(csrfToken);
+        return updates.prune(csrfToken, capabilities);
+      },
+      onSuccess: (result) => {
+        if (result.status) {
+          qc.setQueryData(opsQueryKeys.updateStatus, result.status);
+        }
+        invalidateJobs();
+        qc.invalidateQueries({ queryKey: opsQueryKeys.updateStatus });
+      }
+    }),
+    archiveDryRun: useMutation({
+      mutationFn: () => {
+        requireThreadCleanup();
+        return dryRunArchiveDelete(csrfToken);
+      },
+      onSuccess: input.onArchiveDryRun
+    }),
+    archiveExecute: useMutation({
+      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
+        requireThreadCleanup();
+        return startArchiveDelete({ csrfToken, expectedCount });
+      },
+      onSuccess: (result) => {
+        input.onArchiveExecute(result);
+        invalidateJobs();
+        invalidateSystem();
+        invalidateThreads();
+      }
+    }),
+    hiddenDryRun: useMutation({
+      mutationFn: () => {
+        requireThreadCleanup();
+        return dryRunHiddenThreadDelete(csrfToken);
+      },
+      onSuccess: input.onHiddenDryRun
+    }),
+    hiddenExecute: useMutation({
+      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
+        requireThreadCleanup();
+        return startHiddenThreadDelete({ csrfToken, expectedCount });
+      },
+      onSuccess: (result) => {
+        input.onHiddenExecute(result);
+        invalidateJobs();
+        invalidateSystem();
+        invalidateThreads();
+      }
+    })
+  };
+}

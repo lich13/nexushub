@@ -1,0 +1,6071 @@
+mod api;
+mod auth;
+mod linux_adapter;
+mod provider_monitor;
+mod rpc_payload;
+mod rpc_surface;
+mod state;
+mod turnstile;
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use nexushub_core::{
+    codex::{
+        resolve_codex_paths, rollout_completion_last_agent_message_selection,
+        rollout_hook_stop_message_selection, rollout_request_user_input_state, CodexGoalAction,
+        PendingElicitation, RolloutMessageSelection, RolloutRequestUserInputState,
+        UserInputQuestion,
+    },
+    config::{
+        patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
+        Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeNotificationsConfigPatch,
+        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
+    },
+    db::{NewProbeErrorIncident, NewProbeEvent, PanelDb, ProbeErrorIncident},
+    platform::PlatformPaths,
+    probe::{redact_probe_event_for_output, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
+    probe_error_monitor::{
+        scan_codex_turn_errors, ProbeErrorCursor, ProbeErrorMonitorRuntimeStatus,
+    },
+    services::probe as probe_service,
+    services::system::HostSurface,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use state::AppState;
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    io::{self, IsTerminal, Read, Write},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    process::{Command as ProcessCommand, Stdio},
+    time::Duration,
+};
+use tokio::{net::TcpListener, time};
+use tower_http::{services::ServeDir, trace::TraceLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
+const PROBE_BARK_BODY_CHUNK_BYTES: usize = 2_400;
+const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
+const PROBE_ERROR_MONITOR_CURSOR_SETTING: &str = "probe_error_monitor_cursor";
+const PROBE_ERROR_MONITOR_STATUS_SETTING: &str = "probe_error_monitor_status";
+const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 100;
+const PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS: u32 = 4;
+const PROBE_ERROR_MONITOR_RECOVERY_RETRY_SECONDS: [i64; 3] = [15, 60, 300];
+static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static PROBE_ERROR_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "nexushub-webd",
+    version,
+    about = "Headless Web panel for local Codex state and controlled jobs"
+)]
+struct Cli {
+    #[arg(long, env = "NEXUSHUB_CONFIG", default_value_os_t = Config::current_default_config_path())]
+    config: PathBuf,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Serve {
+        #[arg(long, default_value_t = HostSurface::LinuxServerWebui)]
+        surface: HostSurface,
+    },
+    Doctor,
+    InitConfig,
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+    Probe {
+        #[command(subcommand)]
+        command: ProbeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminCommand {
+    Init {
+        #[arg(long, default_value = "admin")]
+        username: String,
+        #[arg(long, env = "NEXUSHUB_ADMIN_PASSWORD")]
+        password: String,
+    },
+    ResetPassword {
+        #[arg(long, default_value = "admin")]
+        username: String,
+        #[arg(long, env = "NEXUSHUB_ADMIN_PASSWORD")]
+        password: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProbeCommand {
+    Status,
+    HookStatus,
+    Events {
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    Running {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    ReplyNeeded {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Recoverable {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    HookStop {
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        turn_id: Option<String>,
+        #[arg(long, default_value = "hook-stop")]
+        kind: String,
+    },
+    #[command(hide = true)]
+    HookRequestUserInput,
+    #[command(hide = true)]
+    HookRequestUserInputConfirm,
+    HooksInstall {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    NotifyCompletion {
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        turn_id: Option<String>,
+    },
+    BarkTest,
+    LifecycleRepair,
+    ServiceRestart,
+    LegacyImport,
+    #[command(hide = true)]
+    MonitorErrors,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "nexushub-webd=info,tower_http=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
+
+    let cli = Cli::parse();
+    match cli.command {
+        Command::InitConfig => {
+            Config::write_default(&cli.config)?;
+            println!("wrote {}", cli.config.display());
+        }
+        Command::Doctor => {
+            let config = Config::load(&cli.config)?;
+            let db = open_panel_db(&config)?;
+            let resolved = resolve_codex_paths(&config.codex.home);
+            println!("config={}", cli.config.display());
+            println!("db={}", db.path().display());
+            println!("codex_home={}", resolved.home.display());
+            println!(
+                "configured_codex_home={}",
+                resolved.configured_codex_home.as_deref().unwrap_or("auto")
+            );
+            println!("codex_home_source={}", resolved.codex_home_source);
+            println!("listen={}", config.server.listen);
+            println!("admin_count={}", db.admin_count()?);
+            println!("codex_read_model=local_state_rollout_logs");
+            let status = nexushub_core::system::system_status(&config).await?;
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        }
+        Command::Admin { command } => {
+            let config = Config::load(&cli.config)?;
+            let db = open_panel_db(&config)?;
+            match command {
+                AdminCommand::Init { username, password } => {
+                    init_admin(db, &username, &password, false)?
+                }
+                AdminCommand::ResetPassword { username, password } => {
+                    init_admin(db, &username, &password, true)?
+                }
+            }
+        }
+        Command::Probe {
+            command: ProbeCommand::HookRequestUserInput,
+        } => {
+            if let Err(err) = handle_hook_request_user_input_command(&cli.config).await {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "ok": false,
+                        "error": "probe_hook_request_user_input_failed",
+                    }))?
+                );
+                tracing::warn!("probe hook-request-user-input failed open");
+                tracing::debug!("probe hook-request-user-input diagnostic: {err:#}");
+            }
+        }
+        Command::Probe {
+            command: ProbeCommand::HookRequestUserInputConfirm,
+        } => {
+            if let Err(err) = handle_hook_request_user_input_confirm_command(&cli.config).await {
+                tracing::warn!("probe hook-request-user-input-confirm failed closed");
+                tracing::debug!("probe hook-request-user-input-confirm diagnostic: {err:#}");
+            }
+        }
+        Command::Probe {
+            command: ProbeCommand::MonitorErrors,
+        } => run_probe_error_monitor_daemon(cli.config).await?,
+        Command::Probe { command } => {
+            let config = Config::load(&cli.config)?;
+            let db = open_panel_db(&config)?;
+            run_probe_command(command, &config, db).await?;
+        }
+        Command::Serve { surface } => serve(cli.config, surface).await?,
+    }
+    Ok(())
+}
+
+async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) -> Result<()> {
+    match command {
+        ProbeCommand::Status => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&probe_runtime(config).status().await?)?
+            );
+        }
+        ProbeCommand::HookStatus => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&probe_runtime(config).hook_status())?
+            );
+        }
+        ProbeCommand::Events { limit } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "events": db.list_probe_events(limit)?.into_iter().map(redact_probe_event).collect::<Vec<_>>()
+                }))?
+            );
+        }
+        ProbeCommand::Running { limit } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &probe_thread_snapshot(config, &db, "running", limit).await?
+                )?
+            );
+        }
+        ProbeCommand::ReplyNeeded { limit } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &probe_thread_snapshot(config, &db, "reply-needed", limit).await?
+                )?
+            );
+        }
+        ProbeCommand::Recoverable { limit } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &probe_thread_snapshot(config, &db, "recoverable", limit).await?
+                )?
+            );
+        }
+        ProbeCommand::HookStop {
+            thread_id,
+            turn_id,
+            kind,
+        } => match handle_hook_stop_command(config, &db, thread_id, turn_id, kind).await {
+            Ok(result) => {
+                let (stdout, stderr) = hook_stop_cli_output(&result)?;
+                eprint!("{stderr}");
+                print!("{stdout}");
+            }
+            Err(err) => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "ok": false,
+                        "error": "probe_hook_stop_failed",
+                    }))?
+                );
+                tracing::warn!("probe hook-stop failed before event recording");
+                tracing::debug!("probe hook-stop diagnostic: {err:#}");
+                println!("{}", serde_json::to_string(&codex_stop_continue_output())?);
+            }
+        },
+        ProbeCommand::HookRequestUserInput
+        | ProbeCommand::HookRequestUserInputConfirm
+        | ProbeCommand::MonitorErrors => {
+            unreachable!("handled before config loading")
+        }
+        ProbeCommand::HooksInstall { dry_run } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&install_probe_hooks(config, dry_run).await?)?
+            );
+        }
+        ProbeCommand::NotifyCompletion { thread_id, turn_id } => {
+            let stdin_payload = read_optional_stdin_json()?;
+            let input = notify_completion_context(
+                config,
+                stdin_payload.as_ref(),
+                thread_id.as_deref(),
+                turn_id.as_deref(),
+            )?;
+            let event = probe_runtime(config).build_event(input);
+            let (outcome, bark) = record_probe_event_with_bark(config, &db, event).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "probe_event": outcome,
+                    "bark": bark,
+                }))?
+            );
+        }
+        ProbeCommand::BarkTest => {
+            let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
+            let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+            let bark = if config.probe.notifications.enabled && configured {
+                send_bark_notification(
+                    config,
+                    device_key.as_deref().unwrap_or_default(),
+                    &ProbeBarkRequest {
+                        title: "Codex Sentinel Lite".to_string(),
+                        body: "Bark 推送通道正常。".to_string(),
+                        dedupe_key: "probe-bark-test".to_string(),
+                    },
+                    std::time::Duration::from_secs(8),
+                )
+                .await?
+            } else {
+                ProbeBarkOutcome::skipped(
+                    if config.probe.notifications.enabled {
+                        "device_key_missing"
+                    } else {
+                        "notifications_disabled"
+                    },
+                    config.probe.notifications.enabled,
+                    true,
+                    configured,
+                )
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": bark.sent || (!config.probe.notifications.enabled && bark.skipped),
+                    "configured": configured,
+                    "skipped": bark.skipped,
+                    "sent": bark.sent,
+                    "reason": bark.reason,
+                    "http_status": bark.http_status,
+                }))?
+            );
+        }
+        ProbeCommand::LifecycleRepair => {
+            anyhow::bail!(
+                "unsupported_probe_action: lifecycle_repair has no fixed NexusHub implementation"
+            );
+        }
+        ProbeCommand::ServiceRestart => {
+            anyhow::bail!(
+                "unsupported_probe_action: service_restart has no fixed NexusHub implementation"
+            );
+        }
+        ProbeCommand::LegacyImport => {
+            let result = import_legacy_sentinel_config(&db)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_hook_stop_command(
+    config: &Config,
+    db: &PanelDb,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    kind: String,
+) -> Result<HookStopResult> {
+    let stdin_payload = read_optional_stdin_json()?;
+    let event_input = hook_stop_event_input(
+        config,
+        stdin_payload.as_ref(),
+        thread_id.as_deref(),
+        turn_id.as_deref(),
+        &kind,
+    )?;
+    let event = probe_runtime(config).build_event(event_input);
+    handle_built_probe_event(config, db, event).await
+}
+
+async fn handle_hook_request_user_input_command(config_path: &Path) -> Result<()> {
+    let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
+    let config = Config::load(config_path)?;
+    validate_hook_request_user_input_envelope(&stdin_payload)?;
+    if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
+        return Ok(());
+    }
+    validate_hook_request_user_input_payload(&stdin_payload)?;
+    schedule_hook_request_user_input_confirmation(config_path, &stdin_payload)?;
+    Ok(())
+}
+
+async fn handle_hook_request_user_input_confirm_command(config_path: &Path) -> Result<()> {
+    let stdin_payload = read_optional_stdin_json()?.context("PreToolUse stdin is required")?;
+    let config = Config::load(config_path)?;
+    validate_hook_request_user_input_envelope(&stdin_payload)?;
+    if hook_context_suppression_reason(&config, &stdin_payload).is_some() {
+        return Ok(());
+    }
+    let hook_payload = validate_hook_request_user_input_payload(&stdin_payload)?;
+    time::sleep(Duration::from_millis(QUESTION_CONFIRMATION_DELAY_MS)).await;
+    let Some(transcript_path) =
+        read_string_field(&stdin_payload, &["transcript_path", "transcriptPath"])
+    else {
+        return Ok(());
+    };
+    let state = rollout_request_user_input_state(
+        Path::new(&transcript_path),
+        hook_payload.turn_id.trim(),
+        hook_payload.tool_use_id.trim(),
+    )
+    .unwrap_or(RolloutRequestUserInputState::Missing);
+    if state != RolloutRequestUserInputState::Pending {
+        return Ok(());
+    }
+
+    let event_input = hook_request_user_input_event_input(&config, stdin_payload)?
+        .with_body_selection_diagnostics(question_confirmation_diagnostics());
+    let db = open_panel_db(&config)?;
+    let event = probe_runtime(&config).build_event(event_input);
+    record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
+        .await?;
+    Ok(())
+}
+
+fn schedule_hook_request_user_input_confirmation(
+    config_path: &Path,
+    payload: &Value,
+) -> Result<()> {
+    let executable = env::current_exe().context("resolve current helper executable")?;
+    let mut child = ProcessCommand::new(executable)
+        .args([
+            "--config",
+            config_path
+                .to_str()
+                .context("config path is not valid UTF-8")?,
+            "probe",
+            "hook-request-user-input-confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start question confirmation helper")?;
+    let payload = serde_json::to_vec(payload).context("serialize PreToolUse payload")?;
+    child
+        .stdin
+        .take()
+        .context("open question confirmation stdin")?
+        .write_all(&payload)
+        .context("send PreToolUse payload to confirmation helper")?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct HookRequestUserInputPayload {
+    hook_event_name: String,
+    session_id: String,
+    turn_id: String,
+    tool_name: String,
+    tool_input: HookRequestUserInputToolInput,
+    tool_use_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HookRequestUserInputToolInput {
+    questions: Vec<UserInputQuestion>,
+}
+
+fn validate_hook_request_user_input_envelope(payload: &Value) -> Result<()> {
+    anyhow::ensure!(
+        read_string_field(payload, &["hook_event_name"]).as_deref() == Some("PreToolUse"),
+        "unexpected hook_event_name"
+    );
+    anyhow::ensure!(
+        read_string_field(payload, &["tool_name"]).as_deref() == Some("request_user_input"),
+        "unexpected tool_name"
+    );
+    Ok(())
+}
+
+fn validate_hook_request_user_input_payload(
+    payload: &Value,
+) -> Result<HookRequestUserInputPayload> {
+    let mut hook_payload: HookRequestUserInputPayload =
+        serde_json::from_value(payload.clone()).context("parse PreToolUse payload")?;
+    anyhow::ensure!(
+        hook_payload.hook_event_name == "PreToolUse",
+        "unexpected hook_event_name"
+    );
+    anyhow::ensure!(
+        hook_payload.tool_name == "request_user_input",
+        "unexpected tool_name"
+    );
+    required_hook_field(&hook_payload.session_id, "session_id")?;
+    required_hook_field(&hook_payload.turn_id, "turn_id")?;
+    required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
+    hook_payload.tool_input.questions =
+        normalize_hook_questions(hook_payload.tool_input.questions)?;
+    Ok(hook_payload)
+}
+
+fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Result<ProbeEventInput> {
+    validate_hook_request_user_input_envelope(&payload)?;
+    if let Some(reason) = hook_context_suppression_reason(config, &payload) {
+        let session_id = read_string_field(&payload, &["session_id", "sessionId"]);
+        let turn_id = read_string_field(&payload, &["turn_id", "turnId"]);
+        let tool_use_id = read_string_field(&payload, &["tool_use_id", "toolUseId"]);
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            session_id.as_deref(),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            "reply-needed",
+        )
+        .with_body_source(Some("request_user_input"))
+        .with_pre_tool_use_scan_source()
+        .with_call_id(tool_use_id.as_deref())
+        .with_suppression_reason(Some(reason)));
+    }
+    let hook_payload = validate_hook_request_user_input_payload(&payload)?;
+    let session_id = required_hook_field(&hook_payload.session_id, "session_id")?;
+    let turn_id = required_hook_field(&hook_payload.turn_id, "turn_id")?;
+    let tool_use_id = required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
+    let questions = normalize_hook_questions(hook_payload.tool_input.questions)?;
+    let elicitation = PendingElicitation {
+        turn_id: Some(turn_id.to_string()),
+        item_id: Some(tool_use_id.to_string()),
+        questions,
+    };
+    let body = probe_service::format_probe_pending_elicitation(&elicitation);
+    let thread_title = hook_thread_title(config, Some(&payload), Some(session_id));
+    let transcript_path = read_string_field(&payload, &["transcript_path", "transcriptPath"]);
+
+    Ok(ProbeEventInput::hook_stop_with_context(
+        Some(session_id),
+        Some(turn_id),
+        Some(session_id),
+        transcript_path.as_deref(),
+        Some(&body),
+        "reply-needed",
+    )
+    .with_body_source(Some("request_user_input"))
+    .with_pre_tool_use_scan_source()
+    .with_call_id(Some(tool_use_id))
+    .with_thread_title(thread_title.as_deref()))
+}
+
+fn question_confirmation_diagnostics() -> BTreeMap<String, Value> {
+    BTreeMap::from([
+        (
+            "question_confirmation_strategy".to_string(),
+            json!("rollout_unresolved_after_grace"),
+        ),
+        (
+            "question_confirmation_delay_ms".to_string(),
+            json!(QUESTION_CONFIRMATION_DELAY_MS),
+        ),
+        ("question_confirmed_pending".to_string(), json!(true)),
+    ])
+}
+
+fn required_hook_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
+    let value = value.trim();
+    anyhow::ensure!(!value.is_empty(), "missing {name}");
+    Ok(value)
+}
+
+fn normalize_hook_questions(
+    mut questions: Vec<UserInputQuestion>,
+) -> Result<Vec<UserInputQuestion>> {
+    anyhow::ensure!(
+        !questions.is_empty(),
+        "tool_input.questions must not be empty"
+    );
+    for question in &mut questions {
+        question.id = required_hook_field(&question.id, "question.id")?.to_string();
+        question.question =
+            required_hook_field(&question.question, "question.question")?.to_string();
+        question.header = question
+            .header
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        anyhow::ensure!(
+            !question.options.is_empty(),
+            "question.options must not be empty"
+        );
+        for option in &mut question.options {
+            option.label = required_hook_field(&option.label, "option.label")?.to_string();
+            option.description = option
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+        }
+    }
+    Ok(questions)
+}
+
+#[cfg(test)]
+mod notification_accuracy_tests;
+
+fn hook_thread_title(
+    config: &Config,
+    payload: Option<&Value>,
+    thread_id: Option<&str>,
+) -> Option<String> {
+    payload
+        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]))
+        .or_else(|| {
+            thread_id.and_then(|thread_id| local_thread_title(config, thread_id).ok().flatten())
+        })
+}
+
+fn hook_stop_event_input(
+    config: &Config,
+    stdin_payload: Option<&Value>,
+    cli_thread_id: Option<&str>,
+    cli_turn_id: Option<&str>,
+    kind: &str,
+) -> Result<ProbeEventInput> {
+    let payload_thread_id = stdin_payload.as_ref().and_then(|value| {
+        read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
+    });
+    let payload_turn_id = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["turn_id", "turnId"]));
+    let payload_session_id = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["session_id", "sessionId"]));
+    let payload_transcript_path = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
+    let payload_last_assistant_message = stdin_payload.as_ref().and_then(|value| {
+        read_string_field(value, &["last_assistant_message", "lastAssistantMessage"])
+    });
+    let event_thread_id = cli_thread_id
+        .map(str::to_string)
+        .or(payload_thread_id.clone())
+        .or(payload_session_id.clone());
+    let event_turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id.clone());
+    let event_kind = stdin_payload
+        .as_ref()
+        .and_then(|value| read_string_field(value, &["kind", "event_kind", "eventKind"]))
+        .unwrap_or_else(|| kind.to_string());
+    if let Some(reason) = stdin_payload
+        .and_then(|payload| hook_memory_suppression_reason(config, payload))
+        .or_else(|| task_notification_suppression_reason(config, event_thread_id.as_deref()))
+    {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            event_thread_id.as_deref(),
+            event_turn_id.as_deref(),
+            payload_session_id.as_deref(),
+            None,
+            None,
+            &event_kind,
+        )
+        .with_suppression_reason(Some(reason)));
+    }
+    let resolved_last_assistant_message = hook_stop_last_assistant_message(
+        payload_transcript_path.as_deref(),
+        event_turn_id.as_deref(),
+        payload_last_assistant_message.as_deref(),
+    )?;
+    if resolved_last_assistant_message.is_none() {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            event_thread_id.as_deref(),
+            event_turn_id.as_deref(),
+            payload_session_id.as_deref(),
+            None,
+            None,
+            &event_kind,
+        )
+        .with_suppression_reason(Some("unconfirmed_final_body")));
+    }
+    let thread_title = hook_thread_title(config, stdin_payload, event_thread_id.as_deref());
+    Ok(ProbeEventInput::hook_stop_with_context(
+        event_thread_id.as_deref(),
+        event_turn_id.as_deref(),
+        payload_session_id.as_deref(),
+        payload_transcript_path.as_deref(),
+        resolved_last_assistant_message
+            .as_ref()
+            .map(|selection| selection.message.as_str()),
+        &event_kind,
+    )
+    .with_body_source(
+        resolved_last_assistant_message
+            .as_ref()
+            .map(|selection| selection.source.as_str()),
+    )
+    .with_body_selection_diagnostics(selection_diagnostics(
+        resolved_last_assistant_message.as_ref(),
+    ))
+    .with_thread_title(thread_title.as_deref()))
+}
+
+fn hook_stop_last_assistant_message(
+    transcript_path: Option<&str>,
+    turn_id: Option<&str>,
+    stdin_message: Option<&str>,
+) -> Result<Option<TranscriptMessageSelection>> {
+    if let Some(message) = stdin_message
+        .filter(|message| nexushub_core::probe::is_probe_machine_control_payload(message))
+    {
+        return Ok(Some(TranscriptMessageSelection::from_stdin(
+            message,
+            "internal_control_payload",
+        )));
+    }
+    if let Some(path) = transcript_path
+        .filter(|path| !path.trim().is_empty())
+        .map(Path::new)
+    {
+        if let Some(selection) =
+            stable_transcript_selection(path, turn_id, TranscriptSelectionKind::HookStop)?
+        {
+            return Ok(Some(selection));
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TranscriptSelectionKind {
+    HookStop,
+    Completion,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptMessageSelection {
+    message: String,
+    source: String,
+    strategy: String,
+    selected_turn_id: Option<String>,
+    selected_line: Option<usize>,
+    candidate_count: usize,
+    transcript_stabilized: bool,
+    transcript_size_before: Option<u64>,
+    transcript_size_after: Option<u64>,
+}
+
+impl TranscriptMessageSelection {
+    fn from_rollout(selection: RolloutMessageSelection, stability: TranscriptStability) -> Self {
+        Self {
+            message: selection.message,
+            source: selection.source,
+            strategy: selection.strategy,
+            selected_turn_id: selection.selected_turn_id,
+            selected_line: selection.selected_line,
+            candidate_count: selection.candidate_count,
+            transcript_stabilized: stability.stabilized,
+            transcript_size_before: stability.size_before,
+            transcript_size_after: stability.size_after,
+        }
+    }
+
+    fn from_stdin(message: &str, source: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            source: source.to_string(),
+            strategy: source.to_string(),
+            selected_turn_id: None,
+            selected_line: None,
+            candidate_count: 1,
+            transcript_stabilized: false,
+            transcript_size_before: None,
+            transcript_size_after: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TranscriptStability {
+    stabilized: bool,
+    size_before: Option<u64>,
+    size_after: Option<u64>,
+}
+
+fn stable_transcript_selection(
+    path: &Path,
+    turn_id: Option<&str>,
+    kind: TranscriptSelectionKind,
+) -> Result<Option<TranscriptMessageSelection>> {
+    let size_before = fs::metadata(path).ok().map(|metadata| metadata.len());
+    let mut last_size = size_before;
+    let mut stable_reads = 0usize;
+    let mut latest_selection = transcript_selection(path, turn_id, kind)?;
+    for _ in 0..8 {
+        std::thread::sleep(Duration::from_millis(50));
+        let current_size = fs::metadata(path).ok().map(|metadata| metadata.len());
+        let changed = current_size != last_size;
+        if !changed {
+            stable_reads += 1;
+        } else {
+            stable_reads = 0;
+        }
+        last_size = current_size;
+        if changed {
+            latest_selection = transcript_selection(path, turn_id, kind)?;
+        }
+        if stable_reads >= 2 && latest_selection.is_some() {
+            break;
+        }
+    }
+    let stability = TranscriptStability {
+        stabilized: stable_reads >= 2,
+        size_before,
+        size_after: last_size,
+    };
+    Ok(latest_selection
+        .map(|selection| TranscriptMessageSelection::from_rollout(selection, stability)))
+}
+
+fn transcript_selection(
+    path: &Path,
+    turn_id: Option<&str>,
+    kind: TranscriptSelectionKind,
+) -> Result<Option<RolloutMessageSelection>> {
+    match kind {
+        TranscriptSelectionKind::HookStop => rollout_hook_stop_message_selection(path, turn_id),
+        TranscriptSelectionKind::Completion => {
+            rollout_completion_last_agent_message_selection(path, turn_id)
+        }
+    }
+}
+
+fn selection_diagnostics(
+    selection: Option<&TranscriptMessageSelection>,
+) -> BTreeMap<String, Value> {
+    let mut diagnostics = BTreeMap::new();
+    diagnostics.insert(
+        "body_selection_strategy".to_string(),
+        selection
+            .map(|value| json!(value.strategy))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_selected_turn_id".to_string(),
+        selection
+            .and_then(|value| value.selected_turn_id.as_deref())
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_selected_line".to_string(),
+        selection
+            .and_then(|value| value.selected_line)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "body_candidate_count".to_string(),
+        selection
+            .map(|value| json!(value.candidate_count))
+            .unwrap_or_else(|| json!(0)),
+    );
+    diagnostics.insert(
+        "transcript_stabilized".to_string(),
+        selection
+            .map(|value| json!(value.transcript_stabilized))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "transcript_size_before".to_string(),
+        selection
+            .and_then(|value| value.transcript_size_before)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics.insert(
+        "transcript_size_after".to_string(),
+        selection
+            .and_then(|value| value.transcript_size_after)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    diagnostics
+}
+
+fn read_optional_stdin_json() -> Result<Option<Value>> {
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        return Ok(None);
+    }
+    let mut buffer = String::new();
+    let mut lock = stdin.lock();
+    lock.read_to_string(&mut buffer)
+        .context("read hook stop stdin")?;
+    if buffer.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&buffer)
+        .map(Some)
+        .context("parse stdin json")
+}
+
+fn read_string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn hook_context_suppression_reason(config: &Config, payload: &Value) -> Option<&'static str> {
+    hook_memory_suppression_reason(config, payload).or_else(|| {
+        let id = read_string_field(
+            payload,
+            &["thread_id", "threadId", "session_id", "sessionId"],
+        );
+        task_notification_suppression_reason(config, id.as_deref())
+    })
+}
+
+fn hook_memory_suppression_reason(config: &Config, payload: &Value) -> Option<&'static str> {
+    let transcript_path = hook_transcript_path_for_identity(payload).flatten();
+    let cwd = read_string_field(payload, &["cwd"]);
+    probe_runtime(config)
+        .hook_context_suppression_reason(cwd.as_deref(), transcript_path.as_deref())
+        .filter(|_| hook_transcript_path_for_identity(payload).is_some())
+}
+
+fn task_notification_suppression_reason(
+    config: &Config,
+    thread_id: Option<&str>,
+) -> Option<&'static str> {
+    let Some(id) = thread_id else {
+        return Some("unconfirmed_task_identity");
+    };
+    let paths = resolve_codex_paths(&config.codex.home).codex_paths();
+    let identity = match nexushub_core::codex::codex_task_identity(&paths, id) {
+        Ok(identity) => identity,
+        Err(_) => return Some("unconfirmed_task_identity"),
+    };
+    identity.suppression_reason()
+}
+
+fn hook_transcript_path_for_identity(payload: &Value) -> Option<Option<String>> {
+    let mut transcript_path = None;
+    for key in ["transcript_path", "transcriptPath"] {
+        let Some(value) = payload.get(key) else {
+            continue;
+        };
+        match value {
+            Value::Null => {}
+            Value::String(path) if path.trim().is_empty() => {}
+            Value::String(path) => transcript_path = Some(path.trim().to_string()),
+            _ => return None,
+        }
+    }
+    Some(transcript_path)
+}
+
+fn notify_completion_context(
+    config: &Config,
+    payload: Option<&Value>,
+    cli_thread_id: Option<&str>,
+    cli_turn_id: Option<&str>,
+) -> Result<ProbeEventInput> {
+    let payload_thread_id = payload.and_then(|value| {
+        read_string_field(value, &["thread_id", "threadId", "session_id", "sessionId"])
+    });
+    let payload_turn_id =
+        payload.and_then(|value| read_string_field(value, &["turn_id", "turnId"]));
+    let thread_id = cli_thread_id.map(str::to_string).or(payload_thread_id);
+    let turn_id = cli_turn_id.map(str::to_string).or(payload_turn_id);
+    let session_id =
+        payload.and_then(|value| read_string_field(value, &["session_id", "sessionId"]));
+    if let Some(reason) = payload
+        .and_then(|value| hook_memory_suppression_reason(config, value))
+        .or_else(|| {
+            task_notification_suppression_reason(
+                config,
+                thread_id.as_deref().or(session_id.as_deref()),
+            )
+        })
+    {
+        return Ok(ProbeEventInput::notify_completion_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .with_suppression_reason(Some(reason)));
+    }
+    let transcript_path =
+        payload.and_then(|value| read_string_field(value, &["transcript_path", "transcriptPath"]));
+    let payload_thread_title = payload
+        .and_then(|value| read_string_field(value, &["thread_title", "threadTitle", "title"]));
+    let resolved_thread = if transcript_path.is_none() && thread_id.is_some() {
+        notify_completion_thread_summary(config, thread_id.as_deref().unwrap())
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let resolved_transcript_path = transcript_path.or_else(|| {
+        resolved_thread
+            .as_ref()
+            .and_then(|thread| thread.rollout_path.as_ref())
+            .map(|path| path.to_string_lossy().to_string())
+    });
+    let thread_title = payload_thread_title.or_else(|| {
+        resolved_thread
+            .as_ref()
+            .map(|thread| thread.title.clone())
+            .filter(|title| !title.trim().is_empty())
+    });
+    let transcript_message = if let Some(path) = resolved_transcript_path.as_deref() {
+        stable_transcript_selection(
+            Path::new(path),
+            turn_id.as_deref(),
+            TranscriptSelectionKind::Completion,
+        )?
+    } else {
+        None
+    };
+    let (message, body_source, diagnostics) = if let Some(selection) = transcript_message {
+        (
+            Some(selection.message.clone()),
+            Some(selection.source.clone()),
+            selection_diagnostics(Some(&selection)),
+        )
+    } else {
+        return Ok(ProbeEventInput::notify_completion_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .with_suppression_reason(Some("unconfirmed_final_body")));
+    };
+    if body_source
+        .as_deref()
+        .is_some_and(|source| matches!(source, "proposed_plan" | "request_user_input"))
+    {
+        return Ok(ProbeEventInput::hook_stop_with_context(
+            thread_id.as_deref().or(session_id.as_deref()),
+            turn_id.as_deref(),
+            session_id.as_deref(),
+            resolved_transcript_path.as_deref(),
+            message.as_deref(),
+            "reply-needed",
+        )
+        .with_body_source(body_source.as_deref())
+        .with_body_selection_diagnostics(diagnostics)
+        .with_thread_title(thread_title.as_deref()));
+    }
+    Ok(ProbeEventInput::notify_completion_with_context(
+        thread_id.as_deref().or(session_id.as_deref()),
+        turn_id.as_deref(),
+        session_id.as_deref(),
+        resolved_transcript_path.as_deref(),
+        message.as_deref(),
+        body_source.as_deref(),
+    )
+    .with_body_selection_diagnostics(diagnostics)
+    .with_thread_title(thread_title.as_deref()))
+}
+
+fn notify_completion_thread_summary(
+    config: &Config,
+    thread_id: &str,
+) -> Result<Option<nexushub_core::codex::ThreadSummary>> {
+    let resolved = resolve_codex_paths(&config.codex.home);
+    nexushub_core::codex::local_thread_summary(&resolved.codex_paths(), thread_id)
+}
+
+fn local_thread_title(config: &Config, thread_id: &str) -> Result<Option<String>> {
+    Ok(notify_completion_thread_summary(config, thread_id)?
+        .map(|thread| thread.title)
+        .filter(|title| !title.trim().is_empty() && title.trim() != "未命名线程"))
+}
+
+fn probe_runtime(config: &Config) -> ProbeRuntime {
+    ProbeRuntime::new(config.clone(), PlatformPaths::current())
+}
+
+fn redact_probe_event(event: nexushub_core::db::ProbeEvent) -> nexushub_core::db::ProbeEvent {
+    redact_probe_event_for_output(event)
+}
+
+async fn probe_thread_snapshot(
+    config: &Config,
+    db: &PanelDb,
+    status: &'static str,
+    limit: usize,
+) -> Result<Value> {
+    let status = status.trim();
+    let state = AppState::new(config.clone(), db.clone());
+    let threads = api::load_probe_threads(&state, status, limit).await?;
+    Ok(json!({
+        "status": status,
+        "count": threads.len(),
+        "threads": threads,
+    }))
+}
+
+async fn install_probe_hooks(config: &Config, dry_run: bool) -> Result<Value> {
+    install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
+        Ok(serde_json::to_value(
+            nexushub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
+                platform, enabled,
+            )?,
+        )?)
+    })
+    .await
+}
+
+async fn install_probe_hooks_with_repair(
+    config: &Config,
+    dry_run: bool,
+    repair_error_monitor: impl FnOnce(&PlatformPaths, bool) -> Result<Value>,
+) -> Result<Value> {
+    let resolved = resolve_codex_paths(&config.codex.home);
+    let hooks_path = resolved.home.join("hooks.json");
+    let codex_config_path = resolved.home.join("config.toml");
+    let platform = PlatformPaths::current();
+    let hook_command = format!(
+        "{} --config {} probe hook-stop",
+        shell_quote(&platform.daemon_binary().display().to_string()),
+        shell_quote(&platform.config_file.display().to_string())
+    );
+    let request_user_input_hook_command = format!(
+        "{} --config {} probe hook-request-user-input",
+        shell_quote(&platform.daemon_binary().display().to_string()),
+        shell_quote(&platform.config_file.display().to_string())
+    );
+    let mut root = read_hooks_json(&hooks_path)?;
+    let hooks_json_changed = ensure_probe_hook(&mut root, "Stop", "*", &hook_command, None)
+        | ensure_probe_hook(
+            &mut root,
+            "PreToolUse",
+            "^request_user_input$",
+            &request_user_input_hook_command,
+            Some(5),
+        );
+    let config_before = read_optional_text(&codex_config_path)?;
+    let codex_config_after = ensure_codex_hooks_feature(&config_before)?;
+    let codex_config_changed = codex_config_after != config_before;
+    let backup_path = hooks_path.with_extension(format!(
+        "json.nexushub-probe-bak-{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S")
+    ));
+    let codex_config_backup_path = codex_config_path.with_extension(format!(
+        "toml.nexushub-probe-bak-{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S")
+    ));
+    if hooks_json_changed && !dry_run {
+        if let Some(parent) = hooks_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create hooks dir {}", parent.display()))?;
+        }
+        if hooks_path.exists() {
+            fs::copy(&hooks_path, &backup_path).with_context(|| {
+                format!(
+                    "backup hooks {} to {}",
+                    hooks_path.display(),
+                    backup_path.display()
+                )
+            })?;
+        }
+        fs::write(&hooks_path, serde_json::to_vec_pretty(&root)?)
+            .with_context(|| format!("write hooks {}", hooks_path.display()))?;
+    }
+    if codex_config_changed && !dry_run {
+        if let Some(parent) = codex_config_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create codex config dir {}", parent.display()))?;
+        }
+        if codex_config_path.exists() {
+            fs::copy(&codex_config_path, &codex_config_backup_path).with_context(|| {
+                format!(
+                    "backup codex config {} to {}",
+                    codex_config_path.display(),
+                    codex_config_backup_path.display()
+                )
+            })?;
+        }
+        fs::write(&codex_config_path, codex_config_after)
+            .with_context(|| format!("write codex config {}", codex_config_path.display()))?;
+    }
+    let error_monitor_launch_agent = if dry_run {
+        Value::Null
+    } else {
+        repair_error_monitor(
+            &platform,
+            config.probe.enabled
+                && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
+        )?
+    };
+    let launch_agent_changed = error_monitor_launch_agent
+        .get("changed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let changed = hooks_json_changed || codex_config_changed || launch_agent_changed;
+    Ok(json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "changed": changed,
+        "hooks_json_changed": hooks_json_changed,
+        "codex_config_changed": codex_config_changed,
+        "hooks_json": hooks_path,
+        "codex_config": codex_config_path,
+        "configured_codex_home": resolved.configured_codex_home,
+        "resolved_codex_home": resolved.home,
+        "codex_home_source": resolved.codex_home_source,
+        "discovery_warnings": resolved.discovery_warnings,
+        "backup_path": if hooks_path.exists() { Some(backup_path) } else { None },
+        "codex_config_backup_path": if codex_config_path.exists() { Some(codex_config_backup_path) } else { None },
+        "hook_command": hook_command,
+        "request_user_input_hook_command": request_user_input_hook_command,
+        "reload_result": Value::Null,
+        "error_monitor_launch_agent": error_monitor_launch_agent,
+    }))
+}
+
+fn read_optional_text(path: &Path) -> Result<String> {
+    if path.exists() {
+        fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+    } else {
+        Ok(String::new())
+    }
+}
+
+fn ensure_codex_hooks_feature(text: &str) -> Result<String> {
+    let mut value: toml::Value = if text.trim().is_empty() {
+        toml::Value::Table(toml::map::Map::new())
+    } else {
+        toml::from_str(text).context("parse Codex config.toml")?
+    };
+    let root = value
+        .as_table_mut()
+        .context("Codex config.toml root must be a table")?;
+    let features = root
+        .entry("features")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    if !features.is_table() {
+        *features = toml::Value::Table(toml::map::Map::new());
+    }
+    let features = features
+        .as_table_mut()
+        .context("Codex config features must be a table")?;
+    let mut changed = false;
+    if !matches!(features.get("hooks"), Some(toml::Value::Boolean(true))) {
+        features.insert("hooks".to_string(), toml::Value::Boolean(true));
+        changed = true;
+    }
+    changed |= prune_codex_hook_state(root);
+    if !changed {
+        return Ok(text.to_string());
+    }
+    toml::to_string_pretty(&value).context("serialize Codex config.toml")
+}
+
+fn prune_codex_hook_state(root: &mut toml::map::Map<String, toml::Value>) -> bool {
+    let Some(hooks) = root.get_mut("hooks").and_then(toml::Value::as_table_mut) else {
+        return false;
+    };
+    let Some(state) = hooks.get_mut("state").and_then(toml::Value::as_table_mut) else {
+        return false;
+    };
+    let stale_keys = state
+        .keys()
+        .filter(|key| is_codex_hook_state_key(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if stale_keys.is_empty() {
+        return false;
+    }
+    for key in stale_keys {
+        state.remove(&key);
+    }
+    if state.is_empty() {
+        hooks.remove("state");
+    }
+    true
+}
+
+fn is_codex_hook_state_key(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    lowered.contains("hooks.json:stop:") || lowered.contains("hooks.json:pre_tool_use:")
+}
+
+fn read_hooks_json(path: &Path) -> Result<Value> {
+    if !path.exists() {
+        return Ok(json!({"hooks": {}}));
+    }
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn ensure_probe_hook(
+    root: &mut Value,
+    event: &str,
+    matcher: &str,
+    hook_command: &str,
+    timeout_seconds: Option<u64>,
+) -> bool {
+    let mut changed = false;
+    if !root.is_object() {
+        *root = json!({"hooks": {}});
+        changed = true;
+    }
+    let object = root.as_object_mut().expect("object initialized");
+    let hooks = object.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        *hooks = json!({});
+        changed = true;
+    }
+    let hooks_object = hooks.as_object_mut().expect("hooks object initialized");
+    let event_hooks = hooks_object
+        .entry(event)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !event_hooks.is_array() {
+        *event_hooks = Value::Array(Vec::new());
+        changed = true;
+    }
+    let groups = event_hooks.as_array_mut().expect("hook array initialized");
+    let mut expected_installed = false;
+    for group in groups.iter_mut() {
+        if !group.is_object() {
+            *group = json!({"matcher": "*", "hooks": []});
+            changed = true;
+        }
+        let group_object = group.as_object_mut().expect("group object initialized");
+        let group_matches = group_object.get("matcher").and_then(Value::as_str) == Some(matcher);
+        let hooks = group_object
+            .entry("hooks")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if !hooks.is_array() {
+            *hooks = Value::Array(Vec::new());
+            changed = true;
+        }
+        let items = hooks.as_array_mut().expect("group hooks array initialized");
+        let before = items.len();
+        items.retain(|item| {
+            let Some(command) = item.get("command").and_then(Value::as_str) else {
+                return true;
+            };
+            let timeout_matches = match timeout_seconds {
+                Some(timeout) => item.get("timeout").and_then(Value::as_u64) == Some(timeout),
+                None => item.get("timeout").is_none(),
+            };
+            let expected = command == hook_command
+                && item.get("type").and_then(Value::as_str) == Some("command")
+                && group_matches
+                && timeout_matches
+                && item.get("async").is_none();
+            if expected && !expected_installed {
+                expected_installed = true;
+                return true;
+            }
+            !is_nexushub_managed_hook_command(command)
+        });
+        if items.len() != before {
+            changed = true;
+        }
+    }
+    let before_groups = groups.len();
+    groups.retain(|group| {
+        group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    });
+    if groups.len() != before_groups {
+        changed = true;
+    }
+    if expected_installed {
+        return changed;
+    }
+    groups.push(json!({
+        "matcher": matcher,
+        "hooks": [{
+            "type": "command",
+            "command": hook_command,
+            "timeout": timeout_seconds,
+        }]
+    }));
+    if timeout_seconds.is_none() {
+        if let Some(hook) = groups
+            .last_mut()
+            .and_then(|group| group.get_mut("hooks"))
+            .and_then(Value::as_array_mut)
+            .and_then(|hooks| hooks.first_mut())
+            .and_then(Value::as_object_mut)
+        {
+            hook.remove("timeout");
+        }
+    }
+    true
+}
+
+fn is_nexushub_managed_hook_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    (lowered.contains("probe hook-stop") || lowered.contains("probe hook-request-user-input"))
+        && (lowered.contains("nexushubd")
+            || lowered.contains("nexushub-webd")
+            || lowered.contains("/opt/nexushub")
+            || lowered.contains("application support/nexushub")
+            || lowered.contains("codex-sentinel"))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HookStopResult {
+    stdout: Value,
+    outcome: ProbeEventOutcome,
+    bark: ProbeBarkOutcome,
+}
+
+#[derive(Debug, Clone)]
+struct ProbeBarkRequest {
+    title: String,
+    body: String,
+    dedupe_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BarkPushResponse {
+    code: Option<i64>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProbeBarkOutcome {
+    sent: bool,
+    skipped: bool,
+    reason: Option<String>,
+    http_status: Option<u16>,
+    server_url: Option<String>,
+    request_url: Option<String>,
+    request_count: usize,
+    chunk_count: usize,
+    notifications_enabled: bool,
+    relevant_switch_enabled: bool,
+    device_key_configured: bool,
+    dedupe_hit: bool,
+    dedupe_key: Option<String>,
+}
+
+impl ProbeBarkOutcome {
+    fn sent(
+        status: u16,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: true,
+            skipped: false,
+            reason: None,
+            http_status: Some(status),
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_hit: false,
+            dedupe_key,
+        }
+    }
+
+    fn skipped(
+        reason: &str,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: true,
+            reason: Some(reason.to_string()),
+            http_status: None,
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_hit: reason == "dedupe",
+            dedupe_key: None,
+        }
+    }
+
+    fn failed_status(
+        status: u16,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: false,
+            reason: Some("http_status".to_string()),
+            http_status: Some(status),
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_hit: false,
+            dedupe_key,
+        }
+    }
+
+    fn failed_request(
+        reason: &str,
+        notifications_enabled: bool,
+        relevant_switch_enabled: bool,
+        device_key_configured: bool,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            sent: false,
+            skipped: false,
+            reason: Some(reason.to_string()),
+            http_status: None,
+            server_url: None,
+            request_url: None,
+            request_count: 0,
+            chunk_count: 0,
+            notifications_enabled,
+            relevant_switch_enabled,
+            device_key_configured,
+            dedupe_hit: false,
+            dedupe_key,
+        }
+    }
+
+    fn with_delivery_metadata(
+        mut self,
+        server_url: &str,
+        request_count: usize,
+        chunk_count: usize,
+    ) -> Self {
+        self.server_url = Some(server_url.to_string());
+        self.request_url = (request_count > 0).then(|| "[redacted]".to_string());
+        self.request_count = request_count;
+        self.chunk_count = chunk_count;
+        self
+    }
+}
+
+async fn handle_built_probe_event(
+    config: &Config,
+    db: &PanelDb,
+    event: nexushub_core::probe::ProbeBuiltEvent,
+) -> Result<HookStopResult> {
+    let (outcome, bark) = record_probe_event_with_bark(config, db, event).await?;
+    Ok(HookStopResult {
+        stdout: codex_stop_continue_output(),
+        outcome,
+        bark,
+    })
+}
+
+fn hook_stop_cli_output(result: &HookStopResult) -> Result<(String, String)> {
+    let stdout = format!("{}\n", serde_json::to_string(&result.stdout)?);
+    let stderr = format!(
+        "{}\n",
+        serde_json::to_string(&json!({
+            "probe_event": result.outcome,
+            "bark": result.bark,
+        }))?
+    );
+    Ok((stdout, stderr))
+}
+
+async fn record_probe_event_with_bark(
+    config: &Config,
+    db: &PanelDb,
+    event: nexushub_core::probe::ProbeBuiltEvent,
+) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    record_probe_event_with_bark_timeout(config, db, event, std::time::Duration::from_secs(8)).await
+}
+
+async fn record_probe_event_with_bark_timeout(
+    config: &Config,
+    db: &PanelDb,
+    event: nexushub_core::probe::ProbeBuiltEvent,
+    bark_timeout: std::time::Duration,
+) -> Result<(ProbeEventOutcome, ProbeBarkOutcome)> {
+    if let Some(reason) = event
+        .suppression_reason
+        .as_deref()
+        .or_else(|| task_notification_suppression_reason(config, event.thread_id.as_deref()))
+    {
+        let mut outcome = ProbeEventOutcome::from_claim(&event, false);
+        outcome.duplicate = false;
+        return Ok((
+            outcome,
+            ProbeBarkOutcome::skipped(
+                reason,
+                config.probe.notifications.enabled,
+                probe_service::probe_event_bark_switch_enabled(config, &event.kind),
+                false,
+            ),
+        ));
+    }
+    let record_plan = probe_service::probe_event_record_plan(event);
+    let event = record_plan.event;
+    if passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())? {
+        let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
+        let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+        let decision =
+            probe_service::probe_bark_delivery_decision(config, &event.kind, configured, true);
+        return Ok((
+            record_plan.duplicate_outcome,
+            ProbeBarkOutcome::skipped(
+                "sent_marker",
+                decision.notifications_enabled,
+                decision.relevant_switch_enabled,
+                decision.device_key_configured,
+            ),
+        ));
+    }
+    let claimed = db.claim_probe_dedupe(
+        &event.dedupe_namespace,
+        &event.dedupe_key,
+        event.ttl_seconds,
+    )?;
+    let bark = handle_probe_event_bark(config, db, &event, claimed, bark_timeout).await?;
+    let write_plan = probe_service::probe_event_record_write_plan(
+        &event,
+        claimed,
+        &bark,
+        probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref()),
+    )?;
+    if let Some(record) = write_plan.record {
+        db.record_probe_event(NewProbeEvent {
+            kind: &record.kind,
+            thread_id: record.thread_id.as_deref(),
+            title: Some(&record.title),
+            message: Some(&record.message),
+            dedupe_key: Some(&record.dedupe_key),
+            source: &record.source,
+            payload: record.payload,
+        })?;
+    }
+    if let Some(marker) = write_plan.passive_marker {
+        mark_passive_unresolved_action_sent(db, marker)?;
+    }
+
+    Ok((write_plan.outcome, bark))
+}
+
+fn passive_unresolved_action_sent(db: &PanelDb, key: Option<&str>) -> Result<bool> {
+    let Some(key) = key else {
+        return Ok(false);
+    };
+    Ok(db.get_setting(key)?.is_some())
+}
+
+fn mark_passive_unresolved_action_sent(
+    db: &PanelDb,
+    marker: probe_service::ProbePassiveMarkerWrite,
+) -> Result<()> {
+    db.set_setting(&marker.key, &serde_json::to_string(&marker.value)?)
+}
+
+async fn handle_probe_event_bark(
+    config: &Config,
+    db: &PanelDb,
+    event: &nexushub_core::probe::ProbeBuiltEvent,
+    claimed: bool,
+    timeout: std::time::Duration,
+) -> Result<ProbeBarkOutcome> {
+    let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
+    let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
+    let decision =
+        probe_service::probe_bark_delivery_decision(config, &event.kind, configured, claimed);
+    if !decision.should_send {
+        return Ok(ProbeBarkOutcome::skipped(
+            decision.skip_reason.as_deref().unwrap_or("skipped"),
+            decision.notifications_enabled,
+            decision.relevant_switch_enabled,
+            decision.device_key_configured,
+        ));
+    }
+    send_bark_notification(
+        config,
+        device_key.as_deref().unwrap_or_default(),
+        &ProbeBarkRequest {
+            title: event.bark_title.clone(),
+            body: event.bark_body.clone(),
+            dedupe_key: event.dedupe_key.clone(),
+        },
+        timeout,
+    )
+    .await
+}
+
+fn codex_stop_continue_output() -> Value {
+    json!({
+        "continue": true,
+        "suppressOutput": false,
+    })
+}
+
+async fn send_bark_notification(
+    config: &Config,
+    device_key: &[u8],
+    request: &ProbeBarkRequest,
+    timeout: std::time::Duration,
+) -> Result<ProbeBarkOutcome> {
+    let device_key = match std::str::from_utf8(device_key) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("Bark device_key is not utf-8: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "invalid_device_key_encoding",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
+    let server_url = config.probe.notifications.server_url.trim();
+    let server_url = if server_url.is_empty() {
+        "https://api.day.app"
+    } else {
+        server_url
+    };
+    if !valid_probe_notification_server_url(server_url) {
+        tracing::warn!("Bark notification server URL rejected by Probe policy");
+        return Ok(ProbeBarkOutcome::failed_request(
+            "invalid_server_url",
+            config.probe.notifications.enabled,
+            true,
+            true,
+            Some(request.dedupe_key.clone()),
+        ));
+    }
+    let base = if server_url.ends_with('/') {
+        server_url.to_string()
+    } else {
+        format!("{server_url}/")
+    };
+    let push_url = match reqwest::Url::parse(&base).and_then(|url| url.join("push")) {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!("Bark notification push URL build failed: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "invalid_server_url",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!("Bark notification client build failed: {err}");
+            return Ok(ProbeBarkOutcome::failed_request(
+                "client_build_error",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            ));
+        }
+    };
+    let chunks = bark_body_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
+    let chunk_count = chunks.len();
+    let mut last_status = None;
+    let mut request_count = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let chunk_title = if chunk_count > 1 {
+            format!("{} ({}/{})", request.title, index + 1, chunk_count)
+        } else {
+            request.title.clone()
+        };
+        let payload = json!({
+            "device_key": device_key.trim(),
+            "title": chunk_title,
+            "body": chunk,
+        });
+        let response = client.post(push_url.clone()).json(&payload).send().await;
+        request_count += 1;
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                let reason = if err.is_timeout() {
+                    "timeout"
+                } else {
+                    "request_error"
+                };
+                tracing::warn!("Bark notification request failed: {reason}");
+                return Ok(ProbeBarkOutcome::failed_request(
+                    reason,
+                    config.probe.notifications.enabled,
+                    true,
+                    true,
+                    Some(request.dedupe_key.clone()),
+                )
+                .with_delivery_metadata(server_url, request_count, chunk_count));
+            }
+        };
+        let status = response.status().as_u16();
+        last_status = Some(status);
+        if !response.status().is_success() {
+            return Ok(ProbeBarkOutcome::failed_status(
+                status,
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            )
+            .with_delivery_metadata(server_url, request_count, chunk_count));
+        }
+        let bark_response = match response.json::<BarkPushResponse>().await {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!("Bark notification response decode failed: {err}");
+                return Ok(ProbeBarkOutcome::failed_request(
+                    "response_decode",
+                    config.probe.notifications.enabled,
+                    true,
+                    true,
+                    Some(request.dedupe_key.clone()),
+                )
+                .with_delivery_metadata(server_url, request_count, chunk_count));
+            }
+        };
+        if bark_response.code != Some(200) {
+            if let Some(message) = bark_response.message.as_deref() {
+                tracing::warn!("Bark notification rejected: {message}");
+            }
+            let mut outcome = ProbeBarkOutcome::failed_request(
+                "bark_response_code",
+                config.probe.notifications.enabled,
+                true,
+                true,
+                Some(request.dedupe_key.clone()),
+            )
+            .with_delivery_metadata(server_url, request_count, chunk_count);
+            outcome.http_status = Some(status);
+            return Ok(outcome);
+        }
+    }
+    Ok(ProbeBarkOutcome::sent(
+        last_status.unwrap_or(0),
+        config.probe.notifications.enabled,
+        true,
+        true,
+        Some(request.dedupe_key.clone()),
+    )
+    .with_delivery_metadata(server_url, request_count, chunk_count))
+}
+
+fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    if value.is_empty() || max_bytes == 0 {
+        return vec![String::new()];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < value.len() {
+        let mut end = (start + max_bytes).min(value.len());
+        while end > start && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = value[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| start + offset)
+                .unwrap_or(value.len());
+        }
+        chunks.push(value[start..end].to_string());
+        start = end;
+    }
+    chunks
+}
+
+fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || max_bytes == 0 {
+        return vec![String::new()];
+    }
+    let raw_chunks = utf8_chunks(trimmed, max_bytes);
+    let chunk_count = raw_chunks.len();
+    if chunk_count <= 1 {
+        return raw_chunks;
+    }
+    raw_chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| format!("{}{chunk}", bark_chunk_prefix(index + 1, chunk_count)))
+        .collect()
+}
+
+fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
+    format!("第 {index}/{chunk_count} 段\n\n")
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelConfig {
+    server: LegacySentinelServerSection,
+    bark: LegacySentinelBarkSection,
+    observability: LegacySentinelObservabilitySection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelServerSection {
+    host_label: String,
+    codex_home: Option<PathBuf>,
+    app_server_service: String,
+    poll_seconds: Option<u64>,
+    recent_limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelBarkSection {
+    enabled: Option<bool>,
+    server_url: String,
+    device_key: String,
+    sound: String,
+    group: String,
+    url: String,
+    notify_completion: Option<bool>,
+    notify_abnormal: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacySentinelObservabilitySection {
+    hook_event_max_lines: Option<usize>,
+    hook_cooldown_max_lines: Option<usize>,
+    log_max_bytes: Option<usize>,
+}
+
+fn import_legacy_sentinel_config(db: &PanelDb) -> Result<Value> {
+    let legacy_path = PathBuf::from("/etc/codex-sentinel-server/config.toml");
+    let config_path = std::env::var_os("NEXUSHUB_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PlatformPaths::current().config_file);
+    import_legacy_sentinel_config_from_path(db, &legacy_path, &config_path)
+}
+
+fn import_legacy_sentinel_config_from_path(
+    db: &PanelDb,
+    legacy_path: &Path,
+    config_path: &Path,
+) -> Result<Value> {
+    if !legacy_path.exists() {
+        return Ok(json!({
+            "ok": true,
+            "action": "legacy_import",
+            "imported": false,
+            "legacy_config": legacy_path,
+            "skip_reason": "legacy_config_missing",
+        }));
+    }
+
+    let text = fs::read_to_string(legacy_path)
+        .with_context(|| format!("read {}", legacy_path.display()))?;
+    let legacy: LegacySentinelConfig =
+        toml::from_str(&text).with_context(|| format!("parse {}", legacy_path.display()))?;
+    let patch = legacy_sentinel_config_patch(&legacy);
+    let current = fs::read_to_string(config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+    let updated = patch_probe_config_toml(&current, &patch)?;
+    fs::write(config_path, updated).with_context(|| format!("write {}", config_path.display()))?;
+
+    let mut imported_secret = false;
+    let device_key = legacy.bark.device_key.trim();
+    if !device_key.is_empty() {
+        db.set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
+        imported_secret = true;
+    }
+    db.set_setting(
+        "probe_legacy_import",
+        &json!({
+            "legacy_config": legacy_path,
+            "config_path": config_path,
+            "imported_bark_device_key": imported_secret,
+            "imported_at": chrono::Utc::now().to_rfc3339(),
+        })
+        .to_string(),
+    )?;
+
+    Ok(json!({
+        "ok": true,
+        "action": "legacy_import",
+        "imported": true,
+        "legacy_config": legacy_path,
+        "config_path": config_path,
+        "imported_bark_device_key": imported_secret,
+        "mapped": {
+            "codex": ["home", "host_label"],
+            "probe": ["enabled", "poll_seconds", "recent_limit", "notifications", "observability"],
+        }
+    }))
+}
+
+fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFilePatch {
+    let nonempty = |value: &str| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    ProbeConfigFilePatch {
+        codex: Some(CodexProbeConfigPatch {
+            home: legacy
+                .server
+                .codex_home
+                .as_ref()
+                .map(|path| Some(path.to_string_lossy().to_string())),
+            host_label: nonempty(&legacy.server.host_label),
+            ..Default::default()
+        }),
+        probe: Some(ProbeSettingsPatch {
+            enabled: Some(true),
+            poll_seconds: legacy.server.poll_seconds,
+            recent_limit: legacy.server.recent_limit,
+            hooks: Some(ProbeHooksConfigPatch {
+                manage_stop_hook: Some(true),
+                reload_app_server_after_install: Some(true),
+            }),
+            notifications: Some(ProbeNotificationsConfigPatch {
+                enabled: legacy.bark.enabled,
+                server_url: nonempty(&legacy.bark.server_url),
+                sound: Some(nonempty(&legacy.bark.sound)),
+                group: nonempty(&legacy.bark.group),
+                url: Some(nonempty(&legacy.bark.url)),
+                notify_completion: legacy.bark.notify_completion,
+                notify_reply_needed: legacy.bark.notify_completion,
+                notify_recoverable: legacy.bark.notify_abnormal,
+                ..Default::default()
+            }),
+            observability: Some(ProbeObservabilityConfigPatch {
+                event_retention_days: None,
+                hook_event_max_lines: legacy.observability.hook_event_max_lines,
+                hook_cooldown_max_lines: legacy.observability.hook_cooldown_max_lines,
+                log_max_bytes: legacy.observability.log_max_bytes,
+            }),
+            error_monitor: None,
+        }),
+    }
+}
+
+fn init_admin(db: PanelDb, username: &str, password: &str, allow_existing: bool) -> Result<()> {
+    if password.len() < 12 {
+        anyhow::bail!("password must be at least 12 characters");
+    }
+    if !allow_existing && db.admin_count()? > 0 {
+        anyhow::bail!("admin already exists; use admin reset-password");
+    }
+    let hash = auth::hash_password(password)?;
+    db.upsert_admin(&uuid::Uuid::new_v4().to_string(), username, &hash)?;
+    println!("admin {} configured", username);
+    Ok(())
+}
+
+async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
+    anyhow::ensure!(
+        host_surface == HostSurface::LinuxServerWebui && cfg!(target_os = "linux"),
+        "Web server is available only on Linux; desktop LAN WebUI has been retired"
+    );
+    let config = Config::load(&config_path)?;
+    let db = open_panel_db(&config)?;
+    let state = AppState::new_for_surface(config.clone(), db, host_surface);
+    spawn_probe_thread_scan(state.clone());
+    spawn_probe_error_monitor(state.clone());
+    api::spawn_probe_status_refresh(state.clone());
+    let webui_dir = config.paths.webui_dir.clone();
+    let app =
+        with_webui_static_routes(api::router(state), webui_dir).layer(TraceLayer::new_for_http());
+    let addr: SocketAddr = config.server.listen;
+    let listener = TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind {addr}"))?;
+    tracing::info!("nexushub listening on {addr} surface={host_surface}");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProbeErrorMonitorRunOutcome {
+    baseline_only: bool,
+    rows_seen: usize,
+    new_incidents: usize,
+    deliveries_completed: usize,
+    recoveries_processed: usize,
+}
+
+fn spawn_probe_error_monitor(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            let config = state.config();
+            match run_probe_error_monitor_once(&config, &state.db, &state.goal_client).await {
+                Ok(outcome) if outcome.new_incidents > 0 => tracing::info!(
+                    new_incidents = outcome.new_incidents,
+                    recoveries_processed = outcome.recoveries_processed,
+                    "Probe error monitor processed Codex turn errors"
+                ),
+                Ok(_) => tracing::debug!("Probe error monitor scan completed"),
+                Err(err) => tracing::warn!("Probe error monitor scan failed: {err}"),
+            }
+            time::sleep(Duration::from_secs(
+                config.probe.poll_seconds.clamp(5, 3_600),
+            ))
+            .await;
+        }
+    });
+}
+
+async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
+    loop {
+        let poll_seconds = match Config::load(&config_path) {
+            Ok(config) => {
+                match open_panel_db(&config) {
+                    Ok(db) => {
+                        let client = nexushub_core::codex::CodexGoalClient::new();
+                        if let Err(err) = run_probe_error_monitor_once(&config, &db, &client).await
+                        {
+                            tracing::warn!("Probe error monitor scan failed: {err}");
+                        }
+                    }
+                    Err(err) => tracing::warn!("Probe error monitor DB open failed: {err}"),
+                }
+                config.probe.poll_seconds.clamp(5, 3_600)
+            }
+            Err(err) => {
+                tracing::warn!("Probe error monitor config load failed: {err}");
+                15
+            }
+        };
+        time::sleep(Duration::from_secs(poll_seconds)).await;
+    }
+}
+
+async fn run_probe_error_monitor_once(
+    config: &Config,
+    db: &PanelDb,
+    goal_client: &nexushub_core::codex::CodexGoalClient,
+) -> Result<ProbeErrorMonitorRunOutcome> {
+    let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
+    if let Err(error) = provider_monitor::run(config, db).await {
+        tracing::warn!(
+            "native provider notification monitor failed: {}",
+            safe_probe_monitor_error(&error.to_string())
+        );
+    }
+    if !config.probe.enabled || !config.probe.error_monitor.enabled {
+        store_probe_error_monitor_status(
+            db,
+            ProbeErrorMonitorRuntimeStatus {
+                status: "disabled".to_string(),
+                last_scan_at: PanelDb::now(),
+                last_error: None,
+                rows_seen: 0,
+                new_incidents: 0,
+                incident_count: db.probe_error_incident_count()?,
+                cursor: load_probe_error_cursor(db)?,
+            },
+        )?;
+        return Ok(ProbeErrorMonitorRunOutcome {
+            baseline_only: false,
+            rows_seen: 0,
+            new_incidents: 0,
+            deliveries_completed: 0,
+            recoveries_processed: 0,
+        });
+    }
+
+    let resolved = resolve_codex_paths(&config.codex.home);
+    let previous = load_probe_error_cursor(db)?;
+    let scan = match scan_codex_turn_errors(
+        &resolved.logs_db,
+        previous.as_ref(),
+        PROBE_ERROR_MONITOR_BATCH_LIMIT,
+    ) {
+        Ok(scan) => scan,
+        Err(err) => {
+            let safe_error = safe_probe_monitor_error(&err.to_string());
+            store_probe_error_monitor_status(
+                db,
+                ProbeErrorMonitorRuntimeStatus {
+                    status: "error".to_string(),
+                    last_scan_at: PanelDb::now(),
+                    last_error: Some(safe_error),
+                    rows_seen: 0,
+                    new_incidents: 0,
+                    incident_count: db.probe_error_incident_count()?,
+                    cursor: previous,
+                },
+            )?;
+            return Err(err);
+        }
+    };
+
+    let mut claimed = Vec::new();
+    for incident in &scan.incidents {
+        if task_notification_suppression_reason(config, Some(&incident.thread_id)).is_some() {
+            continue;
+        }
+        let record = NewProbeErrorIncident {
+            incident_key: incident.incident_key.clone(),
+            source_ts: incident.source_ts,
+            source_ts_nanos: incident.source_ts_nanos,
+            source_row_id: incident.source_row_id,
+            thread_id: incident.thread_id.clone(),
+            turn_id: incident.turn_id.clone(),
+            classification: incident.classification.as_str().to_string(),
+            error_sha256: incident.error_sha256.clone(),
+            error_summary: incident.summary.clone(),
+        };
+        if db.claim_probe_error_incident(&record)? {
+            claimed.push(incident.clone());
+        }
+    }
+
+    let pending_deliveries = db.list_pending_probe_error_deliveries(100)?;
+    let delivery = deliver_probe_error_incidents(config, db, &pending_deliveries);
+    let recovery = process_due_probe_error_recoveries(config, db, goal_client);
+    let (delivery_result, recovery_result) = tokio::join!(delivery, recovery);
+    let deliveries_completed = delivery_result?;
+    let recoveries_processed = recovery_result?;
+    db.set_setting(
+        PROBE_ERROR_MONITOR_CURSOR_SETTING,
+        &serde_json::to_string(&scan.cursor)?,
+    )?;
+    store_probe_error_monitor_status(
+        db,
+        ProbeErrorMonitorRuntimeStatus {
+            status: if scan.baseline_only { "baseline" } else { "ok" }.to_string(),
+            last_scan_at: PanelDb::now(),
+            last_error: None,
+            rows_seen: scan.rows_seen,
+            new_incidents: claimed.len(),
+            incident_count: db.probe_error_incident_count()?,
+            cursor: Some(scan.cursor.clone()),
+        },
+    )?;
+    Ok(ProbeErrorMonitorRunOutcome {
+        baseline_only: scan.baseline_only,
+        rows_seen: scan.rows_seen,
+        new_incidents: claimed.len(),
+        deliveries_completed,
+        recoveries_processed,
+    })
+}
+
+async fn deliver_probe_error_incidents(
+    config: &Config,
+    db: &PanelDb,
+    incidents: &[ProbeErrorIncident],
+) -> Result<usize> {
+    let mut delivered = 0usize;
+    for incident in incidents {
+        let title = local_thread_title(config, &incident.thread_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "未命名线程".to_string());
+        let mut diagnostics = BTreeMap::new();
+        diagnostics.insert(
+            "error_classification".to_string(),
+            json!(incident.classification),
+        );
+        diagnostics.insert("error_sha256".to_string(), json!(incident.error_sha256));
+        diagnostics.insert("source_log_ts".to_string(), json!(incident.source_ts));
+        diagnostics.insert(
+            "source_log_ts_nanos".to_string(),
+            json!(incident.source_ts_nanos),
+        );
+        diagnostics.insert(
+            "source_log_row_id".to_string(),
+            json!(incident.source_row_id),
+        );
+        diagnostics.insert(
+            "goal_auto_resume_enabled".to_string(),
+            json!(config.probe.error_monitor.auto_resume_goals),
+        );
+        let event = probe_runtime(config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some(&incident.thread_id),
+                Some(&incident.turn_id),
+                Some(&incident.thread_id),
+                None,
+                Some(&incident.error_summary),
+                "turn-error",
+            )
+            .with_thread_title(Some(&title))
+            .with_body_source(Some("turn_error"))
+            .with_body_selection_diagnostics(diagnostics)
+            .with_error_monitor_source(),
+        );
+        let (outcome, bark) =
+            record_probe_event_with_bark_timeout(config, db, event, Duration::from_secs(3)).await?;
+        let event_id = db.probe_event_id_by_dedupe_key(&outcome.dedupe_key)?;
+        let bark_status = if bark.sent {
+            "sent".to_string()
+        } else if bark.skipped {
+            format!("skipped:{}", bark.reason.as_deref().unwrap_or("unknown"))
+        } else {
+            format!("failed:{}", bark.reason.as_deref().unwrap_or("unknown"))
+        };
+        db.update_probe_error_incident_delivery(
+            &incident.incident_key,
+            event_id.as_deref(),
+            &bark_status,
+        )?;
+        delivered += 1;
+    }
+    Ok(delivered)
+}
+
+async fn process_due_probe_error_recoveries(
+    config: &Config,
+    db: &PanelDb,
+    goal_client: &nexushub_core::codex::CodexGoalClient,
+) -> Result<usize> {
+    let now = PanelDb::now();
+    let incidents = db.list_due_probe_error_incidents(now, 100)?;
+    let mut processed = 0usize;
+    for incident in incidents {
+        if let Some(reason) =
+            task_notification_suppression_reason(config, Some(&incident.thread_id))
+        {
+            db.finish_probe_error_recovery(&incident.incident_key, reason, None)?;
+            continue;
+        }
+        if !config.probe.error_monitor.auto_resume_goals {
+            db.finish_probe_error_recovery(&incident.incident_key, "auto_resume_disabled", None)?;
+            continue;
+        }
+        if incident.recovery_attempts >= PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS
+            || !db.claim_probe_error_recovery_attempt(
+                &incident.incident_key,
+                incident.recovery_attempts,
+                now,
+            )?
+        {
+            continue;
+        }
+        processed += 1;
+        let attempts = incident.recovery_attempts + 1;
+        match goal_client
+            .execute(
+                &resolve_codex_paths(&config.codex.home).home,
+                &incident.thread_id,
+                CodexGoalAction::RecoverRestricted,
+            )
+            .await
+        {
+            Ok(Some(goal)) if goal.status == "active" => {
+                db.finish_probe_error_recovery(&incident.incident_key, "active", None)?;
+            }
+            Ok(Some(goal)) => {
+                db.finish_probe_error_recovery(
+                    &incident.incident_key,
+                    &format!("not_applicable:{}", goal.status),
+                    None,
+                )?;
+            }
+            Ok(None) => {
+                db.finish_probe_error_recovery(&incident.incident_key, "no_goal", None)?;
+            }
+            Err(err) => {
+                let mut safe_error = safe_probe_monitor_error(&err.to_string());
+                let timeout_unknown = err.to_string().contains("resulting state is unknown");
+                if timeout_unknown {
+                    match goal_client
+                        .execute(
+                            &resolve_codex_paths(&config.codex.home).home,
+                            &incident.thread_id,
+                            CodexGoalAction::Get,
+                        )
+                        .await
+                    {
+                        Ok(Some(goal)) if goal.status == "active" => {
+                            db.finish_probe_error_recovery(
+                                &incident.incident_key,
+                                "active_confirmed_after_timeout",
+                                None,
+                            )?;
+                            continue;
+                        }
+                        Ok(Some(goal))
+                            if !matches!(
+                                goal.status.as_str(),
+                                "blocked" | "usageLimited" | "budgetLimited"
+                            ) =>
+                        {
+                            db.finish_probe_error_recovery(
+                                &incident.incident_key,
+                                &format!("not_applicable:{}", goal.status),
+                                None,
+                            )?;
+                            continue;
+                        }
+                        Ok(None) => {
+                            db.finish_probe_error_recovery(
+                                &incident.incident_key,
+                                "no_goal",
+                                None,
+                            )?;
+                            continue;
+                        }
+                        Ok(Some(_)) => {}
+                        Err(query_err) => {
+                            safe_error = format!(
+                                "{}; state recheck failed: {}",
+                                safe_error,
+                                safe_probe_monitor_error(&query_err.to_string())
+                            );
+                        }
+                    }
+                }
+                if attempts < PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS {
+                    let delay = PROBE_ERROR_MONITOR_RECOVERY_RETRY_SECONDS[(attempts - 1) as usize];
+                    db.schedule_probe_error_recovery_retry(
+                        &incident.incident_key,
+                        attempts,
+                        PanelDb::now() + delay,
+                        &safe_error,
+                    )?;
+                } else {
+                    db.finish_probe_error_recovery(
+                        &incident.incident_key,
+                        "failed",
+                        Some(&safe_error),
+                    )?;
+                    notify_probe_goal_recovery_failure(config, db, &incident, &safe_error).await?;
+                }
+            }
+        }
+    }
+    Ok(processed)
+}
+
+async fn notify_probe_goal_recovery_failure(
+    config: &Config,
+    db: &PanelDb,
+    incident: &ProbeErrorIncident,
+    safe_error: &str,
+) -> Result<()> {
+    let title = local_thread_title(config, &incident.thread_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "未命名线程".to_string());
+    let body = format!("Goal 自动恢复失败（已重试 4 次）：{safe_error}");
+    let mut diagnostics = BTreeMap::new();
+    diagnostics.insert("recovery_failed".to_string(), json!(true));
+    diagnostics.insert("recovery_attempts".to_string(), json!(4));
+    diagnostics.insert(
+        "original_error_sha256".to_string(),
+        json!(incident.error_sha256),
+    );
+    let event = probe_runtime(config).build_event(
+        ProbeEventInput::hook_stop_with_context(
+            Some(&incident.thread_id),
+            Some(&incident.turn_id),
+            Some(&incident.thread_id),
+            None,
+            Some(&body),
+            "turn-error",
+        )
+        .with_thread_title(Some(&title))
+        .with_body_source(Some("goal_recovery_failed"))
+        .with_body_selection_diagnostics(diagnostics)
+        .with_error_monitor_source(),
+    );
+    let _ = record_probe_event_with_bark_timeout(config, db, event, Duration::from_secs(3)).await?;
+    Ok(())
+}
+
+fn load_probe_error_cursor(db: &PanelDb) -> Result<Option<ProbeErrorCursor>> {
+    db.get_setting(PROBE_ERROR_MONITOR_CURSOR_SETTING)?
+        .map(|value| serde_json::from_str(&value).context("decode Probe error monitor cursor"))
+        .transpose()
+}
+
+fn store_probe_error_monitor_status(
+    db: &PanelDb,
+    status: ProbeErrorMonitorRuntimeStatus,
+) -> Result<()> {
+    db.set_setting(
+        PROBE_ERROR_MONITOR_STATUS_SETTING,
+        &serde_json::to_string(&status)?,
+    )
+}
+
+fn safe_probe_monitor_error(value: &str) -> String {
+    let redacted = nexushub_core::security::redact_output(value.trim());
+    let mut end = redacted.len().min(512);
+    while !redacted.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end < redacted.len() {
+        format!("{} [truncated]", &redacted[..end])
+    } else {
+        redacted
+    }
+}
+
+fn with_webui_static_routes(app: axum::Router, webui_dir: PathBuf) -> axum::Router {
+    app.nest_service(
+        "/nexushub",
+        ServeDir::new(webui_dir.clone()).append_index_html_on_directories(true),
+    )
+    .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
+}
+
+fn open_panel_db(config: &Config) -> Result<PanelDb> {
+    PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box()?)
+}
+
+fn spawn_probe_thread_scan(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            match run_probe_thread_scan_if_due(state.clone()).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!(count, "probe thread scan notifications recorded");
+                }
+                Ok(_) => {
+                    tracing::debug!("probe thread scan skipped");
+                }
+                Err(err) => {
+                    tracing::warn!("probe thread scan failed: {err}");
+                }
+            }
+            time::sleep(std::time::Duration::from_secs(
+                PROBE_THREAD_SCAN_TICK_SECONDS,
+            ))
+            .await;
+        }
+    });
+}
+
+async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
+    let _guard = PROBE_THREAD_SCAN_LOCK.lock().await;
+    let config = state.config();
+    if !config.probe.enabled || !config.probe.notifications.enabled {
+        return Ok(0);
+    }
+    let mut recorded = 0usize;
+    for status in ["reply-needed", "recoverable"] {
+        let threads = api::load_probe_threads(&state, status, config.probe.recent_limit).await?;
+        for thread in threads {
+            if task_notification_suppression_reason(&config, Some(&thread.id)).is_some() {
+                continue;
+            }
+            let plan = probe_service::probe_passive_thread_notification_plan(&thread, status);
+            if !plan.fresh {
+                continue;
+            }
+            let transcript_path = thread
+                .rollout_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string());
+            let mut event = probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some(thread.id.as_str()),
+                    thread.active_turn_id.as_deref(),
+                    Some(thread.id.as_str()),
+                    transcript_path.as_deref(),
+                    plan.body.as_deref(),
+                    status,
+                )
+                .with_thread_title(Some(thread.title.as_str()))
+                .with_body_source(plan.body_source.as_deref())
+                .with_passive_scan_source(),
+            );
+            event.payload["thread_title"] = json!(thread.title.clone());
+            event.payload["thread_id"] = json!(thread.id.clone());
+            if let Some(active_turn_id) = thread.active_turn_id.as_deref() {
+                event.payload["turn_id"] = json!(active_turn_id);
+            }
+            if let Some(elicitation) = &thread.pending_elicitation {
+                if let Some(item_id) = elicitation.item_id.as_deref() {
+                    event.payload["item_id"] = json!(item_id);
+                    event.payload["call_id"] = json!(item_id);
+                }
+            }
+            if let Some(reason_label) = plan.reason_label.as_deref() {
+                event.payload["reason_label"] = json!(reason_label);
+            }
+            let (outcome, bark) = record_probe_event_with_bark(&config, &state.db, event).await?;
+            if outcome.recorded || bark.sent {
+                recorded += 1;
+            }
+        }
+    }
+    Ok(recorded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        routing::{any, get},
+    };
+    use rusqlite::{params, Connection};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::time::SystemTime;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn webui_static_routes_serve_root_subpath_assets_and_preserve_api_routes() {
+        let dir = temp_test_dir("nexushub-webui-static");
+        fs::create_dir_all(dir.join("assets")).unwrap();
+        fs::write(dir.join("index.html"), "<html>NexusHub index</html>").unwrap();
+        fs::write(dir.join("assets/app.js"), "console.log('nexushub asset');").unwrap();
+        let app = with_webui_static_routes(
+            axum::Router::new()
+                .route("/healthz", get(|| async { "health-ok" }))
+                .route(
+                    "/api/*path",
+                    any(|| async { (StatusCode::NOT_FOUND, "api-not-found") }),
+                ),
+            dir.clone(),
+        );
+
+        let (status, body) = static_route_response(app.clone(), "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "<html>NexusHub index</html>");
+
+        let (status, body) = static_route_response(app.clone(), "/nexushub/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "<html>NexusHub index</html>");
+
+        let (status, body) = static_route_response(app.clone(), "/nexushub/assets/app.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "console.log('nexushub asset');");
+
+        let (status, body) = static_route_response(app.clone(), "/assets/app.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "console.log('nexushub asset');");
+
+        let (status, body) = static_route_response(app.clone(), "/healthz").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "health-ok");
+
+        let (status, body) = static_route_response(app, "/api/no-such-route").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "api-not-found");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn static_route_response(app: axum::Router, uri: &str) -> (StatusCode, String) {
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn unsupported_probe_cli_actions_do_not_report_fake_success() {
+        let config = Config::default();
+
+        for command in [ProbeCommand::LifecycleRepair, ProbeCommand::ServiceRestart] {
+            let db = PanelDb::open(":memory:").unwrap();
+            let err = run_probe_command(command, &config, db).await.unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("unsupported"));
+            assert!(!message.contains("\"ok\": true"));
+        }
+    }
+
+    #[test]
+    fn hook_request_user_input_cli_subcommand_is_internal_and_argument_free() {
+        assert!(Cli::try_parse_from(["nexushub-webd", "probe", "hook-request-user-input"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["nexushub-webd", "probe", "hook-request-user-input-confirm"])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from([
+            "nexushub-webd",
+            "probe",
+            "hook-request-user-input",
+            "--thread-id",
+            "thread-a"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn legacy_import_maps_server_bark_observability_without_plaintext_secret() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        let legacy_path = dir.join("legacy.toml");
+        let mut config = Config::default();
+        config.security.secret_key = "7q9DCmCPyxnTrH3FhrV1sUJol1yqPgscQsBnR-mXA2E".to_string();
+        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        fs::write(
+            &legacy_path,
+            r#"
+[server]
+host_label = "tencent-example-user"
+codex_home = "/root/.codex"
+app_server_service = "codex-app-server-root.service"
+poll_seconds = 60
+recent_limit = 50
+
+[bark]
+enabled = true
+server_url = "https://api.day.app"
+device_key = "legacy-bark-secret"
+sound = "bell"
+group = "Codex"
+url = "https://panel.example.com/nexushub/"
+notify_completion = true
+notify_abnormal = false
+
+[observability]
+hook_event_max_lines = 500
+hook_cooldown_max_lines = 1000
+log_max_bytes = 5242880
+"#,
+        )
+        .unwrap();
+        let db = PanelDb::open_with_secret_box(
+            dir.join("nexushub.sqlite"),
+            config.secret_box().unwrap(),
+        )
+        .unwrap();
+
+        let result =
+            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
+
+        assert_eq!(result["imported"], true);
+        assert_eq!(result["imported_bark_device_key"], true);
+        let updated = fs::read_to_string(&config_path).unwrap();
+        assert!(updated.contains("home = \"/root/.codex\""));
+        assert!(updated.contains("host_label = \"tencent-example-user\""));
+        assert!(updated.contains("poll_seconds = 60"));
+        assert!(updated.contains("enabled = true"));
+        assert!(updated.contains("sound = \"bell\""));
+        assert!(updated.contains("notify_recoverable = false"));
+        assert!(updated.contains("hook_event_max_lines = 500"));
+        assert!(updated.contains("log_max_bytes = 5242880"));
+        assert!(!updated.contains("legacy-bark-secret"));
+        assert!(!updated.contains("app_server_service"));
+        assert!(!updated.contains("codex-app-server-root.service"));
+        assert_eq!(
+            db.get_secret_setting_bytes("probe_bark_device_key")
+                .unwrap()
+                .as_deref(),
+            Some("legacy-bark-secret".as_bytes())
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_import_reports_missing_config_without_touching_current_config() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-missing-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        let legacy_path = dir.join("missing.toml");
+        fs::write(&config_path, "sentinel = \"keep\"\n").unwrap();
+        let db = PanelDb::open(dir.join("nexushub.sqlite")).unwrap();
+
+        let result =
+            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
+
+        assert_eq!(result["imported"], false);
+        assert_eq!(result["skip_reason"], "legacy_config_missing");
+        assert_eq!(
+            fs::read_to_string(&config_path).unwrap(),
+            "sentinel = \"keep\"\n"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn codex_config_patch_enables_features_hooks_and_preserves_existing_values() {
+        let updated = ensure_codex_hooks_feature(
+            r#"
+model = "gpt-5"
+
+[features]
+foo = true
+hooks = false
+"#,
+        )
+        .unwrap();
+
+        assert!(updated.contains("hooks = true"));
+        assert!(updated.contains("foo = true"));
+        assert!(updated.contains("model = \"gpt-5\""));
+    }
+
+    #[test]
+    fn codex_config_patch_creates_features_table_when_missing() {
+        let updated = ensure_codex_hooks_feature("model = \"gpt-5\"\n").unwrap();
+
+        assert!(updated.contains("[features]"));
+        assert!(updated.contains("hooks = true"));
+    }
+
+    async fn install_probe_hooks_for_test(config: &Config, dry_run: bool) -> Result<Value> {
+        install_probe_hooks_with_repair(config, dry_run, |platform, enabled| {
+            Ok(json!({
+                "supported": true,
+                "enabled": enabled,
+                "loaded": enabled,
+                "changed": false,
+                "label": nexushub_core::probe_error_monitor::PROBE_ERROR_MONITOR_LAUNCH_AGENT_LABEL,
+                "plist_path": Value::Null,
+                "helper_path": platform.daemon_binary(),
+                "config_path": &platform.config_file,
+            }))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn install_probe_hooks_writes_hooks_json_and_codex_features_hooks() {
+        let dir = temp_test_dir("nexushub-hooks-install");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::write(codex_home.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.probe.hooks.reload_app_server_after_install = false;
+
+        let result = install_probe_hooks_for_test(&config, false).await.unwrap();
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["hooks_json_changed"], true);
+        assert_eq!(result["codex_config_changed"], true);
+        assert!(result["reload_result"].is_null());
+        let hooks_json: Value =
+            serde_json::from_slice(&fs::read(codex_home.join("hooks.json")).unwrap()).unwrap();
+        assert!(hooks_json.to_string().contains("probe hook-stop"));
+        let pre_tool_use = hooks_json["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool_use.len(), 1);
+        assert_eq!(pre_tool_use[0]["matcher"], "^request_user_input$");
+        let request_hook = &pre_tool_use[0]["hooks"][0];
+        assert!(request_hook["command"]
+            .as_str()
+            .unwrap()
+            .contains("probe hook-request-user-input"));
+        assert_eq!(request_hook["timeout"], 5);
+        assert!(request_hook.get("async").is_none());
+        let codex_config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+        assert!(codex_config.contains("[features]"));
+        assert!(codex_config.contains("hooks = true"));
+
+        let second = install_probe_hooks_for_test(&config, false).await.unwrap();
+        assert_eq!(second["changed"], false);
+        assert_eq!(
+            fs::read(codex_home.join("hooks.json")).unwrap(),
+            serde_json::to_vec_pretty(&hooks_json).unwrap()
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_probe_hooks_replaces_stale_nexushub_hooks_and_hook_state() {
+        let dir = temp_test_dir("nexushub-hooks-replace-stale");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(
+            codex_home.join("hooks.json"),
+            serde_json::to_vec_pretty(&json!({
+                "hooks": {
+                    "Stop": [
+                        {"hooks": []},
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-stop"
+                            }]
+                        },
+                        {
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/usr/local/bin/third-party-hook"
+                            }]
+                        }
+                    ],
+                    "PreToolUse": [
+                        {
+                            "matcher": "^request_user_input$",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/opt/nexushub/bin/nexushubd --config /opt/nexushub/config.toml probe hook-request-user-input",
+                                "timeout": 9,
+                                "async": true
+                            }]
+                        },
+                        {
+                            "matcher": "^request_user_input$",
+                            "hooks": [{
+                                "type": "command",
+                                "command": "/usr/local/bin/third-party-request-hook"
+                            }]
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            codex_home.join("config.toml"),
+            r#"
+model = "gpt-5"
+
+[features]
+hooks = true
+
+[hooks.state."/tmp/.codex/hooks.json:stop:0:0"]
+last_error = "old empty group"
+
+[hooks.state."/tmp/.codex/hooks.json:stop:1:0"]
+last_error = "old nexushub hook"
+
+[hooks.state."/tmp/.codex/hooks.json:pre_tool_use:0:0"]
+last_error = "old nexushub request hook"
+"#,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.probe.hooks.reload_app_server_after_install = false;
+
+        let result = install_probe_hooks_for_test(&config, false).await.unwrap();
+
+        assert_eq!(result["hooks_json_changed"], true);
+        assert_eq!(result["codex_config_changed"], true);
+        let hooks_json: Value =
+            serde_json::from_slice(&fs::read(codex_home.join("hooks.json")).unwrap()).unwrap();
+        let stop = hooks_json["hooks"]["Stop"].as_array().unwrap();
+        let commands = stop
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .filter_map(|hook| hook["command"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains("probe hook-stop"))
+                .count(),
+            1
+        );
+        assert!(commands
+            .iter()
+            .any(|command| command.contains("nexushub-webd")));
+        assert!(!commands.iter().any(|command| command.contains("nexushubd")));
+        assert!(commands.contains(&"/usr/local/bin/third-party-hook"));
+        assert!(stop.iter().all(|group| group["hooks"]
+            .as_array()
+            .is_some_and(|hooks| !hooks.is_empty())));
+        let pre_tool_use = hooks_json["hooks"]["PreToolUse"].as_array().unwrap();
+        let request_commands = pre_tool_use
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .filter_map(|hook| hook["command"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            request_commands
+                .iter()
+                .filter(|command| command.contains("probe hook-request-user-input"))
+                .count(),
+            1
+        );
+        assert!(request_commands
+            .iter()
+            .any(|command| command.contains("nexushub-webd")));
+        assert!(request_commands.contains(&"/usr/local/bin/third-party-request-hook"));
+        let managed_request_hook = pre_tool_use
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains("nexushub-webd"))
+            })
+            .unwrap();
+        assert_eq!(managed_request_hook["timeout"], 5);
+        assert!(managed_request_hook.get("async").is_none());
+        let codex_config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+        assert!(!codex_config.contains("[hooks.state."));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_records_probe_event_but_returns_codex_stop_json_and_redacted_bark_state() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+
+        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
+            Some("thread-a"),
+            Some("turn-1"),
+            "hook-stop",
+        ));
+        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        assert_eq!(
+            result.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(result.outcome.recorded);
+        assert!(!result.bark.sent);
+        assert!(result.bark.skipped);
+        assert_eq!(result.bark.reason.as_deref(), Some("device_key_missing"));
+        assert!(!result.bark.device_key_configured);
+        let output = serde_json::to_string(&result).unwrap();
+        assert!(!output.contains("device-key"));
+        assert!(!output.contains("secret"));
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "hook-stop");
+        assert_eq!(events[0].payload["bark"]["reason"], "device_key_missing");
+        assert!(events[0].payload["bark"].get("device_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn probe_control_payload_suppression_skips_dedupe_db_and_bark() {
+        let dir = temp_test_dir("nexushub-control-payload-suppression");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-extra-key"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+
+        for (index, body) in [r#"{"suggestions":[]}"#, r#"{"exclude":[]}"#]
+            .into_iter()
+            .enumerate()
+        {
+            let event =
+                probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+                    Some(&format!("thread-control-{index}")),
+                    Some(&format!("turn-control-{index}")),
+                    Some(&format!("thread-control-{index}")),
+                    None,
+                    Some(body),
+                    "hook-stop",
+                ));
+            let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+                .await
+                .unwrap();
+
+            assert!(!outcome.recorded);
+            assert!(!outcome.duplicate);
+            assert!(bark.skipped);
+            assert_eq!(bark.reason.as_deref(), Some("internal_control_payload"));
+            assert_eq!(bark.request_count, 0);
+        }
+
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+
+        let normal_event =
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+                Some("thread-extra-key"),
+                Some("turn-extra-key"),
+                Some("thread-extra-key"),
+                None,
+                Some(r#"{"suggestions":[],"message":"normal JSON"}"#),
+                "hook-stop",
+            ));
+        let (normal_outcome, normal_bark) =
+            record_probe_event_with_bark(&config, &db, normal_event)
+                .await
+                .unwrap();
+        assert!(normal_outcome.recorded);
+        assert!(!normal_outcome.duplicate);
+        assert_eq!(normal_bark.request_count, 1);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_suppresses_internal_memory_consolidation_before_body_dedupe_db_and_bark() {
+        let dir = temp_test_dir("nexushub-memory-hook-stop-suppression");
+        let codex_home = dir.join("custom-codex-home");
+        let memory_root = codex_home.join("memories");
+        let normalized_cwd = memory_root.join("nested").join("..");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(memory_root.join("nested")).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let memory_body = "MEMORY_CONSOLIDATION_BODY_MUST_NOT_BE_READ_OR_STORED";
+
+        let event_input = hook_stop_event_input(
+            &config,
+            Some(&json!({
+                "cwd": normalized_cwd,
+                "hook_event_name": "Stop",
+                "ephemeral": true,
+                "session_id": "00000000-0000-4000-8000-000000000106",
+                "turn_id": "turn-memory",
+                "transcript_path": null,
+                "last_assistant_message": memory_body,
+            })),
+            None,
+            None,
+            "hook-stop",
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert_eq!(
+            event.suppression_reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert!(event.payload["last_assistant_message"].is_null());
+        assert!(!event.bark_body.contains(memory_body));
+
+        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+        assert_eq!(
+            result.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(!result.outcome.recorded);
+        assert!(!result.outcome.duplicate);
+        assert_eq!(
+            result.bark.reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert_eq!(result.bark.request_count, 0);
+
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_events", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hook_stop_memory_identity_is_exact_and_fails_open_for_counterexamples() {
+        let dir = temp_test_dir("nexushub-memory-hook-stop-counterexamples");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        let ordinary_cwd = dir.join("workspace");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        fs::create_dir_all(&ordinary_cwd).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "turn-user",
+                    "last_agent_message": "用户线程完成"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+
+        let payloads = [
+            json!({
+                "cwd": ordinary_cwd,
+                "session_id": "ordinary-empty-transcript",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "正文提及 MEMORY.md、memory_summary.md 和记忆整理"
+            }),
+            json!({
+                "cwd": memory_root,
+                "session_id": "memory-with-transcript",
+                "turn_id": "turn-user",
+                "transcript_path": transcript,
+                "last_assistant_message": "显式用户线程"
+            }),
+            json!({
+                "session_id": "missing-cwd",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "普通用户线程"
+            }),
+            json!({
+                "cwd": dir.join("does-not-exist"),
+                "session_id": "invalid-cwd",
+                "turn_id": "turn-user",
+                "transcript_path": null,
+                "last_assistant_message": "普通用户线程"
+            }),
+            json!({
+                "cwd": memory_root,
+                "session_id": "invalid-transcript-field",
+                "turn_id": "turn-user",
+                "transcript_path": 42,
+                "last_assistant_message": "普通用户线程"
+            }),
+        ];
+
+        for payload in payloads {
+            let event_input =
+                hook_stop_event_input(&config, Some(&payload), None, None, "hook-stop").unwrap();
+            let event = probe_runtime(&config).build_event(event_input);
+            assert_ne!(
+                event.suppression_reason.as_deref(),
+                Some("internal_memory_consolidation"),
+                "payload should fail open: {payload}"
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn hook_request_user_input_memory_context_with_transcript_or_invalid_field_fails_open() {
+        let dir = temp_test_dir("nexushub-memory-pre-tool-use-counterexamples");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        notification_accuracy_tests::seed_main_task_identities(
+            &config.codex.home,
+            &["thread-user-question"],
+        );
+
+        for transcript_path in [json!("/tmp/user-rollout.jsonl"), json!(42)] {
+            let event_input = hook_request_user_input_event_input(
+                &config,
+                json!({
+                    "cwd": memory_root,
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "thread-user-question",
+                    "turn_id": "turn-user-question",
+                    "tool_name": "request_user_input",
+                    "tool_use_id": "call-user-question",
+                    "tool_input": {
+                        "questions": [{
+                            "id": "mode",
+                            "question": "Choose a mode?",
+                            "options": [{"label": "Continue"}]
+                        }]
+                    },
+                    "transcript_path": transcript_path
+                }),
+            )
+            .unwrap();
+            let event = probe_runtime(&config).build_event(event_input);
+            assert_ne!(
+                event.suppression_reason.as_deref(),
+                Some("internal_memory_consolidation")
+            );
+            assert!(event.bark_body.contains("Choose a mode?"));
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_request_user_input_suppresses_memory_context_without_db_dedupe_or_bark() {
+        let dir = temp_test_dir("nexushub-memory-pre-tool-use-suppression");
+        let codex_home = dir.join(".codex");
+        let memory_root = codex_home.join("memories");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::create_dir_all(&memory_root).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let event_input = hook_request_user_input_event_input(
+            &config,
+            json!({
+                "cwd": memory_root,
+                "hook_event_name": "PreToolUse",
+                "session_id": "thread-memory-question",
+                "turn_id": "turn-memory-question",
+                "tool_name": "request_user_input",
+                "tool_use_id": "call-memory-question",
+                "tool_input": {
+                    "questions": [{
+                        "id": "memory",
+                        "question": "Internal memory question?",
+                        "options": [{"label": "Continue"}]
+                    }]
+                },
+                "transcript_path": null
+            }),
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert_eq!(
+            event.suppression_reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(!outcome.recorded);
+        assert!(!outcome.duplicate);
+        assert_eq!(
+            bark.reason.as_deref(),
+            Some("internal_memory_consolidation")
+        );
+        assert_eq!(bark.request_count, 0);
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        let conn = Connection::open(db.path()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM probe_dedupe", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_records_stdin_compatible_context_fields() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["session-stdin"]);
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let event = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            None,
+            Some("turn-stdin"),
+            Some("session-stdin"),
+            Some("/tmp/transcript.jsonl"),
+            Some("assistant body"),
+            "hook-stop",
+        ));
+
+        let result = handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        assert_eq!(
+            result.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].thread_id.as_deref(), Some("session-stdin"));
+        assert_eq!(events[0].payload["session_id"], "session-stdin");
+        assert_eq!(events[0].payload["turn_id"], "turn-stdin");
+        assert_eq!(
+            events[0].payload["transcript_path"],
+            "/tmp/transcript.jsonl"
+        );
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["summary"],
+            "assistant body"
+        );
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["classification"],
+            "completion"
+        );
+        assert_eq!(events[0].payload["event_type"], "completion");
+        assert_eq!(events[0].payload["raw_kind"], "hook-stop");
+        assert_eq!(events[0].payload["dedupe"]["namespace"], "probe_event");
+        assert_eq!(events[0].payload["dedupe"]["claimed"], true);
+        assert_eq!(events[0].payload["dedupe"]["duplicate"], false);
+        assert_eq!(events[0].kind, "completion");
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_transcript_latest_assistant_when_stdin_omits_body() {
+        let (mut config, _identity) = notification_accuracy_tests::test_notification_config(&[
+            "thread-transcript",
+            "session-transcript",
+        ]);
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-hook-transcript-summary");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-transcript","payload":{"type":"message","role":"assistant","content":[{"text":"first answer"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-transcript","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"final answer"}]}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let selection = hook_stop_last_assistant_message(
+            Some(transcript.to_string_lossy().as_ref()),
+            Some("turn-transcript"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-transcript"),
+                Some("turn-transcript"),
+                Some("session-transcript"),
+                Some(transcript.to_string_lossy().as_ref()),
+                Some(&selection.message),
+                "hook-stop",
+            )
+            .with_body_source(Some(&selection.source)),
+        );
+
+        handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["summary"],
+            "final answer"
+        );
+        assert_eq!(
+            events[0].payload["last_assistant_message"]["classification"],
+            "completion"
+        );
+        assert_eq!(events[0].payload["body_summary"], "final answer");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_local_thread_title_for_bark_title_when_payload_omits_title() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-hook-local-title");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let transcript = codex_home.join("sessions").join("rollout-title.jsonl");
+        fs::write(
+            &transcript,
+            json!({"type":"response_item","turn_id":"turn-title","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"完整最终回复"}]}})
+                .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                source TEXT,
+                thread_source TEXT,
+                updated_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
+            params![
+                "thread-title",
+                "真实 HookStop 标题",
+                chrono::Utc::now().timestamp_millis(),
+                transcript.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        config.codex.home = codex_home;
+
+        let selection = hook_stop_last_assistant_message(
+            Some(transcript.to_string_lossy().as_ref()),
+            Some("turn-title"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let event_input = ProbeEventInput::hook_stop_with_context(
+            Some("thread-title"),
+            Some("turn-title"),
+            Some("thread-title"),
+            Some(transcript.to_string_lossy().as_ref()),
+            Some(&selection.message),
+            "hook-stop",
+        )
+        .with_body_source(Some(&selection.source))
+        .with_thread_title(
+            local_thread_title(&config, "thread-title")
+                .unwrap()
+                .as_deref(),
+        );
+        let event = probe_runtime(&config).build_event(event_input);
+
+        handle_built_probe_event(&config, &db, event).await.unwrap();
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events[0].title.as_deref(), Some("真实 HookStop 标题"));
+        assert_eq!(events[0].payload["thread_title"], "真实 HookStop 标题");
+        assert_eq!(
+            events[0].payload["bark"]["title"],
+            "线程正常完成：真实 HookStop 标题"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_dedupe_skips_duplicate_bark_without_leaking_device_key() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let first = handle_built_probe_event(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
+                Some("thread-a"),
+                Some("turn-1"),
+                "hook-stop",
+            )),
+        )
+        .await
+        .unwrap();
+        let duplicate = handle_built_probe_event(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
+                Some("thread-a"),
+                Some("turn-1"),
+                "hook-stop",
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.bark.reason.as_deref(), Some("request_error"));
+        assert_eq!(
+            duplicate.stdout,
+            json!({"continue": true, "suppressOutput": false})
+        );
+        assert!(!duplicate.outcome.recorded);
+        assert!(!duplicate.bark.sent);
+        assert!(duplicate.bark.skipped);
+        assert_eq!(duplicate.bark.reason.as_deref(), Some("dedupe"));
+        assert!(duplicate.bark.device_key_configured);
+        assert!(duplicate.bark.dedupe_hit);
+        assert!(!serde_json::to_string(&duplicate)
+            .unwrap()
+            .contains("super-secret-device"));
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["bark"]["device_key_configured"], true);
+        assert!(events[0].payload["bark"].get("device_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_scan_uses_sent_marker_while_hook_window_stays_short() {
+        let (mut config, _identity) = notification_accuracy_tests::test_notification_config(&[
+            "thread-passive",
+            "thread-hook",
+        ]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let passive_input = || {
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-passive"),
+                Some("turn-passive"),
+                Some("thread-passive"),
+                None,
+                Some("等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-passive\nTurn ID：turn-passive\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：继续吗？\n选项 1：继续"),
+                "reply-needed",
+            )
+            .with_body_source(Some("request_user_input"))
+            .with_passive_scan_source()
+        };
+
+        let first = record_probe_event_with_bark(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(passive_input()),
+        )
+        .await
+        .unwrap();
+        let duplicate = record_probe_event_with_bark(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(passive_input()),
+        )
+        .await
+        .unwrap();
+
+        assert!(first.0.recorded);
+        assert!(!duplicate.0.recorded);
+        assert_eq!(duplicate.1.reason.as_deref(), Some("sent_marker"));
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["dedupe_ttl_seconds"], 6 * 60 * 60);
+        assert_eq!(events[0].payload["scan_source"], "passive-scan");
+
+        let hook = probe_runtime(&config).build_event(ProbeEventInput::hook_stop_with_context(
+            Some("thread-hook"),
+            Some("turn-hook"),
+            Some("thread-hook"),
+            None,
+            Some("等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-hook\nTurn ID：turn-hook"),
+            "reply-needed",
+        ));
+
+        assert_eq!(
+            hook.ttl_seconds,
+            nexushub_core::probe::PROBE_EVENT_TTL_SECONDS
+        );
+        assert_eq!(
+            hook.payload["dedupe_ttl_seconds"],
+            nexushub_core::probe::PROBE_EVENT_TTL_SECONDS
+        );
+        assert_eq!(hook.payload["scan_source"], "hook-stop");
+    }
+
+    #[tokio::test]
+    async fn notify_completion_uses_completion_bark_switch() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let event = probe_runtime(&config).build_event(ProbeEventInput::notify_completion(
+            Some("thread-a"),
+            Some("turn-a"),
+        ));
+
+        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+
+        assert!(bark.skipped);
+        assert_eq!(bark.reason.as_deref(), Some("event_switch_disabled"));
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events[0].kind, "completion");
+        assert_eq!(events[0].payload["bark"]["relevant_switch_enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn notify_completion_uses_complete_last_agent_message_from_rollout_without_storing_body()
+    {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-notify-completion-rollout");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let final_message = format!(
+            "最终反馈第一行\n{}\nAuthorization: Bearer secret-token\n末尾唯一完整反馈",
+            "完整正文".repeat(900)
+        );
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":"short assistant fallback"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":final_message}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(event.kind, "completion");
+        assert!(event.bark_body.contains("最终反馈第一行"));
+        assert!(event.bark_body.contains("完整正文完整正文"));
+        assert!(event.bark_body.contains("末尾唯一完整反馈"));
+        assert!(!event.bark_body.contains("secret-token"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(!event.bark_body.contains("最后反馈："));
+        assert!(event.payload["bark"].get("body").is_none());
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
+        let stored = db.list_probe_events(10).unwrap();
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(!stored_json.contains("secret-token"));
+        assert_eq!(
+            stored[0].payload["body_summary"],
+            event.payload["body_summary"]
+        );
+        assert_eq!(
+            stored[0].payload["body_sha256"],
+            event.payload["body_sha256"]
+        );
+        assert!(stored[0].payload["bark"].get("body").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_prefers_transcript_final_message_over_stale_stdin_message() {
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
+        let dir = temp_test_dir("nexushub-notify-completion-stale-stdin");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","content":[{"text":"上一条 assistant fallback"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":"最后一条 final message"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+                "last_assistant_message": "上一条旧消息"
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert!(event.bark_body.contains("最后一条 final message"));
+        assert!(!event.bark_body.contains("上一条旧消息"));
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_waits_for_later_final_message_and_records_selection_diagnostics() {
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-live"]);
+        let dir = temp_test_dir("nexushub-notify-completion-waits-final");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}}).to_string(),
+                json!({"type":"turn_context","payload":{"turn_id":"turn-live","summary":"auto","cwd":"/tmp"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let transcript_for_writer = transcript.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let final_message = "已接着完成。\n最终完成正文唯一标记";
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&transcript_for_writer)
+                .unwrap();
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":final_message}],"phase":"final_answer"}})
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-live","last_agent_message":final_message}})
+            )
+            .unwrap();
+        });
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-live",
+                "turn_id": "turn-live",
+                "transcript_path": transcript,
+                "last_assistant_message": "过早 stdin 正文"
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        writer.join().unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert!(event.bark_body.contains("最终完成正文唯一标记"));
+        assert!(!event.bark_body.contains("过早 stdin 正文"));
+        assert!(!event.bark_body.contains("上一轮完成正文"));
+        assert_eq!(
+            event.payload["body_source"],
+            "task_complete.last_agent_message"
+        );
+        assert_eq!(event.payload["body_selected_turn_id"], "turn-live");
+        assert!(event.payload["body_selected_line"].as_u64().unwrap() >= 4);
+        assert_eq!(event.payload["transcript_stabilized"], true);
+        assert!(
+            event.payload["transcript_size_after"].as_u64().unwrap()
+                > event.payload["transcript_size_before"].as_u64().unwrap()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_uses_full_raw_assistant_message_when_task_complete_body_is_missing()
+    {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-complete"]);
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let dir = temp_test_dir("nexushub-notify-completion-raw-assistant");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let final_message = format!(
+            "助手完整回复开头\n{}\n助手完整回复末尾唯一标记",
+            "没有完成字段也不能截断".repeat(900)
+        );
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-complete","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":final_message}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-complete",
+                "turn_id": "turn-complete",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+        let (_outcome, _bark) = record_probe_event_with_bark(&config, &db, event.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(event.kind, "completion");
+        assert_eq!(event.payload["body_source"], "last_assistant_message");
+        assert!(event.bark_body.contains("助手完整回复开头"));
+        assert!(event.bark_body.contains("助手完整回复末尾唯一标记"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(event.payload["body_length"].as_u64().unwrap() > 4000);
+        let stored = db.list_probe_events(10).unwrap();
+        assert!(!serde_json::to_string(&stored[0])
+            .unwrap()
+            .contains("助手完整回复末尾唯一标记"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_uses_cli_turn_id_when_payload_turn_id_is_missing() {
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-cli"]);
+        let dir = temp_test_dir("nexushub-hook-cli-turn-id");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"上一轮完成正文"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-cli"}}).to_string(),
+                json!({"type":"turn_context","payload":{"turn_id":"turn-cli","summary":"auto","cwd":"/tmp"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-cli","last_agent_message":"CLI turn 最终正文"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let event_input = hook_stop_event_input(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-cli",
+                "transcript_path": transcript,
+                "last_assistant_message": "payload 早期正文"
+            })),
+            Some("thread-cli"),
+            Some("turn-cli"),
+            "hook-stop",
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(event_input);
+
+        assert!(event.bark_body.contains("CLI turn 最终正文"));
+        assert!(!event.bark_body.contains("上一轮完成正文"));
+        assert!(!event.bark_body.contains("payload 早期正文"));
+        assert_eq!(event.payload["turn_id"], "turn-cli");
+        assert_eq!(event.payload["body_selected_turn_id"], "turn-cli");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_context_keeps_unresolved_plan_as_reply_needed() {
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan"]);
+        let dir = temp_test_dir("nexushub-notify-completion-plan-pending");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 待确认计划\n- 检查\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"计划等待确认。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-plan",
+                "turn_id": "turn-plan",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert_eq!(event.payload["body_source"], "proposed_plan");
+        assert_eq!(event.bark_body, "# 待确认计划\n- 检查");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_completion_context_keeps_unresolved_question_as_reply_needed() {
+        let (config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-choice"]);
+        let dir = temp_test_dir("nexushub-notify-completion-question-pending");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"RequestUserInput","turn_id":"turn-choice","item_id":"choice-1","questions":[{"id":"choice","question":"继续吗？","options":[{"label":"继续"},{"label":"停止"}]}]}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-choice","last_agent_message":"问题等待选择。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let context = notify_completion_context(
+            &config,
+            Some(&json!({
+                "thread_id": "thread-choice",
+                "turn_id": "turn-choice",
+                "transcript_path": transcript,
+            })),
+            None,
+            None,
+        )
+        .unwrap();
+        let event = probe_runtime(&config).build_event(context);
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert_eq!(event.payload["body_source"], "request_user_input");
+        assert!(event.bark_body.contains("问题 1：继续吗？"));
+        assert!(event.bark_body.contains("选项 1：继续"));
+        assert!(event.bark_body.contains("选项 2：停止"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn hook_stop_prefers_full_rollout_plan_over_short_stdin_summary() {
+        let mut config = Config::default();
+        config.probe.notifications.enabled = false;
+        let dir = temp_test_dir("nexushub-hook-stop-full-plan");
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("rollout.jsonl");
+        let full_plan = format!("# 完整计划\n{}\n末尾唯一完整计划", "计划正文".repeat(1200));
+        fs::write(
+            &transcript,
+            [
+                json!({"type":"item_completed","thread_id":"thread-plan","turn_id":"turn-plan","item":{"type":"Plan","id":"plan-1","text":full_plan}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n短摘要\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let selection = hook_stop_last_assistant_message(
+            transcript.to_str(),
+            Some("turn-plan"),
+            Some("<proposed_plan>\n短摘要\n</proposed_plan>"),
+        )
+        .unwrap()
+        .unwrap();
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan"),
+                Some("turn-plan"),
+                Some("thread-plan"),
+                transcript.to_str(),
+                Some(&selection.message),
+                "hook-stop",
+            )
+            .with_body_source(Some(&selection.source)),
+        );
+
+        assert_eq!(event.kind, "reply-needed");
+        assert_eq!(event.event_type, "reply_needed");
+        assert!(event.bark_body.contains("# 完整计划"));
+        assert!(event.bark_body.contains("末尾唯一完整计划"));
+        assert!(!event.bark_body.contains("短摘要"));
+        assert!(!event.bark_body.contains("[truncated]"));
+        assert!(event.payload["body_length"].as_u64().unwrap() > 4000);
+        assert_eq!(event.payload["body_source"], "proposed_plan");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_body_formats_questions_and_extracts_plan_text() {
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-question".to_string(),
+            title: "问题线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 1,
+            latest_message: Some("fallback should not be used".to_string()),
+            cwd: None,
+            model: None,
+            rollout_path: None,
+            active_turn_id: Some("turn-question".to_string()),
+            active_job_id: None,
+            pending_elicitation: Some(nexushub_core::codex::PendingElicitation {
+                turn_id: Some("turn-question".to_string()),
+                item_id: Some("call-question".to_string()),
+                questions: vec![nexushub_core::codex::UserInputQuestion {
+                    id: "q1".to_string(),
+                    header: Some("Mode".to_string()),
+                    question: "怎么继续？".to_string(),
+                    options: vec![
+                        nexushub_core::codex::UserInputOption {
+                            label: "直接执行".to_string(),
+                            description: Some("按当前计划继续".to_string()),
+                        },
+                        nexushub_core::codex::UserInputOption {
+                            label: "先调整".to_string(),
+                            description: Some("补充约束后再执行".to_string()),
+                        },
+                    ],
+                }],
+            }),
+            last_event_kind: None,
+        };
+
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
+
+        let body = body.expect("request_user_input body");
+        assert_eq!(source.as_deref(), Some("request_user_input"));
+        assert!(!body.contains("等待用户选择"));
+        assert!(!body.contains("Call ID："));
+        assert!(!body.contains("Turn ID："));
+        assert!(!body.contains("待选择内容"));
+        assert!(body.contains("问题 1：怎么继续？"));
+        assert!(body.contains("选项 1：直接执行"));
+        assert!(body.contains("说明：按当前计划继续"));
+        assert!(body.contains("选项 2：先调整"));
+        assert!(!body.contains("fallback should not be used"));
+
+        let event = probe_runtime(&Config::default()).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-question"),
+                Some("turn-question"),
+                Some("thread-question"),
+                None,
+                Some(&body),
+                "reply-needed",
+            )
+            .with_thread_title(Some("问题线程"))
+            .with_body_source(source.as_deref()),
+        );
+        assert_eq!(event.bark_title, "等待回复：问题线程");
+        assert_eq!(event.bark_body, body);
+        assert!(!event.bark_body.contains("thread-question"));
+
+        let plan_thread = nexushub_core::codex::ThreadSummary {
+            pending_elicitation: None,
+            latest_message: Some(
+                "<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            ..thread
+        };
+
+        let plan =
+            probe_service::probe_passive_thread_notification_plan(&plan_thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
+
+        let body = body.expect("plan body");
+        assert_eq!(source.as_deref(), Some("proposed_plan"));
+        assert_eq!(body, "# 修复计划\n- 等待确认");
+        assert!(!body.contains("<proposed_plan>"));
+        assert!(!body.contains("</proposed_plan>"));
+    }
+
+    #[test]
+    fn passive_reply_needed_body_suppresses_plan_after_later_reply_or_completion() {
+        let dir = temp_test_dir("nexushub-plan-suppressed-after-reply");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout-plan-replied.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"批准，继续。"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"正在执行计划。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"已完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-plan-replied".to_string(),
+            title: "计划已回复线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 4,
+            latest_message: Some(
+                "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: Some("turn-plan".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_scan_rejects_old_reply_needed_threads() {
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-old-plan".to_string(),
+            title: "旧计划线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: Some(
+                (chrono::Utc::now()
+                    - chrono::Duration::seconds(
+                        probe_service::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS + 60,
+                    ))
+                .to_rfc3339(),
+            ),
+            archived_at: None,
+            message_count: 1,
+            latest_message: Some(
+                "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+            ),
+            cwd: None,
+            model: None,
+            rollout_path: None,
+            active_turn_id: Some("turn-old".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        assert!(!plan.fresh);
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_dedupe_key_changes_with_plan_hash_and_no_ttl_resend() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-plan-ttl-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let body_one = nexushub_core::codex::extract_proposed_plan_text(
+            "<proposed_plan>\n# 第一版\n- A\n</proposed_plan>",
+        )
+        .unwrap();
+        let body_two = nexushub_core::codex::extract_proposed_plan_text(
+            "<proposed_plan>\n# 第二版\n- B\n</proposed_plan>",
+        )
+        .unwrap();
+        let make_event = |body: &str| {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-plan"),
+                    Some("turn-plan"),
+                    Some("thread-plan"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("真实计划线程"))
+                .with_body_source(Some("proposed_plan"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first_event = make_event(&body_one);
+        let first_key = first_event.dedupe_key.clone();
+        let first = record_probe_event_with_bark(&config, &db, first_event)
+            .await
+            .unwrap();
+        let duplicate = record_probe_event_with_bark(&config, &db, make_event(&body_one))
+            .await
+            .unwrap();
+        let changed_event = make_event(&body_two);
+        let changed_key = changed_event.dedupe_key.clone();
+        let changed = record_probe_event_with_bark(&config, &db, changed_event)
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(duplicate.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!duplicate.0.recorded);
+        assert!(changed.0.recorded);
+        assert_ne!(first_key, changed_key);
+        assert!(first_key.contains("thread-plan"));
+        assert!(first_key.contains("turn-plan"));
+        assert_ne!(
+            first_key,
+            "reply-needed:thread-plan:turn-plan:reply_needed:turn:turn-plan"
+        );
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_does_not_resend_after_ttl_expires() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan-ttl"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-plan-ttl-marker-single");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = nexushub_core::codex::extract_proposed_plan_text(
+            "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>",
+        )
+        .unwrap();
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-plan-ttl"),
+                    Some("turn-plan-ttl"),
+                    Some("thread-plan-ttl"),
+                    None,
+                    Some(&body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("旧计划 TTL 线程"))
+                .with_body_source(Some("proposed_plan"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_event_does_not_resend_after_ttl_expires() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-question-ttl"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-input-ttl-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：2026-06-16 12:00:00 北京时间\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续";
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-question-ttl"),
+                    Some("turn-question"),
+                    Some("thread-question-ttl"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("问题 TTL 线程"))
+                .with_body_source(Some("request_user_input"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pre_tool_use_request_user_input_event_does_not_resend_after_ttl_expires() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-pre-tool-question"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let dir = temp_test_dir("nexushub-pre-tool-use-input-marker");
+        fs::create_dir_all(&dir).unwrap();
+        let db = PanelDb::open(dir.join("panel.sqlite")).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let body = "问题 1：Continue?\n选项 1：继续\n选项 2：停止";
+        let make_event = || {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-pre-tool-question"),
+                    Some("turn-pre-tool-question"),
+                    Some("thread-pre-tool-question"),
+                    None,
+                    Some(body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("PreToolUse 问题"))
+                .with_body_source(Some("request_user_input"))
+                .with_pre_tool_use_scan_source()
+                .with_call_id(Some("call-pre-tool-question")),
+            )
+        };
+
+        let first = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+        Connection::open(db.path())
+            .unwrap()
+            .execute("DELETE FROM probe_dedupe", [])
+            .unwrap();
+        let after_ttl = record_probe_event_with_bark(&config, &db, make_event())
+            .await
+            .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(after_ttl.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!after_ttl.0.recorded);
+        assert!(!after_ttl.1.sent);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_marker_ignores_scan_time_changes() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-question-time"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let make_body = |time: &str| {
+            format!(
+                "等待用户选择：Plan Mode 已请求用户选择后继续。\n\nCall ID：call-question\nTurn ID：turn-question\n时间：{time}\n状态说明：这一轮正在等待用户选择，不是异常停止。\n\n待选择内容：\n问题 1：Continue?\n选项 1：继续"
+            )
+        };
+        let make_event = |body: String| {
+            probe_runtime(&config).build_event(
+                ProbeEventInput::hook_stop_with_context(
+                    Some("thread-question-time"),
+                    Some("turn-question"),
+                    Some("thread-question-time"),
+                    None,
+                    Some(&body),
+                    "reply-needed",
+                )
+                .with_thread_title(Some("问题时间线程"))
+                .with_body_source(Some("request_user_input"))
+                .with_passive_scan_source(),
+            )
+        };
+
+        let first = record_probe_event_with_bark(
+            &config,
+            &db,
+            make_event(make_body("2026-06-16 12:00:00 北京时间")),
+        )
+        .await
+        .unwrap();
+        let second = record_probe_event_with_bark(
+            &config,
+            &db,
+            make_event(make_body("2026-06-16 12:05:00 北京时间")),
+        )
+        .await
+        .unwrap();
+
+        assert!(first.0.recorded);
+        assert_eq!(second.1.reason.as_deref(), Some("sent_marker"));
+        assert!(!second.0.recorded);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn send_bark_posts_lite_payload_and_reports_non_success_response_code() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 39\r\n\r\n{\"code\":400,\"message\":\"bad bark token\"}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.server_url = server.url();
+        config.probe.notifications.group = "Probe Group".to_string();
+        config.probe.notifications.sound = Some("bell".to_string());
+        config.probe.notifications.url = Some("https://panel.example.com/nexushub/".to_string());
+
+        let request = ProbeBarkRequest {
+            title: "Codex Sentinel Lite".to_string(),
+            body: "Bark 推送通道正常。".to_string(),
+            dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
+        };
+        let result = send_bark_notification(
+            &config,
+            b"device key/with spaces",
+            &request,
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.sent);
+        assert!(!result.skipped);
+        assert_eq!(result.reason.as_deref(), Some("bark_response_code"));
+        assert_eq!(result.http_status, Some(200));
+        assert!(result.device_key_configured);
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("device key"));
+        let raw = server.request();
+        assert!(raw.starts_with("POST /push "));
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let payload: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(payload["device_key"], "device key/with spaces");
+        assert_eq!(payload["title"], "Codex Sentinel Lite");
+        assert_eq!(payload["body"], "Bark 推送通道正常。");
+        assert_eq!(payload.as_object().unwrap().len(), 3);
+        assert!(payload.get("group").is_none());
+        assert!(payload.get("sound").is_none());
+        assert!(payload.get("url").is_none());
+    }
+
+    #[tokio::test]
+    async fn send_bark_splits_long_body_on_utf8_boundaries_with_segment_prefix() {
+        let server = TestHttpServer::start_n(
+            20,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.server_url = server.url();
+        config.probe.notifications.group = "Probe Group".to_string();
+
+        let request = ProbeBarkRequest {
+            title: "NexusHub Probe long body".to_string(),
+            body: "完成".repeat(4_000),
+            dedupe_key: "hook-stop:thread-a:turn-long".to_string(),
+        };
+        let result = send_bark_notification(
+            &config,
+            b"device-key",
+            &request,
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.sent);
+        assert_eq!(result.http_status, Some(200));
+        let requests = server.requests(result.chunk_count);
+        assert_eq!(requests.len(), result.chunk_count);
+        for (index, raw) in requests.iter().enumerate() {
+            assert!(raw.starts_with("POST /push "));
+            let body = raw.split("\r\n\r\n").nth(1).unwrap();
+            let payload: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(payload["device_key"], "device-key");
+            assert_eq!(
+                payload["title"],
+                format!(
+                    "NexusHub Probe long body ({}/{})",
+                    index + 1,
+                    result.chunk_count
+                )
+            );
+            let chunk = payload["body"].as_str().unwrap();
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
+            assert!(chunk.starts_with(&prefix));
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.is_char_boundary(chunk.len()));
+        }
+        let combined = requests
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                let body = raw.split("\r\n\r\n").nth(1).unwrap();
+                let chunk = serde_json::from_str::<Value>(body).unwrap()["body"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, result.chunk_count);
+                chunk.strip_prefix(&prefix).unwrap().to_string()
+            })
+            .collect::<String>();
+        assert_eq!(combined, request.body);
+    }
+
+    #[tokio::test]
+    async fn bark_delivery_uses_full_event_body_not_truncated_summary() {
+        let server = TestHttpServer::start_n(
+            20,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-long"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
+            .unwrap();
+        let full_body = format!("开头\n{}\n末尾唯一完整反馈", "完整正文".repeat(900));
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-long"),
+                Some("turn-long"),
+                Some("thread-long"),
+                None,
+                Some(&full_body),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("真实长正文线程")),
+        );
+        assert_eq!(event.bark_title, "线程正常完成：真实长正文线程");
+        assert!(event.payload["body_truncated"].as_bool().unwrap());
+        assert!(!event.payload["body_summary"]
+            .as_str()
+            .unwrap()
+            .contains("末尾唯一完整反馈"));
+
+        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+
+        assert!(bark.sent);
+        let requests = server.requests(bark.request_count);
+        assert_eq!(requests.len(), bark.request_count);
+        let combined = requests
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                let body = raw.split("\r\n\r\n").nth(1).unwrap();
+                let payload: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(
+                    payload["title"],
+                    format!(
+                        "线程正常完成：真实长正文线程 ({}/{})",
+                        index + 1,
+                        bark.request_count
+                    )
+                );
+                let chunk = payload["body"].as_str().unwrap();
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, bark.request_count);
+                let body_part = chunk.strip_prefix(&prefix).unwrap();
+                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                body_part.to_string()
+            })
+            .collect::<String>();
+        assert!(combined.contains("开头"));
+        assert!(combined.contains("末尾唯一完整反馈"));
+        assert!(combined.contains(&full_body));
+        let stored = db.list_probe_events(10).unwrap();
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(stored[0].payload["bark"].get("body").is_none());
+    }
+
+    #[test]
+    fn bark_body_chunks_match_lite_split_and_trim_body() {
+        let body = format!("  {}  \n", "完成".repeat(4_000));
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert!(!chunks[0].contains("  完成"));
+        for (index, chunk) in chunks.iter().enumerate() {
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            assert!(chunk.starts_with(&prefix));
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(chunk.is_char_boundary(chunk.len()));
+        }
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                chunk.strip_prefix(&prefix).unwrap()
+            })
+            .collect::<String>();
+        assert_eq!(joined, body.trim());
+    }
+
+    #[test]
+    fn bark_body_chunks_keeps_body_budget_when_prefix_digit_count_grows() {
+        let body = "a".repeat((PROBE_BARK_BODY_CHUNK_BYTES * 9) - 100);
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert_eq!(chunks.len(), 9);
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                let body_part = chunk.strip_prefix(&prefix).unwrap();
+                assert!(body_part.len() <= PROBE_BARK_BODY_CHUNK_BYTES);
+                body_part
+            })
+            .collect::<String>();
+        assert_eq!(joined, body);
+    }
+
+    #[test]
+    fn bark_body_chunks_match_lite_exact_2400_body_bytes_before_prefix() {
+        let body = "a".repeat(PROBE_BARK_BODY_CHUNK_BYTES * 2);
+        let chunks = bark_body_chunks(&body, PROBE_BARK_BODY_CHUNK_BYTES);
+
+        assert_eq!(chunks.len(), 2);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+            let body_part = chunk.strip_prefix(&prefix).unwrap();
+            assert_eq!(body_part.len(), PROBE_BARK_BODY_CHUNK_BYTES);
+            assert!(body_part.is_char_boundary(body_part.len()));
+        }
+        let joined = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let prefix = format!("第 {}/{} 段\n\n", index + 1, chunks.len());
+                chunk.strip_prefix(&prefix).unwrap()
+            })
+            .collect::<String>();
+        assert_eq!(joined, body);
+    }
+
+    #[tokio::test]
+    async fn record_probe_event_stores_body_metadata_but_not_full_bark_body_or_tokens() {
+        let server = TestHttpServer::start_n(
+            20,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-safe-store"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_completion = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"secret-device-token")
+            .unwrap();
+        let full_body = format!(
+            "开头\nAuthorization: Bearer secret-token\n{}\n<proposed_plan>不要存这个标签</proposed_plan>\n末尾唯一完整反馈",
+            "完整正文".repeat(900)
+        );
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::notify_completion_with_context(
+                Some("thread-safe-store"),
+                Some("turn-safe-store"),
+                Some("thread-safe-store"),
+                None,
+                Some(&full_body),
+                Some("task_complete.last_agent_message"),
+            )
+            .with_thread_title(Some("安全存储线程")),
+        );
+
+        let (_outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(bark.sent);
+        let _requests = server.requests(bark.request_count);
+
+        let stored = db.list_probe_events(10).unwrap();
+        assert_eq!(stored.len(), 1);
+        let payload = &stored[0].payload;
+        assert!(payload["body_summary"].as_str().unwrap().contains("开头"));
+        assert!(payload["body_sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
+        assert_eq!(payload["body_length"], full_body.len() as u64);
+        assert_eq!(payload["bark"]["body_length"], full_body.len() as u64);
+        assert_eq!(payload["bark"]["body_sha256"], payload["body_sha256"]);
+        assert!(payload["bark"]["chunk_count"].as_u64().is_some());
+        assert!(payload["bark"]["request_count"].as_u64().is_some());
+        assert!(payload["bark"].get("body").is_none());
+        assert!(payload.get("bark_body").is_none() || payload["bark_body"].is_null());
+        let stored_json = serde_json::to_string(&stored[0]).unwrap();
+        assert!(!stored_json.contains("末尾唯一完整反馈"));
+        assert!(!stored_json.contains("secret-token"));
+        assert!(!stored_json.contains("secret-device-token"));
+        assert!(!stored_json.contains("<proposed_plan>"));
+        assert!(!stored_json.contains("</proposed_plan>"));
+        assert!(!stored_json.contains("/push"));
+    }
+
+    #[tokio::test]
+    async fn passive_reply_needed_plan_dedupe_key_includes_thread_turn_item_and_plan_hash() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-plan-stable"]);
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+        let raw_plan = "<proposed_plan>\n# 稳定计划\n- A\n</proposed_plan>";
+        let body = nexushub_core::codex::extract_proposed_plan_text(raw_plan).unwrap();
+        let event = probe_runtime(&config).build_event(
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-plan-stable"),
+                Some("turn-plan-stable"),
+                Some("thread-plan-stable"),
+                None,
+                Some(&body),
+                "reply-needed",
+            )
+            .with_thread_title(Some("稳定计划线程"))
+            .with_body_source(Some("proposed_plan"))
+            .with_passive_scan_source(),
+        );
+        let mut event = event;
+        event.payload["item_id"] = json!("item-plan-stable");
+
+        let (outcome, bark) = record_probe_event_with_bark(&config, &db, event)
+            .await
+            .unwrap();
+        assert!(bark.sent);
+        let _raw = server.request();
+        let dedupe_key = outcome.dedupe_key;
+
+        assert!(dedupe_key.contains("thread-plan-stable"));
+        assert!(dedupe_key.contains("turn-plan-stable"));
+        assert!(dedupe_key.contains("item-plan-stable"));
+        assert!(dedupe_key.contains("plan_hash"));
+        assert_ne!(
+            dedupe_key,
+            "reply-needed:thread-plan-stable:turn-plan-stable:reply_needed:turn:turn-plan-stable"
+        );
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn passive_reply_needed_body_suppresses_plan_after_tool_output_assistant_or_turn_completed() {
+        for (name, tail) in [
+            (
+                "tool-output",
+                vec![
+                    json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"function_call_output","call_id":"call-plan","output":"完成选择"}}),
+                ],
+            ),
+            (
+                "assistant-progress",
+                vec![
+                    json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"继续执行计划。"}]}}),
+                ],
+            ),
+            (
+                "turn-completed",
+                vec![json!({"type":"turn_completed","turn_id":"turn-plan"})],
+            ),
+        ] {
+            let dir = temp_test_dir(&format!("nexushub-plan-suppressed-{name}"));
+            fs::create_dir_all(&dir).unwrap();
+            let rollout = dir.join("rollout.jsonl");
+            let mut lines = vec![
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}),
+            ];
+            lines.extend(tail);
+            fs::write(
+                &rollout,
+                lines
+                    .into_iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            let thread = nexushub_core::codex::ThreadSummary {
+                id: format!("thread-{name}"),
+                title: "计划应被抑制线程".to_string(),
+                status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+                updated_at: None,
+                archived_at: None,
+                message_count: 2,
+                latest_message: Some(
+                    "<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>".to_string(),
+                ),
+                cwd: None,
+                model: None,
+                rollout_path: Some(rollout),
+                active_turn_id: Some("turn-plan".to_string()),
+                active_job_id: None,
+                pending_elicitation: None,
+                last_event_kind: None,
+            };
+
+            let plan =
+                probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+            let body = plan.body;
+            let source = plan.body_source;
+
+            assert_eq!(body, None, "{name}");
+            assert_eq!(source, None, "{name}");
+            fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn passive_reply_needed_fallback_suppresses_old_plan_after_later_completion() {
+        let dir = temp_test_dir("nexushub-fallback-old-plan-completed");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧 fallback 计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"继续"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-work","payload":{"type":"message","role":"assistant","content":[{"text":"执行完成。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"执行完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-fallback-old-plan".to_string(),
+            title: "fallback 旧计划线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 4,
+            latest_message: None,
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: None,
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passive_reply_needed_fallback_suppresses_old_plan_when_completion_has_no_body() {
+        let dir = temp_test_dir("nexushub-fallback-old-plan-empty-complete");
+        fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧 fallback 计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"继续"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":null}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            nexushub_core::codex::rollout_completion_last_agent_message(
+                &rollout,
+                Some("turn-plan"),
+            )
+            .unwrap(),
+            None
+        );
+        let thread = nexushub_core::codex::ThreadSummary {
+            id: "thread-fallback-empty-complete".to_string(),
+            title: "fallback 空完成线程".to_string(),
+            status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
+            updated_at: None,
+            archived_at: None,
+            message_count: 3,
+            latest_message: None,
+            cwd: None,
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: Some("turn-plan".to_string()),
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: Some("task_complete".to_string()),
+        };
+
+        let plan = probe_service::probe_passive_thread_notification_plan(&thread, "reply-needed");
+        let body = plan.body;
+        let source = plan.body_source;
+
+        assert_eq!(body, None);
+        assert_eq!(source, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_thread_scan_does_not_resend_completed_old_plan_when_app_server_is_offline() {
+        let dir = temp_test_dir("nexushub-thread-scan-old-plan-offline");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let rollout = codex_home.join("sessions").join("rollout-old-plan.jsonl");
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-plan","item_id":"item-plan","payload":{"type":"message","role":"assistant","content":[{"text":"<proposed_plan>\n# 旧计划\n- 等待确认\n</proposed_plan>"}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-plan","payload":{"type":"message","role":"user","content":[{"text":"同意，继续。"}]}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-work","last_agent_message":"已完成。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                source TEXT,
+                thread_source TEXT,
+                updated_at INTEGER,
+                archived_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
+            params![
+                "thread-old-plan",
+                "真实旧计划线程",
+                chrono::Utc::now().timestamp_millis(),
+                rollout.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.codex.app_server_socket = Some(dir.join("missing.sock"));
+        config.codex.bridge_enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        let state = AppState::new(config, db.clone());
+
+        let count = run_probe_thread_scan_if_due(state).await.unwrap();
+
+        assert_eq!(count, 0);
+        assert!(db.list_probe_events(10).unwrap().is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn passive_request_user_input_does_not_resend_after_ttl_or_revive_after_answer() {
+        let dir = temp_test_dir("nexushub-request-user-input-no-revive");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let rollout = codex_home.join("sessions").join("rollout-question.jsonl");
+        fs::write(
+            &rollout,
+            json!({
+                "type": "response_item",
+                "turn_id": "turn-question",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "status": "pending",
+                    "call_id": "call-question",
+                    "questions": [{
+                        "id": "choice",
+                        "header": "Mode",
+                        "question": "Continue?",
+                        "options": [
+                            {"label": "继续", "description": "按计划执行"},
+                            {"label": "停止"}
+                        ]
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                source TEXT,
+                thread_source TEXT,
+                updated_at INTEGER,
+                archived_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
+            params![
+                "thread-question-no-repeat",
+                "待选择线程",
+                chrono::Utc::now().timestamp_millis(),
+                rollout.to_string_lossy().as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.codex.app_server_socket = Some(dir.join("missing.sock"));
+        config.codex.bridge_enabled = true;
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"super-secret-device")
+            .unwrap();
+
+        let first_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
+            .await
+            .unwrap();
+        db.maintain_probe_events(1, 100, false).unwrap();
+        let second_count = run_probe_thread_scan_if_due(AppState::new(config.clone(), db.clone()))
+            .await
+            .unwrap();
+        fs::write(
+            &rollout,
+            [
+                json!({"type":"response_item","turn_id":"turn-question","payload":{"type":"function_call","name":"request_user_input","status":"pending","call_id":"call-question","questions":[{"id":"choice","header":"Mode","question":"Continue?","options":[{"label":"继续","description":"按计划执行"},{"label":"停止"}]}]}}).to_string(),
+                json!({"type":"response_item","turn_id":"turn-question","payload":{"type":"UserInputAnswer","call_id":"call-question","answers":{"choice":["继续"]}}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-question","last_agent_message":"已继续。"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let answered_count = run_probe_thread_scan_if_due(AppState::new(config, db.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(first_count, 1);
+        assert_eq!(second_count, 0);
+        assert_eq!(answered_count, 0);
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_bark_success_reports_redacted_request_metadata() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        config.probe.notifications.group = "Probe Group".to_string();
+
+        let result = send_bark_notification(
+            &config,
+            b"device-key-secret",
+            &ProbeBarkRequest {
+                title: "Codex Sentinel Lite".to_string(),
+                body: "ok".to_string(),
+                dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
+            },
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.sent);
+        assert_eq!(result.reason, None);
+        assert_eq!(result.http_status, Some(200));
+        assert_eq!(result.request_count, 1);
+        assert_eq!(result.chunk_count, 1);
+        assert_eq!(result.server_url.as_deref(), Some(server.url().as_str()));
+        assert!(result.request_url.as_deref().is_some_and(|value| {
+            value == "[redacted]" || !value.contains("device-key-secret")
+        }));
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("device-key-secret"));
+        let _ = server.request();
+    }
+
+    #[tokio::test]
+    async fn bark_test_uses_codex_sentinel_lite_title_and_body() {
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
+        );
+        let mut config = Config::default();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(":memory:").unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
+            .unwrap();
+
+        run_probe_command(ProbeCommand::BarkTest, &config, db)
+            .await
+            .unwrap();
+
+        let raw = server.request();
+        assert!(raw.starts_with("POST /push "));
+        let body = raw.split("\r\n\r\n").nth(1).unwrap();
+        let payload: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(payload["device_key"], "device-key");
+        assert_eq!(payload["title"], "Codex Sentinel Lite");
+        assert_eq!(payload["body"], "Bark 推送通道正常。");
+    }
+
+    #[tokio::test]
+    async fn hook_stop_cli_payload_keeps_stdout_codex_only_and_stderr_diagnostics() {
+        let (mut config, _identity) =
+            notification_accuracy_tests::test_notification_config(&["thread-a"]);
+        config.probe.notifications.enabled = false;
+        let db = PanelDb::open(":memory:").unwrap();
+        let result = handle_built_probe_event(
+            &config,
+            &db,
+            probe_runtime(&config).build_event(ProbeEventInput::hook_stop(
+                Some("thread-a"),
+                Some("turn-a"),
+                "hook-stop",
+            )),
+        )
+        .await
+        .unwrap();
+
+        let (stdout, stderr) = hook_stop_cli_output(&result).unwrap();
+        assert_eq!(stdout.trim(), r#"{"continue":true,"suppressOutput":false}"#);
+        let diagnostics: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(diagnostics["probe_event"]["recorded"], true);
+        assert_eq!(diagnostics["bark"]["skipped"], true);
+        assert_eq!(diagnostics["bark"]["reason"], "notifications_disabled");
+        assert!(!stdout.contains("bark"));
+        assert!(!stdout.contains("probe_event"));
+    }
+
+    #[test]
+    fn utf8_chunks_preserve_multibyte_boundaries_and_content() {
+        let value = "完成a".repeat(10);
+        let chunks = utf8_chunks(&value, 7);
+
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 7));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.is_char_boundary(chunk.len())));
+        assert_eq!(chunks.concat(), value);
+    }
+
+    pub(super) struct TestHttpServer {
+        address: std::net::SocketAddr,
+        request: std::sync::mpsc::Receiver<String>,
+    }
+
+    impl TestHttpServer {
+        pub(super) fn start_n(expected_requests: usize, response: &'static str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for _ in 0..expected_requests {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        reader.read_line(&mut line).unwrap();
+                        request.push_str(&line);
+                        if line == "\r\n" || line.is_empty() {
+                            break;
+                        }
+                    }
+                    let content_length = request
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    let mut body = vec![0_u8; content_length];
+                    reader.read_exact(&mut body).unwrap();
+                    request.push_str(&String::from_utf8_lossy(&body));
+                    tx.send(request).unwrap();
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+            });
+            Self {
+                address,
+                request: rx,
+            }
+        }
+
+        pub(super) fn url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        pub(super) fn request(self) -> String {
+            self.request
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        }
+
+        fn requests(self, count: usize) -> Vec<String> {
+            (0..count)
+                .map(|_| {
+                    self.request
+                        .recv_timeout(std::time::Duration::from_secs(2))
+                        .unwrap()
+                })
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_thread_scan_records_request_user_input_body_for_reply_needed() {
+        let dir = temp_test_dir("nexushub-thread-scan-request-user-input");
+        let codex_home = dir.join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        fs::write(
+            codex_home
+                .join("sessions")
+                .join("rollout-stale-reply.jsonl"),
+            json!({
+                "type": "response_item",
+                "turn_id": "turn-stale",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "status": "pending",
+                    "call_id": "call-choice",
+                    "questions": [{
+                        "id": "q1",
+                        "header": "确认",
+                        "question": "Continue?",
+                        "options": [
+                            {"label": "继续", "description": "按计划执行"},
+                            {"label": "停止"}
+                        ]
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let conn = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                source TEXT,
+                thread_source TEXT,
+                updated_at INTEGER,
+                archived_at INTEGER,
+                rollout_path TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads(id, title, source, thread_source, updated_at, rollout_path) VALUES(?1, ?2, 'vscode', 'user', ?3, ?4)",
+            params![
+                "stale-reply",
+                "stale reply",
+                chrono::Utc::now().timestamp_millis(),
+                codex_home
+                    .join("sessions")
+                    .join("rollout-stale-reply.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            ],
+        )
+        .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let mut config = Config::default();
+        config.codex.home = codex_home.clone();
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.server_url = "http://127.0.0.1:9".to_string();
+        config.probe.notifications.notify_reply_needed = true;
+        config.probe.notifications.notify_recoverable = true;
+        let db = PanelDb::open(":memory:").unwrap();
+        let state = AppState::new(config, db.clone());
+
+        let count = run_probe_thread_scan_if_due(state).await.unwrap();
+
+        assert_eq!(count, 1);
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "reply-needed");
+        assert_eq!(events[0].payload["thread_title"], "stale reply");
+        assert_eq!(events[0].payload["body_source"], "request_user_input");
+        let body_summary = events[0].payload["body_summary"].as_str().unwrap();
+        assert!(!body_summary.contains("等待用户选择"));
+        assert!(!body_summary.contains("Turn ID："));
+        assert!(!body_summary.contains("Call ID："));
+        assert!(!body_summary.contains("状态说明："));
+        assert!(body_summary.contains("问题 1：Continue?"));
+        assert!(body_summary.contains("选项 1：继续"));
+        assert!(body_summary.contains("说明：按计划执行"));
+        assert!(body_summary.contains("选项 2：停止"));
+        assert!(events[0].payload["bark"].get("body").is_none());
+        assert!(events[0].payload["bark"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("等待回复"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn temp_test_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
+    }
+
+    fn error_monitor_test_fixture(
+        prefix: &str,
+        thread_id: &str,
+        title: &str,
+    ) -> (PathBuf, Config, PanelDb, Connection) {
+        let dir = temp_test_dir(prefix);
+        let codex_home = dir.join("codex-home");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let state_db = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        state_db
+            .execute_batch(
+                r#"
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    source TEXT,
+                    thread_source TEXT,
+                    updated_at INTEGER,
+                    archived_at INTEGER,
+                    rollout_path TEXT
+                );
+                "#,
+            )
+            .unwrap();
+        state_db
+            .execute(
+                "INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
+                 VALUES(?1, ?2, 'vscode', 'user', 100, NULL, NULL)",
+                params![thread_id, title],
+            )
+            .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let logs = Connection::open(codex_home.join("logs_2.sqlite")).unwrap();
+        logs.execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                target TEXT NOT NULL,
+                feedback_log_body TEXT,
+                module_path TEXT,
+                file TEXT,
+                line INTEGER,
+                thread_id TEXT,
+                process_uuid TEXT,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+            INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id)
+            VALUES(100, 1, 'INFO', 'test', 'baseline', 'baseline-thread');
+            "#,
+        )
+        .unwrap();
+
+        let mut config =
+            Config::for_platform_kind_with_home(nexushub_core::platform::PlatformKind::Macos, &dir);
+        config.codex.home = codex_home;
+        config.paths.db_path = dir.join("nexushub.sqlite");
+        let db = PanelDb::open(&config.paths.db_path).unwrap();
+        (dir, config, db, logs)
+    }
+
+    fn seed_probe_error_incident(db: &PanelDb, incident_key: &str, thread_id: &str) {
+        assert!(db
+            .claim_probe_error_incident(&NewProbeErrorIncident {
+                incident_key: incident_key.to_string(),
+                source_ts: 101,
+                source_ts_nanos: 2,
+                source_row_id: 2,
+                thread_id: thread_id.to_string(),
+                turn_id: format!("turn-{incident_key}"),
+                classification: "server_overloaded".to_string(),
+                error_sha256: "a".repeat(64),
+                error_summary: "Selected model is at capacity.".to_string(),
+            })
+            .unwrap());
+    }
+
+    fn write_test_executable(path: &Path, script: &str) {
+        fs::write(path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_error_monitor_replays_persisted_pending_delivery_after_restart() {
+        let thread_id = "thread-pending-delivery";
+        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
+            "nexushub-probe-error-monitor-pending",
+            thread_id,
+            "待投递恢复线程",
+        );
+        config.probe.notifications.enabled = false;
+        config.probe.error_monitor.auto_resume_goals = false;
+        seed_probe_error_incident(&db, "pending-delivery", thread_id);
+        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+            vec![dir.join("missing-codex")],
+            Duration::from_millis(100),
+        );
+
+        let outcome = run_probe_error_monitor_once(&config, &db, &goal_client)
+            .await
+            .unwrap();
+
+        assert!(outcome.baseline_only);
+        assert_eq!(outcome.new_incidents, 0);
+        assert_eq!(outcome.deliveries_completed, 1);
+        let incident = db
+            .get_probe_error_incident("pending-delivery")
+            .unwrap()
+            .unwrap();
+        assert_eq!(incident.bark_status, "skipped:notifications_disabled");
+        assert_eq!(incident.recovery_status, "auto_resume_disabled");
+        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_error_monitor_bark_failure_does_not_block_goal_recovery() {
+        let thread_id = "thread-bark-failure";
+        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
+            "nexushub-probe-error-monitor-bark-failure",
+            thread_id,
+            "Bark 失败恢复线程",
+        );
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_recoverable = true;
+        config.probe.notifications.server_url = server.url();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
+            .unwrap();
+        seed_probe_error_incident(&db, "bark-failure", thread_id);
+
+        let executable = dir.join("codex");
+        write_test_executable(
+            &executable,
+            &format!(
+                r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.4'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Recover despite Bark","status":"blocked","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":1}}}}}}'
+      ;;
+    *'"method":"thread/goal/set"'*)
+      echo '{{"id":3,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Recover despite Bark","status":"active","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":2}}}}}}'
+      ;;
+  esac
+done
+"#,
+            ),
+        );
+        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+            vec![executable],
+            Duration::from_secs(10),
+        );
+
+        let outcome = run_probe_error_monitor_once(&config, &db, &goal_client)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.deliveries_completed, 1);
+        assert_eq!(outcome.recoveries_processed, 1);
+        let incident = db
+            .get_probe_error_incident("bark-failure")
+            .unwrap()
+            .unwrap();
+        assert_eq!(incident.bark_status, "failed:http_status");
+        assert_eq!(incident.recovery_status, "active");
+        let _request = server.request();
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_error_monitor_rechecks_state_after_mutation_timeout_without_second_set() {
+        let thread_id = "thread-timeout-recheck";
+        let (dir, config, db, _logs) = error_monitor_test_fixture(
+            "nexushub-probe-error-monitor-timeout",
+            thread_id,
+            "超时复查线程",
+        );
+        seed_probe_error_incident(&db, "timeout-recheck", thread_id);
+        let executable = dir.join("codex");
+        let counter = dir.join("app-server-count");
+        let capture = dir.join("app-server-input.jsonl");
+        write_test_executable(
+            &executable,
+            &format!(
+                r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.4'
+  exit 0
+fi
+count=0
+if [ -f '{counter}' ]; then count=$(cat '{counter}'); fi
+count=$((count + 1))
+echo "$count" > '{counter}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{capture}'
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      if [ "$count" -eq 1 ]; then
+        echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Timeout recovery","status":"blocked","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":1}}}}}}'
+      else
+        echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Timeout recovery","status":"active","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":2}}}}}}'
+      fi
+      ;;
+    *'"method":"thread/goal/set"'*)
+      :
+      ;;
+  esac
+done
+"#,
+                counter = counter.display(),
+                capture = capture.display(),
+            ),
+        );
+        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+            vec![executable],
+            Duration::from_millis(200),
+        );
+        goal_client.resolve_executable().await.unwrap();
+
+        assert_eq!(
+            process_due_probe_error_recoveries(&config, &db, &goal_client)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let incident = db
+            .get_probe_error_incident("timeout-recheck")
+            .unwrap()
+            .unwrap();
+        assert_eq!(incident.recovery_status, "active_confirmed_after_timeout");
+        assert_eq!(incident.recovery_attempts, 1);
+        let input = fs::read_to_string(capture).unwrap();
+        assert_eq!(input.matches("\"method\":\"thread/goal/set\"").count(), 1);
+        assert_eq!(input.matches("\"method\":\"thread/goal/get\"").count(), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_error_monitor_retries_four_times_then_sends_failure_bark() {
+        let thread_id = "thread-retry-failure";
+        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
+            "nexushub-probe-error-monitor-retries",
+            thread_id,
+            "恢复重试失败线程",
+        );
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"code\":200,\"message\":\"ok\"}",
+        );
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_recoverable = true;
+        config.probe.notifications.server_url = server.url();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
+            .unwrap();
+        seed_probe_error_incident(&db, "retry-failure", thread_id);
+        db.update_probe_error_incident_delivery("retry-failure", None, "sent")
+            .unwrap();
+
+        let executable = dir.join("codex");
+        let capture = dir.join("retry-input.jsonl");
+        write_test_executable(
+            &executable,
+            &format!(
+                r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.4'
+  exit 0
+fi
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{capture}'
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{{"id":2,"error":{{"code":-32000,"message":"app-server temporarily unavailable"}}}}'
+      ;;
+  esac
+done
+"#,
+                capture = capture.display(),
+            ),
+        );
+        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+            vec![executable],
+            Duration::from_secs(10),
+        );
+
+        for (attempt, delay) in [15_i64, 60, 300].into_iter().enumerate() {
+            assert_eq!(
+                process_due_probe_error_recoveries(&config, &db, &goal_client)
+                    .await
+                    .unwrap(),
+                1
+            );
+            let incident = db
+                .get_probe_error_incident("retry-failure")
+                .unwrap()
+                .unwrap();
+            assert_eq!(incident.recovery_attempts, attempt as u32 + 1);
+            assert_eq!(incident.recovery_status, "retrying");
+            let next_retry_at = incident.next_retry_at.unwrap();
+            let remaining = next_retry_at - PanelDb::now();
+            assert!(remaining >= delay - 1 && remaining <= delay, "{remaining}");
+            Connection::open(&config.paths.db_path)
+                .unwrap()
+                .execute(
+                    "UPDATE probe_error_incidents SET next_retry_at=0 WHERE incident_key='retry-failure'",
+                    [],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            process_due_probe_error_recoveries(&config, &db, &goal_client)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let incident = db
+            .get_probe_error_incident("retry-failure")
+            .unwrap()
+            .unwrap();
+        assert_eq!(incident.recovery_status, "failed");
+        assert_eq!(incident.recovery_attempts, 4);
+        assert!(incident.next_retry_at.is_none());
+        let input = fs::read_to_string(capture).unwrap();
+        assert_eq!(input.matches("\"method\":\"thread/goal/get\"").count(), 4);
+        assert!(!input.contains("\"method\":\"thread/goal/set\""));
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["body_source"], "goal_recovery_failed");
+        assert_eq!(events[0].payload["recovery_attempts"], 4);
+        let request = server.request();
+        assert!(request.contains("Goal 自动恢复失败"));
+        assert!(request.contains("恢复重试失败线程"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_error_monitor_capacity_error_notifies_once_and_recovers_blocked_goal() {
+        let dir = temp_test_dir("nexushub-probe-error-monitor-capacity");
+        let codex_home = dir.join("codex-home");
+        fs::create_dir_all(codex_home.join("sessions")).unwrap();
+        let logs_path = codex_home.join("logs_2.sqlite");
+        let state_db = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
+        state_db
+            .execute_batch(
+                r#"
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    source TEXT,
+                    thread_source TEXT,
+                    updated_at INTEGER,
+                    archived_at INTEGER,
+                    rollout_path TEXT
+                );
+                INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
+                VALUES('thread-capacity', '容量错误验收线程', 'vscode', 'user', 100, NULL, NULL);
+                "#,
+            )
+            .unwrap();
+        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
+        let logs = Connection::open(&logs_path).unwrap();
+        logs.execute_batch(
+            r#"
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                target TEXT NOT NULL,
+                feedback_log_body TEXT,
+                module_path TEXT,
+                file TEXT,
+                line INTEGER,
+                thread_id TEXT,
+                process_uuid TEXT,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
+            INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id)
+            VALUES(100, 1, 'INFO', 'test', 'baseline', 'thread-capacity');
+            "#,
+        )
+        .unwrap();
+
+        let server = TestHttpServer::start_n(
+            1,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"code\":200,\"message\":\"ok\"}",
+        );
+        let mut config =
+            Config::for_platform_kind_with_home(nexushub_core::platform::PlatformKind::Macos, &dir);
+        config.codex.home = codex_home.clone();
+        config.paths.db_path = dir.join("nexushub.sqlite");
+        config.probe.notifications.enabled = true;
+        config.probe.notifications.notify_recoverable = true;
+        config.probe.notifications.server_url = server.url();
+        let db = PanelDb::open(&config.paths.db_path).unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
+            .unwrap();
+
+        let executable = dir.join("codex");
+        let capture = dir.join("goal-input.jsonl");
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo 'codex-cli 0.144.4'
+  exit 0
+fi
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{}'
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{{"id":1,"result":{{"userAgent":"fake","codexHome":"{}","platformFamily":"unix","platformOs":"macos"}}}}'
+      ;;
+    *'"method":"thread/goal/get"'*)
+      echo '{{"id":2,"result":{{"goal":{{"threadId":"thread-capacity","objective":"Finish release","status":"blocked","tokenBudget":9000,"tokensUsed":50,"timeUsedSeconds":5,"createdAt":100,"updatedAt":200}}}}}}'
+      ;;
+    *'"method":"thread/goal/set"'*)
+      echo '{{"id":3,"result":{{"goal":{{"threadId":"thread-capacity","objective":"Finish release","status":"active","tokenBudget":9000,"tokensUsed":50,"timeUsedSeconds":5,"createdAt":100,"updatedAt":201}}}}}}'
+      ;;
+  esac
+done
+"#,
+            capture.display(),
+            codex_home.display(),
+        );
+        fs::write(&executable, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&executable).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable, permissions).unwrap();
+        }
+        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+            vec![executable],
+            Duration::from_secs(10),
+        );
+
+        let baseline = run_probe_error_monitor_once(&config, &db, &goal_client)
+            .await
+            .unwrap();
+        assert!(baseline.baseline_only);
+        assert_eq!(baseline.new_incidents, 0);
+
+        let body = "session_loop{thread_id=thread-capacity}:submission_dispatch{submission.id=\"turn-capacity\"}:turn{thread.id=thread-capacity turn.id=turn-capacity model=gpt-5.6-sol}:session_task.run:run_turn: Turn error: Selected model is at capacity. Please try a different model.";
+        logs.execute(
+            "INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES(101, 2, 'INFO', 'codex_core::session::turn', ?1, 'thread-capacity')",
+            params![body],
+        )
+        .unwrap();
+        let first = run_probe_error_monitor_once(&config, &db, &goal_client)
+            .await
+            .unwrap();
+        assert_eq!(first.new_incidents, 1);
+        assert_eq!(first.deliveries_completed, 1);
+        assert_eq!(first.recoveries_processed, 1);
+
+        let second = run_probe_error_monitor_once(&config, &db, &goal_client)
+            .await
+            .unwrap();
+        assert_eq!(second.new_incidents, 0);
+        assert_eq!(db.probe_error_incident_count().unwrap(), 1);
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "recoverable");
+        assert_eq!(events[0].payload["turn_id"], "turn-capacity");
+        assert_eq!(
+            events[0].payload["error_classification"],
+            "server_overloaded"
+        );
+        assert!(!events[0].payload.to_string().contains("session_loop"));
+        let panel = Connection::open(&config.paths.db_path).unwrap();
+        let incident_key: String = panel
+            .query_row(
+                "SELECT incident_key FROM probe_error_incidents LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let incident = db.get_probe_error_incident(&incident_key).unwrap().unwrap();
+        assert_eq!(
+            incident.error_summary,
+            "Selected model is at capacity. Please try a different model."
+        );
+        assert!(!incident.error_summary.contains("session_loop"));
+        assert_eq!(incident.recovery_status, "active");
+        assert_eq!(incident.recovery_attempts, 1);
+        let goal_input = fs::read_to_string(&capture).unwrap();
+        assert_eq!(
+            goal_input.matches("\"method\":\"thread/goal/set\"").count(),
+            1
+        );
+        let bark_request = server.request();
+        assert!(bark_request.contains("Selected model is at capacity"));
+        assert!(bark_request.contains("容量错误验收线程"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

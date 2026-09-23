@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NexusHub",
+  "version": "1.0.0",
+  "identifier": "com.lich13.nexushub",
+  "mainBinaryName": "nexushub",
+  "build": {
+    "frontendDist": "../webui/dist",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
+    "beforeBuildCommand": "corepack pnpm@11.0.8 --dir webui build:tauri"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NexusHub",
+        "create": false,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1000,
+        "minHeight": 680,
+        "maximized": true,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": [
+      "dmg",
+      "app",
+      "appimage",
+      "deb",
+      "rpm"
+    ],
+    "resources": {
+      "resources/nexushub-webd": "nexushub-webd"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMzQTExRDJERDlCRDczNEEKUldSS2M3M1pMUjJodysxYTVtM3RUeitYclBCcFB1Vk1jZmQrMmtNYlFYV3RTV25mY2FMSGxHVEgK",
+      "endpoints": [
+        "https://github.com/lich13/nexushub/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

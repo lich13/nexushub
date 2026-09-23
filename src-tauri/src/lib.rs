@@ -1,0 +1,103 @@
+mod commands;
+mod desktop_boot;
+// Domain commands live in commands/*; overview owns desktop state and startup paths.
+mod overview;
+mod resources;
+mod services;
+
+use tauri::{Manager, WebviewWindowBuilder};
+
+pub use overview::{nexus_paths_for_home, DesktopState, NexusPaths};
+pub use services::probe::desktop_probe_status_with_state;
+pub use services::updates::desktop_update_status_with_state;
+
+pub fn run() {
+    tauri::Builder::default()
+        .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            commands::sessions::previewSessionBatch,
+            commands::sessions::executeSessionBatch,
+            commands::system::getSystemStatus,
+            commands::system::getSystemVersion,
+            commands::system::listProviders,
+            commands::system::getPlatformOverview,
+            commands::threads::listThreads,
+            commands::threads::getThread,
+            commands::threads::getThreadBlocks,
+            commands::threads::archiveThread,
+            commands::threads::restoreThread,
+            commands::threads::renameThread,
+            commands::probe::getProbeStatus,
+            commands::updates::getUpdateStatus,
+            commands::updates::updatesCheck,
+            commands::updates::updatesInstall,
+            commands::settings::getProbeSettings,
+            commands::settings::saveProbeSettings,
+            commands::settings::getProbeEvents,
+            commands::settings::probeBarkTest,
+            commands::settings::probeInstallHooks,
+            commands::settings::dryRunArchiveDelete,
+            commands::settings::startArchiveDelete,
+            commands::settings::dryRunHiddenThreadDelete,
+            commands::settings::startHiddenThreadDelete,
+            commands::jobs::listJobs,
+            commands::jobs::getJob,
+            commands::grok::listGrokSessions,
+            commands::grok::getGrokSession,
+            commands::grok::renameGrokSession,
+            commands::grok::previewGrokSessionDelete,
+            commands::grok::deleteGrokSession,
+            commands::pi::listPiSessions,
+            commands::pi::getPiSession,
+            commands::pi::renamePiSession,
+            commands::pi::previewPiSessionDelete,
+            commands::pi::deletePiSession
+        ])
+        .setup(|app| {
+            if let Err(err) = resources::retire_legacy_desktop_web_service(
+                &nexushub_core::platform::PlatformPaths::desktop_current(),
+            ) {
+                eprintln!("Legacy desktop WebUI retirement incomplete: {err}");
+            }
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                resources::sync_nexushub_webd_helper_from_resource(&resource_dir)?;
+            }
+            let state = DesktopState::current().map_err(|err| err.to_string())?;
+            if let Err(err) = resources::repair_probe_error_monitor_launch_agent(
+                &state.config(),
+                state.platform(),
+            ) {
+                eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
+            }
+            app.manage(state);
+            let main_window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == desktop_boot::MAIN_WINDOW_LABEL)
+                .ok_or_else(|| "main Tauri window config not found".to_string())?;
+            let window = WebviewWindowBuilder::from_config(app.handle(), main_window_config)
+                .map_err(|err| err.to_string())?
+                .build()
+                .map_err(|err| err.to_string())?;
+            desktop_boot::reveal_main_window(&window);
+            desktop_boot::schedule_delayed_main_window_reveal(&window);
+            desktop_boot::schedule_desktop_boot_probe(&window);
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to build NexusHub desktop app")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Ready) {
+                if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {
+                    desktop_boot::reveal_main_window(&window);
+                }
+            }
+        });
+}
+
+#[cfg(test)]
+mod entry_guard_tests;

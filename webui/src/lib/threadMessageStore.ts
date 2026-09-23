@@ -1,0 +1,462 @@
+import { useCallback, useMemo, useRef, useState } from "react";
+import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
+
+export type ThreadMessageSlot = {
+  summary: ThreadSummary | null;
+  blocks: MessageBlock[];
+  totalBlocks: number;
+  hasMoreBlocks: boolean;
+  beforeCursor: string | null;
+  visibleUpdateRevision: number;
+  bottomFollowRevision: number;
+  loadingEarlier: boolean;
+  loadError: string | null;
+  feedback: string | null;
+  showAllHistory: boolean;
+  hiddenActionKey: string | null;
+  fetchedAt: number | null;
+};
+
+export type ThreadMessageStoreState = {
+  activeThreadId: string | null;
+  slots: Map<string, ThreadMessageSlot>;
+};
+
+export type ThreadMessageStoreController = {
+  store: ThreadMessageStoreState;
+  setActive: (threadId: string | null) => void;
+  getSlot: (threadId: string) => ThreadMessageSlot;
+  isActive: (threadId: string) => boolean;
+  applyDetail: (threadId: string, detail: ThreadDetail) => void;
+  applySummary: (threadId: string, summary: ThreadSummary) => void;
+  patchSummary: (threadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => void;
+  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
+  applyBlockPage: (threadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => void;
+  setLoadingEarlier: (threadId: string, loading: boolean, error?: string | null) => void;
+  setFeedback: (threadId: string, feedback: string | null) => void;
+  setHistoryExpanded: (threadId: string, expanded: boolean) => void;
+  setHiddenActionKey: (threadId: string, key: string | null) => void;
+  clear: (threadId: string) => void;
+};
+
+export function createThreadMessageStoreState(): ThreadMessageStoreState {
+  return {
+    activeThreadId: null,
+    slots: new Map()
+  };
+}
+
+export function createThreadMessageSlot(): ThreadMessageSlot {
+  return {
+    summary: null,
+    blocks: [],
+    totalBlocks: 0,
+    hasMoreBlocks: false,
+    beforeCursor: null,
+    visibleUpdateRevision: 0,
+    bottomFollowRevision: 0,
+    loadingEarlier: false,
+    loadError: null,
+    feedback: null,
+    showAllHistory: false,
+    hiddenActionKey: null,
+    fetchedAt: null
+  };
+}
+
+export function fallbackThreadSummary(threadId: string): ThreadSummary {
+  return {
+    id: threadId,
+    title: "读取中",
+    status: "Recent",
+    message_count: 0
+  };
+}
+
+export function threadDetailFromMessageSlot(
+  threadId: string,
+  slot: ThreadMessageSlot,
+  fallback?: ThreadSummary | null
+): ThreadDetail {
+  return {
+    summary: slot.summary ?? fallback ?? fallbackThreadSummary(threadId),
+    messages: [],
+    blocks: slot.blocks,
+    raw_event_count: slot.totalBlocks,
+    total_blocks: slot.totalBlocks,
+    has_more_blocks: slot.hasMoreBlocks,
+    before_cursor: slot.beforeCursor
+  };
+}
+
+export function useThreadMessageStoreController(
+  legacyBlocks: (detail: ThreadDetail) => MessageBlock[] = defaultLegacyBlocks
+): ThreadMessageStoreController {
+  const storeRef = useRef<ThreadMessageStoreState>(createThreadMessageStoreState());
+  const [, setRevision] = useState(0);
+  const notify = useCallback((threadId: string | null) => {
+    if (threadId && storeRef.current.activeThreadId !== threadId) return;
+    setRevision((value) => value + 1);
+  }, []);
+  const setActive = useCallback((nextThreadId: string | null) => {
+    setActiveThreadSlot(storeRef.current, nextThreadId);
+    notify(nextThreadId);
+  }, [notify]);
+  const getSlotForThread = useCallback((nextThreadId: string) => getThreadSlot(storeRef.current, nextThreadId), []);
+  const isActive = useCallback((nextThreadId: string) => storeRef.current.activeThreadId === nextThreadId, []);
+  const applyDetail = useCallback((nextThreadId: string, nextDetail: ThreadDetail) => {
+    applyThreadDetailToSlot(storeRef.current, nextThreadId, nextDetail, legacyBlocks);
+    notify(nextThreadId);
+  }, [legacyBlocks, notify]);
+  const applySummary = useCallback((nextThreadId: string, nextSummary: ThreadSummary) => {
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, nextSummary);
+    notify(nextThreadId);
+  }, [notify]);
+  const patchSummary = useCallback((nextThreadId: string, patch: Partial<ThreadSummary> | ((current: ThreadSummary) => ThreadSummary)) => {
+    const slot = getThreadSlot(storeRef.current, nextThreadId);
+    const base = slot.summary ?? fallbackThreadSummary(nextThreadId);
+    const next = typeof patch === "function" ? patch(base) : { ...base, ...patch };
+    applyThreadSummaryToSlot(storeRef.current, nextThreadId, next);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyRealtimeBlocks = useCallback((nextThreadId: string, blocks: MessageBlock[]) => {
+    applyRealtimeBlocksToThreadSlot(storeRef.current, nextThreadId, blocks);
+    notify(nextThreadId);
+  }, [notify]);
+  const applyBlockPage = useCallback((nextThreadId: string, page: ThreadBlockPage, expectedCursor?: string | null) => {
+    applyThreadBlockPageToSlot(storeRef.current, nextThreadId, page, expectedCursor);
+    notify(nextThreadId);
+  }, [notify]);
+  const setLoadingEarlierForThread = useCallback((nextThreadId: string, loading: boolean, error: string | null = null) => {
+    setThreadLoadingEarlier(storeRef.current, nextThreadId, loading, error);
+    notify(nextThreadId);
+  }, [notify]);
+  const setFeedbackForThread = useCallback((nextThreadId: string, feedback: string | null) => {
+    setThreadFeedback(storeRef.current, nextThreadId, feedback);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHistoryExpandedForThread = useCallback((nextThreadId: string, expanded: boolean) => {
+    setThreadHistoryExpanded(storeRef.current, nextThreadId, expanded);
+    notify(nextThreadId);
+  }, [notify]);
+  const setHiddenActionKeyForThread = useCallback((nextThreadId: string, key: string | null) => {
+    setThreadHiddenActionKey(storeRef.current, nextThreadId, key);
+    notify(nextThreadId);
+  }, [notify]);
+  const clearThread = useCallback((nextThreadId: string) => {
+    const wasActive = storeRef.current.activeThreadId === nextThreadId;
+    clearThreadSlot(storeRef.current, nextThreadId);
+    notify(wasActive ? null : nextThreadId);
+  }, [notify]);
+
+  return useMemo(() => ({
+    store: storeRef.current,
+    setActive,
+    getSlot: getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlier: setLoadingEarlierForThread,
+    setFeedback: setFeedbackForThread,
+    setHistoryExpanded: setHistoryExpandedForThread,
+    setHiddenActionKey: setHiddenActionKeyForThread,
+    clear: clearThread
+  }), [
+    setActive,
+    getSlotForThread,
+    isActive,
+    applyDetail,
+    applySummary,
+    patchSummary,
+    applyRealtimeBlocks,
+    applyBlockPage,
+    setLoadingEarlierForThread,
+    setFeedbackForThread,
+    setHistoryExpandedForThread,
+    setHiddenActionKeyForThread,
+    clearThread
+  ]);
+}
+
+export function setActiveThreadSlot(store: ThreadMessageStoreState, threadId: string | null): ThreadMessageSlot | null {
+  store.activeThreadId = threadId;
+  return threadId ? getThreadSlot(store, threadId) : null;
+}
+
+export function getThreadSlot(store: ThreadMessageStoreState, threadId: string): ThreadMessageSlot {
+  let slot = store.slots.get(threadId);
+  if (!slot) {
+    slot = createThreadMessageSlot();
+    store.slots.set(threadId, slot);
+  }
+  return slot;
+}
+
+export function clearThreadSlot(store: ThreadMessageStoreState, threadId: string): void {
+  store.slots.delete(threadId);
+  if (store.activeThreadId === threadId) {
+    store.activeThreadId = null;
+  }
+}
+
+export function applyThreadDetailToSlot(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  detail: ThreadDetail,
+  legacyBlocks: (detail: ThreadDetail) => MessageBlock[] = defaultLegacyBlocks
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  if (detail.summary.id !== threadId) {
+    return slot;
+  }
+  const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
+  const previousBefore = slot.beforeCursor;
+  const mergedBlocks = mergeBlocksPreservingHistory(slot.blocks, incomingBlocks);
+  const blocksChanged = mergedBlocks !== slot.blocks;
+  const changed = blocksChanged
+    || slot.summary !== detail.summary
+    || slot.totalBlocks !== (detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length))
+    || slot.hasMoreBlocks !== Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
+
+  slot.summary = mergeSummary(slot.summary, detail.summary);
+  slot.blocks = mergedBlocks;
+  slot.totalBlocks = detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length);
+  slot.hasMoreBlocks = Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
+  if (detail.before_cursor) {
+    if (!previousBefore || cursorIndex(detail.before_cursor) < cursorIndex(previousBefore)) {
+      slot.beforeCursor = detail.before_cursor;
+    }
+  } else if (!slot.blocks.length || slot.blocks.length >= slot.totalBlocks) {
+    slot.beforeCursor = null;
+    slot.hasMoreBlocks = false;
+  }
+  slot.fetchedAt = Date.now();
+  if (changed) slot.visibleUpdateRevision += 1;
+  if (blocksChanged) slot.bottomFollowRevision += 1;
+  return slot;
+}
+
+export function applyThreadBlockPageToSlot(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  page: ThreadBlockPage,
+  expectedCursor?: string | null
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  if (page.thread_id !== threadId) {
+    return slot;
+  }
+  if (expectedCursor && slot.beforeCursor && slot.beforeCursor !== expectedCursor) {
+    return slot;
+  }
+  const nextBlocks = mergeMessageBlocks(slot.blocks, page.blocks, "prepend");
+  const changed = nextBlocks !== slot.blocks;
+  slot.blocks = nextBlocks;
+  slot.totalBlocks = page.total_blocks ?? Math.max(slot.totalBlocks, nextBlocks.length);
+  slot.hasMoreBlocks = Boolean(page.has_more_blocks);
+  slot.beforeCursor = page.before_cursor ?? null;
+  slot.loadingEarlier = false;
+  slot.loadError = null;
+  if (changed) slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+export function applyRealtimeBlocksToThreadSlot(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  blocks: MessageBlock[]
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  const nextBlocks = mergeMessageBlocks(slot.blocks, blocks);
+  if (nextBlocks !== slot.blocks) {
+    slot.blocks = nextBlocks;
+    slot.totalBlocks = Math.max(slot.totalBlocks, nextBlocks.length);
+    slot.visibleUpdateRevision += 1;
+    slot.bottomFollowRevision += 1;
+  }
+  return slot;
+}
+
+export function applyThreadSummaryToSlot(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  summary: ThreadSummary
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  if (summary.id !== threadId) {
+    return slot;
+  }
+  slot.summary = mergeSummary(slot.summary, summary);
+  slot.fetchedAt = Date.now();
+  slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+
+export function setThreadFeedback(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  feedback: string | null
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  slot.feedback = feedback;
+  slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+export function setThreadHistoryExpanded(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  showAllHistory: boolean
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  slot.showAllHistory = showAllHistory;
+  slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+export function setThreadHiddenActionKey(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  hiddenActionKey: string | null
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  slot.hiddenActionKey = hiddenActionKey;
+  slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+export function setThreadLoadingEarlier(
+  store: ThreadMessageStoreState,
+  threadId: string,
+  loadingEarlier: boolean,
+  loadError: string | null = null
+): ThreadMessageSlot {
+  const slot = getThreadSlot(store, threadId);
+  slot.loadingEarlier = loadingEarlier;
+  slot.loadError = loadError;
+  slot.visibleUpdateRevision += 1;
+  return slot;
+}
+
+function defaultLegacyBlocks(detail: ThreadDetail): MessageBlock[] {
+  return detail.messages.map((message, index) => ({
+    id: `legacy-${index}`,
+    role: message.role,
+    kind: message.kind,
+    text: message.text,
+    created_at: message.created_at,
+    questions: []
+  }));
+}
+
+function mergeSummary(current: ThreadSummary | null, incoming: ThreadSummary): ThreadSummary {
+  if (!current || current.id !== incoming.id) return incoming;
+  const next = { ...current, ...incoming };
+  next.title = mergeThreadSummaryTitle(current.title, incoming.title);
+  if (!isVisibleLastEventKind(incoming.last_event_kind) && isVisibleLastEventKind(current.last_event_kind)) {
+    next.last_event_kind = current.last_event_kind;
+  }
+  return next;
+}
+
+export function mergeThreadSummaryTitle(current?: string | null, incoming?: string | null): string {
+  const currentTitle = current?.trim() ?? "";
+  const incomingTitle = incoming?.trim() ?? "";
+  if (!incomingTitle) return currentTitle;
+  if (isUsableThreadTitle(currentTitle) && isNoisyThreadTitle(incomingTitle)) return currentTitle;
+  if (isNoisyThreadTitle(currentTitle) && isUsableThreadTitle(incomingTitle)) return incomingTitle;
+  if (isNoisyThreadTitle(incomingTitle)) return currentTitle;
+  return incomingTitle;
+}
+
+export function isNoisyThreadTitle(title?: string | null): boolean {
+  const value = title?.trim() ?? "";
+  if (!value) return true;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLowerCase();
+  if (["未命名线程", "untitled thread", "untitled", "读取中", "loading", "loading..."].includes(lower)) return true;
+  if (/<\/?proposed_plan>/i.test(value)) return true;
+  if (looksLikePlanBody(value)) return true;
+  if (looksLikeAssistantBodyTitle(normalized)) return true;
+  return normalized.length > 80;
+}
+
+function isUsableThreadTitle(title?: string | null): boolean {
+  return !isNoisyThreadTitle(title);
+}
+
+function looksLikePlanBody(value: string): boolean {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  const planLines = lines.filter((line) => /^(\d+[\.)、]|[-*•])\s+/.test(line));
+  return planLines.length >= Math.min(2, lines.length);
+}
+
+function looksLikeAssistantBodyTitle(value: string): boolean {
+  if (value.length < 40) return false;
+  if (!/[。！？.!?]/.test(value)) return false;
+  return /(?:我会|我将|接下来|先.+然后|然后.+最后|最后.+运行|确认不会再)/.test(value);
+}
+
+function isVisibleLastEventKind(value?: string | null): boolean {
+  const event = value?.trim();
+  return Boolean(event && !event.startsWith("app-server.") && !event.startsWith("panel."));
+}
+
+function mergeBlocksPreservingHistory(current: MessageBlock[], incoming: MessageBlock[]): MessageBlock[] {
+  if (!current.length) return incoming;
+  if (!incoming.length) return current;
+  const incomingIds = new Set(incoming.map((block) => block.id));
+  const retainedHistory = current.filter((block) => !incomingIds.has(block.id));
+  if (!retainedHistory.length) return mergeMessageBlocks(current, incoming);
+  const next = mergeMessageBlocks(retainedHistory, incoming);
+  return next === retainedHistory ? current : next;
+}
+
+export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
+  if (!incoming.length) return current;
+  let changed = false;
+  let next = current;
+  const ordered = mode === "prepend" ? [...incoming].reverse() : incoming;
+  for (const block of ordered) {
+    if (mode === "prepend" && !next.some((item) => item.id === block.id)) {
+      next = [block, ...next];
+      changed = true;
+      continue;
+    }
+    const updated = upsertMessageBlock(next, block);
+    if (updated !== next) {
+      next = updated;
+      changed = true;
+    }
+  }
+  return changed ? next : current;
+}
+
+export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
+  const existingIndex = current.findIndex((block) => block.id === next.id);
+  if (existingIndex === -1) return [...current, next];
+  const existing = current[existingIndex];
+  if (messageBlocksEqual(existing, next)) return current;
+  const updated = [...current];
+  updated[existingIndex] = next;
+  return updated;
+}
+
+function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function cursorIndex(cursor: string | null | undefined): number {
+  if (!cursor) return Number.POSITIVE_INFINITY;
+  const parsed = Number(cursor.replace(/^b:/, ""));
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
