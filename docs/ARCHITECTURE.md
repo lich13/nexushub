@@ -17,7 +17,7 @@ Two host surfaces share one WebUI and core: `desktop_embedded_tauri` and `linux_
 
 Codex notifications use the canonical main turn's final answer, never intermediate/tool/internal text. Unresolved questions retain call identity and confirmation; answered questions do not notify again. Bark and restricted recovery switches are independent. Recovery only reactivates eligible blocked/usageLimited/budgetLimited Goals, never paused/complete Goals or a turn. macOS uses its existing fixed monitor LaunchAgent; Linux uses the server process.
 
-The current contract registry, not historical matrices, defines the public API. Task creation, sending, stop/steer/fork, uploads, followup execution, question/plan/approval actions, manual Goal RPC and desktop LAN WebUI are retired. Preserve historical database rows without execution or fallback.
+The current contract registry, not historical matrices, defines the public API. Task creation, sending, stop/steer/fork, uploads, followup execution, question/plan/approval actions, manual Goal RPC and desktop LAN WebUI are retired. Upgrade cleanup removes obsolete log-maintenance task/state records only; provider data and unrelated jobs remain without execution or fallback.
 
 ## Changing a shared action
 
