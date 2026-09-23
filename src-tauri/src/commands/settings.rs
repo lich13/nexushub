@@ -1,0 +1,87 @@
+#![allow(non_snake_case)]
+
+use crate::{
+    overview::DesktopState,
+    services::{
+        actions::DesktopActionResponse,
+        settings::{
+            self as settings_service, DesktopCleanupExecuteRequest, DesktopProbeEventsRequest,
+            DesktopProbeEventsResponse, DesktopProbeSettings,
+        },
+    },
+};
+use anyhow::Result;
+use nexushub_core::services::{probe as probe_service, settings::ProbeSettingsSaveRequest};
+
+#[tauri::command(rename = "probe.settings.get")]
+pub fn getProbeSettings(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopProbeSettings, String> {
+    settings_service::probe_settings_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "probe.settings.save")]
+pub fn saveProbeSettings(
+    state: tauri::State<'_, DesktopState>,
+    settings: ProbeSettingsSaveRequest,
+) -> Result<DesktopProbeSettings, String> {
+    settings_service::probe_save_settings_with_state(&state, settings)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "probe.barkTest")]
+pub fn probeBarkTest(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "probe.installHooks")]
+pub fn probeInstallHooks(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::InstallHooks)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "probe.events")]
+pub fn getProbeEvents(
+    state: tauri::State<'_, DesktopState>,
+    limit: Option<u32>,
+) -> Result<DesktopProbeEventsResponse, String> {
+    settings_service::probe_events_with_state(&state, DesktopProbeEventsRequest { limit })
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "cleanup.archiveDryRun")]
+pub fn dryRunArchiveDelete(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::archive::ArchiveDeletePlan, String> {
+    settings_service::archive_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "cleanup.archiveExecute")]
+pub fn startArchiveDelete(
+    state: tauri::State<'_, DesktopState>,
+    request: DesktopCleanupExecuteRequest,
+) -> Result<nexushub_core::archive::ArchiveDeleteResult, String> {
+    settings_service::archive_delete_execute_with_state(&state, request)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "cleanup.hiddenDryRun")]
+pub fn dryRunHiddenThreadDelete(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
+    settings_service::hidden_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command(rename = "cleanup.hiddenExecute")]
+pub fn startHiddenThreadDelete(
+    state: tauri::State<'_, DesktopState>,
+    request: DesktopCleanupExecuteRequest,
+) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
+    settings_service::hidden_delete_execute_with_state(&state, request)
+        .map_err(|err| err.to_string())
+}

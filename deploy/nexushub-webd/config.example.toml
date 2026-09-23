@@ -1,0 +1,62 @@
+[server]
+listen = "127.0.0.1:15742"
+public_base_url = "https://panel.example.com/nexushub/"
+trust_forwarded_headers = true
+
+[codex]
+workspace = "/home/ubuntu/codex-workspace"
+host_label = "NexusHub"
+# Codex 本地状态库: state_5.sqlite, session_index.jsonl, rollout files, and logs_2.sqlite.
+# NexusHub reads native state and uses fixed native protocols for management.
+# codex.home is omitted so NexusHub auto-discovers /root/.codex or /home/ubuntu/.codex.
+
+[probe]
+enabled = true
+poll_seconds = 15
+recent_limit = 50
+
+[probe.hooks]
+manage_stop_hook = true
+
+[probe.notifications]
+enabled = false
+server_url = "https://api.day.app"
+group = "NexusHub"
+notify_completion = true
+notify_reply_needed = true
+notify_recoverable = true
+notify_codex = true
+notify_grok = true
+notify_grok_completion = true
+notify_grok_failure = true
+notify_pi = true
+notify_pi_completion = true
+# Reserved preference: Pi final failure detection is unavailable without an extension.
+notify_pi_failure = true
+
+[probe.observability]
+event_retention_days = 2
+hook_event_max_lines = 500
+hook_cooldown_max_lines = 1000
+log_max_bytes = 5242880
+
+[security]
+cookie_secure = true
+session_ttl_seconds = 31536000
+login_rate_limit_per_minute = 8
+turnstile_expected_hostname = "panel.example.com"
+turnstile_expected_action = "login"
+
+[paths]
+data_dir = "/var/lib/nexushub-webd"
+db_path = "/var/lib/nexushub-webd/nexushub.sqlite"
+webui_dir = "/usr/share/nexushub-webd/webui"
+log_dir = "/var/log/nexushub-webd"
+
+[update]
+precheck_command = "/usr/local/bin/nexushub-codex-precheck"
+update_command = "/usr/local/bin/nexushub-codex-update"
+prune_command = "/usr/local/bin/nexushub-codex-prune"
+doctor_command = "/usr/local/bin/nexushub-codex-precheck"
+panel_update_command = "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
+panel_precheck_command = "test -x /usr/local/bin/nexushub-webd-update && systemctl is-active nexushub-webd && curl -fsS http://127.0.0.1:15742/healthz"

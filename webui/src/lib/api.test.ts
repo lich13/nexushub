@@ -1,0 +1,2312 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import appSource from "../App.tsx?raw";
+import apiSource from "./api.ts?raw";
+import apiAuthSource from "./api/auth.ts?raw";
+import apiGrokSource from "./api/grok.ts?raw";
+import apiSessionsSource from "./api/sessions.ts?raw";
+import apiPiSource from "./api/pi.ts?raw";
+import apiJobsSource from "./api/jobs.ts?raw";
+import apiProbeSource from "./api/probe.ts?raw";
+import apiSettingsSource from "./api/settings.ts?raw";
+import apiSharedSource from "./api/shared.ts?raw";
+import apiSystemSource from "./api/system.ts?raw";
+import apiThreadsSource from "./api/threads.ts?raw";
+import apiUpdatesSource from "./api/updates.ts?raw";
+import queryAuthSource from "./query/auth.ts?raw";
+import queryOpsSource from "./query/ops.ts?raw";
+import queryProbeSource from "./query/probe.ts?raw";
+import querySecuritySource from "./query/security.ts?raw";
+import querySystemSource from "./query/system.ts?raw";
+import queryThreadsSource from "./query/threads.ts?raw";
+import runtimeSource from "./runtime.ts?raw";
+import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
+import demoCoreSource from "./domain/demoCore.ts?raw";
+import type { MessageBlock, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
+
+const domainApiSource = [
+  apiAuthSource,
+  apiGrokSource,
+  apiPiSource,
+  apiSessionsSource,
+  apiJobsSource,
+  apiProbeSource,
+  apiSettingsSource,
+  apiSharedSource,
+  apiSystemSource,
+  apiThreadsSource,
+  apiUpdatesSource
+].join("\n");
+
+const querySource = [
+  queryAuthSource,
+  queryOpsSource,
+  queryProbeSource,
+  querySecuritySource,
+  querySystemSource,
+  queryThreadsSource
+].join("\n");
+
+type ProductionSource = {
+  path: string;
+  source: string;
+};
+
+const srcRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+
+function collectProductionSources(dir: string = srcRoot): ProductionSource[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      return collectProductionSources(absolutePath);
+    }
+    if (!/\.(ts|tsx)$/.test(entry.name) || /\.(test|spec)\.(ts|tsx)$/.test(entry.name)) {
+      return [];
+    }
+    return [{
+      path: relative(srcRoot, absolutePath).replaceAll("\\", "/"),
+      source: readFileSync(absolutePath, "utf8")
+    }];
+  }).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const productionSources = collectProductionSources();
+const runtimeProductionSources = productionSources.filter((file) => file.path === "lib/runtime.ts");
+const apiTransportSources = productionSources.filter((file) => file.path === "lib/api/transport.ts");
+const domainApiProductionSources = productionSources.filter(
+  (file) => file.path.startsWith("lib/api/") && file.path !== "lib/api/transport.ts",
+);
+const queryProductionSources = productionSources.filter((file) => file.path.startsWith("lib/query/"));
+const productionComponentSources = productionSources.filter(
+  (file) => file.path === "App.tsx" || file.path === "main.tsx" || file.path.startsWith("components/") || file.path.startsWith("hooks/"),
+);
+const appComponentSources = productionSources.filter((file) => file.path === "App.tsx");
+const nonRuntimeProductionSources = productionSources.filter((file) => file.path !== "lib/runtime.ts");
+const nonQueryProductionSources = productionSources.filter((file) => !file.path.startsWith("lib/query/"));
+const nonTransportApiProductionSources = productionSources.filter(
+  (file) => file.path !== "lib/runtime.ts" && file.path !== "lib/api/transport.ts",
+);
+const nonTransportAndQueryProductionSources = productionSources.filter(
+  (file) => file.path !== "lib/runtime.ts"
+    && file.path !== "lib/api/transport.ts"
+    && !file.path.startsWith("lib/query/"),
+);
+const apiNonDemoProductionSources = domainApiProductionSources.filter(
+  (file) => file.path !== "lib/api/demo.ts",
+);
+
+function expectNoSourceMatches(
+  files: ProductionSource[],
+  pattern: string | RegExp,
+  label: string,
+) {
+  for (const file of files) {
+    if (typeof pattern === "string") {
+      expect(file.source, `${file.path} must not contain ${label}`).not.toContain(pattern);
+    } else {
+      expect(file.source, `${file.path} must not match ${label}`).not.toMatch(pattern);
+    }
+  }
+}
+
+async function loadRealApi() {
+  vi.stubEnv("VITE_USE_REAL_API", "1");
+  vi.resetModules();
+  return import("./api");
+}
+
+async function loadDesktopApi() {
+  vi.stubEnv("VITE_USE_REAL_API", "1");
+  vi.resetModules();
+  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  return import("./api");
+}
+
+async function loadDesktopDemoApi() {
+  vi.stubEnv("VITE_USE_REAL_API", "0");
+  vi.resetModules();
+  globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+  return import("./api");
+}
+
+function rpcCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const [path, options] = fetchMock.mock.calls[index] as [string, RequestInit & { headers: Headers; body?: string | FormData }];
+  return {
+    path,
+    command: path.replace(/^.*\/api\/rpc\//, ""),
+    options,
+    body: typeof options.body === "string" ? JSON.parse(options.body) : options.body
+  };
+}
+
+describe("archive delete API compatibility", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
+    delete globalThis.__NEXUSHUB_TEST_INVOKE__;
+    vi.resetModules();
+  });
+
+  test("uses a typed confirmation payload with expected archive count", async () => {
+    const { startArchiveDelete } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startArchiveDelete({ csrfToken: "csrf-token", expectedCount: 3 });
+
+    const call = rpcCall(fetchMock);
+    expect(call.path).toBe("/api/rpc/cleanup.archiveExecute");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(call.body).toEqual({ confirmed: true, expectedCount: 3 });
+  });
+
+  test("uses hidden thread cleanup endpoints with dry-run and expected hidden count", async () => {
+    const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
+      String(path).endsWith("/cleanup.hiddenDryRun")
+        ? {
+          total_threads: 9,
+          visible_threads: 7,
+          hidden_threads: 2,
+          archived_threads: 0,
+          session_index_lines: 9,
+          rollout_files: 9,
+          hidden_ids: ["child-a", "child-b"],
+          hidden_source_counts: { subagent: 2 },
+          integrity: "ok"
+        }
+        : {
+          before: {
+            total_threads: 9,
+            visible_threads: 7,
+            hidden_threads: 2,
+            archived_threads: 0,
+            session_index_lines: 9,
+            rollout_files: 9,
+            hidden_ids: ["child-a", "child-b"],
+            hidden_source_counts: { subagent: 2 },
+            integrity: "ok"
+          },
+          deleted_threads: 2,
+          after_total_threads: 7,
+          after_visible_threads: 7,
+          after_hidden_threads: 0,
+          after_archived_threads: 0,
+          after_integrity: "ok",
+          visible_threads: 7,
+          hidden_threads: 0,
+          integrity: "ok",
+          deleted_rollout_files: 2
+        }
+    ), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const plan = await dryRunHiddenThreadDelete("csrf-token");
+    const result = await startHiddenThreadDelete({ csrfToken: "csrf-token", expectedCount: plan.hidden_threads });
+
+    expect(plan.hidden_threads).toBe(2);
+    expect(result.deleted_threads).toBe(2);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/rpc/cleanup.hiddenDryRun",
+      "/api/rpc/cleanup.hiddenExecute"
+    ]);
+    const execute = rpcCall(fetchMock, 1);
+    expect(execute.options.method).toBe("POST");
+    expect(execute.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(execute.body).toEqual({ confirmed: true, expectedCount: 2 });
+  });
+
+  test("thread detail request supports pagination query parameters", async () => {
+    const { getThread } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      summary: { id: "thread-a", title: "example-user", status: "Recent", message_count: 1 },
+      messages: [],
+      blocks: [],
+      raw_event_count: 1,
+      total_blocks: 240,
+      has_more_blocks: true,
+      before_cursor: "b:120"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const detail = await getThread("thread-a", { limit: 120, before: "b:240", full: true });
+
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.detail");
+    expect(rpcCall(fetchMock).body).toEqual({
+      id: "thread-a",
+      options: { limit: 120, before: "b:240", full: true }
+    });
+    expect(detail.total_blocks).toBe(240);
+    expect(detail.before_cursor).toBe("b:120");
+  });
+
+  test("probe events request uses the dedicated endpoint and limit parameter", async () => {
+    const { getProbeEvents } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      events: [{ id: "event-1", kind: "hook-stop", source: "test", payload: {}, created_at: "2026-06-15T00:00:00Z" }],
+      limit: 10
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getProbeEvents(10);
+
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/probe.events");
+    expect(rpcCall(fetchMock).body).toEqual({ limit: 10 });
+    expect(result.available).toBe(true);
+    expect(result.data?.events[0].kind).toBe("hook-stop");
+  });
+
+  test("demo probe events expose structured payload fields for the UI cards", async () => {
+    vi.resetModules();
+    const { getProbeEvents } = await import("./api");
+
+    const result = await getProbeEvents(10);
+
+    expect(result.available).toBe(true);
+    expect(result.data?.events).toHaveLength(3);
+    expect(result.data?.events[0]).toMatchObject({
+      payload: expect.objectContaining({
+        event_type: "reply-needed",
+        thread_title: "Plan Mode 修复",
+        reason_label: "等待用户确认",
+        bark: expect.objectContaining({ sent: false, skipped: true, reason: "dedupe", http_status: 200, dedupe_hit: true }),
+        dedupe: expect.objectContaining({ claimed: true, duplicate: false, status: "claimed" })
+      })
+    });
+    expect(JSON.stringify(result.data)).not.toContain("secret");
+  });
+
+  test("demo probe and thread data do not expose raw proposed plan tags", async () => {
+    vi.resetModules();
+    const { getProbeStatus, listThreads } = await import("./api");
+
+    const status = await getProbeStatus();
+    const threads = await listThreads("reply-needed", "");
+
+    expect(status.available).toBe(true);
+    expect(JSON.stringify(status.data)).not.toContain("<proposed_plan>");
+    expect(JSON.stringify(threads)).not.toContain("<proposed_plan>");
+    expect(status.data?.reply_needed_threads?.[0]?.latest_message).toBe("等待确认");
+    expect(threads[0]?.latest_message).toBe("等待确认");
+  });
+
+  test("demo jobs include probe job history entries", async () => {
+    vi.resetModules();
+    const { listJobs } = await import("./api");
+
+    const jobs = await listJobs();
+    const serialized = JSON.stringify(jobs);
+    const retiredCodexJobTitle = ["Codex", "update", "precheck"].join(" ");
+    const retiredClaudeJobTitle = ["Claude Code", "update"].join(" ");
+
+    expect(jobs.some((job) => job.kind.startsWith("probe_"))).toBe(true);
+    expect(jobs.some((job) => job.title.includes("Bark"))).toBe(true);
+    expect(serialized).not.toContain(retiredCodexJobTitle);
+    expect(serialized).not.toContain(retiredClaudeJobTitle);
+  });
+
+  test("thread block page request uses lightweight blocks endpoint", async () => {
+    const { getThreadBlocks } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      thread_id: "thread-a",
+      blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
+      total_blocks: 240,
+      has_more_blocks: true,
+      before_cursor: "b:120"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
+
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.blocks");
+    expect(rpcCall(fetchMock).body).toEqual({
+      id: "thread-a",
+      options: { limit: 80, before: "b:200" }
+    });
+    expect(page.thread_id).toBe("thread-a");
+    expect(page.blocks[0].id).toBe("b1");
+    expect(page.before_cursor).toBe("b:120");
+  });
+
+  test("desktop thread block page request keeps limit and cursor in the typed native command", async () => {
+    const { getThreadBlocks } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      expect(command).toBe("threads.blocks");
+      expect(args).toEqual({
+        id: "thread-a",
+        options: { limit: 80, before: "b:200" }
+      });
+      return {
+        thread_id: "thread-a",
+        blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
+        total_blocks: 240,
+        has_more_blocks: true,
+        before_cursor: "b:120"
+      };
+    });
+
+    const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(page.before_cursor).toBe("b:120");
+  });
+
+  test("routes NexusHub updates to typed runtime command endpoints", async () => {
+    const { getUpdateStatus, updates } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "panel-job" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      current_version: "0.1.100",
+      latest_version: "v0.1.103",
+      update_available: true,
+      channel: "stable",
+      method: "linux_systemd_job",
+      state: "idle",
+      recommended_action: "/usr/local/bin/nexushub-webd-update",
+      capabilities: ["job_history"]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const status = await getUpdateStatus();
+    const result = await updates.install("csrf-token");
+
+    const statusCall = rpcCall(fetchMock, 0);
+    const actionCall = rpcCall(fetchMock, 1);
+    expect(status.method).toBe("linux_systemd_job");
+    expect(result).toEqual({ job_id: "panel-job" });
+    expect(statusCall.path).toBe("/api/rpc/updates.status");
+    expect(actionCall.path).toBe("/api/rpc/updates.install");
+    expect(actionCall.options.method).toBe("POST");
+    expect(actionCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(actionCall.body).toEqual({});
+  });
+
+  test("does not export legacy update job helper or codex update targets", async () => {
+    const api = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect("startUpdateJob" in api).toBe(false);
+    expect(apiSource).not.toContain("codex/update");
+    expect(apiSource).not.toContain("/api/system/panel/update");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("Probe demo data labels the builtin NexusHub service consistently", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    const { getProbeStatus } = await import("./api");
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: { flavor: "builtin", service_kind: "systemd", service_name: "nexushub-webd" }
+    });
+  });
+
+  test("desktop demo platform data reflects macOS Tauri instead of Linux WebUI", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    const { getPlatformOverview, getProbeStatus } = await import("./api");
+
+    await expect(getPlatformOverview()).resolves.toMatchObject({
+      kind: "macos",
+      service_kind: "tauri",
+      service_name: "NexusHub.app"
+    });
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        platform: "macos",
+        service_kind: "tauri",
+        service_name: "NexusHub.app"
+      }
+    });
+  });
+
+  test("desktop demo fixtures are built from macOS-only data", async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSecurity, getSystemStatus, getUpdateStatus, listJobs } = await import("./api");
+
+    const systemStatus = await getSystemStatus();
+    const fixtures = [
+      await getPlatformOverview(),
+      (await getProbeStatus()).data,
+      (await getProbeSettings()).data,
+      await getSecurity(),
+      { ...systemStatus, capabilities: undefined },
+      await getUpdateStatus(),
+      await listJobs()
+    ];
+    const serialized = JSON.stringify(fixtures);
+
+    expect(demoCoreSource).toContain("function buildDemoPlatformOverview");
+    expect(demoCoreSource).toContain("function buildDemoSystemStatus");
+    expect(demoCoreSource).toContain("function buildDemoSecurity");
+    expect(systemStatus.capabilities).toMatchObject({
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false
+    });
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
+  });
+
+  test("demo fixture builder accepts explicit runtime fixtures with complete capabilities", async () => {
+    const {
+      buildDemoFixture,
+      buildDemoPlatformOverview,
+      buildDemoSecurity,
+      buildDemoSystemStatus
+    } = await import("./domain/demoCore");
+    const capabilityKeys = [
+      "admin_password",
+      "app_updater",
+      "csrf",
+      "job_history",
+      "jobs",
+      "linux_update_job",
+      "nginx",
+      "probe",
+      "prune_backups",
+      "public_endpoint",
+      "security_settings",
+      "settings",
+      "status",
+      "systemd",
+      "thread_archive_actions",
+      "thread_cleanup",
+      "threads",
+      "turnstile",
+      "web_auth"
+    ];
+    const macosVisibleCapabilityKeys = [
+      "app_updater",
+      "job_history",
+      "jobs",
+      "probe",
+      "settings",
+      "status",
+      "thread_archive_actions",
+      "thread_cleanup",
+      "threads"
+    ];
+
+    const linuxPlatform = buildDemoPlatformOverview("linux-web");
+    const linuxSystem = buildDemoSystemStatus("linux-web");
+    const linuxSecurity = buildDemoSecurity("linux-web");
+    const macPlatform = buildDemoPlatformOverview("macos-tauri");
+    const macSystem = buildDemoSystemStatus("macos-tauri");
+    const macSecurity = buildDemoSecurity("macos-tauri");
+
+    expect(Object.keys(linuxSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
+    expect(Object.keys(macSystem.capabilities ?? {}).sort()).toEqual(macosVisibleCapabilityKeys);
+    expect(linuxSystem.capabilities).toMatchObject({
+      web_auth: true,
+      security_settings: true,
+      turnstile: true,
+      systemd: true,
+      nginx: true,
+      public_endpoint: true,
+      admin_password: true,
+      linux_update_job: true,
+      prune_backups: true,
+    });
+    expect(macSystem.capabilities).toMatchObject({
+      web_auth: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false,
+      thread_cleanup: true,
+      thread_archive_actions: true,
+    });
+    expect(linuxPlatform).toMatchObject({ kind: "linux", service_kind: "systemd" });
+    expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "demo.nexushub.local");
+    expect(macPlatform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
+    expect(macSecurity).toEqual({});
+    expect(JSON.stringify([macPlatform, { ...macSystem, capabilities: undefined }, macSecurity])).not.toMatch(
+      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i
+    );
+
+    expect(typeof buildDemoFixture).toBe("function");
+    const macFixture = buildDemoFixture("macos-tauri");
+    const linuxFixture = buildDemoFixture("linux-web");
+    expect(macFixture).toMatchObject({
+      platform: { kind: "macos", service_kind: "tauri" },
+      system: { capabilities: { web_auth: false, linux_update_job: false, prune_backups: false } },
+      security: {}
+    });
+    expect(linuxFixture).toMatchObject({
+      platform: { kind: "linux", service_kind: "systemd" },
+      system: { capabilities: { web_auth: true, linux_update_job: true, prune_backups: true } },
+      security: { turnstile_expected_hostname: "demo.nexushub.local" }
+    });
+    expect(JSON.stringify({ ...macFixture, system: { ...macFixture.system, capabilities: undefined } })).not.toMatch(
+      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i
+    );
+  });
+
+  test("Probe fixed jobs use typed runtime command endpoints and maintenance is retired", async () => {
+    const api = await loadRealApi();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ job_id: "bark-job-1" }), {
+      status: 200, headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.runProbeBarkTest("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(api.runProbeHooksInstall("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/api/rpc/probe.barkTest", "/api/rpc/probe.installHooks"]);
+    for (const name of ["getProbeLogsDbStatus", "runProbeLogsDbDryRun", "runProbeLogsDbExecute"]) expect(api).not.toHaveProperty(name);
+  });
+
+  test("Probe API accepts resolved Codex path discovery fields", async () => {
+    const { getProbeStatus } = await loadRealApi();
+    const probeStatus: ProbeStatus = {
+      label: "Probe",
+      enabled: true,
+      available: true,
+      platform: "linux",
+      service_kind: "systemd",
+      service_name: "nexushub-webd",
+      flavor: "builtin",
+      hook_status: "managed",
+      bark_status: "configured",
+      recent_event_count: 0,
+      running_count: 0,
+      reply_needed_count: 0,
+      recoverable_count: 0,
+      running_threads: [],
+      reply_needed_threads: [],
+      recoverable_threads: [],
+      config_path: "/etc/nexushub-webd/config.toml",
+      codex_home: "/root/.codex",
+      configured_codex_home: null,
+      resolved_codex_home: "/home/codex/.codex",
+      codex_home_source: "auto",
+      logs_db_source: "resolved_codex_home",
+      discovery_warnings: ["configured Codex home missing"]
+    };
+    const responses: Record<string, unknown> = {
+      "/api/rpc/probe.status": probeStatus,
+    };
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        configured_codex_home: null,
+        resolved_codex_home: "/home/codex/.codex",
+        codex_home_source: "auto",
+        logs_db_source: "resolved_codex_home",
+        discovery_warnings: ["configured Codex home missing"]
+      }
+    });
+  });
+
+  test("Probe OptionalResult wrappers are unwrapped without confusing ProbeStatus availability", async () => {
+    const { getProbeEvents, getProbeStatus } = await loadRealApi();
+    const probeStatus: ProbeStatus = {
+      label: "Probe",
+      enabled: true,
+      available: true,
+      platform: "macos",
+      service_kind: "tauri",
+      service_name: "NexusHub.app",
+      flavor: "builtin",
+      hook_status: "managed",
+      bark_status: "configured",
+      recent_event_count: 1,
+      running_count: 0,
+      reply_needed_count: 0,
+      recoverable_count: 0,
+      running_threads: [],
+      reply_needed_threads: [],
+      recoverable_threads: [],
+      config_path: "/Users/example/Library/Application Support/NexusHub/config.toml"
+    };
+    const responses: Record<string, unknown> = {
+      "/api/rpc/probe.status": probeStatus,
+      "/api/rpc/probe.events": {
+        available: true,
+        data: {
+          limit: 10,
+          events: [{
+            id: "event-a",
+            kind: "reply-needed",
+            thread_id: "thread-a",
+            title: "Reply",
+            message: "Need input",
+            source: "probe",
+            payload: {},
+            created_at: "2026-06-19T00:00:00Z",
+            handled_at: null
+          }]
+        }
+      }
+    };
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })));
+
+    await expect(getProbeStatus()).resolves.toMatchObject({
+      available: true,
+      data: {
+        available: true,
+        service_kind: "tauri",
+        service_name: "NexusHub.app"
+      }
+    });
+    await expect(getProbeEvents(10)).resolves.toMatchObject({
+      available: true,
+      data: {
+        limit: 10,
+        events: [{ id: "event-a", kind: "reply-needed" }]
+      }
+    });
+  });
+
+  test("listJobs unwraps OptionalResult responses into a stable array contract", async () => {
+    const { listJobs } = await loadRealApi();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      available: true,
+      data: [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1, output: "" }]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listJobs()).resolves.toEqual([
+      expect.objectContaining({ id: "job-a", kind: "probe" })
+    ]);
+    expect(rpcCall(fetchMock).path).toBe("/api/rpc/jobs.list");
+  });
+
+  test("status path display helpers prefer resolved backend paths and source labels", async () => {
+    const app = await import("../test/domain");
+    const status: SystemStatus = {
+      host_label: "cloud",
+      codex_home: "/root/.codex",
+      configured_codex_home: null,
+      resolved_codex_home: "/home/codex/.codex",
+      codex_home_source: "auto",
+      panel_db: "/var/lib/nexushub-webd/nexushub.sqlite"
+    };
+
+    expect(app.codexHomeStatusValue(status)).toBe("/home/codex/.codex · auto");
+    expect(app.codexHomeStatusValue({ codex_home: "" })).toBe("未知");
+  });
+
+  test("runtime UI capabilities derive from core system capabilities", async () => {
+    const { runtimeCapabilities, runtimeCapabilitiesFromSystemStatus, runtimeCapabilitiesForRuntime } = await loadRealApi();
+    const linuxCore: SystemStatus["capabilities"] = {
+      threads: true,
+      jobs: true,
+      probe: true,
+      status: true,
+      settings: true,
+      job_history: true,
+      app_updater: true,
+      web_auth: true,
+      csrf: true,
+      security_settings: true,
+      turnstile: true,
+      systemd: true,
+      nginx: true,
+      public_endpoint: true,
+      admin_password: true,
+      linux_update_job: true,
+      prune_backups: true,
+      thread_cleanup: true,
+      thread_archive_actions: true,
+    };
+    const macCore: SystemStatus["capabilities"] = {
+      ...linuxCore,
+      web_auth: false,
+      csrf: false,
+      security_settings: false,
+      turnstile: false,
+      systemd: false,
+      nginx: false,
+      public_endpoint: false,
+      admin_password: false,
+      linux_update_job: false,
+      prune_backups: false,
+      thread_cleanup: true,
+      thread_archive_actions: true,
+    };
+    const webBootstrap = runtimeCapabilitiesForRuntime("web");
+    const desktopBootstrap = runtimeCapabilitiesForRuntime("desktop");
+
+    expect(runtimeCapabilities()).toEqual(webBootstrap);
+    expect(webBootstrap).toMatchObject({
+      runtimeKind: "web",
+      hostSurface: "linux_server_webui",
+      webAuth: true,
+      logout: true,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
+      updatePrune: false,
+      threadCleanup: false,
+      threadArchiveActions: false,
+      updateServiceLabels: false,
+    });
+    expect(desktopBootstrap).toMatchObject({
+      runtimeKind: "desktop",
+      hostSurface: "desktop_embedded_tauri",
+      webAuth: false,
+      logout: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
+      updatePrune: false,
+      threadCleanup: false,
+      threadArchiveActions: false,
+      updateServiceLabels: false,
+    });
+
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore, host_surface: "linux_server_webui" }, webBootstrap)).toMatchObject({
+      runtimeKind: "web",
+      hostSurface: "linux_server_webui",
+      webAuth: true,
+      securitySettings: true,
+      publicEndpointStatus: true,
+      updatePrune: true,
+      threadCleanup: true,
+      threadArchiveActions: true,
+      updateServiceLabels: true,
+    });
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore, host_surface: "desktop_embedded_tauri" }, desktopBootstrap)).toMatchObject({
+      runtimeKind: "desktop",
+      hostSurface: "desktop_embedded_tauri",
+      webAuth: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      updatePrune: false,
+      threadCleanup: true,
+      threadArchiveActions: true,
+      updateServiceLabels: false,
+    });
+    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, desktopBootstrap)).toMatchObject({
+      runtimeKind: "desktop",
+      webAuth: false,
+      logout: false,
+      securitySettings: false,
+      publicEndpointStatus: false,
+      codexStatePaths: false,
+      updatePrune: false,
+      threadCleanup: true,
+      threadArchiveActions: true,
+      updateServiceLabels: false,
+    });
+    expect(Object.keys(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap))).not.toEqual(expect.arrayContaining([
+      "linuxBackupPrune",
+      "linuxUpdateLabels"
+    ]));
+  });
+
+  test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
+    const { getPublicSettings, getSystemStatus, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
+
+    const publicSettings = await getPublicSettings();
+    const systemStatus = await getSystemStatus();
+    const updateStatus = await getUpdateStatus();
+    const platformOverview = await getPlatformOverview();
+    const visibleValues = [
+      publicSettings.site_name,
+      systemStatus.host_label,
+      systemStatus.hostname,
+      systemStatus.public_endpoint,
+      systemStatus.codex_home,
+      systemStatus.configured_codex_home,
+      systemStatus.resolved_codex_home,
+      systemStatus.codex_home_source,
+      systemStatus.panel_db,
+      systemStatus.state_db_integrity,
+      updateStatus.method,
+      updateStatus.recommended_action,
+      ...(updateStatus.capabilities ?? []),
+      platformOverview.kind,
+      platformOverview.data_dir,
+      platformOverview.config_file,
+      platformOverview.webui_dir,
+      platformOverview.log_dir,
+      platformOverview.service_name,
+      platformOverview.service_kind
+    ].filter((value): value is string => typeof value === "string").join("\n");
+
+    expect(visibleValues).not.toMatch(/systemd|Nginx|管理员密码|Turnstile|Linux prune|prune_backups|linux_systemd_job|panel\.example\.com/i);
+    expect(visibleValues).toMatch(/macos_tauri_updater|signature_verification|restart_after_install/);
+  });
+
+  test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
+    const { saveProbeSettings } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ saved: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveProbeSettings({
+      codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
+      probe: {
+        enabled: true,
+        notifications: { enabled: true, device_key: "secret", server_url: "https://api.day.app" },
+        observability: { event_retention_days: 2 }
+      }
+    }, "csrf-token");
+
+    const call = rpcCall(fetchMock);
+    const body = call.body as Record<string, any>;
+    expect(call.path).toBe("/api/rpc/probe.settings.save");
+    expect(call.options.method).toBe("POST");
+    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(Object.keys(body).sort()).toEqual(["settings"]);
+    expect(Object.keys(body.settings).sort()).toEqual(["codex", "notifications", "probe"]);
+    expect(body.settings.probe.notifications).toEqual({
+      enabled: true,
+      device_key: "secret",
+      server_url: "https://api.day.app"
+    });
+    expect(body.settings.notifications).toEqual({ device_key: "secret" });
+    expect(body.settings.probe.observability).toEqual({ event_retention_days: 2 });
+  });
+
+  test("retired provider job helper is no longer exported", async () => {
+    const api = await loadRealApi() as Record<string, unknown>;
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(api[["startClaude", "CodeJob"].join("")]).toBeUndefined();
+    expect(api[["claudeCode", "JobRoutes"].join("")]).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("Job History labels read-only filesystem failures in Chinese", async () => {
+    const app = await import("../test/domain") as typeof import("../test/domain") & {
+      failureCategoryLabel?: (category: string) => string;
+    };
+
+    expect(app.failureCategoryLabel?.("read_only_file_system")).toBe("文件系统只读/安装目录不可写");
+  });
+
+  test("includes an optional Turnstile token in login payload", async () => {
+    const { login } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      id: "admin",
+      username: "admin",
+      csrf_token: "csrf"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await login("admin", "password", "turnstile-token");
+
+    const call = rpcCall(fetchMock);
+    expect(call.path).toBe("/api/rpc/auth.login");
+    expect(call.body).toEqual({
+      username: "admin",
+      password: "password",
+      turnstile_token: "turnstile-token"
+    });
+  });
+
+  test("normalizes public Turnstile settings from the shared camelCase facade", async () => {
+    const { getPublicSettings } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      requiredCapability: "web_auth",
+      public: {
+        siteName: "NexusHub",
+        turnstileEnabled: true,
+        turnstileRequired: false,
+        turnstileSiteKey: "1x00000000000000000000AA",
+        turnstileAction: "login",
+        adminConfigured: true,
+        baseUrl: "https://panel.example.com/nexushub/"
+      }
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPublicSettings()).resolves.toMatchObject({
+      site_name: "NexusHub",
+      turnstile_enabled: true,
+      turnstile_required: false,
+      turnstile_site_key: "1x00000000000000000000AA",
+      turnstile_action: "login",
+      admin_configured: true
+    });
+  });
+
+  test("normalizes saved security settings from the shared camelCase view", async () => {
+    const { saveSecurity } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      turnstileEnabled: true,
+      turnstileRequired: false,
+      turnstileSiteKey: "site-key",
+      turnstileSecretConfigured: true,
+      sessionTtlSeconds: 31536000,
+      turnstileExpectedHostname: "panel.example.com",
+      turnstileExpectedAction: "login"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(saveSecurity({ turnstile_site_key: "site-key" }, "csrf-token")).resolves.toMatchObject({
+      turnstile_enabled: true,
+      turnstile_required: false,
+      turnstile_site_key: "site-key",
+      turnstile_secret_configured: true,
+      session_ttl_seconds: 31536000,
+      turnstile_expected_hostname: "panel.example.com",
+      turnstile_expected_action: "login"
+    });
+  });
+
+  test("login uses the scoped API base configured for the Linux /nexushub/ package", async () => {
+    vi.stubEnv("BASE_URL", "/nexushub/");
+    vi.stubEnv("VITE_API_BASE", "/nexushub");
+    const { login } = await loadRealApi();
+    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+      id: "admin",
+      username: "admin",
+      csrf_token: "csrf"
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await login("admin", "password");
+
+    const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/nexushub/api/rpc/auth.login");
+  });
+
+  test("desktop auth query state never calls Web auth endpoints", async () => {
+    const { desktopRuntimeSessionUser } = await loadDesktopApi();
+    const { logoutRuntime } = await import("./query/auth");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => null);
+
+    expect(desktopRuntimeSessionUser()).toMatchObject({
+      username: "desktop",
+      csrf_token: null
+    });
+    await logoutRuntime("ignored-csrf");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
+  });
+
+  test("desktop update helpers use shared typed updater commands instead of Linux panel routes", async () => {
+    const { getUpdateStatus, updates, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      if (command === "updates.install") {
+        return { job_id: "desktop-native-job", installed: false };
+      }
+      if (command === "updates.check") {
+        return {
+          job_id: "desktop-check-job",
+          status: {
+            current_version: "0.1.100",
+            latest_version: "v0.1.103",
+            update_available: true,
+            channel: "stable",
+            method: "macos_tauri_updater",
+            state: "ready",
+            recommended_action: "Confirm install in the Tauri updater after signature verification.",
+            capabilities: ["signature_verification", "job_history"]
+          }
+        };
+      }
+      expect(command).toBe("updates.status");
+      expect(args).toBeUndefined();
+      return {
+        current_version: "0.1.100",
+        latest_version: "v0.1.103",
+        update_available: true,
+        channel: "stable",
+        method: "macos_tauri_updater",
+        state: "idle",
+        recommended_action: "Confirm install in the Tauri updater after signature verification.",
+        capabilities: ["signature_verification", "job_history"]
+      };
+    });
+
+    expect((await getUpdateStatus()).method).toBe("macos_tauri_updater");
+    await expect(updates.check("ignored-csrf")).resolves.toEqual({
+      job_id: "desktop-check-job",
+      status: expect.objectContaining({
+        latest_version: "v0.1.103",
+        state: "ready"
+      })
+    });
+    await expect(updates.install("ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
+    const macCapabilities = runtimeCapabilitiesForRuntime("desktop");
+    expect(macCapabilities.updatePrune).toBe(false);
+    await expect(updates.prune("ignored-csrf", macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
+    try {
+      await updates.prune("ignored-csrf", macCapabilities);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toMatch(/Linux|systemd|Nginx|sudo/i);
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.check", undefined);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.install", undefined);
+  });
+
+  test("update prune is gated by capability matrix instead of runtime kind", async () => {
+    const { updates, runtimeCapabilitiesForRuntime } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args, job_id: "desktop-prune-job" }));
+
+    const desktopWithPrune = {
+      ...runtimeCapabilitiesForRuntime("desktop"),
+      updatePrune: true
+    };
+
+    await expect(updates.prune("ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.prune", undefined);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("desktop archive cleanup uses a typed native command instead of a route bridge", async () => {
+    const { startArchiveDelete } = await loadDesktopApi();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => {
+      expect(command).toBe("cleanup.archiveExecute");
+      expect(args).toEqual({ request: { confirmed: true, expectedCount: 0 } });
+      return {
+        before: {},
+        deleted_threads: 0,
+        after_total_threads: 1,
+        after_archived_threads: 0,
+        after_integrity: "ok"
+      };
+    });
+
+    await expect(startArchiveDelete({ csrfToken: "ignored-csrf", expectedCount: 0 })).resolves.toMatchObject({ after_integrity: "ok" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("frontend production code does not reintroduce route bridges or component API passthroughs", () => {
+    const forbiddenDomainTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "@tauri-apps/api",
+      "isDesktopRuntime(",
+      "isWebRuntime(",
+      "runtimeDispatch(",
+      "__testRuntimeDispatch",
+      "desktopCommand",
+      "desktopArgs",
+      "webCommand",
+      "webArgs",
+      "runtimeValue",
+      "selectRuntimeFallback",
+      "desktop_api_command",
+      "desktopApiRoute",
+      "invokeDesktopApi",
+      "desktop_api",
+      "DesktopApi",
+      "desktopBridge"
+    ];
+
+    expect(apiSource).not.toContain("const ROUTES");
+    expect(domainApiSource).not.toContain("const ROUTES");
+    expect(domainApiSource).not.toContain("WebRoute");
+    expect(domainApiSource).not.toContain("DesktopRoute");
+    expect(domainApiSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(domainApiSource).not.toContain("invokeDesktop");
+    expect(domainApiSource).not.toContain("DesktopApiUpload");
+    expect(domainApiSource).not.toContain("new EventSource");
+    expect(domainApiSource).not.toContain("/api/system/panel/update");
+    expect(domainApiSource).not.toContain("getRuntimeKind");
+    expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
+    expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
+    expect(domainApiSource).not.toContain("SystemCapabilities =");
+    expect(domainApiSource).not.toContain('from "../runtime"');
+    expect(domainApiSource).not.toContain('from "./shared";\nexport { selectRuntimeFallback');
+    expect(domainApiSource).not.toContain("runtimeRpc(");
+    expect(domainApiSource).not.toContain("uploadRuntimeFiles");
+    expect(domainApiSource).not.toContain("createRuntimeThreadEventSource");
+    expect(domainCapabilitiesSource).not.toContain("../api/");
+    expect(domainCapabilitiesSource).not.toContain('from "../api');
+    expect(domainCapabilitiesSource).not.toContain('from "../runtime"');
+    expect(domainCapabilitiesSource).not.toContain("linuxBackupPrune");
+    expect(domainCapabilitiesSource).not.toContain("linuxUpdateLabels");
+    for (const token of forbiddenDomainTokens) {
+      expect(apiSource, `api.ts must not contain ${token}`).not.toContain(token);
+      expect(domainApiSource, `domain API modules must not contain ${token}`).not.toContain(token);
+      expect(domainCapabilitiesSource, `domain/capabilities.ts must not contain ${token}`).not.toContain(token);
+      expect(demoCoreSource, `domain/demoCore.ts must not contain ${token}`).not.toContain(token);
+    }
+    expect(runtimeSource).not.toContain("SystemCapabilities");
+    expect(appSource).not.toContain("desktopApiRoute");
+    expect(appSource).not.toContain('runtimeRpc("desktopApi"');
+    expect(appSource).not.toContain("invoke(");
+    expect(appSource).not.toContain("runtimeDispatch(");
+    expect(appSource).not.toContain("runtimeRpc(");
+    expect(appSource).not.toContain("fetch(");
+    expect(appSource).not.toContain("new EventSource");
+    expect(appSource).not.toContain("EventSource");
+    expect(appSource).not.toContain("desktopCommand");
+    expect(appSource).not.toContain("webCommand");
+    expect(appSource).not.toContain('"/api/');
+    expect(appSource).not.toContain("'/api/");
+  });
+
+  test("production API commands are unified dot commands with upload and events as transport exceptions", () => {
+    const commands = [
+      ...domainApiSource.matchAll(/callCommand(?:<[^()]*>)?\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
+      ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
+    ].map((match) => match[1]);
+    const allowedCommands = [
+      "auth.login",
+      "auth.logout",
+      "auth.me",
+      "auth.publicSettings",
+      "cleanup.archiveDryRun",
+      "cleanup.archiveExecute",
+      "cleanup.hiddenDryRun",
+      "cleanup.hiddenExecute",
+      "grok.deleteExecute",
+      "grok.deletePreview",
+      "grok.detail",
+      "grok.list",
+      "grok.rename",
+      "jobs.detail",
+      "jobs.list",
+      "pi.deleteExecute",
+      "sessions.bulkPreview",
+      "sessions.bulkExecute",
+      "pi.deletePreview",
+      "pi.detail",
+      "pi.list",
+      "pi.rename",
+      "probe.barkTest",
+      "probe.events",
+      "probe.installHooks",
+      "probe.settings.get",
+      "probe.settings.save",
+      "probe.status",
+      "security.changePassword",
+      "security.get",
+      "security.save",
+      "system.platform",
+      "system.providers",
+      "system.status",
+      "system.version",
+      "threads.archive",
+      "threads.blocks",
+      "threads.detail",
+      "threads.list",
+      "threads.rename",
+      "threads.restore",
+      "updates.check",
+      "updates.install",
+      "updates.prune",
+      "updates.status",
+    ].sort();
+
+    expect(commands.length).toBeGreaterThan(20);
+    expect(commands.every((command) => command.includes("."))).toBe(true);
+    expect([...new Set(commands)].sort()).toEqual(allowedCommands);
+    expect(domainApiSource).not.toMatch(/callCommand(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
+    expect(runtimeSource).not.toContain("uploadRuntimeFiles");
+    expect(runtimeSource).toContain("createRuntimeThreadEventSource");
+    expect(runtimeSource).toContain("/api/rpc/threadEvents/");
+  });
+
+  test("transport and query cache APIs are scoped to their intended layers", () => {
+    const transportOnlyTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "new EventSource",
+      "__TAURI_INTERNALS__",
+      "__NEXUSHUB_DESKTOP_RUNTIME__"
+    ];
+    const queryOnlyTokens = [
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries"
+    ];
+
+    for (const token of transportOnlyTokens) {
+      expect(domainApiSource, `domain API modules must not own transport token ${token}`).not.toContain(token);
+      expect(querySource, `query modules must not own transport token ${token}`).not.toContain(token);
+      expect(appSource, `components must not own transport token ${token}`).not.toContain(token);
+    }
+    for (const token of queryOnlyTokens) {
+      expect(domainApiSource, `domain API modules must not own query cache token ${token}`).not.toContain(token);
+      expect(appSource, `components must not own query cache token ${token}`).not.toContain(token);
+    }
+
+    expect(runtimeSource).toContain('buildRuntimeApiPath(`/api/rpc/threadEvents/');
+    expect(runtimeSource).not.toContain("uploadRuntimeFiles");
+    expect(runtimeSource).toContain("EventSource");
+    expect(querySource).toContain("useQueryClient");
+    expect(querySource).toContain("invalidateQueries");
+  });
+
+  test("components do not import transport or own query cache state", () => {
+    expect(appComponentSources.map((file) => file.path)).toEqual(["App.tsx"]);
+    expect(productionComponentSources.map((file) => file.path)).toEqual(expect.arrayContaining([
+      "App.tsx",
+      "components/chat/ChatWorkspace.tsx",
+      "components/chat/Conversation.tsx",
+      "components/security/SecurityWorkspace.tsx",
+      "main.tsx"
+    ]));
+
+    for (const token of [
+      'from "./lib/api/transport"',
+      'from "./lib/runtime"',
+      'from "./runtime"',
+      "callCommand(",
+      "runtimeRpc(",
+      "uploadRuntimeFiles",
+      "createRuntimeThreadEventSource",
+      "new EventSource",
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries",
+      "QueryClient",
+      "queryClient",
+    ]) {
+      expectNoSourceMatches(appComponentSources, token, `component transport/query-cache token ${token}`);
+    }
+  });
+
+  test("App uses domain/query facades instead of the raw thread message store", () => {
+    expect(appSource).not.toContain("./lib/threadMessageStore");
+    expect(appSource).not.toMatch(/\bfrom\s+["'][^"']*threadMessageStore["']/);
+  });
+
+  test("query action hooks do not expose the raw QueryClient handle", () => {
+    for (const file of queryProductionSources) {
+      const exportedFunctions = Array.from(
+        file.source.matchAll(/export function (use[A-Z]\w+)\([^)]*\)\s*\{([\s\S]*?)(?=\nexport function|\nfunction|\nconst |\ntype |\Z)/g),
+        (match) => ({ name: match[1], body: match[2] }),
+      );
+
+      for (const fn of exportedFunctions) {
+        if (!/Actions$/.test(fn.name)) continue;
+        expect(fn.body, `${file.path} ${fn.name} must not return qc directly`).not.toMatch(/return\s+\{[\s\S]*?\bqc\s*(?:,|\})/);
+        expect(fn.body, `${file.path} ${fn.name} must not expose queryClient directly`).not.toMatch(/return\s+\{[\s\S]*?\bqueryClient\s*(?:,|\})/);
+      }
+    }
+  });
+
+  test("non-demo API modules do not inline bulky demo payloads", () => {
+    for (const file of apiNonDemoProductionSources) {
+      expect(file.source, `${file.path} should not create large demo arrays inline`).not.toMatch(/Array\.from\(\s*\{\s*length:\s*(?:[1-9]\d|[6-9])/);
+      expect(file.source, `${file.path} should not declare demo ThreadSummary arrays inline`).not.toMatch(/const\s+\w+\s*:\s*ThreadSummary\[\]\s*=\s*\[/);
+      expect(file.source, `${file.path} should not declare demo MessageBlock arrays inline`).not.toMatch(/const\s+\w+\s*:\s*MessageBlock\[\]\s*=\s*\[/);
+    }
+  });
+
+  test("macOS demo fixtures do not include Linux-only rendered copy or paths", async () => {
+    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
+    const {
+      buildDemoFixture,
+      buildDemoPlatformOverview,
+      buildDemoSecurity,
+      buildDemoSystemStatus
+    } = await import("./domain/demoCore");
+    const {
+      demoCodexConfig,
+      demoPlatformOverview,
+      demoProbeSettings,
+      demoSystemStatus,
+      demoUpdateStatus
+    } = await import("./api/demo");
+
+    const macosFixtures = [
+      buildDemoFixture("macos-tauri"),
+      buildDemoPlatformOverview("macos-tauri"),
+      buildDemoSystemStatus("macos-tauri"),
+      buildDemoSecurity("macos-tauri"),
+      demoPlatformOverview("macos-tauri"),
+      demoSystemStatus("macos-tauri"),
+      demoUpdateStatus("macos-tauri"),
+      demoCodexConfig("macos-tauri"),
+      demoProbeSettings("macos-tauri")
+    ];
+    const serialized = JSON.stringify(macosFixtures);
+
+    expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Public endpoint|Linux update|Linux prune|prune_backups|\/opt\/nexushub|192\.0\.2\.10|panel\.example\.com|\/home\/ubuntu|\/root\/\.codex/i);
+  });
+
+  test("production source files keep transport, domain API, and query cache boundaries explicit", () => {
+    expect(runtimeProductionSources.map((file) => file.path)).toEqual(["lib/runtime.ts"]);
+    expect(apiTransportSources.map((file) => file.path)).toEqual(["lib/api/transport.ts"]);
+    expect(queryProductionSources.length).toBeGreaterThan(0);
+    expect(domainApiProductionSources.length).toBeGreaterThan(0);
+    expect(productionComponentSources.map((file) => file.path).sort()).toEqual(expect.arrayContaining([
+      "App.tsx",
+      "components/chat/ChatWorkspace.tsx",
+      "components/chat/Conversation.tsx",
+      "components/security/SecurityWorkspace.tsx",
+      "main.tsx"
+    ]));
+
+    const runtimeOnlyTokens = [
+      '"/api/',
+      "'/api/",
+      "`/api/",
+      "new EventSource"
+    ];
+    for (const token of runtimeOnlyTokens) {
+      expectNoSourceMatches(nonRuntimeProductionSources, token, `runtime transport token ${token}`);
+    }
+    expectNoSourceMatches(nonRuntimeProductionSources, /\bEventSource\b/, "runtime EventSource type/value");
+
+    const runtimePrimitiveTokens = [
+      "runtimeRpc(",
+      "uploadRuntimeFiles",
+      "createRuntimeThreadEventSource",
+      "buildRuntimeApiPath("
+    ];
+    for (const token of runtimePrimitiveTokens) {
+      expectNoSourceMatches(nonTransportApiProductionSources, token, `runtime primitive ${token}`);
+    }
+    expectNoSourceMatches(nonTransportApiProductionSources, /from\s+["']\.\.\/runtime["']/, "direct runtime import");
+    expectNoSourceMatches(nonTransportAndQueryProductionSources, /from\s+["'][^"']*api\/transport["']/, "direct transport import outside API/query boundary");
+
+    const queryCacheTokens = [
+      "useQueryClient",
+      "setQueryData",
+      "invalidateQueries",
+      "getQueryCache",
+      "getQueryData",
+      "removeQueries",
+      "cancelQueries"
+    ];
+    for (const token of queryCacheTokens) {
+      expectNoSourceMatches(nonQueryProductionSources, token, `query cache API ${token}`);
+    }
+
+    const retiredCompatibilityTokens = [
+      "desktopCommand",
+      "webCommand",
+      "runtimeDispatch",
+      "runtimeValue",
+      "getSentinelStatus",
+      "SentinelStatus"
+    ];
+    for (const token of retiredCompatibilityTokens) {
+      expectNoSourceMatches(productionSources, token, `retired compatibility token ${token}`);
+    }
+  });
+
+  test("retired send payload and results have no production helpers", () => {
+    for (const token of ["function buildPayload(", "function actionMessage(", "function setThreadLastResult(", "function demoCreatedThreadResult("]) {
+      expectNoSourceMatches(productionSources, token, "retired sending helper");
+    }
+  });
+
+  test("plan, pending question and answered history render read-only without reviving actions", async () => {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { MessageBlockView } = await import("../components/chat/MessageStream");
+    const blocks: MessageBlock[] = [
+      { id: "plan", role: "assistant", kind: "plan", text: "<proposed_plan>Current plan</proposed_plan>", status: "pending", questions: [] },
+      { id: "question", role: "assistant", kind: "request_user_input", turn_id: "turn-current", questions: [{ id: "q1", question: "Current question", options: [{ label: "Option A" }] }] },
+      { id: "answer", role: "assistant", kind: "request_user_input_result", turn_id: "turn-old", status: "completed", questions: [], answers: [{ question_id: "q1", answers: ["Option B"] }] }
+    ];
+    const rendered = blocks.map(block => renderToStaticMarkup(createElement(MessageBlockView, { block }))).join("\n");
+    for (const text of ["Current plan", "Current question", "Option A", "Option B", "turn-current"]) expect(rendered).toContain(text);
+    expect(rendered).not.toMatch(/<(button|input|textarea|form)\b/);
+    expect(renderToStaticMarkup(createElement(MessageBlockView, { block: { id: "approval", role: "assistant", kind: "approval", text: "Retired approval", questions: [] } }))).toBe("");
+  });
+
+  test("thread status tabs include an explicit archive restoration view", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.statusTabs.map((tab: { id: string }) => tab.id)).toEqual([
+      "all",
+      "running",
+      "reply-needed",
+      "recoverable",
+      "archived"
+    ]);
+  });
+
+  test("NexusHub navigation exposes the slim provider workspaces", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "grok", "pi", "probe", "ops"]);
+    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Grok Build", "Pi", "Probe", "设置"]);
+  });
+
+  test("thread list item text only exposes the title", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.threadListItemText({
+      id: "thread-a",
+      title: "example-user",
+      status: "Running",
+      latest_message: "接手这个线程的工作 019e86d2...",
+      model: "custom",
+      last_event_kind: "app-server.thread/list",
+      message_count: 8359
+    })).toBe("example-user");
+  });
+
+  test("thread list metadata shows status and preview without contaminating title", async () => {
+    const app = await import("../test/domain");
+    const thread = {
+      id: "thread-a",
+      title: "example-user",
+      status: "Running",
+      latest_message: "正在执行长任务输出",
+      active_turn_id: "turn-1",
+      message_count: 24
+    } satisfies Partial<ThreadSummary>;
+
+    expect(app.threadListItemStatusText(thread)).toBe("运行中");
+    expect(app.threadListItemPreviewText(thread)).toBe("正在执行长任务输出");
+    expect(app.threadListItemText(thread)).toBe("example-user");
+    expect(app.threadListItemPreviewText({
+      ...thread,
+      latest_message: "<proposed_plan>\n1. 检查\n2. 修复\n</proposed_plan>"
+    })).toBe("1. 检查 2. 修复");
+    expect(app.threadListItemPreviewText({ ...thread, latest_message: "" })).toBe("");
+    expect(app.isThreadListItemRunning(thread)).toBe(true);
+    expect(app.isThreadListItemRunning({ ...thread, status: "Recent", active_turn_id: undefined })).toBe(false);
+  });
+
+  test("demo thread list does not expose cwd or runtime workspace paths", async () => {
+    vi.resetModules();
+    const { listThreads } = await import("./api");
+
+    const threads = await listThreads("all", "");
+    const serialized = JSON.stringify(threads);
+
+    expect(threads.every((thread) => !("cwd" in thread))).toBe(true);
+    expect(serialized).not.toContain("/srv/hermes");
+    expect(serialized).not.toContain("/root/.codex");
+    expect(serialized).not.toContain("/home/ubuntu/codex-workspace");
+  });
+
+  test("thread list cache helper inserts and removes rows for running filter", async () => {
+    const app = await import("../test/domain");
+    const existing = {
+      id: "thread-a",
+      title: "example-user",
+      status: "Recent",
+      latest_message: "old",
+      message_count: 1
+    } satisfies ThreadSummary;
+    const running = {
+      ...existing,
+      title: "未命名线程",
+      status: "Running",
+      active_turn_id: "turn-live",
+      latest_message: "working"
+    } satisfies ThreadSummary;
+    const completed = {
+      ...existing,
+      status: "Recent",
+      active_turn_id: null,
+      latest_message: "done"
+    } satisfies ThreadSummary;
+
+    expect(app.mergeThreadSummaryIntoListCache([], running, "running", "")).toEqual([
+      expect.objectContaining({ id: "thread-a", status: "Running", active_turn_id: "turn-live" })
+    ]);
+    expect(app.mergeThreadSummaryIntoListCache([existing], running, "all", "")).toEqual([
+      expect.objectContaining({ id: "thread-a", title: "example-user", latest_message: "working" })
+    ]);
+    expect(app.mergeThreadSummaryIntoListCache([running], completed, "running", "")).toEqual([]);
+    expect(app.mergeThreadSummaryIntoListCache([existing], running, "running", "xianbao")).toEqual([]);
+  });
+
+  test("thread list visibility filters archived and every known subagent marker", async () => {
+    const app = await import("../test/domain");
+    const rows = [
+      { id: "main", title: "example-user", status: "Running", message_count: 1 },
+      { id: "archived", title: "old", status: "Archived", message_count: 1 },
+      { id: "parent", title: "child", status: "Recent", message_count: 1, parentThreadId: "main" },
+      { id: "source-kind", title: "child", status: "Recent", message_count: 1, sourceKind: "subAgentRun" },
+      { id: "thread-source", title: "child", status: "Recent", message_count: 1, thread_source: "subagent" },
+      { id: "source-json", title: "child", status: "Recent", message_count: 1, source: { subagent: { thread_spawn: { parentThreadId: "main" } } } },
+      { id: "agent-path", title: "child", status: "Recent", message_count: 1, agentPath: "/tmp/subagent" },
+      { id: "agent-nickname", title: "child", status: "Recent", message_count: 1, agentNickname: "reviewer" },
+      { id: "agent-role", title: "child", status: "Recent", message_count: 1, agentRole: "explorer" },
+      {
+        id: "internal-exec",
+        title: "只读验证任务。不要修改文件。",
+        status: "Recent",
+        message_count: 1,
+        source: "exec",
+        thread_source: "user",
+        has_user_event: 0,
+        first_user_message: "只读验证任务。不要修改文件。使用 tool_search 查询 spawn_agent。"
+      },
+      {
+        id: "internal-subagent-prompt",
+        title: "你是子代理 A，必须使用 gpt-5.5 和 xhigh。",
+        status: "Recent",
+        message_count: 1,
+        source: "exec",
+        thread_source: "user",
+        has_user_event: 0
+      }
+    ] satisfies Array<Partial<ThreadSummary>>;
+
+    expect(app.filterVisibleThreadSummaries(rows).map((thread) => thread.id)).toEqual(["main"]);
+  });
+
+  test("conversation title text ignores latest message previews", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.conversationTitleText({
+      title: " example-user ",
+      latest_message: "接手这个线程的工作 019e86d2...",
+      model: "custom",
+      last_event_kind: "app-server.thread/read"
+    })).toBe("example-user");
+    expect(app.conversationTitleText({
+      title: "   ",
+      latest_message: "接手这个线程的工作 019e86d2..."
+    })).toBe("未命名线程");
+  });
+
+  test("incoming realtime summary keeps an existing title when the update has only a placeholder", async () => {
+    const app = await import("../test/domain");
+    const current = {
+      id: "thread-a",
+      title: "example-user",
+      status: "Recent",
+      message_count: 8,
+      latest_message: "旧摘要",
+      last_event_kind: "task_complete"
+    } satisfies Partial<ThreadSummary>;
+    const incoming = {
+      id: "thread-a",
+      title: "未命名线程",
+      status: "Running",
+      message_count: 9,
+      latest_message: "新摘要",
+      active_turn_id: "turn-live",
+      last_event_kind: "app-server.thread/list"
+    } satisfies Partial<ThreadSummary>;
+
+    expect(app.mergeIncomingThreadSummary(current, incoming)).toMatchObject({
+      title: "example-user",
+      status: "Running",
+      latest_message: "新摘要",
+      active_turn_id: "turn-live",
+      last_event_kind: "task_complete"
+    });
+    expect(app.lastEventKindText({ last_event_kind: "app-server.thread/read" })).toBe("未知");
+    expect(app.lastEventKindText({ last_event_kind: "panel.job.running" })).toBe("未知");
+    expect(app.lastEventKindText({ last_event_kind: "task_complete" })).toBe("task_complete");
+  });
+
+  test("thread detail summary merges fresh list status without losing title", async () => {
+    const app = await import("../test/domain");
+    const detail = {
+      summary: {
+        id: "thread-a",
+        title: "example-user",
+        status: "Recent",
+        message_count: 8,
+        latest_message: "旧摘要",
+        active_turn_id: null
+      },
+      messages: [],
+      blocks: [],
+      raw_event_count: 20
+    } satisfies ThreadDetail;
+    const merged = app.mergeThreadDetailSummaryFromList(detail, {
+      id: "thread-a",
+      title: "未命名线程",
+      status: "Running",
+      message_count: 9,
+      latest_message: "正在执行",
+      active_turn_id: "turn-live",
+      last_event_kind: "app-server.thread/list"
+    });
+
+    expect(merged).not.toBe(detail);
+    expect(merged.summary).toMatchObject({
+      title: "example-user",
+      status: "Running",
+      latest_message: "正在执行",
+      active_turn_id: "turn-live"
+    });
+  });
+
+  test("thread detail refetch keeps polling idle selections and speeds up running threads", async () => {
+    const app = await import("../test/domain");
+    const idleDetail = {
+      summary: {
+        id: "thread-a",
+        title: "example-user",
+        status: "Recent",
+        message_count: 8
+      },
+      messages: [],
+      blocks: [],
+      raw_event_count: 20
+    } satisfies ThreadDetail;
+
+    expect(app.threadDetailRefetchInterval(idleDetail, null)).toBe(5000);
+    expect(app.threadDetailRefetchInterval(idleDetail, { status: "Running" })).toBe(5000);
+    expect(app.threadDetailRefetchInterval(undefined, { status: "Running" })).toBe(2000);
+    expect(app.threadDetailRefetchInterval({
+      ...idleDetail,
+      summary: { ...idleDetail.summary, status: "Running" }
+    }, null)).toBe(2000);
+  });
+
+  test("tool block helpers expose compact title, summary, and detail text", async () => {
+    const app = await import("../test/domain");
+    const block = {
+      id: "tool-1",
+      role: "tool",
+      kind: "function_call_output",
+      status: "completed",
+      tool_name: "exec_command",
+      call_id: "call-1",
+      summary: "Output: ok",
+      input: "{\n  \"cmd\": \"pwd\"\n}",
+      text: "Output:\n/home/ubuntu",
+      truncated: true,
+      questions: []
+    };
+
+    expect(app.isToolBlock(block)).toBe(true);
+    expect(app.toolBlockTitle(block)).toBe("exec_command");
+    expect(app.toolBlockSummary(block)).toBe("Output: ok");
+    expect(app.toolBlockDetailText(block)).toContain("\"cmd\": \"pwd\"");
+    expect(app.toolBlockDetailText(block)).toContain("Output:\n/home/ubuntu");
+    expect(app.toolBlockDetailText(block)).toContain("[output truncated]");
+    expect(app.toolBlockTitle({
+      id: "chat-history-collapsed",
+      role: "tool",
+      kind: "chat_history_collapsed",
+      status: "completed",
+      tool_name: "chat_history",
+      summary: "4078 条历史对话已折叠",
+      questions: []
+    })).toBe("4078 条历史对话已折叠");
+  });
+
+  test("upsert message block appends, replaces changed blocks, and keeps identical references", async () => {
+    const app = await import("../test/domain");
+    const current = [{
+      id: "tool-1",
+      role: "tool",
+      kind: "function_call",
+      status: "running",
+      tool_name: "exec_command",
+      questions: []
+    }] satisfies MessageBlock[];
+    const completed = {
+      ...current[0],
+      kind: "function_call_output",
+      status: "completed",
+      text: "Output:\n/tmp"
+    } satisfies MessageBlock;
+
+    const unchanged = app.upsertMessageBlock(current, current[0]);
+    expect(unchanged).toBe(current);
+
+    const replaced = app.upsertMessageBlock(current, completed);
+    expect(replaced).not.toBe(current);
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]).toEqual(completed);
+
+    const appended = app.upsertMessageBlock(replaced, {
+      id: "assistant-1",
+      role: "assistant",
+      kind: "message",
+      text: "done",
+      questions: []
+    });
+    expect(appended).toHaveLength(2);
+    expect(appended[1].id).toBe("assistant-1");
+  });
+
+  test("merge message blocks appends, prepends, updates, and preserves unchanged references", async () => {
+    const app = await import("../test/domain");
+    const current = [
+      { id: "b2", role: "assistant", kind: "message", text: "middle", questions: [] },
+      { id: "b3", role: "assistant", kind: "message", text: "old", questions: [] }
+    ] satisfies MessageBlock[];
+
+    expect(app.mergeMessageBlocks(current, [])).toBe(current);
+    expect(app.mergeMessageBlocks(current, [{ ...current[0] }])).toBe(current);
+
+    const appended = app.mergeMessageBlocks(current, [
+      { id: "b3", role: "assistant", kind: "message", text: "updated", questions: [] },
+      { id: "b4", role: "assistant", kind: "message", text: "new", questions: [] }
+    ]);
+    expect(appended).not.toBe(current);
+    expect(appended.map((block: MessageBlock) => `${block.id}:${block.text}`)).toEqual([
+      "b2:middle",
+      "b3:updated",
+      "b4:new"
+    ]);
+
+    const prepended = app.mergeMessageBlocks(appended, [
+      { id: "b0", role: "user", kind: "message", text: "older", questions: [] },
+      { id: "b1", role: "assistant", kind: "message", text: "old answer", questions: [] },
+      { id: "b2", role: "assistant", kind: "message", text: "middle", questions: [] }
+    ], "prepend");
+    expect(prepended.map((block: MessageBlock) => block.id)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
+  });
+
+  test("conversation block compaction collapses old completed tools but keeps running tools", async () => {
+    const app = await import("../test/domain");
+    const completed = Array.from({ length: 5 }, (_, index) => ({
+      id: `tool-${index}`,
+      role: "tool",
+      kind: "function_call_output",
+      status: "completed",
+      text: `done-${index}`,
+      questions: []
+    })) satisfies MessageBlock[];
+    const running = {
+      id: "tool-live",
+      role: "tool",
+      kind: "function_call",
+      status: "running",
+      text: "running",
+      questions: []
+    } satisfies MessageBlock;
+
+    const compacted = app.compactConversationBlocks([...completed, running], 2);
+
+    expect(compacted.map((block) => block.id)).toEqual([
+      "completed-tool-history-collapsed",
+      "tool-3",
+      "tool-4",
+      "tool-live"
+    ]);
+    expect(compacted[0].summary).toBe("3 个历史工具调用已折叠");
+    expect(compacted[compacted.length - 1]).toBe(running);
+  });
+
+  test("conversation block compaction defaults to compact completed tool history", async () => {
+    const app = await import("../test/domain");
+    const completed = Array.from({ length: 18 }, (_, index) => ({
+      id: `tool-${index}`,
+      role: "tool",
+      kind: "function_call_output",
+      status: "completed",
+      text: `done-${index}`,
+      questions: []
+    })) satisfies MessageBlock[];
+
+    const compacted = app.compactConversationBlocks(completed);
+
+    expect(compacted).toHaveLength(5);
+    expect(compacted[0].id).toBe("completed-tool-history-collapsed");
+    expect(compacted[0].summary).toBe("14 个历史工具调用已折叠");
+    expect(compacted[compacted.length - 1]?.id).toBe("tool-17");
+  });
+
+  test("conversation message presentation uses light chat rows", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.conversationMessagePresentation({ role: "user" })).toEqual({
+      kind: "user",
+      rowClassName: "chat-row user",
+      bodyClassName: "chat-bubble"
+    });
+    expect(app.conversationMessagePresentation({ role: "assistant" })).toEqual({
+      kind: "assistant",
+      rowClassName: "chat-row assistant",
+      bodyClassName: "assistant-message-body"
+    });
+  });
+
+  test("plan and question blocks render in the conversation stream but not the action stack", async () => {
+    const app = await import("../test/domain");
+    const plan = {
+      id: "plan-1",
+      role: "assistant",
+      kind: "plan",
+      display_kind: "plan",
+      turn_id: "turn-live",
+      item_id: "plan-item",
+      text: "<proposed_plan>先检查，再实现。</proposed_plan>",
+      status: "pending",
+      resolved: false,
+      questions: []
+    } satisfies MessageBlock;
+    const question = {
+      id: "question-1",
+      role: "assistant",
+      kind: "request_user_input",
+      display_kind: "question",
+      turn_id: "turn-live",
+      call_id: "call-1",
+      status: "pending",
+      resolved: false,
+      questions: [{ id: "q1", question: "选择方案", options: [{ label: "A" }, { label: "B" }] }]
+    } satisfies MessageBlock;
+    const approval = {
+      id: "approval-1",
+      role: "assistant",
+      kind: "approval",
+      display_kind: "approval",
+      turn_id: "turn-live",
+      text: "Allow command?",
+      questions: []
+    } satisfies MessageBlock;
+
+    expect(app.shouldRenderConversationBlock(plan)).toBe(true);
+    expect(app.shouldRenderConversationBlock(question)).toBe(true);
+    expect(app.shouldRenderConversationBlock(approval)).toBe(false);
+    expect(app.compactConversationBlocks([plan, question])).toEqual([plan, question]);
+  });
+
+  test("history ordering retains current plans and questions without promoting answered history", async () => {
+    const app = await import("../test/domain");
+    const currentPlan = {
+      id: "plan-live",
+      role: "assistant",
+      kind: "plan",
+      turn_id: "turn-live",
+      item_id: "plan-item",
+      status: "pending",
+      resolved: false,
+      text: "<proposed_plan>当前计划</proposed_plan>",
+      questions: []
+    } satisfies MessageBlock;
+    const historyPlan = {
+      ...currentPlan,
+      id: "plan-old",
+      turn_id: "turn-old",
+      status: "completed",
+      resolved: true,
+      text: "<proposed_plan>旧计划</proposed_plan>"
+    } satisfies MessageBlock;
+    const answeredQuestion = {
+      id: "question-old",
+      role: "assistant",
+      kind: "request_user_input",
+      turn_id: "turn-old",
+      call_id: "call-old",
+      status: "completed",
+      resolved: true,
+      questions: [{ id: "q1", question: "选择方案", options: [{ label: "A" }, { label: "B" }] }],
+      answers: [{ question_id: "q1", answers: ["B"], note: null }]
+    } satisfies MessageBlock;
+    const currentQuestion = {
+      ...answeredQuestion,
+      id: "question-live",
+      turn_id: "turn-live",
+      call_id: "call-live",
+      status: "pending",
+      resolved: false,
+      answers: []
+    } satisfies MessageBlock;
+
+    expect(app.isActionablePlanBlock(currentPlan, currentPlan)).toBe(true);
+    expect(app.isActionablePlanBlock(historyPlan, currentPlan)).toBe(false);
+    expect(app.isActionableQuestionBlock(currentQuestion, currentQuestion)).toBe(true);
+    expect(app.isActionableQuestionBlock(answeredQuestion, currentQuestion)).toBe(false);
+    expect(app.questionAnswerLabels(answeredQuestion, "q1")).toEqual(["B"]);
+    expect(app.isResolvedActionBlock(answeredQuestion)).toBe(true);
+
+    expect(app.prioritizeCurrentActionBlocks(
+      [currentPlan, answeredQuestion, currentQuestion],
+      currentPlan,
+      currentQuestion
+    ).map((block) => block.id)).toEqual([
+      "question-old",
+      "plan-live",
+      "question-live"
+    ]);
+  });
+
+  test("hidden cleanup helpers expose readiness and disabled state", async () => {
+    const app = await import("../test/domain");
+    const { hiddenThreadDeleteStats } = await import("./domain/runtimeViewModel");
+    const hiddenPlan = {
+      total_threads: 9,
+      visible_threads: 7,
+      hidden_threads: 2,
+      archived_threads: 0,
+      session_index_lines: 9,
+      rollout_files: 9,
+      hidden_ids: ["child-a", "child-b"],
+      hidden_source_counts: { exec: 1, subagent: 1 },
+      integrity: "ok"
+    };
+
+    expect(hiddenThreadDeleteStats(hiddenPlan)).toEqual({
+      hidden: 2,
+      visible: 7,
+      sourceCounts: "exec:1 subagent:1",
+      integrity: "ok"
+    });
+    expect(app.canStartHiddenThreadDelete(hiddenPlan)).toBe(true);
+    expect(app.canStartHiddenThreadDelete({ ...hiddenPlan, hidden_threads: 0 })).toBe(false);
+    expect(app.canStartHiddenThreadDelete(null)).toBe(false);
+  });
+
+  test("conversation block compaction collapses old chat messages but keeps recent chat and running tools", async () => {
+    const app = await import("../test/domain");
+    const chat = Array.from({ length: 6 }, (_, index) => ({
+      id: `chat-${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      kind: "message",
+      text: `message-${index}`,
+      questions: []
+    })) satisfies MessageBlock[];
+    const running = {
+      id: "tool-live",
+      role: "tool",
+      kind: "function_call",
+      status: "running",
+      text: "running",
+      questions: []
+    } satisfies MessageBlock;
+
+    const compacted = app.compactConversationBlocks([...chat, running], 80, 2);
+
+    expect(compacted.map((block) => block.id)).toEqual([
+      "chat-history-collapsed",
+      "chat-4",
+      "chat-5",
+      "tool-live"
+    ]);
+    expect(compacted[0].summary).toBe("4 条历史对话已折叠");
+    expect(compacted[compacted.length - 1]).toBe(running);
+  });
+
+  test("conversation block compaction collapses historical plans while preserving the current plan", async () => {
+    const app = await import("../test/domain");
+    const historicalPlans = Array.from({ length: 8 }, (_, index) => ({
+      id: `plan-${index}`,
+      role: "assistant",
+      kind: "plan",
+      display_kind: "plan",
+      turn_id: `turn-${index}`,
+      item_id: `plan-item-${index}`,
+      status: "pending",
+      resolved: false,
+      text: `<proposed_plan>历史计划 ${index}</proposed_plan>`,
+      questions: []
+    })) satisfies MessageBlock[];
+    const currentPlan = {
+      id: "plan-current",
+      role: "assistant",
+      kind: "plan",
+      display_kind: "plan",
+      turn_id: "turn-current",
+      item_id: "plan-item-current",
+      status: "pending",
+      resolved: false,
+      text: "<proposed_plan>当前计划</proposed_plan>",
+      questions: []
+    } satisfies MessageBlock;
+
+    const compacted = app.visibleConversationBlocksForHistory(
+      [...historicalPlans, currentPlan],
+      false,
+      currentPlan,
+      null
+    );
+    const prioritized = app.prioritizeCurrentActionBlocks(compacted, currentPlan, null);
+
+    expect(prioritized.map((block) => block.id)).toEqual([
+      "action-history-collapsed",
+      "plan-5",
+      "plan-6",
+      "plan-7",
+      "plan-current"
+    ]);
+    expect(prioritized[0].summary).toBe("5 条历史计划/问题已折叠");
+    expect(app.visibleConversationBlocksForHistory([...historicalPlans, currentPlan], true)).toHaveLength(9);
+  });
+
+  test("visible conversation history can expand from compacted to full renderable blocks", async () => {
+    const app = await import("../test/domain");
+    const chat = Array.from({ length: 70 }, (_, index) => ({
+      id: `chat-${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      kind: "message",
+      text: `message-${index}`,
+      questions: []
+    })) satisfies MessageBlock[];
+
+    const compacted = app.visibleConversationBlocksForHistory(chat, false);
+    const expanded = app.visibleConversationBlocksForHistory(chat, true);
+
+    expect(compacted.map((block) => block.id)).toEqual([
+      "chat-history-collapsed",
+      ...Array.from({ length: 60 }, (_, index) => `chat-${index + 10}`)
+    ]);
+    expect(app.visibleConversationBlocksForHistory(chat, false).some((block) => block.kind === "chat_history_collapsed")).toBe(true);
+    expect(expanded).toEqual(chat);
+  });
+
+  test("conversation block compaction does not duplicate server history collapse cards", async () => {
+    const app = await import("../test/domain");
+    const serverCollapsed = {
+      id: "chat-history-collapsed",
+      role: "tool",
+      kind: "chat_history_collapsed",
+      status: "completed",
+      summary: "4078 条历史对话已折叠",
+      questions: []
+    } satisfies MessageBlock;
+    const chat = Array.from({ length: 6 }, (_, index) => ({
+      id: `chat-${index}`,
+      role: "assistant",
+      kind: "message",
+      text: `message-${index}`,
+      questions: []
+    })) satisfies MessageBlock[];
+
+    const compacted = app.compactConversationBlocks([serverCollapsed, ...chat], 80, 2);
+
+    expect(compacted.map((block) => block.id)).toEqual([
+      "chat-history-collapsed",
+      "chat-0",
+      "chat-1",
+      "chat-2",
+      "chat-3",
+      "chat-4",
+      "chat-5"
+    ]);
+  });
+
+  test("subscribe thread events uses credentials and dispatches block summary and errors", async () => {
+    const { subscribeThreadEvents } = await loadRealApi();
+    const listeners = new Map<string, (event: MessageEvent) => void>();
+    const close = vi.fn();
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      constructor(readonly url: string, readonly init?: EventSourceInit) {
+        MockEventSource.instances.push(this);
+      }
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+        listeners.set(type, listener as (event: MessageEvent) => void);
+      }
+      close = close;
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onBlock = vi.fn();
+    const onSummary = vi.fn();
+    const onError = vi.fn();
+
+    const unsubscribe = subscribeThreadEvents("thread-a", { onBlock, onSummary, onError });
+    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b1", role: "assistant", kind: "message", questions: [] }) }));
+    listeners.get("summary")?.(new MessageEvent("summary", { data: JSON.stringify({ id: "thread-a", title: "example-user", status: "Running", message_count: 1 }) }));
+    listeners.get("error")?.(new MessageEvent("error", { data: "stream failed" }));
+    listeners.get("error")?.(new Event("error") as MessageEvent);
+    unsubscribe();
+
+    expect(MockEventSource.instances[0].url).toBe("/api/rpc/threadEvents/thread-a");
+    expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
+    expect(onBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }), "thread-a");
+    expect(onSummary).toHaveBeenCalledWith(expect.objectContaining({ status: "Running" }), "thread-a");
+    expect(onError).toHaveBeenCalledWith("stream failed", "thread-a");
+    expect(onError).toHaveBeenCalledWith("stream disconnected", "thread-a");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  test("subscribe thread events batches block updates and flushes on unsubscribe", async () => {
+    vi.useFakeTimers();
+    const { subscribeThreadEvents } = await loadRealApi();
+    const listeners = new Map<string, (event: MessageEvent) => void>();
+    const close = vi.fn();
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      constructor(readonly url: string, readonly init?: EventSourceInit) {
+        MockEventSource.instances.push(this);
+      }
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+        listeners.set(type, listener as (event: MessageEvent) => void);
+      }
+      close = close;
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onBlock = vi.fn();
+    const onBlocks = vi.fn();
+
+    const unsubscribe = subscribeThreadEvents("thread-a", { onBlock, onBlocks });
+    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b1", role: "assistant", kind: "message", text: "one", questions: [] }) }));
+    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b2", role: "assistant", kind: "message", text: "two", questions: [] }) }));
+
+    expect(onBlock).toHaveBeenCalledTimes(2);
+    expect(onBlocks).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(99);
+    expect(onBlocks).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onBlocks).toHaveBeenCalledTimes(1);
+    expect(onBlocks).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: "b1" }),
+      expect.objectContaining({ id: "b2" })
+    ], "thread-a");
+
+    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b3", role: "assistant", kind: "message", text: "three", questions: [] }) }));
+    unsubscribe();
+
+    expect(onBlocks).toHaveBeenCalledTimes(2);
+    expect(onBlocks).toHaveBeenLastCalledWith([expect.objectContaining({ id: "b3" })], "thread-a");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  test("conversation message helper hides internal rollout roles", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.shouldRenderConversationMessage({
+      id: "developer-1",
+      role: "developer",
+      kind: "message",
+      text: "internal instructions",
+      questions: []
+    })).toBe(false);
+    expect(app.shouldRenderConversationMessage({
+      id: "reasoning-1",
+      role: "assistant",
+      kind: "reasoning",
+      text: "hidden reasoning",
+      questions: []
+    })).toBe(false);
+    expect(app.shouldRenderConversationMessage({
+      id: "assistant-1",
+      role: "assistant",
+      kind: "message",
+      text: "visible answer",
+      questions: []
+    })).toBe(true);
+  });
+
+  test("conversation message helper hides plan mode action and subagent context blocks", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.shouldRenderConversationMessage({
+      id: "choice-1",
+      role: "assistant",
+      kind: "request_user_input",
+      text: "选择方案",
+      questions: [{ id: "q1", question: "选择方案", options: [{ label: "A" }] }]
+    })).toBe(false);
+    expect(app.shouldRenderConversationMessage({
+      id: "subagent-1",
+      role: "user",
+      kind: "message",
+      text: "<subagent_notification>{\"agent_path\":\"/tmp/child\"}</subagent_notification>",
+      questions: []
+    })).toBe(false);
+    expect(app.shouldRenderConversationMessage({
+      id: "subagent-2",
+      role: "user",
+      kind: "message",
+      text: "<subagent_context>\n- /tmp/child: worker\n</subagent_context>",
+      questions: []
+    })).toBe(false);
+  });
+
+  test("plan helper exposes proposed plan body without transcript tags", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.extractPlanText("<proposed_plan>\n# Summary\n- Fix it\n</proposed_plan>")).toBe("# Summary\n- Fix it");
+    expect(app.extractPlanText("")).toBe("Plan 内容等待 Codex 写入。");
+  });
+
+  test("message stream only follows when already near the bottom", async () => {
+    const app = await import("../test/domain");
+
+    expect(app.shouldAutoFollowMessageStream({
+      scrollTop: 900,
+      clientHeight: 600,
+      scrollHeight: 1540
+    })).toBe(true);
+    expect(app.shouldAutoFollowMessageStream({
+      scrollTop: 320,
+      clientHeight: 600,
+      scrollHeight: 1540
+    })).toBe(false);
+  });
+});
+
+test("retired mutation and desktop LAN exports are unavailable", async () => {
+  const api = await loadRealApi() as Record<string, unknown>;
+  for (const name of ["createThread", "sendMessage", "steerThread", "stopThread", "forkThread", "enqueueFollowUp", "cancelFollowUp", "listFollowUps", "answerQuestions", "approvePlan", "getGoal", "saveGoal", "pauseGoal", "resumeGoal", "clearGoal", "uploadFiles", "deleteUpload", "getClaudeCodeOverview", "getDesktopWebUiStatus", "startDesktopWebUi", "stopDesktopWebUi"]) {
+    expect(api[name], name).toBeUndefined();
+  }
+  expect(runtimeSource).not.toContain("uploadRuntimeFiles");
+  expect(apiThreadsSource).not.toMatch(/callCommand[^\n]*"(?:threads\.(?:create|send|stop|steer|fork)|threads\.goal\.|uploads\.)/);
+});
