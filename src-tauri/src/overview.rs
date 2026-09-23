@@ -154,6 +154,12 @@ mod tests {
     }
 
     #[test]
+    fn desktop_thread_service_passes_archive_filter_to_codex_reader() {
+        let source = include_str!("services/threads.rs");
+        assert!(source.contains("plan.list.query.status.as_deref()"));
+    }
+
+    #[test]
     fn mac_style_paths_use_nexushub_application_support_and_logs() {
         let paths = nexus_paths_for_home("/Users/example");
 
