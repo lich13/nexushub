@@ -259,6 +259,10 @@ impl PanelDb {
               error TEXT
             );
 
+            DELETE FROM jobs WHERE kind IN (
+              'probe_logs_db_maintain', 'probe_logs_db_maintain_dry_run'
+            );
+
             CREATE TABLE IF NOT EXISTS turnstile_attempts (
               token_hash TEXT PRIMARY KEY,
               action TEXT,
@@ -1548,6 +1552,28 @@ mod tests {
                 Some("preserve-fixture")
             );
         }
+    }
+
+    #[test]
+    fn upgrade_removes_retired_log_maintenance_jobs_only() {
+        let db = PanelDb::open(":memory:").unwrap();
+        db.create_job("retired-maintain", "probe_logs_db_maintain", "retired")
+            .unwrap();
+        db.create_job(
+            "retired-dry-run",
+            "probe_logs_db_maintain_dry_run",
+            "retired dry-run",
+        )
+        .unwrap();
+        db.create_job("keep", "probe_bark_test", "keep").unwrap();
+
+        db.migrate().unwrap();
+
+        let jobs = db.list_jobs(20).unwrap();
+        assert!(jobs
+            .iter()
+            .all(|job| !job.kind.starts_with("probe_logs_db_maintain")));
+        assert!(jobs.iter().any(|job| job.id == "keep"));
     }
 
     #[test]
