@@ -1,6 +1,6 @@
 # Current status
 
-- Version: `1.1.1`.
+- Version: `1.1.2`.
 - Scope: Goal and automatic-recovery retirement, unified provider running state, command execution groups, macOS/webd release simplification and database migration.
 - Current Markdown set: `README.md`, `AGENTS.md`, `DESIGN.md`, `docs/ARCHITECTURE.md`, `docs/cloud-deploy-runbook.md` and this file.
 
@@ -20,6 +20,6 @@
 
 ## Acceptance boundary
 
-Formal macOS installation, signed release assets, matching GitHub CI/Release, cloud deployment and authenticated Browser checks must be recorded here after the 1.1.1 commit and tag exist. Linux desktop acceptance is intentionally retired. Cloud hosts without Pi use empty-state and isolated interface checks only.
+Formal macOS installation, signed release assets, matching GitHub CI/Release, cloud deployment and authenticated Browser checks must be recorded here after the 1.1.2 commit and tag exist. Linux desktop acceptance is intentionally retired. Cloud hosts without Pi use empty-state and isolated interface checks only.
 
 Future evidence is appended to this document through normal commits. Do not add another plan, summary or archive Markdown.

@@ -1,4 +1,4 @@
-# NexusHub 1.1.1
+# NexusHub 1.1.2
 
 NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The shared React UI runs in the macOS ARM64 Tauri app and the headless Linux `webd` service. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -45,7 +45,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Grok a
 
 ## Release and deployment
 
-Release `v1.1.1` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`.
+Release `v1.1.2` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`.
 
 ```bash
 bash scripts/package-darwin-arm64.sh
