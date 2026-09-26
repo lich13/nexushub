@@ -8,8 +8,8 @@ test("selected Grok session shows a new message within three seconds", async ({ 
   await page.route("**/grok.detail", route => route.fulfill({ json: {
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "running" },
     events: [
-      { kind: "tool_call", text: "Execute `pwd`", callId: "command-1", status: "in_progress" },
-      { kind: "tool_call", text: "Execute `ls`", callId: "command-2", status: "completed" },
+      { kind: "tool_call", method: "session/update", text: "Execute `pwd`", callId: "command-1", status: "in_progress" },
+      { kind: "tool_call", method: "session/update", text: "Execute `ls`", callId: "command-2", status: "completed" },
       { kind: "agent_message_chunk", text }
     ]
   } }));

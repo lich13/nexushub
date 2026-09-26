@@ -80,7 +80,7 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
 export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRenderItem<GrokHistoryEvent>[] {
   return groupAdjacentCommands(
     events,
-    event => event.kind.startsWith("tool_") && isCommandText(event.method ?? event.text ?? event.detail),
+    event => event.kind.startsWith("tool_") && isCommandText([event.method, event.text, event.detail].filter(Boolean).join(" ")),
     event => event.status,
     event => event.callId
   );
@@ -90,7 +90,7 @@ export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderI
   return groupAdjacentCommands(
     events,
     event => (event.kind === "tool_call" || event.kind === "tool_result")
-      && isCommandText(event.role ?? event.text ?? event.detail),
+      && isCommandText([event.role, event.text, event.detail].filter(Boolean).join(" ")),
     event => event.status,
     event => event.callId
   );
