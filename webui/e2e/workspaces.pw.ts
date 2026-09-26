@@ -95,6 +95,7 @@ test("menus support keyboard, rename, archive and restore from their visible ent
   const calls = await mockApi(page);
   await page.goto("/");
   await page.locator(".thread-item").first().click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
   const menu = page.getByLabel("任务操作", { exact: true });
   await menu.press("ArrowDown");
   await expect(page.getByRole("button", { name: "改名", exact: true })).toBeFocused();
@@ -114,6 +115,7 @@ test("menus support keyboard, rename, archive and restore from their visible ent
   await page.getByRole("button", { name: "归档", exact: true }).last().click();
   await page.locator(".thread-list .segmented").getByRole("button", { name: "归档", exact: true }).click();
   await page.locator(".thread-item").first().click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
   await menu.click();
   await expect(page.getByRole("button", { name: "改名", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveAttribute("title", "取消归档后可改名");
@@ -128,6 +130,7 @@ test("Grok rename and guarded deletion use a scoped preview with Escape and focu
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build" }).click();
   await page.locator(".provider-session").click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
   const menu = page.getByLabel("Grok 任务操作");
   await menu.click();
   await page.getByRole("button", { name: "改名", exact: true }).click();
@@ -148,11 +151,49 @@ test("Grok rename and guarded deletion use a scoped preview with Escape and focu
   expect(calls.filter(name => name === "grok.deleteExecute")).toHaveLength(1);
 });
 
+test("provider list rows rename on double-click without changing provider contracts", async ({ page }) => {
+  const calls = await mockApi(page);
+  await page.goto("/");
+
+  const codexRow = page.locator(".thread-item").first();
+  await codexRow.click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
+  await codexRow.dblclick();
+  const codexInput = page.getByLabel("线程名称", { exact: true });
+  await codexInput.fill("Codex double click");
+  await codexInput.press("Enter");
+  await expect(codexRow.locator(".thread-item-title")).toHaveText("Codex double click");
+  expect(calls).toContain("threads.rename");
+
+  await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
+  const grokRow = page.locator(".provider-session").first();
+  await grokRow.click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
+  await grokRow.dblclick();
+  const grokInput = page.getByLabel("线程名称", { exact: true });
+  await grokInput.fill("Grok double click");
+  await grokInput.press("Enter");
+  await expect(grokRow.locator("strong")).toHaveText("Grok double click");
+  expect(calls).toContain("grok.rename");
+
+  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
+  const piRow = page.locator(".provider-session").first();
+  await piRow.click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
+  await piRow.dblclick();
+  const piInput = page.getByLabel("线程名称", { exact: true });
+  await piInput.fill("Pi double click");
+  await piInput.press("Enter");
+  await expect(piRow.locator("strong")).toHaveText("Pi double click");
+  expect(calls).toContain("pi.rename");
+});
+
 test("Pi rename and guarded single-file deletion use sessionKey", async ({ page }) => {
   const calls = await mockApi(page);
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
   await page.locator(".provider-session").click();
+  await expect(page.locator(".conversation-title")).toBeVisible();
   const menu = page.getByLabel("Pi 任务操作");
   await menu.click();
   await page.getByRole("button", { name: "改名", exact: true }).click();

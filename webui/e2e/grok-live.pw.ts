@@ -16,7 +16,11 @@ test("selected Grok session shows a new message within three seconds", async ({ 
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.locator(".provider-session .thread-running-indicator").first()).toBeVisible();
-  await expect(page.locator("details.execution-group")).toContainText("2 条命令");
+  const group = page.locator("details.execution-group");
+  await expect(group).toContainText("2 条命令");
+  await expect(group.locator("details.execution-command")).toHaveCount(2);
+  await expect(group.locator("details.execution-command").first()).toHaveAttribute("open", "");
+  await expect(group.locator("details.execution-command").nth(1)).not.toHaveAttribute("open");
   await expect(page.getByText(text, { exact: true })).toBeVisible();
   const appendedAt = Date.now();
   text = "Fresh native message after opening the conversation";
@@ -78,7 +82,8 @@ test("selected running Pi session refreshes within three seconds", async ({ page
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
   await expect(page.locator(".provider-session .thread-running-indicator").first()).toBeVisible();
-  await expect(page.locator("details.execution-group")).toContainText("2 条命令");
+  await expect(page.locator("details.execution-group")).toContainText("1 条命令");
+  await expect(page.locator("details.execution-command")).toHaveCount(1);
   await expect(page.getByText(text, { exact: true })).toBeVisible();
   const appendedAt = Date.now();
   text = "Fresh Pi message after opening the conversation";

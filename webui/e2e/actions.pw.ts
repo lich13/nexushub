@@ -104,6 +104,9 @@ test("copy commands use the selected task and long load errors stay readable", a
   });
   await page.goto("/");
   await page.locator(".thread-item").first().click();
+  await page.locator(".chat-row.assistant .copy-reply").last().click();
+  await expect(page.locator("html")).toHaveAttribute("data-copied", /状态正常/);
+  await expect(page.getByLabel("已复制回复", { exact: true })).toBeVisible();
   const menu = page.getByLabel("任务操作", { exact: true });
   await menu.click();
   await page.getByRole("button", { name: "复制 ID", exact: true }).click();
@@ -125,6 +128,8 @@ test("copy commands use the selected task and long load errors stay readable", a
   await page.getByRole("button", { name: "复制线程 ID", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-copied", "pi-native-fixture");
   await expect(page.getByText("已复制线程 ID", { exact: true })).toBeVisible();
+  await page.locator(".provider-events .assistant_message .copy-reply").click();
+  await expect(page.locator("html")).toHaveAttribute("data-copied", "Pi fixture result");
   await page.setViewportSize({ width: 320, height: 844 });
   await page.route("**/grok.list", route => route.fulfill({ status: 500, json: { error: "Fixture load failure: " + "long-path/".repeat(40) } }));
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();

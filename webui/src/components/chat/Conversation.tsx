@@ -1,13 +1,14 @@
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import { ExecutionGroupView, MessageBlockView } from "./MessageStream";
+import { MessageBlockView } from "./MessageStream";
+import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
-import type { ThreadDetail } from "../../types";
+import type { ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
 
 
@@ -15,6 +16,8 @@ import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
 export function Conversation(props: {
   threadId: string;
   detail: ThreadDetail;
+  selectedSummary?: ThreadSummary | null;
+  archivedView?: boolean;
   slot: ThreadMessageSlot;
   messageStore: ThreadMessageStoreController;
   csrfToken?: string | null;
@@ -25,6 +28,9 @@ export function Conversation(props: {
   onBack?: () => void;
 }) {
   const { detail, slot, csrfToken } = props;
+  const summary = props.selectedSummary?.id === detail.summary.id
+    ? { ...detail.summary, ...props.selectedSummary }
+    : detail.summary;
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -67,16 +73,16 @@ export function Conversation(props: {
     try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
     catch { setFeedback("复制失败"); }
   };
-  const archived = detail.summary.status === "Archived";
+  const archived = Boolean(props.archivedView) || summary.status === "Archived";
   return <div className="conversation-shell compact-readonly-conversation">
     <main className="conversation-main">
       <header className="conversation-header">
         <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
-        <div className="conversation-title-copy"><h1 className="conversation-title">{detail.summary.title}</h1><span className="muted-text">{detail.summary.cwd ?? detail.summary.id}</span></div>
-        <div className="conversation-header-actions">
-          <span className={`status-chip ${detail.summary.status}`}>{threadStatusLabel(detail.summary.status)}</span>
+          <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1><span className="muted-text">{summary.cwd ?? summary.id}</span></div>
+          <div className="conversation-header-actions">
+          <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
           <TaskMenu>
-              <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(detail.summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
+              <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
               <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
               <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
               <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
