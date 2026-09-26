@@ -23,7 +23,7 @@ export function executionStatus(value?: string | null): "running" | "failed" | "
 
 export function isCommandText(value?: string | null): boolean {
   const text = value?.trim().toLowerCase() ?? "";
-  return /(?:^|[._:\s-])(exec_command|run_terminal_command|bash_execution|bashexecution|shell|terminal|bash)(?:$|[._:\s-])/.test(text)
+  return /(?:^|[._:\s-])(exec_command|run_terminal_command|bash_execution|bashexecution|shell|terminal|bash|execute)(?:$|[._:\s-])/.test(text)
     || text === "exec_command";
 }
 
