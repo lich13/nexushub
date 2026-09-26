@@ -1,4 +1,4 @@
-# NexusHub 1.1.2
+# NexusHub 1.1.3
 
 NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The shared React UI runs in the macOS ARM64 Tauri app and the headless Linux `webd` service. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -8,7 +8,7 @@ NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The sh
 - **Grok Build**: read native sessions, search, rename, copy the native thread ID, batch-delete selected session directories, and inspect tool activity.
 - **Pi**: read native JSONL branches, search, rename through the fixed native RPC when available, copy the native thread ID, and batch-delete selected session files. Missing or uncertain activity is read-only.
 - **Probe**: read-only error detection, persistent dedupe and Bark delivery. Codex, Grok and Pi completion notifications follow provider-specific evidence rules; Pi final-failure notification remains disabled without an extension.
-- **UI**: running sessions share one accessible spinner. Consecutive command activity is normalized into an outer group with one collapsible row per command; completed groups and commands start closed, while active or failed items stay open. Every visible assistant reply in Codex, Grok and Pi has a raw-Markdown copy button, and list rows support double-click rename when the provider allows it.
+- **UI**: running sessions share one accessible spinner. Grok folds adjacent native tool activity, including Read/List/search and commands, into one group with a collapsible row per call; Codex and Pi retain command groups. Completed groups start closed, while active or failed items stay open. Visible assistant replies can be copied as Markdown; Codex and Grok plans can also be copied or downloaded as `.md` files named from their titles. List rows support double-click rename when the provider allows it.
 
 NexusHub has no Goal management or automatic recovery path. Codex native logs remain read-only inputs for error detection. The retired `codex_thread_goals` table is removed during database migration. Composer, send/steer/stop/fork, manual approvals/questions/plans, uploads and the desktop LAN WebUI remain unavailable.
 
@@ -45,7 +45,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Grok a
 
 ## Release and deployment
 
-Release `v1.1.2` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`.
+Release `v1.1.3` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`.
 
 ```bash
 bash scripts/package-darwin-arm64.sh

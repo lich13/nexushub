@@ -13,12 +13,21 @@ test("questions retain their content and options without reply controls", () => 
   expect(html).not.toMatch(/<(button|input|textarea|form)\b/);
 });
 
-test("plans remain readable without submission controls or pending copy", () => {
+test("plans remain readable with copy and download but no submission controls", () => {
   const block: MessageBlock = {
     id: "plan", role: "assistant", kind: "plan", text: "<proposed_plan>## Verified plan\nOne step</proposed_plan>", questions: []
   };
   const html = renderToStaticMarkup(<MessageBlockView block={block} />);
   expect(html).toContain("Verified plan");
   expect(html).toContain("One step");
-  expect(html).not.toMatch(/<(button|input|textarea|form)\b/);
+  expect(html).toContain('aria-label="复制计划"');
+  expect(html).toContain('aria-label="下载计划 Markdown"');
+  expect(html).not.toMatch(/<(input|textarea|form)\b/);
+});
+
+test("empty plans do not expose copy or download", () => {
+  const block: MessageBlock = {
+    id: "empty-plan", role: "assistant", kind: "plan", text: "<proposed_plan> </proposed_plan>", questions: []
+  };
+  expect(renderToStaticMarkup(<MessageBlockView block={block} />)).not.toContain("plan-actions");
 });

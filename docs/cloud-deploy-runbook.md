@@ -24,7 +24,7 @@ A host filesystem mounted rw can still be ro inside the service namespace. Check
 
 ## Release and install
 
-`v1.1.2` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
+`v1.1.3` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
 
 ```bash
 sudo deploy/nexushub-webd/install.sh --archive /absolute/staging/nexushub-webd-linux-x86_64.tar.gz --domain panel.example --path-prefix /nexushub/
@@ -43,6 +43,6 @@ sudo systemctl is-active nexushub-webd
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
-Use the authenticated public entry with disposable sessions to verify Grok batch deletion, Pi empty state, running spinner, command folding, provider Bark delivery and copy-ID feedback. A host without Pi is not evidence of Pi mutation support.
+Use the authenticated public entry with disposable sessions to verify Grok batch deletion, Pi empty state, running spinner, mixed Grok tool folding, plan copy/download, provider Bark delivery and copy-ID feedback. A host without Pi is not evidence of Pi mutation support.
 
 On failure restore the previous service binary/unit and verify health before retrying. Remove only task-created staging and test paths after acceptance; retain user data, configuration and secrets.

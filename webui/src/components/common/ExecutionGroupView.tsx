@@ -32,8 +32,8 @@ function CommandView({ command }: { command: ExecutionCommand }) {
 
 export function ExecutionGroupView({ group }: { group: ExecutionGroup }) {
   return <ActivityDetails className="execution-group" initiallyOpen={group.running || group.failedCount > 0} summary={<>
-    <span>命令执行组</span>
-    <small>{group.commands.length} 条命令{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>
+    <span>{group.kind === "tool" ? "工具活动组" : "命令执行组"}</span>
+    <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>
     {group.running && <RunningIndicator />}
   </>}>
     {group.commands.map(command => <CommandView key={command.id} command={command} />)}

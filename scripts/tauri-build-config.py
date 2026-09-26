@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare one Tauri build hook and validate explicitly reused frontend output."""
 import json
+import os
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -23,7 +24,10 @@ def prepare(source, output, webui, signed, skip):
     config = json.loads(Path(source).read_text())
     root = (Path(webui) / "dist").resolve()
     build = config.setdefault("build", {})
-    build["frontendDist"] = str(root)
+    # Keep the generated config relocatable.  An absolute frontendDist embeds
+    # the maintainer's checkout path in the native bundle and trips the release
+    # privacy scan.  Tauri resolves this path relative to tauri.conf.json.
+    build["frontendDist"] = os.path.relpath(root, Path(source).resolve().parent)
     if Path(webui).resolve() != (Path(source).resolve().parent.parent / "webui").resolve():
         build["beforeBuildCommand"] = {"script": "corepack pnpm@11.0.8 build:tauri", "cwd": str(Path(webui).resolve())}
     if not signed:

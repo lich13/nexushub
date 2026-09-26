@@ -154,6 +154,11 @@ small { font-size: 12px; }
 .tool-summary { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 6px; overflow-wrap: anywhere; }
 .tool-card pre, .job-item pre, .grok-tool pre { margin: 10px 0 0; padding: 12px; max-height: 460px; overflow: auto; background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-cell, .question-cell, .question-result-cell, .question-block, .answered-list, .choice-grid { display: grid; gap: 10px; }
+.plan-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.plan-header .message-meta { min-width: 0; overflow-wrap: anywhere; }
+.plan-actions { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 100%; margin-left: auto; }
+.plan-action { width: 30px; height: 30px; }
+.plan-action-error { flex-basis: 100%; color: var(--danger); font-size: 12px; text-align: right; }
 .question-result-cell p { margin: 0; color: var(--muted); }
 .question-block { margin-top: 10px; }
 .question-block > strong { font-size: 14px; overflow-wrap: anywhere; }
@@ -184,7 +189,7 @@ small { font-size: 12px; }
 .markdown-code { position: relative; margin: 12px 0 20px; background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px; overflow: hidden; }
 .markdown-code > button { position: absolute; right: 4px; top: 4px; background: var(--surface); }
 .markdown-code pre { margin: 0; padding: 38px 16px 16px; overflow: auto; max-width: 100%; color: var(--text); }
-.reply-actions { display: flex; align-items: center; gap: 6px; min-height: 30px; margin-top: 8px; }
+.reply-actions { position: relative; display: flex; align-items: center; gap: 6px; min-height: 30px; margin-top: 8px; }
 .copy-reply { width: 30px; height: 30px; border: 1px solid var(--hairline); }
 .reply-copy-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 .markdown-code code { background: transparent; padding: 0; white-space: pre; }

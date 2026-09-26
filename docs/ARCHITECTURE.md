@@ -10,7 +10,7 @@
 | Grok / Pi | Native session discovery, branch-aware history, identity, activity checks, rename and scoped deletion |
 | Probe | Error detection, provider terminal evidence, cursors, dedupe, redaction, retention and Bark delivery |
 | Database/config | NexusHub settings, events, deliveries and migration; Codex native data stays outside this schema |
-| WebUI | Shared visual contract, provider queries and pure execution-group view models |
+| WebUI | Shared visual contract, provider queries, pure execution-group view models and client-side Plan export |
 | Packaging | macOS ARM64 Tauri app/updater and Linux x86_64 headless webd |
 
 NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_goals` storage are retired. The old command names are unavailable tombstones only. The database migration rebuilds `probe_error_incidents` without recovery columns and drops the Goal table while retaining incident records.
