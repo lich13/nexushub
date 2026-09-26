@@ -3,13 +3,16 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { MarkdownContent } from "../common/MarkdownContent";
+import { CopyReplyButton } from "../common/CopyReplyButton";
+import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { TaskMenu } from "../common/TaskMenu";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import type { GrokDeletePreview, GrokHistoryEvent, GrokSessionSummary } from "../../types";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
-import { groupGrokCommandEvents, type ExecutionGroup } from "../../lib/domain/executionGroups";
+import { RenameableSession } from "../common/RenameableSession";
+import { groupGrokCommandEvents } from "../../lib/domain/executionGroups";
 
 export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const menuTrigger = useRef<HTMLElement>(null);
@@ -60,7 +63,15 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <div className="provider-list-scroll">
         <SessionBatchControls batch={batch} operations={["delete"]} />
         {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-        {sessions.data?.map((item) => <div key={item.id} className="selectable-session">{batch.selecting && <SessionCheckbox batch={batch} sessionKey={item.id} title={grokSessionLabel(item)} />}<button disabled={batch.busy} className={`provider-session ${item.id === selected?.id ? "selected" : ""}`} onClick={() => { if (batch.selecting) { batch.toggle(item.id); return; } setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); }}><strong>{grokSessionLabel(item)}</strong><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>}</button></div>)}
+        {sessions.data?.map((item) => <div key={item.id} className="selectable-session">{batch.selecting && <SessionCheckbox batch={batch} sessionKey={item.id} title={grokSessionLabel(item)} />}<RenameableSession
+          title={grokSessionLabel(item)}
+          className={`provider-session ${item.id === selected?.id ? "selected" : ""}`}
+          disabled={batch.busy}
+          selecting={batch.selecting}
+          selected={item.id === selected?.id}
+          onSelect={() => { if (batch.selecting) { batch.toggle(item.id); return; } setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); }}
+          onRename={(next) => actions.rename.mutateAsync({ id: item.id, title: next })}
+        ><strong>{grokSessionLabel(item)}</strong><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>}</RenameableSession></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">暂无 Grok 任务</div>}
       </div>
@@ -100,14 +111,7 @@ function renderGrokEvents(events: GrokHistoryEvent[]): ReactNode {
 function renderGrokEvent(event: GrokHistoryEvent, index: number): ReactNode {
   return event.kind.startsWith("tool_")
     ? <details className="grok-tool" key={event.callId ?? index}><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>
-    : <article className={`provider-event ${event.kind}`} key={index}><div className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</div><MarkdownContent text={event.text ?? ""} /></article>;
-}
-
-function ExecutionGroupView({ group }: { group: ExecutionGroup<GrokHistoryEvent> }) {
-  return <details className="execution-group" open={group.running || group.failed}>
-    <summary><span>命令执行组</span><small>{group.items.length} 条命令{group.failed ? ` · ${group.items.filter(item => item.status === "failed").length} 条失败` : ""}</small>{group.running && <RunningIndicator />}</summary>
-    {group.items.map((event, index) => renderGrokEvent(event, index))}
-  </details>;
+    : <article className={`provider-event ${event.kind}`} key={index}><div className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</div><MarkdownContent text={event.text ?? ""} />{event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
 export function grokSessionLabel(session: GrokSessionSummary): string { return session.title || session.id; }

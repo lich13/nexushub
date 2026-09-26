@@ -15,6 +15,9 @@ import { Conversation } from "./Conversation";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
+import { RenameableSession } from "../common/RenameableSession";
+import { useReadOnlyThreadActions } from "../../lib/query/threads";
+import { sharedDisabledStates } from "../../lib/domain/visualContract";
 
 export const statusTabs = [
   { id: "all", label: "全部" },
@@ -68,15 +71,19 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
       onBatchSucceeded={(keys) => { for (const key of keys) threadCache.clearArchivedThreadClientState(messageStore, key); if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null); }}
     />
   );
+  const selectedSlot = resolvedSelected ? messageStore.getSlot(resolvedSelected) : null;
+  const selectedFallback = selectedThreadSummary ?? selectedSlot?.summary ?? null;
 
   return (
     <div className={`chat-layout ${!mobileThreadsOpen && resolvedSelected ? "has-selection" : ""}`}>
       <aside className="thread-column">{list}</aside>
       <section className="conversation-column">
-        {resolvedSelected && (selectedDetail || messageStore.getSlot(resolvedSelected).summary) ? (
+        {resolvedSelected && selectedFallback ? (
           <Conversation
             threadId={resolvedSelected}
-            detail={selectedDetail ?? threadDetailFromSlot(resolvedSelected, messageStore.getSlot(resolvedSelected), selectedThreadSummary)}
+            detail={selectedDetail ?? threadDetailFromSlot(resolvedSelected, selectedSlot ?? messageStore.getSlot(resolvedSelected), selectedFallback)}
+            selectedSummary={selectedThreadSummary}
+            archivedView={status === "archived"}
             slot={messageStore.getSlot(resolvedSelected)}
             messageStore={messageStore}
             csrfToken={csrfToken}
@@ -109,6 +116,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
   onBatchSucceeded: (keys: string[]) => void;
 }) {
   const batch = useSessionSelection("codex", `${status}\0${q}`, threads.map(t => t.id), csrfToken, onBatchSucceeded);
+  const rename = useReadOnlyThreadActions({ csrfToken });
   return (
     <div className="thread-list">
       <div className="section-title thread-title-row">
@@ -139,7 +147,16 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
           return (
             <div className="selectable-session" key={thread.id}>
             {batch.selecting && <SessionCheckbox batch={batch} sessionKey={thread.id} title={title} />}
-            <button className={`thread-item ${selectedId === thread.id ? "selected" : ""}${running ? " running" : ""}`} onClick={() => batch.selecting ? batch.toggle(thread.id) : onSelect(thread.id)} title={title} disabled={batch.busy}>
+            <RenameableSession
+              title={title}
+              className={`thread-item ${selectedId === thread.id ? "selected" : ""}${running ? " running" : ""}`}
+              disabled={batch.busy}
+              selecting={batch.selecting}
+              selected={selectedId === thread.id}
+              renameBlockReason={thread.status === "Archived" ? sharedDisabledStates.renameArchivedThread : undefined}
+              onSelect={() => batch.selecting ? batch.toggle(thread.id) : onSelect(thread.id)}
+              onRename={(next) => rename.mutateAsync({ kind: "rename", id: thread.id, title: next })}
+            >
               <span className="thread-item-content">
                 <span className="thread-item-title">{title}</span>
                 <span className="thread-item-meta">
@@ -151,7 +168,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
                   {preview && <span className="thread-item-preview">{preview}</span>}
                 </span>
               </span>
-            </button>
+            </RenameableSession>
             </div>
           );
         })}

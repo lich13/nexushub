@@ -8,7 +8,8 @@ NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: 
 - Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Adjacent command calls and results form an `ExecutionGroup`. Native `<details>` provides keyboard, touch and focus behavior. Completed groups start closed; active and failed groups open; non-command tools stay independent.
+- Adjacent command calls and results are paired into command rows, then consecutive rows form an outer `ExecutionGroup`. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events. Non-command tools stay independent.
+- Visible assistant replies in all three providers expose a compact copy button that copies the original Markdown. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed.
 
 ## Visual tokens

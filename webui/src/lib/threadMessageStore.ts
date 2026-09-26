@@ -78,8 +78,11 @@ export function threadDetailFromMessageSlot(
   slot: ThreadMessageSlot,
   fallback?: ThreadSummary | null
 ): ThreadDetail {
+  const summary = slot.summary
+    ? fallback ? { ...slot.summary, ...fallback } : slot.summary
+    : fallback ?? fallbackThreadSummary(threadId);
   return {
-    summary: slot.summary ?? fallback ?? fallbackThreadSummary(threadId),
+    summary,
     messages: [],
     blocks: slot.blocks,
     raw_event_count: slot.totalBlocks,
