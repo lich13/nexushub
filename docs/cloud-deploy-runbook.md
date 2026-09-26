@@ -24,7 +24,7 @@ A host filesystem mounted rw can still be ro inside the service namespace. Check
 
 ## Release and install
 
-`v1.1.0` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
+`v1.1.1` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
 
 ```bash
 sudo deploy/nexushub-webd/install.sh --archive /absolute/staging/nexushub-webd-linux-x86_64.tar.gz --domain panel.example --path-prefix /nexushub/
