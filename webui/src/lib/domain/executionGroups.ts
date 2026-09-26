@@ -11,6 +11,7 @@ export type ExecutionCommand = {
 export type ExecutionGroup = {
   id: string;
   commands: ExecutionCommand[];
+  kind: "command" | "tool";
   running: boolean;
   failedCount: number;
 };
@@ -69,8 +70,8 @@ type Activity<T> = {
   sections: ExecutionCommand["sections"];
 };
 
-function groupActivities<T>(activities: Activity<T>[]): ExecutionRenderItem<T>[] {
-  type Entry = { kind: "item"; item: T; key: string } | { kind: "command"; command: ExecutionCommand };
+function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): ExecutionRenderItem<T>[] {
+  type Entry = { kind: "item"; item: T; key: string } | { kind: "command"; command: ExecutionCommand; isCommand: boolean };
   const entries: Entry[] = [];
   const pending = new Map<string, ExecutionCommand>();
   const occurrences = new Map<string, number>();
@@ -89,7 +90,7 @@ function groupActivities<T>(activities: Activity<T>[]): ExecutionRenderItem<T>[]
       }
       continue;
     }
-    if (!activity.command) {
+    if (!activity.command && !(groupAllTools && activity.tool)) {
       entries.push({ kind: "item", item: activity.item, key });
       continue;
     }
@@ -100,7 +101,7 @@ function groupActivities<T>(activities: Activity<T>[]): ExecutionRenderItem<T>[]
       sections: [...activity.sections]
     };
     if (activity.callId) pending.set(activity.callId, command);
-    entries.push({ kind: "command", command });
+    entries.push({ kind: "command", command, isCommand: activity.command });
   }
   const output: ExecutionRenderItem<T>[] = [];
   for (const entry of entries) {
@@ -110,8 +111,10 @@ function groupActivities<T>(activities: Activity<T>[]): ExecutionRenderItem<T>[]
     }
     const previous = output[output.length - 1];
     const group = previous?.kind === "group" ? previous.group : undefined;
-    if (group) group.commands.push(entry.command);
-    else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], running: false, failedCount: 0 } });
+    if (group) {
+      group.commands.push(entry.command);
+      if (!entry.isCommand) group.kind = "tool";
+    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", running: false, failedCount: 0 } });
   }
   for (const entry of output) {
     if (entry.kind !== "group") continue;
@@ -140,17 +143,20 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
 }
 
 export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRenderItem<GrokHistoryEvent>[] {
-  return groupActivities(events.map(event => ({
-    item: event,
-    key: `grok:${event.callId ?? event.timestamp ?? fingerprint(`${event.kind}\0${event.text ?? ""}`)}`,
-    callId: event.callId,
-    tool: event.kind.startsWith("tool_"),
-    command: event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text)),
-    title: commandTitle(event.method, event.text),
-    phase: event.kind === "tool_call" ? "call" : event.kind === "tool_result" ? "result" : "update",
-    status: event.status,
-    sections: event.detail ? [{ label: "命令详情", text: event.detail }] : []
-  })));
+  return groupActivities(events.map(event => {
+    const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
+    return {
+      item: event,
+      key: `grok:${event.callId ?? event.timestamp ?? fingerprint(`${event.kind}\0${event.text ?? ""}`)}`,
+      callId: event.callId,
+      tool: event.kind.startsWith("tool_"),
+      command,
+      title: command ? commandTitle(event.method, event.text) : event.text?.trim() || "工具活动",
+      phase: event.kind === "tool_call" ? "call" : event.kind === "tool_result" ? "result" : "update",
+      status: event.status,
+      sections: event.detail ? [{ label: command ? "命令详情" : "工具详情", text: event.detail }] : []
+    };
+  }), true);
 }
 
 export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {

@@ -1486,7 +1486,9 @@ describe("archive delete API compatibility", () => {
     ];
     const rendered = blocks.map(block => renderToStaticMarkup(createElement(MessageBlockView, { block }))).join("\n");
     for (const text of ["Current plan", "Current question", "Option A", "Option B", "turn-current"]) expect(rendered).toContain(text);
-    expect(rendered).not.toMatch(/<(button|input|textarea|form)\b/);
+    expect(rendered).toContain('aria-label="复制计划"');
+    expect(rendered).toContain('aria-label="下载计划 Markdown"');
+    expect(rendered).not.toMatch(/<(input|textarea|form)\b/);
     expect(renderToStaticMarkup(createElement(MessageBlockView, { block: { id: "approval", role: "assistant", kind: "approval", text: "Retired approval", questions: [] } }))).toBe("");
   });
 

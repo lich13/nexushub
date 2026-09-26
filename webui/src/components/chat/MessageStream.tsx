@@ -3,6 +3,7 @@ import { useState } from "react";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { PlanActions } from "../common/PlanActions";
 import {
   blockKindLabel,
   conversationMessagePresentation,
@@ -28,17 +29,19 @@ import type { MessageBlock } from "../../types";
 export function MessageBlockView({
   block,
   onShowHistory,
-  historyExpanded = false
+  historyExpanded = false,
+  planFallbackTitle = ""
 }: {
   block: MessageBlock;
   onShowHistory?: () => void;
   historyExpanded?: boolean;
+  planFallbackTitle?: string;
 }) {
   if (isHistoryCollapsedBlock(block)) {
     return <HistoryCollapseCell block={block} onShowHistory={onShowHistory} expanded={historyExpanded} />;
   }
   if (isPlanBlock(block)) {
-    return <ProposedPlanCell block={block} />;
+    return <ProposedPlanCell block={block} fallbackTitle={planFallbackTitle} />;
   }
   if (isQuestionResultBlock(block)) {
     return <QuestionResultCell block={block} />;
@@ -105,14 +108,19 @@ function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: Messag
   );
 }
 
-function ProposedPlanCell({ block }: { block: MessageBlock }) {
+function ProposedPlanCell({ block, fallbackTitle }: { block: MessageBlock; fallbackTitle: string }) {
+  const markdown = extractPlanText(block.text || "");
+  const hasContent = Boolean((block.text ?? "").replace(/<\/?proposed_plan>/g, "").trim());
   return (
     <article className="plan-cell">
-      <div className="message-meta">
-        <span>Proposed Plan</span>
-        <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
+      <div className="plan-header">
+        <div className="message-meta">
+          <span>Proposed Plan</span>
+          <small>{block.plan_status || block.status || block.turn_id || block.item_id || block.kind}</small>
+        </div>
+        {hasContent && <PlanActions markdown={markdown} fallbackTitle={fallbackTitle} />}
       </div>
-      <div className="plan-body"><MarkdownContent text={extractPlanText(block.text || "")} /></div>
+      <div className="plan-body"><MarkdownContent text={markdown} /></div>
     </article>
   );
 }

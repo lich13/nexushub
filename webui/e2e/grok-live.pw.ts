@@ -49,6 +49,51 @@ test("Grok follows new messages at the bottom and preserves history reading posi
   await expect.poll(() => stream.evaluate(element => element.scrollTop)).toBe(100);
 });
 
+test("long mixed Grok tool runs fold together without creating an outer page scrollbar", async ({ page }) => {
+  await mockApi(page);
+  const events = Array.from({ length: 24 }, (_, index) => ({
+    kind: "tool_call", method: "session/update", callId: `tool-${index}`, status: "completed",
+    text: `${["Read", "List", "Search", "Execute"][index % 4]} fixture-${index}`,
+    detail: `Result ${index}`
+  }));
+  await page.route("**/grok.detail", route => route.fulfill({ json: {
+    summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "running" },
+    events: [{ kind: "user_message_chunk", text: "Inspect fixtures" }, ...events, { kind: "agent_message_chunk", text: "Summary" }]
+  } }));
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
+  const group = page.locator(".provider-events details.execution-group");
+  await expect(group).toHaveCount(1);
+  await expect(group).toContainText("工具活动组");
+  await expect(group).toContainText("24 项工具");
+  await expect(group).not.toHaveAttribute("open", "");
+  await group.locator("summary").first().click();
+  await expect(group.locator("details.execution-command")).toHaveCount(24);
+  await expect(group).toHaveAttribute("open", "");
+  await expect(group.locator("details.execution-command").first()).not.toHaveAttribute("open", "");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - innerHeight)).toBeLessThanOrEqual(1);
+  await page.locator(".provider-events").evaluate(element => { element.scrollTop = element.scrollHeight; });
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  events.push({ kind: "tool_call", method: "session/update", callId: "new-tool", status: "completed", text: "Read new-fixture", detail: "New result" });
+  await expect(group.locator("details.execution-command")).toHaveCount(25, { timeout: 3000 });
+  await expect(group).toHaveAttribute("open", "");
+});
+
+test("mobile dark Grok history keeps one scroll container with reduced motion", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await mockApi(page);
+  await page.route("**/grok.detail", route => route.fulfill({ json: {
+    summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "recent" },
+    events: [...Array.from({ length: 20 }, (_, index) => ({ kind: "tool_call", callId: `read-${index}`, text: `Read fixture-${index}`, status: "completed" })), { kind: "agent_message_chunk", text: "Result" }]
+  } }));
+  await page.goto("/");
+  await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
+  await page.locator(".provider-session").click();
+  await expect(page.locator(".execution-group")).toContainText("20 项工具");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - innerHeight)).toBeLessThanOrEqual(1);
+});
+
 test("narrow Grok list stops hidden detail reads and reopening reads fresh messages", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const calls = await mockApi(page);

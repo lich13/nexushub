@@ -8,8 +8,8 @@ NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: 
 - Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Adjacent command calls and results are paired into command rows, then consecutive rows form an outer `ExecutionGroup`. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events. Non-command tools stay independent.
-- Visible assistant replies in all three providers expose a compact copy button that copies the original Markdown. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
+- Grok pairs same-call native tool updates and groups every adjacent tool row, including Read/List/search and commands. Pure command groups are labelled “命令执行组”; mixed groups are labelled “工具活动组”. Codex and Pi retain command-only groups. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
+- Visible assistant replies in all three providers expose a compact copy button that copies the original Markdown. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed.
 
 ## Visual tokens
@@ -22,4 +22,4 @@ Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus i
 
 ## Verification
 
-Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, command grouping, keyboard expansion, scroll following and provider empty states. Official macOS acceptance uses the installed Tauri app. Authenticated cloud acceptance uses disposable provider sessions and explicit deployment inputs.
+Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, plan export and provider empty states. Official macOS acceptance uses the installed Tauri app. Authenticated cloud acceptance uses disposable provider sessions and explicit deployment inputs.

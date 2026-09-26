@@ -27,7 +27,7 @@ done
 
 python3 - "${ROOT}" <<'PY'
 from pathlib import Path
-import json, subprocess, sys
+import json, re, subprocess, sys
 root = Path(sys.argv[1])
 expected_docs = {
     "README.md", "AGENTS.md", "DESIGN.md",
@@ -39,12 +39,12 @@ if actual != expected_docs:
     raise SystemExit(f"Markdown set mismatch: missing={sorted(expected_docs-actual)}, extra={sorted(actual-expected_docs)}")
 
 version = json.loads((root / "package.json").read_text())["version"]
-if version != "1.1.2":
-    raise SystemExit(f"package version is {version}, expected 1.1.2")
+if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    raise SystemExit("package version is not semantic versioning")
 for name in ["webui/package.json", "src-tauri/tauri.conf.json"]:
     if json.loads((root / name).read_text())["version"] != version:
         raise SystemExit(f"{name} version mismatch")
-if 'version = "1.1.2"' not in (root / "Cargo.toml").read_text():
+if f'version = "{version}"' not in (root / "Cargo.toml").read_text():
     raise SystemExit("Cargo workspace version mismatch")
 config = json.loads((root / "src-tauri/tauri.conf.json").read_text())
 if config["bundle"]["targets"] != ["dmg", "app"]:
@@ -69,7 +69,7 @@ retired = set(contract.get("retiredActions", []))
 if not {"threads.goal.get", "threads.goal.save", "threads.goal.clear", "threads.goal.pause", "threads.goal.resume"} <= retired:
     raise SystemExit("Goal tombstones are incomplete")
 
-print("NexusHub 1.1.2 install/release boundary checks: ok")
+print(f"NexusHub {version} install/release boundary checks: ok")
 PY
 
 python3 scripts/privacy-check.py --git-objects

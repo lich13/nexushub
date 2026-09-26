@@ -5,6 +5,7 @@ import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationView
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { PlanActions } from "../common/PlanActions";
 import { TaskMenu } from "../common/TaskMenu";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import type { GrokDeletePreview, GrokHistoryEvent, GrokSessionSummary } from "../../types";
@@ -91,7 +92,7 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>{renderGrokEvents(detail.data?.events ?? [])}{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
+        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>{renderGrokEvents(detail.data?.events ?? [], grokSessionLabel(selected))}{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -102,16 +103,21 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   </div>;
 }
 
-function renderGrokEvents(events: GrokHistoryEvent[]): ReactNode {
-  return groupGrokCommandEvents(events).map((entry, index) => entry.kind === "group"
+function renderGrokEvents(events: GrokHistoryEvent[], sessionTitle: string): ReactNode {
+  return groupGrokCommandEvents(events).map(entry => entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : renderGrokEvent(entry.item, index));
+    : renderGrokEvent(entry.item, entry.key, sessionTitle));
 }
 
-function renderGrokEvent(event: GrokHistoryEvent, index: number): ReactNode {
-  return event.kind.startsWith("tool_")
-    ? <details className="grok-tool" key={event.callId ?? index}><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>
-    : <article className={`provider-event ${event.kind}`} key={index}><div className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</div><MarkdownContent text={event.text ?? ""} />{event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: string): ReactNode {
+  return <article className={`provider-event ${event.kind}`} key={key}>
+    <div className={event.kind === "plan" ? "plan-header" : "chat-meta"}>
+      <span className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</span>
+      {event.kind === "plan" && <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />}
+    </div>
+    <MarkdownContent text={event.text ?? ""} />
+    {event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}
+  </article>;
 }
 
 export function grokSessionLabel(session: GrokSessionSummary): string { return session.title || session.id; }

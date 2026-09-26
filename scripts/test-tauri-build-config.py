@@ -29,7 +29,11 @@ class BuildConfigTests(unittest.TestCase):
                         build_config.prepare(source, output, root, signed, skip)
                         result = json.loads(output.read_text())
                         self.assertEqual(result["build"]["beforeBuildCommand"], "" if skip else {"script": "corepack pnpm@11.0.8 build:tauri", "cwd": str(root)})
-                        self.assertEqual(Path(result["build"]["frontendDist"]), assets.parent)
+                        self.assertEqual(
+                            (source.parent / result["build"]["frontendDist"]).resolve(),
+                            assets.parent,
+                        )
+                        self.assertFalse(Path(result["build"]["frontendDist"]).is_absolute())
                         self.assertEqual("updater" in result["plugins"], signed)
                         self.assertEqual(result["bundle"]["createUpdaterArtifacts"], signed)
                         self.assertEqual(json.loads(source.read_text()), original)
