@@ -1,3 +1,4 @@
+import { isInstructionFileActivity } from "./visibleMarkdown";
 import type { MessageBlock, GrokHistoryEvent, PiHistoryEvent } from "../../types";
 import { isToolBlock, toolBlockDetailText } from "./conversationViewModel";
 
@@ -6,6 +7,7 @@ export type ExecutionCommand = {
   id: string;
   title: string;
   status: ExecutionStatus;
+  instructionFile?: boolean;
   sections: Array<{ label: string; text: string }>;
 };
 export type ExecutionGroup = {
@@ -39,12 +41,6 @@ export function isCommandText(value?: string | null): boolean {
   return COMMAND_NAMES.has(name);
 }
 
-function fingerprint(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619);
-  return (hash >>> 0).toString(36);
-}
-
 function commandTitle(...values: Array<string | null | undefined>): string {
   for (const value of values) {
     const normalized = value?.trim().toLowerCase().split(/[\s`(]/, 1)[0].split(/\.|__|\/|:/).pop() ?? "";
@@ -64,6 +60,7 @@ type Activity<T> = {
   turnId?: string | null;
   tool: boolean;
   command: boolean;
+  instructionFile: boolean;
   title: string;
   phase: "call" | "result" | "update";
   status?: string | null;
@@ -84,6 +81,7 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
     if (activity.turnId) turn = activity.turnId;
     const previous = activity.callId && activity.phase !== "call" ? pending.get(activity.callId) : undefined;
     if (previous) {
+      previous.instructionFile ||= activity.instructionFile;
       if (activity.status || activity.phase === "result") previous.status = executionStatus(activity.status);
       for (const section of activity.sections) {
         if (!previous.sections.some(existing => existing.label === section.label && existing.text === section.text)) previous.sections.push(section);
@@ -97,6 +95,7 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
     const command: ExecutionCommand = {
       id: key,
       title: activity.title,
+      instructionFile: activity.instructionFile,
       status: activity.status ? executionStatus(activity.status) : activity.phase === "call" ? "running" : "completed",
       sections: [...activity.sections]
     };
@@ -133,6 +132,7 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
       callId: block.call_id,
       turnId: block.turn_id,
       tool: isToolBlock(block),
+      instructionFile: isInstructionFileActivity(block.tool_name, block.input, block.summary, toolBlockDetailText(block)),
       command: isToolBlock(block) && (isCommandText(block.tool_name) || isCommandText(block.kind)),
       title: commandTitle(block.tool_name, block.kind),
       phase: result ? "result" : "call",
@@ -147,9 +147,10 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
     const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
     return {
       item: event,
-      key: `grok:${event.callId ?? event.timestamp ?? fingerprint(`${event.kind}\0${event.text ?? ""}`)}`,
+      key: `grok:${event.callId ?? `${event.timestamp ?? ""}:${event.kind}`}`,
       callId: event.callId,
       tool: event.kind.startsWith("tool_"),
+      instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),
       command,
       title: command ? commandTitle(event.method, event.text) : event.text?.trim() || "工具活动",
       phase: event.kind === "tool_call" ? "call" : event.kind === "tool_result" ? "result" : "update",
@@ -162,9 +163,10 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
 export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {
   return groupActivities(events.map(event => ({
     item: event,
-    key: `pi:${event.callId ?? `${event.timestamp ?? ""}:${fingerprint(`${event.kind}\0${event.role ?? ""}\0${event.text ?? ""}`)}`}`,
+    key: `pi:${event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}`}`,
     callId: event.callId,
     tool: event.kind === "tool_call" || event.kind === "tool_result",
+    instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),
     command: (event.kind === "tool_call" || event.kind === "tool_result") && (isCommandText(event.role) || isCommandText(event.text)),
     title: commandTitle(event.role, event.text),
     phase: event.kind === "tool_call" ? "call" : "result",

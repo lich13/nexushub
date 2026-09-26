@@ -1,0 +1,29 @@
+import { ChevronRight } from "lucide-react";
+import { createContext, useContext, useState, type ReactNode } from "react";
+
+// Only disclosure choices live here, never message contents. The bound prevents
+// long-lived desktop sessions from retaining an unbounded set of thread IDs.
+const choices = new Map<string, boolean>();
+export const DisclosureScope = createContext<string | null>(null);
+
+export function ActivityDetails({ className, stateKey, initiallyOpen, summary, children }: {
+  className: string; stateKey: string; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode);
+}) {
+  const scope = useContext(DisclosureScope);
+  const id = scope ? `${scope}:${stateKey}` : null;
+  const [choice, setChoice] = useState<boolean>();
+  const open = (id ? choices.get(id) : choice) ?? initiallyOpen;
+  return <details className={className} open={open} onToggle={event => {
+    if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
+    const next = event.currentTarget.open;
+    if (id) {
+      choices.delete(id);
+      choices.set(id, next);
+      if (choices.size > 2000) choices.delete(choices.keys().next().value!);
+    }
+    setChoice(next);
+  }}>
+    <summary>{summary}<ChevronRight className="execution-chevron" size={16} /></summary>
+    {typeof children === "function" ? (open ? children() : null) : children}
+  </details>;
+}

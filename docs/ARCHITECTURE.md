@@ -1,4 +1,4 @@
-# Architecture
+# Architecture — 1.1.4
 
 ## Boundaries
 
@@ -23,6 +23,10 @@ NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_
 4. Run contract, privacy, Rust, WebUI and install gates.
 
 Batch actions use explicit provider keys and return per-item preview/execute results. Files are isolated before deletion and indexes are replaced atomically. Failures retain a recovery path and are not cascaded to unselected records.
+
+## Visible Markdown
+
+`visibleMarkdown.ts` removes structured memory metadata by source range before rendering and export. CommonMark code positions protect literal examples; a rendering guard also removes metadata elements. Copy buttons, thread previews and Plan filenames/downloads use the same cleaner. Instruction-file recognition feeds native disclosures and execution groups. A bounded in-memory map scoped by provider, session and activity preserves explicit disclosure choices; no database or native session file stores this UI state.
 
 ## Probe and notifications
 

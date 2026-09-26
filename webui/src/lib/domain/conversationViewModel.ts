@@ -1,3 +1,4 @@
+import { visibleMarkdown } from "./visibleMarkdown";
 import type {
   MessageBlock,
   PendingElicitation,
@@ -466,7 +467,7 @@ export function toolBlockDetailText(block: MessageBlock): string {
 }
 
 export function messageBlockText(block: MessageBlock): string {
-  return block.text?.trim() || formatPayload(block.payload) || "";
+  return visibleMarkdown(block.text?.trim() || formatPayload(block.payload) || "");
 }
 
 function legacyBlocks(detail: ThreadDetail): MessageBlock[] {

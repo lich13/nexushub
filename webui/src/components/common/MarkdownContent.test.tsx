@@ -15,4 +15,17 @@ describe("user-visible Markdown", () => {
     expect(html).toContain("literal");
     expect(html).toContain("&lt;oai-mem-citation&gt;");
   });
+
+  test("removes inline metadata and folds instructions with a path-free summary", () => {
+    const html = renderToStaticMarkup(<MarkdownContent foldInstructions text={'Done.<oai-mem-citation>internal-entry</oai-mem-citation>\n\n## /workspace/AGENTS.md\nRun checks.\n## Result\nOrdinary result.'} />);
+    expect(html).not.toContain("internal-entry");
+    expect(html).toMatch(/<details[^>]*instruction-file[^>]*>/);
+    expect(html).not.toMatch(/<details[^>]*open/);
+    const summary = html.match(/<summary>(.*?)<\/summary>/)?.[1];
+    expect(summary).toContain("AGENTS.md");
+    expect(summary).toContain("字节");
+    expect(summary).not.toContain("/workspace");
+    expect(html).toContain("Run checks.");
+    expect(html).toContain("Ordinary result.");
+  });
 });

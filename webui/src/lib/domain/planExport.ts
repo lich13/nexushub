@@ -1,4 +1,8 @@
+import { visibleMarkdown } from "./visibleMarkdown";
+
 export function planFilename(markdown: string, fallbackTitle: string): string {
+  markdown = visibleMarkdown(markdown);
+  fallbackTitle = visibleMarkdown(fallbackTitle);
   const heading = markdown.match(/^ {0,3}#\s+(.+?)\s*#*\s*$/m)?.[1];
   const firstLine = markdown.split(/\r?\n/).map(line => line.trim()).find(Boolean);
   const rawTitle = (heading || firstLine || fallbackTitle || "计划").replace(/^#{1,6}\s+/, "");
@@ -19,7 +23,7 @@ export function planFilename(markdown: string, fallbackTitle: string): string {
 }
 
 export function downloadPlanMarkdown(markdown: string, filename: string): void {
-  const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+  const url = URL.createObjectURL(new Blob([visibleMarkdown(markdown)], { type: "text/markdown;charset=utf-8" }));
   try {
     const link = document.createElement("a");
     link.href = url;

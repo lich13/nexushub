@@ -1,3 +1,5 @@
+import { DisclosureScope } from "../common/ActivityDetails";
+import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
@@ -92,7 +94,7 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>{renderGrokEvents(detail.data?.events ?? [], grokSessionLabel(selected))}{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
+        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}><DisclosureScope.Provider value={`grok:${selected.id}`}>{renderGrokEvents(detail.data?.events ?? [], grokSessionLabel(selected))}</DisclosureScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -110,12 +112,13 @@ function renderGrokEvents(events: GrokHistoryEvent[], sessionTitle: string): Rea
 }
 
 function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: string): ReactNode {
+  if (!visibleMarkdown(event.text ?? "").trim() && event.kind !== "plan") return null;
   return <article className={`provider-event ${event.kind}`} key={key}>
     <div className={event.kind === "plan" ? "plan-header" : "chat-meta"}>
       <span className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</span>
       {event.kind === "plan" && <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />}
     </div>
-    <MarkdownContent text={event.text ?? ""} />
+    <MarkdownContent text={event.text ?? ""} activityId={key} foldInstructions={event.kind !== "plan"} />
     {event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}
   </article>;
 }

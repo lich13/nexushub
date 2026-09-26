@@ -1,18 +1,19 @@
 import { Check, Copy } from "lucide-react";
-import { useState, type ComponentProps } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { instructionSegments, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
+import { ActivityDetails } from "./ActivityDetails";
 
-function omitMemoryCitations() {
-  return (tree: { children: Array<{ type: string; value?: string }> }) => {
-    let inside = false;
-    tree.children = tree.children.filter((node) => {
-      const value = node.type === "html" ? node.value?.trim() : undefined;
-      if (value?.startsWith("<oai-mem-citation>")) inside = true;
-      if (!inside) return true;
-      if (value?.endsWith("</oai-mem-citation>")) inside = false;
-      return false;
-    });
+type Element = { tagName?: string; children?: Element[] };
+function omitMemoryElements() {
+  return (tree: Element) => {
+    function visit(node: Element) {
+      if (node.tagName === "code" || node.tagName === "pre") return;
+      node.children = node.children?.filter(child => !/^(oai-mem-citation|citation_entries|rollout_ids|memory_citation)$/i.test(child.tagName ?? ""));
+      node.children?.forEach(visit);
+    }
+    visit(tree);
   };
 }
 
@@ -26,9 +27,19 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
   }}>{copied ? <Check size={14} /> : <Copy size={14} />}</button><pre {...props}>{children}</pre></div>;
 }
 
-export function MarkdownContent({ text }: { text: string }) {
-  return <div className="markdown-content"><Markdown remarkPlugins={[remarkGfm, omitMemoryCitations]} components={{
+function MarkdownBody({ text }: { text: string }) {
+  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[omitMemoryElements]} components={{
     pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
     a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />
-  }}>{text}</Markdown></div>;
+  }}>{text}</Markdown>;
+}
+
+export function MarkdownContent({ text, activityId = "message", foldInstructions = false }: { text: string; activityId?: string; foldInstructions?: boolean }) {
+  const cleaned = useMemo(() => visibleMarkdown(text), [text]);
+  const segments = useMemo(() => foldInstructions ? instructionSegments(cleaned) : null, [cleaned, foldInstructions]);
+  return <div className="markdown-content">{segments ? segments.map(segment => segment.kind === "instructions"
+    ? <ActivityDetails key={segment.id} stateKey={`${activityId}:${segment.id}`} className="instruction-file execution-command" initiallyOpen={false} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
+      <div className="instruction-file-body"><MarkdownBody text={segment.text} /></div>
+    </ActivityDetails>
+    : <MarkdownBody key={segment.id} text={segment.text} />) : <MarkdownBody text={cleaned} />}</div>;
 }
