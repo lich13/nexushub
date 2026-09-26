@@ -117,12 +117,10 @@ describe("contract registry", () => {
 
     const audit = repositoryFile("docs/ARCHITECTURE.md");
     for (const required of [
-      "cc-switch origin/main",
-      "cc-switch feat/webd",
-      "Windows desktop",
-      "Linux arm64",
+      "macOS ARM64",
+      "Linux x86_64 headless webd",
       "nexushub-webd-linux-x86_64.tar.gz",
-      "NexusHub-*-Linux-x86_64.AppImage",
+      "darwin-aarch64",
       "contracts/nexushub-contract.json"
     ]) {
       expect(audit, `audit missing ${required}`).toContain(required);

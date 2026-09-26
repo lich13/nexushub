@@ -309,7 +309,6 @@ function ProbeRuntimeSettingsCard({
       <div className="probe-toggle-grid">
         <label className="toggle-row"><span>启用 Probe</span><input type="checkbox" checked={draft.probe.enabled} onChange={(event) => setProbe({ enabled: event.target.checked })} /></label>
         <label className="toggle-row"><span>终止错误监控</span><input type="checkbox" checked={draft.probe.error_monitor.enabled} onChange={(event) => setProbe({ error_monitor: { ...draft.probe.error_monitor, enabled: event.target.checked } })} /></label>
-        <label className="toggle-row"><span>受限 Goal 自动恢复</span><input type="checkbox" checked={draft.probe.error_monitor.auto_resume_goals} onChange={(event) => setProbe({ error_monitor: { ...draft.probe.error_monitor, auto_resume_goals: event.target.checked } })} /></label>
         <label className="toggle-row"><span>启用 Bark</span><input type="checkbox" checked={draft.notifications.enabled} onChange={(event) => setNotifications({ enabled: event.target.checked })} /></label>
         <label className="toggle-row"><span>Codex 通知</span><input type="checkbox" checked={draft.notifications.notify_codex} onChange={(event) => setNotifications({ notify_codex: event.target.checked })} /></label>
         <label className="toggle-row"><span>Codex 完成</span><input type="checkbox" checked={draft.notifications.notify_completion} onChange={(event) => setNotifications({ notify_completion: event.target.checked })} /></label>
@@ -323,7 +322,7 @@ function ProbeRuntimeSettingsCard({
         <label className="toggle-row"><span>Codex 异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
         <label className="toggle-row"><span>管理 Codex Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
       </div>
-      <p className="muted-row">Pi 未安装状态扩展：仅发送明确完成通知。原生记录无法证明自动重试已终止，最终失败通知暂不支持。Goal 自动恢复仅用于 Codex。</p>
+      <p className="muted-row">Pi 未安装状态扩展：仅发送明确完成通知。原生记录无法证明自动重试已终止，最终失败通知暂不支持。</p>
       {status?.provider_notifications?.map((provider) => <div key={provider.provider} className="muted-row">{provider.provider.toUpperCase()} · {provider.enabled ? "监控中" : "已停用"} · {provider.streams} 个会话 · {provider.read_errors} 个读取异常 · {provider.failed_deliveries} 次投递失败</div>)}
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}

@@ -125,10 +125,6 @@ pub struct ProbeErrorIncident {
     pub error_summary: String,
     pub event_id: Option<String>,
     pub bark_status: String,
-    pub recovery_status: String,
-    pub recovery_attempts: u32,
-    pub next_retry_at: Option<i64>,
-    pub last_error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -144,28 +140,6 @@ pub struct NewProbeErrorIncident {
     pub classification: String,
     pub error_sha256: String,
     pub error_summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ThreadGoal {
-    pub thread_id: String,
-    pub objective: Option<String>,
-    pub token_budget: Option<u64>,
-    pub status: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ThreadGoalUpdate<'a> {
-    pub thread_id: &'a str,
-    pub objective: Option<&'a str>,
-    pub token_budget: Option<u64>,
-    pub status: &'a str,
-    pub completed_at: Option<i64>,
-    pub blocked_reason: Option<&'a str>,
 }
 
 impl PanelDb {
@@ -329,17 +303,11 @@ impl PanelDb {
               error_summary TEXT NOT NULL,
               event_id TEXT,
               bark_status TEXT NOT NULL DEFAULT 'pending',
-              recovery_status TEXT NOT NULL DEFAULT 'pending',
-              recovery_attempts INTEGER NOT NULL DEFAULT 0,
-              next_retry_at INTEGER,
-              last_error TEXT,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_probe_error_incidents_source
               ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
-            CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_retry
-              ON probe_error_incidents(recovery_status, next_retry_at);
 
             CREATE TABLE IF NOT EXISTS native_probe_providers (
               provider TEXT PRIMARY KEY,
@@ -366,18 +334,10 @@ impl PanelDb {
               updated_at INTEGER NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS codex_thread_goals (
-              thread_id TEXT PRIMARY KEY,
-              objective TEXT,
-              token_budget INTEGER,
-              status TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL,
-              completed_at INTEGER,
-              blocked_reason TEXT
-            );
             "#,
         )?;
+        migrate_probe_error_incidents_schema(&conn)?;
+        conn.execute_batch("DROP TABLE IF EXISTS codex_thread_goals;")?;
         add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
         add_column_if_missing(&conn, "jobs", "turn_id", "TEXT")?;
         add_column_if_missing(&conn, "probe_events", "handled_at", "INTEGER")?;
@@ -398,67 +358,6 @@ impl PanelDb {
         drop(conn);
         self.migrate_turnstile_secret_setting()?;
         Ok(())
-    }
-
-    pub fn get_thread_goal(&self, thread_id: &str) -> Result<Option<ThreadGoal>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            r#"
-            SELECT thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
-            FROM codex_thread_goals
-            WHERE thread_id=?1
-            "#,
-            params![thread_id],
-            thread_goal_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
-    }
-
-    pub fn upsert_thread_goal(&self, update: ThreadGoalUpdate<'_>) -> Result<ThreadGoal> {
-        let now = Self::now();
-        let completed_at = update.completed_at.or({
-            if matches!(update.status, "complete" | "completed") {
-                Some(now)
-            } else {
-                None
-            }
-        });
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            INSERT INTO codex_thread_goals(
-              thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
-            )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)
-            ON CONFLICT(thread_id) DO UPDATE SET
-              objective=excluded.objective,
-              token_budget=excluded.token_budget,
-              status=excluded.status,
-              updated_at=excluded.updated_at,
-              completed_at=excluded.completed_at,
-              blocked_reason=excluded.blocked_reason
-            "#,
-            params![
-                update.thread_id,
-                update.objective,
-                update.token_budget.map(|value| value as i64),
-                update.status,
-                now,
-                completed_at,
-                update.blocked_reason,
-            ],
-        )?;
-        conn.query_row(
-            r#"
-            SELECT thread_id, objective, token_budget, status, created_at, updated_at, completed_at, blocked_reason
-            FROM codex_thread_goals
-            WHERE thread_id=?1
-            "#,
-            params![update.thread_id],
-            thread_goal_from_row,
-        )
-        .map_err(Into::into)
     }
 
     fn migrate_turnstile_secret_setting(&self) -> Result<()> {
@@ -1097,8 +996,8 @@ impl PanelDb {
             INSERT OR IGNORE INTO probe_error_incidents(
               incident_key, source_ts, source_ts_nanos, source_row_id,
               thread_id, turn_id, classification, error_sha256, error_summary,
-              bark_status, recovery_status, recovery_attempts, created_at, updated_at
-            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', 'pending', 0, ?10, ?10)
+              bark_status, created_at, updated_at
+            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10)
             "#,
             params![
                 incident.incident_key,
@@ -1132,8 +1031,7 @@ impl PanelDb {
             r#"
             SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
                    thread_id, turn_id, classification, error_sha256, error_summary,
-                   event_id, bark_status, recovery_status, recovery_attempts,
-                   next_retry_at, last_error, created_at, updated_at
+                   event_id, bark_status, created_at, updated_at
             FROM probe_error_incidents
             WHERE bark_status='pending'
             ORDER BY created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC
@@ -1155,8 +1053,7 @@ impl PanelDb {
             r#"
             SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
                    thread_id, turn_id, classification, error_sha256, error_summary,
-                   event_id, bark_status, recovery_status, recovery_attempts,
-                   next_retry_at, last_error, created_at, updated_at
+                   event_id, bark_status, created_at, updated_at
             FROM probe_error_incidents WHERE incident_key=?1
             "#,
             params![incident_key],
@@ -1164,97 +1061,6 @@ impl PanelDb {
         )
         .optional()
         .map_err(Into::into)
-    }
-
-    pub fn list_due_probe_error_incidents(
-        &self,
-        now: i64,
-        limit: u32,
-    ) -> Result<Vec<ProbeErrorIncident>> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut statement = conn.prepare(
-            r#"
-            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
-                   thread_id, turn_id, classification, error_sha256, error_summary,
-                   event_id, bark_status, recovery_status, recovery_attempts,
-                   next_retry_at, last_error, created_at, updated_at
-            FROM probe_error_incidents
-            WHERE recovery_status IN ('pending', 'retrying')
-              AND (next_retry_at IS NULL OR next_retry_at <= ?1)
-            ORDER BY created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = statement.query_map(
-            params![now, limit.clamp(1, 100)],
-            probe_error_incident_from_row,
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn claim_probe_error_recovery_attempt(
-        &self,
-        incident_key: &str,
-        expected_attempts: u32,
-        now: i64,
-    ) -> Result<bool> {
-        let conn = self.conn.lock().expect("db mutex");
-        Ok(conn.execute(
-            r#"
-            UPDATE probe_error_incidents
-            SET recovery_status='recovering', recovery_attempts=recovery_attempts + 1,
-                next_retry_at=NULL, updated_at=?3
-            WHERE incident_key=?1
-              AND recovery_attempts=?2
-              AND recovery_status IN ('pending', 'retrying')
-              AND (next_retry_at IS NULL OR next_retry_at <= ?3)
-            "#,
-            params![incident_key, i64::from(expected_attempts), now],
-        )? == 1)
-    }
-
-    pub fn schedule_probe_error_recovery_retry(
-        &self,
-        incident_key: &str,
-        attempts: u32,
-        next_retry_at: i64,
-        last_error: &str,
-    ) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            UPDATE probe_error_incidents
-            SET recovery_status='retrying', next_retry_at=?3, last_error=?4, updated_at=?5
-            WHERE incident_key=?1 AND recovery_attempts=?2 AND recovery_status='recovering'
-            "#,
-            params![
-                incident_key,
-                i64::from(attempts),
-                next_retry_at,
-                last_error,
-                Self::now()
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn finish_probe_error_recovery(
-        &self,
-        incident_key: &str,
-        status: &str,
-        last_error: Option<&str>,
-    ) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            UPDATE probe_error_incidents
-            SET recovery_status=?2, next_retry_at=NULL, last_error=?3, updated_at=?4
-            WHERE incident_key=?1
-            "#,
-            params![incident_key, status, last_error, Self::now()],
-        )?;
-        Ok(())
     }
 
     pub fn update_probe_error_incident_delivery(
@@ -1443,27 +1249,72 @@ fn probe_error_incident_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pr
         error_summary: row.get(8)?,
         event_id: row.get(9)?,
         bark_status: row.get(10)?,
-        recovery_status: row.get(11)?,
-        recovery_attempts: row.get::<_, i64>(12)? as u32,
-        next_retry_at: row.get(13)?,
-        last_error: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
-fn thread_goal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadGoal> {
-    let token_budget: Option<i64> = row.get(2)?;
-    Ok(ThreadGoal {
-        thread_id: row.get(0)?,
-        objective: row.get(1)?,
-        token_budget: token_budget.and_then(|value| u64::try_from(value).ok()),
-        status: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
-        completed_at: row.get(6)?,
-        blocked_reason: row.get(7)?,
-    })
+fn migrate_probe_error_incidents_schema(conn: &Connection) -> Result<()> {
+    let columns = conn
+        .prepare("PRAGMA table_info(probe_error_incidents)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    if columns.is_empty()
+        || ![
+            "recovery_status",
+            "recovery_attempts",
+            "next_retry_at",
+            "last_error",
+        ]
+        .iter()
+        .any(|column| columns.contains(*column))
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<()> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE probe_error_incidents_next (
+              incident_key TEXT PRIMARY KEY,
+              source_ts INTEGER NOT NULL,
+              source_ts_nanos INTEGER NOT NULL,
+              source_row_id INTEGER NOT NULL,
+              thread_id TEXT NOT NULL,
+              turn_id TEXT NOT NULL,
+              classification TEXT NOT NULL,
+              error_sha256 TEXT NOT NULL,
+              error_summary TEXT NOT NULL,
+              event_id TEXT,
+              bark_status TEXT NOT NULL DEFAULT 'pending',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            INSERT INTO probe_error_incidents_next(
+              incident_key, source_ts, source_ts_nanos, source_row_id,
+              thread_id, turn_id, classification, error_sha256, error_summary,
+              event_id, bark_status, created_at, updated_at
+            )
+            SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
+              thread_id, turn_id, classification, error_sha256, error_summary,
+              event_id, bark_status, created_at, updated_at
+            FROM probe_error_incidents;
+            DROP INDEX IF EXISTS idx_probe_error_incidents_source;
+            DROP INDEX IF EXISTS idx_probe_error_incidents_retry;
+            DROP TABLE probe_error_incidents;
+            ALTER TABLE probe_error_incidents_next RENAME TO probe_error_incidents;
+            CREATE UNIQUE INDEX idx_probe_error_incidents_source
+              ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
+            "#,
+        )?;
+        conn.execute_batch("COMMIT")?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result
 }
 
 fn setting_bool(value: Option<String>, default: bool) -> bool {
@@ -1524,6 +1375,7 @@ fn encrypted_setting_parts(value: &str) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::PanelDb;
+    use rusqlite::{Connection, OptionalExtension};
     use serde_json::json;
 
     #[test]
@@ -1577,6 +1429,75 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_drops_goal_table_and_preserves_probe_incidents() {
+        let path = std::env::temp_dir().join(format!(
+            "nexushub-db-migration-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE probe_error_incidents (
+                  incident_key TEXT PRIMARY KEY,
+                  source_ts INTEGER NOT NULL,
+                  source_ts_nanos INTEGER NOT NULL,
+                  source_row_id INTEGER NOT NULL,
+                  thread_id TEXT NOT NULL,
+                  turn_id TEXT NOT NULL,
+                  classification TEXT NOT NULL,
+                  error_sha256 TEXT NOT NULL,
+                  error_summary TEXT NOT NULL,
+                  event_id TEXT,
+                  bark_status TEXT NOT NULL DEFAULT 'pending',
+                  recovery_status TEXT NOT NULL DEFAULT 'pending',
+                  recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                  next_retry_at INTEGER,
+                  last_error TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                );
+                CREATE UNIQUE INDEX idx_probe_error_incidents_source
+                  ON probe_error_incidents(source_ts, source_ts_nanos, source_row_id);
+                CREATE INDEX idx_probe_error_incidents_retry
+                  ON probe_error_incidents(recovery_status, next_retry_at);
+                INSERT INTO probe_error_incidents(
+                  incident_key, source_ts, source_ts_nanos, source_row_id,
+                  thread_id, turn_id, classification, error_sha256, error_summary,
+                  bark_status, created_at, updated_at
+                ) VALUES('legacy', 1, 2, 3, 'thread', 'turn', 'capacity', 'hash', 'summary', 'pending', 4, 5);
+                CREATE TABLE codex_thread_goals (thread_id TEXT PRIMARY KEY, goal_json TEXT NOT NULL);
+                INSERT INTO codex_thread_goals(thread_id, goal_json) VALUES('thread', '{}');
+                "#,
+            )
+            .unwrap();
+        }
+
+        let db = PanelDb::open(&path).unwrap();
+        assert_eq!(db.probe_error_incident_count().unwrap(), 1);
+        drop(db);
+        let conn = Connection::open(&path).unwrap();
+        let goal_table: Option<String> = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='codex_thread_goals'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(goal_table.is_none());
+        let columns = conn
+            .prepare("PRAGMA table_info(probe_error_incidents)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "recovery_status"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn creates_admin_and_session() {
         let db = PanelDb::open(":memory:").unwrap();
         db.upsert_admin("a1", "admin", "hash").unwrap();
@@ -1592,46 +1513,6 @@ mod tests {
         })
         .unwrap();
         assert!(db.session_by_token("token").unwrap().is_some());
-    }
-
-    #[test]
-    fn thread_goal_store_sets_gets_and_updates_without_codex_state_db() {
-        let db = PanelDb::open(":memory:").unwrap();
-
-        assert!(db.get_thread_goal("thread-a").unwrap().is_none());
-
-        let goal = db
-            .upsert_thread_goal(super::ThreadGoalUpdate {
-                thread_id: "thread-a",
-                objective: Some("ship local goal"),
-                token_budget: Some(123),
-                status: "active",
-                completed_at: None,
-                blocked_reason: None,
-            })
-            .unwrap();
-        assert_eq!(goal.thread_id, "thread-a");
-        assert_eq!(goal.objective.as_deref(), Some("ship local goal"));
-        assert_eq!(goal.token_budget, Some(123));
-        assert_eq!(goal.status, "active");
-        assert!(goal.completed_at.is_none());
-
-        let updated = db
-            .upsert_thread_goal(super::ThreadGoalUpdate {
-                thread_id: "thread-a",
-                objective: None,
-                token_budget: None,
-                status: "cleared",
-                completed_at: None,
-                blocked_reason: None,
-            })
-            .unwrap();
-        assert_eq!(updated.objective, None);
-        assert_eq!(updated.token_budget, None);
-        assert_eq!(updated.status, "cleared");
-
-        let stored = db.get_thread_goal("thread-a").unwrap().unwrap();
-        assert_eq!(stored.status, "cleared");
     }
 
     #[test]

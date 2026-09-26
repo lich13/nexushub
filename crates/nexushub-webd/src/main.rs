@@ -12,9 +12,8 @@ use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
         resolve_codex_paths, rollout_completion_last_agent_message_selection,
-        rollout_hook_stop_message_selection, rollout_request_user_input_state, CodexGoalAction,
-        PendingElicitation, RolloutMessageSelection, RolloutRequestUserInputState,
-        UserInputQuestion,
+        rollout_hook_stop_message_selection, rollout_request_user_input_state, PendingElicitation,
+        RolloutMessageSelection, RolloutRequestUserInputState, UserInputQuestion,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -52,8 +51,6 @@ const QUESTION_CONFIRMATION_DELAY_MS: u64 = 1_000;
 const PROBE_ERROR_MONITOR_CURSOR_SETTING: &str = "probe_error_monitor_cursor";
 const PROBE_ERROR_MONITOR_STATUS_SETTING: &str = "probe_error_monitor_status";
 const PROBE_ERROR_MONITOR_BATCH_LIMIT: usize = 100;
-const PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS: u32 = 4;
-const PROBE_ERROR_MONITOR_RECOVERY_RETRY_SECONDS: [i64; 3] = [15, 60, 300];
 static PROBE_THREAD_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PROBE_ERROR_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -2154,17 +2151,15 @@ struct ProbeErrorMonitorRunOutcome {
     rows_seen: usize,
     new_incidents: usize,
     deliveries_completed: usize,
-    recoveries_processed: usize,
 }
 
 fn spawn_probe_error_monitor(state: AppState) {
     tokio::spawn(async move {
         loop {
             let config = state.config();
-            match run_probe_error_monitor_once(&config, &state.db, &state.goal_client).await {
+            match run_probe_error_monitor_once(&config, &state.db).await {
                 Ok(outcome) if outcome.new_incidents > 0 => tracing::info!(
                     new_incidents = outcome.new_incidents,
-                    recoveries_processed = outcome.recoveries_processed,
                     "Probe error monitor processed Codex turn errors"
                 ),
                 Ok(_) => tracing::debug!("Probe error monitor scan completed"),
@@ -2184,9 +2179,7 @@ async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
             Ok(config) => {
                 match open_panel_db(&config) {
                     Ok(db) => {
-                        let client = nexushub_core::codex::CodexGoalClient::new();
-                        if let Err(err) = run_probe_error_monitor_once(&config, &db, &client).await
-                        {
+                        if let Err(err) = run_probe_error_monitor_once(&config, &db).await {
                             tracing::warn!("Probe error monitor scan failed: {err}");
                         }
                     }
@@ -2206,7 +2199,6 @@ async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
 async fn run_probe_error_monitor_once(
     config: &Config,
     db: &PanelDb,
-    goal_client: &nexushub_core::codex::CodexGoalClient,
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
     if let Err(error) = provider_monitor::run(config, db).await {
@@ -2233,7 +2225,6 @@ async fn run_probe_error_monitor_once(
             rows_seen: 0,
             new_incidents: 0,
             deliveries_completed: 0,
-            recoveries_processed: 0,
         });
     }
 
@@ -2285,11 +2276,8 @@ async fn run_probe_error_monitor_once(
     }
 
     let pending_deliveries = db.list_pending_probe_error_deliveries(100)?;
-    let delivery = deliver_probe_error_incidents(config, db, &pending_deliveries);
-    let recovery = process_due_probe_error_recoveries(config, db, goal_client);
-    let (delivery_result, recovery_result) = tokio::join!(delivery, recovery);
-    let deliveries_completed = delivery_result?;
-    let recoveries_processed = recovery_result?;
+    let deliveries_completed =
+        deliver_probe_error_incidents(config, db, &pending_deliveries).await?;
     db.set_setting(
         PROBE_ERROR_MONITOR_CURSOR_SETTING,
         &serde_json::to_string(&scan.cursor)?,
@@ -2311,7 +2299,6 @@ async fn run_probe_error_monitor_once(
         rows_seen: scan.rows_seen,
         new_incidents: claimed.len(),
         deliveries_completed,
-        recoveries_processed,
     })
 }
 
@@ -2340,10 +2327,6 @@ async fn deliver_probe_error_incidents(
         diagnostics.insert(
             "source_log_row_id".to_string(),
             json!(incident.source_row_id),
-        );
-        diagnostics.insert(
-            "goal_auto_resume_enabled".to_string(),
-            json!(config.probe.error_monitor.auto_resume_goals),
         );
         let event = probe_runtime(config).build_event(
             ProbeEventInput::hook_stop_with_context(
@@ -2377,166 +2360,6 @@ async fn deliver_probe_error_incidents(
         delivered += 1;
     }
     Ok(delivered)
-}
-
-async fn process_due_probe_error_recoveries(
-    config: &Config,
-    db: &PanelDb,
-    goal_client: &nexushub_core::codex::CodexGoalClient,
-) -> Result<usize> {
-    let now = PanelDb::now();
-    let incidents = db.list_due_probe_error_incidents(now, 100)?;
-    let mut processed = 0usize;
-    for incident in incidents {
-        if let Some(reason) =
-            task_notification_suppression_reason(config, Some(&incident.thread_id))
-        {
-            db.finish_probe_error_recovery(&incident.incident_key, reason, None)?;
-            continue;
-        }
-        if !config.probe.error_monitor.auto_resume_goals {
-            db.finish_probe_error_recovery(&incident.incident_key, "auto_resume_disabled", None)?;
-            continue;
-        }
-        if incident.recovery_attempts >= PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS
-            || !db.claim_probe_error_recovery_attempt(
-                &incident.incident_key,
-                incident.recovery_attempts,
-                now,
-            )?
-        {
-            continue;
-        }
-        processed += 1;
-        let attempts = incident.recovery_attempts + 1;
-        match goal_client
-            .execute(
-                &resolve_codex_paths(&config.codex.home).home,
-                &incident.thread_id,
-                CodexGoalAction::RecoverRestricted,
-            )
-            .await
-        {
-            Ok(Some(goal)) if goal.status == "active" => {
-                db.finish_probe_error_recovery(&incident.incident_key, "active", None)?;
-            }
-            Ok(Some(goal)) => {
-                db.finish_probe_error_recovery(
-                    &incident.incident_key,
-                    &format!("not_applicable:{}", goal.status),
-                    None,
-                )?;
-            }
-            Ok(None) => {
-                db.finish_probe_error_recovery(&incident.incident_key, "no_goal", None)?;
-            }
-            Err(err) => {
-                let mut safe_error = safe_probe_monitor_error(&err.to_string());
-                let timeout_unknown = err.to_string().contains("resulting state is unknown");
-                if timeout_unknown {
-                    match goal_client
-                        .execute(
-                            &resolve_codex_paths(&config.codex.home).home,
-                            &incident.thread_id,
-                            CodexGoalAction::Get,
-                        )
-                        .await
-                    {
-                        Ok(Some(goal)) if goal.status == "active" => {
-                            db.finish_probe_error_recovery(
-                                &incident.incident_key,
-                                "active_confirmed_after_timeout",
-                                None,
-                            )?;
-                            continue;
-                        }
-                        Ok(Some(goal))
-                            if !matches!(
-                                goal.status.as_str(),
-                                "blocked" | "usageLimited" | "budgetLimited"
-                            ) =>
-                        {
-                            db.finish_probe_error_recovery(
-                                &incident.incident_key,
-                                &format!("not_applicable:{}", goal.status),
-                                None,
-                            )?;
-                            continue;
-                        }
-                        Ok(None) => {
-                            db.finish_probe_error_recovery(
-                                &incident.incident_key,
-                                "no_goal",
-                                None,
-                            )?;
-                            continue;
-                        }
-                        Ok(Some(_)) => {}
-                        Err(query_err) => {
-                            safe_error = format!(
-                                "{}; state recheck failed: {}",
-                                safe_error,
-                                safe_probe_monitor_error(&query_err.to_string())
-                            );
-                        }
-                    }
-                }
-                if attempts < PROBE_ERROR_MONITOR_MAX_RECOVERY_ATTEMPTS {
-                    let delay = PROBE_ERROR_MONITOR_RECOVERY_RETRY_SECONDS[(attempts - 1) as usize];
-                    db.schedule_probe_error_recovery_retry(
-                        &incident.incident_key,
-                        attempts,
-                        PanelDb::now() + delay,
-                        &safe_error,
-                    )?;
-                } else {
-                    db.finish_probe_error_recovery(
-                        &incident.incident_key,
-                        "failed",
-                        Some(&safe_error),
-                    )?;
-                    notify_probe_goal_recovery_failure(config, db, &incident, &safe_error).await?;
-                }
-            }
-        }
-    }
-    Ok(processed)
-}
-
-async fn notify_probe_goal_recovery_failure(
-    config: &Config,
-    db: &PanelDb,
-    incident: &ProbeErrorIncident,
-    safe_error: &str,
-) -> Result<()> {
-    let title = local_thread_title(config, &incident.thread_id)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "未命名线程".to_string());
-    let body = format!("Goal 自动恢复失败（已重试 4 次）：{safe_error}");
-    let mut diagnostics = BTreeMap::new();
-    diagnostics.insert("recovery_failed".to_string(), json!(true));
-    diagnostics.insert("recovery_attempts".to_string(), json!(4));
-    diagnostics.insert(
-        "original_error_sha256".to_string(),
-        json!(incident.error_sha256),
-    );
-    let event = probe_runtime(config).build_event(
-        ProbeEventInput::hook_stop_with_context(
-            Some(&incident.thread_id),
-            Some(&incident.turn_id),
-            Some(&incident.thread_id),
-            None,
-            Some(&body),
-            "turn-error",
-        )
-        .with_thread_title(Some(&title))
-        .with_body_source(Some("goal_recovery_failed"))
-        .with_body_selection_diagnostics(diagnostics)
-        .with_error_monitor_source(),
-    );
-    let _ = record_probe_event_with_bark_timeout(config, db, event, Duration::from_secs(3)).await?;
-    Ok(())
 }
 
 fn load_probe_error_cursor(db: &PanelDb) -> Result<Option<ProbeErrorCursor>> {
@@ -5541,531 +5364,5 @@ last_error = "old nexushub request hook"
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{unique}"))
-    }
-
-    fn error_monitor_test_fixture(
-        prefix: &str,
-        thread_id: &str,
-        title: &str,
-    ) -> (PathBuf, Config, PanelDb, Connection) {
-        let dir = temp_test_dir(prefix);
-        let codex_home = dir.join("codex-home");
-        fs::create_dir_all(codex_home.join("sessions")).unwrap();
-        let state_db = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
-        state_db
-            .execute_batch(
-                r#"
-                CREATE TABLE threads (
-                    id TEXT PRIMARY KEY,
-                    title TEXT,
-                    source TEXT,
-                    thread_source TEXT,
-                    updated_at INTEGER,
-                    archived_at INTEGER,
-                    rollout_path TEXT
-                );
-                "#,
-            )
-            .unwrap();
-        state_db
-            .execute(
-                "INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
-                 VALUES(?1, ?2, 'vscode', 'user', 100, NULL, NULL)",
-                params![thread_id, title],
-            )
-            .unwrap();
-        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        let logs = Connection::open(codex_home.join("logs_2.sqlite")).unwrap();
-        logs.execute_batch(
-            r#"
-            CREATE TABLE logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                ts_nanos INTEGER NOT NULL,
-                level TEXT NOT NULL,
-                target TEXT NOT NULL,
-                feedback_log_body TEXT,
-                module_path TEXT,
-                file TEXT,
-                line INTEGER,
-                thread_id TEXT,
-                process_uuid TEXT,
-                estimated_bytes INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
-            INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id)
-            VALUES(100, 1, 'INFO', 'test', 'baseline', 'baseline-thread');
-            "#,
-        )
-        .unwrap();
-
-        let mut config =
-            Config::for_platform_kind_with_home(nexushub_core::platform::PlatformKind::Macos, &dir);
-        config.codex.home = codex_home;
-        config.paths.db_path = dir.join("nexushub.sqlite");
-        let db = PanelDb::open(&config.paths.db_path).unwrap();
-        (dir, config, db, logs)
-    }
-
-    fn seed_probe_error_incident(db: &PanelDb, incident_key: &str, thread_id: &str) {
-        assert!(db
-            .claim_probe_error_incident(&NewProbeErrorIncident {
-                incident_key: incident_key.to_string(),
-                source_ts: 101,
-                source_ts_nanos: 2,
-                source_row_id: 2,
-                thread_id: thread_id.to_string(),
-                turn_id: format!("turn-{incident_key}"),
-                classification: "server_overloaded".to_string(),
-                error_sha256: "a".repeat(64),
-                error_summary: "Selected model is at capacity.".to_string(),
-            })
-            .unwrap());
-    }
-
-    fn write_test_executable(path: &Path, script: &str) {
-        fs::write(path, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(path).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(path, permissions).unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn probe_error_monitor_replays_persisted_pending_delivery_after_restart() {
-        let thread_id = "thread-pending-delivery";
-        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
-            "nexushub-probe-error-monitor-pending",
-            thread_id,
-            "待投递恢复线程",
-        );
-        config.probe.notifications.enabled = false;
-        config.probe.error_monitor.auto_resume_goals = false;
-        seed_probe_error_incident(&db, "pending-delivery", thread_id);
-        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
-            vec![dir.join("missing-codex")],
-            Duration::from_millis(100),
-        );
-
-        let outcome = run_probe_error_monitor_once(&config, &db, &goal_client)
-            .await
-            .unwrap();
-
-        assert!(outcome.baseline_only);
-        assert_eq!(outcome.new_incidents, 0);
-        assert_eq!(outcome.deliveries_completed, 1);
-        let incident = db
-            .get_probe_error_incident("pending-delivery")
-            .unwrap()
-            .unwrap();
-        assert_eq!(incident.bark_status, "skipped:notifications_disabled");
-        assert_eq!(incident.recovery_status, "auto_resume_disabled");
-        assert_eq!(db.list_probe_events(10).unwrap().len(), 1);
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn probe_error_monitor_bark_failure_does_not_block_goal_recovery() {
-        let thread_id = "thread-bark-failure";
-        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
-            "nexushub-probe-error-monitor-bark-failure",
-            thread_id,
-            "Bark 失败恢复线程",
-        );
-        let server = TestHttpServer::start_n(
-            1,
-            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        );
-        config.probe.notifications.enabled = true;
-        config.probe.notifications.notify_recoverable = true;
-        config.probe.notifications.server_url = server.url();
-        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
-            .unwrap();
-        seed_probe_error_incident(&db, "bark-failure", thread_id);
-
-        let executable = dir.join("codex");
-        write_test_executable(
-            &executable,
-            &format!(
-                r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.4'
-  exit 0
-fi
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Recover despite Bark","status":"blocked","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":1}}}}}}'
-      ;;
-    *'"method":"thread/goal/set"'*)
-      echo '{{"id":3,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Recover despite Bark","status":"active","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":2}}}}}}'
-      ;;
-  esac
-done
-"#,
-            ),
-        );
-        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
-            vec![executable],
-            Duration::from_secs(10),
-        );
-
-        let outcome = run_probe_error_monitor_once(&config, &db, &goal_client)
-            .await
-            .unwrap();
-
-        assert_eq!(outcome.deliveries_completed, 1);
-        assert_eq!(outcome.recoveries_processed, 1);
-        let incident = db
-            .get_probe_error_incident("bark-failure")
-            .unwrap()
-            .unwrap();
-        assert_eq!(incident.bark_status, "failed:http_status");
-        assert_eq!(incident.recovery_status, "active");
-        let _request = server.request();
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn probe_error_monitor_rechecks_state_after_mutation_timeout_without_second_set() {
-        let thread_id = "thread-timeout-recheck";
-        let (dir, config, db, _logs) = error_monitor_test_fixture(
-            "nexushub-probe-error-monitor-timeout",
-            thread_id,
-            "超时复查线程",
-        );
-        seed_probe_error_incident(&db, "timeout-recheck", thread_id);
-        let executable = dir.join("codex");
-        let counter = dir.join("app-server-count");
-        let capture = dir.join("app-server-input.jsonl");
-        write_test_executable(
-            &executable,
-            &format!(
-                r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.4'
-  exit 0
-fi
-count=0
-if [ -f '{counter}' ]; then count=$(cat '{counter}'); fi
-count=$((count + 1))
-echo "$count" > '{counter}'
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> '{capture}'
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      if [ "$count" -eq 1 ]; then
-        echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Timeout recovery","status":"blocked","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":1}}}}}}'
-      else
-        echo '{{"id":2,"result":{{"goal":{{"threadId":"{thread_id}","objective":"Timeout recovery","status":"active","tokenBudget":9000,"tokensUsed":1,"timeUsedSeconds":1,"createdAt":1,"updatedAt":2}}}}}}'
-      fi
-      ;;
-    *'"method":"thread/goal/set"'*)
-      :
-      ;;
-  esac
-done
-"#,
-                counter = counter.display(),
-                capture = capture.display(),
-            ),
-        );
-        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
-            vec![executable],
-            Duration::from_millis(200),
-        );
-        goal_client.resolve_executable().await.unwrap();
-
-        assert_eq!(
-            process_due_probe_error_recoveries(&config, &db, &goal_client)
-                .await
-                .unwrap(),
-            1
-        );
-
-        let incident = db
-            .get_probe_error_incident("timeout-recheck")
-            .unwrap()
-            .unwrap();
-        assert_eq!(incident.recovery_status, "active_confirmed_after_timeout");
-        assert_eq!(incident.recovery_attempts, 1);
-        let input = fs::read_to_string(capture).unwrap();
-        assert_eq!(input.matches("\"method\":\"thread/goal/set\"").count(), 1);
-        assert_eq!(input.matches("\"method\":\"thread/goal/get\"").count(), 2);
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn probe_error_monitor_retries_four_times_then_sends_failure_bark() {
-        let thread_id = "thread-retry-failure";
-        let (dir, mut config, db, _logs) = error_monitor_test_fixture(
-            "nexushub-probe-error-monitor-retries",
-            thread_id,
-            "恢复重试失败线程",
-        );
-        let server = TestHttpServer::start_n(
-            1,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"code\":200,\"message\":\"ok\"}",
-        );
-        config.probe.notifications.enabled = true;
-        config.probe.notifications.notify_recoverable = true;
-        config.probe.notifications.server_url = server.url();
-        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
-            .unwrap();
-        seed_probe_error_incident(&db, "retry-failure", thread_id);
-        db.update_probe_error_incident_delivery("retry-failure", None, "sent")
-            .unwrap();
-
-        let executable = dir.join("codex");
-        let capture = dir.join("retry-input.jsonl");
-        write_test_executable(
-            &executable,
-            &format!(
-                r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.4'
-  exit 0
-fi
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> '{capture}'
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{{"id":1,"result":{{"userAgent":"fake"}}}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{{"id":2,"error":{{"code":-32000,"message":"app-server temporarily unavailable"}}}}'
-      ;;
-  esac
-done
-"#,
-                capture = capture.display(),
-            ),
-        );
-        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
-            vec![executable],
-            Duration::from_secs(10),
-        );
-
-        for (attempt, delay) in [15_i64, 60, 300].into_iter().enumerate() {
-            assert_eq!(
-                process_due_probe_error_recoveries(&config, &db, &goal_client)
-                    .await
-                    .unwrap(),
-                1
-            );
-            let incident = db
-                .get_probe_error_incident("retry-failure")
-                .unwrap()
-                .unwrap();
-            assert_eq!(incident.recovery_attempts, attempt as u32 + 1);
-            assert_eq!(incident.recovery_status, "retrying");
-            let next_retry_at = incident.next_retry_at.unwrap();
-            let remaining = next_retry_at - PanelDb::now();
-            assert!(remaining >= delay - 1 && remaining <= delay, "{remaining}");
-            Connection::open(&config.paths.db_path)
-                .unwrap()
-                .execute(
-                    "UPDATE probe_error_incidents SET next_retry_at=0 WHERE incident_key='retry-failure'",
-                    [],
-                )
-                .unwrap();
-        }
-        assert_eq!(
-            process_due_probe_error_recoveries(&config, &db, &goal_client)
-                .await
-                .unwrap(),
-            1
-        );
-
-        let incident = db
-            .get_probe_error_incident("retry-failure")
-            .unwrap()
-            .unwrap();
-        assert_eq!(incident.recovery_status, "failed");
-        assert_eq!(incident.recovery_attempts, 4);
-        assert!(incident.next_retry_at.is_none());
-        let input = fs::read_to_string(capture).unwrap();
-        assert_eq!(input.matches("\"method\":\"thread/goal/get\"").count(), 4);
-        assert!(!input.contains("\"method\":\"thread/goal/set\""));
-        let events = db.list_probe_events(10).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].payload["body_source"], "goal_recovery_failed");
-        assert_eq!(events[0].payload["recovery_attempts"], 4);
-        let request = server.request();
-        assert!(request.contains("Goal 自动恢复失败"));
-        assert!(request.contains("恢复重试失败线程"));
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn probe_error_monitor_capacity_error_notifies_once_and_recovers_blocked_goal() {
-        let dir = temp_test_dir("nexushub-probe-error-monitor-capacity");
-        let codex_home = dir.join("codex-home");
-        fs::create_dir_all(codex_home.join("sessions")).unwrap();
-        let logs_path = codex_home.join("logs_2.sqlite");
-        let state_db = Connection::open(codex_home.join("state_5.sqlite")).unwrap();
-        state_db
-            .execute_batch(
-                r#"
-                CREATE TABLE threads (
-                    id TEXT PRIMARY KEY,
-                    title TEXT,
-                    source TEXT,
-                    thread_source TEXT,
-                    updated_at INTEGER,
-                    archived_at INTEGER,
-                    rollout_path TEXT
-                );
-                INSERT INTO threads(id, title, source, thread_source, updated_at, archived_at, rollout_path)
-                VALUES('thread-capacity', '容量错误验收线程', 'vscode', 'user', 100, NULL, NULL);
-                "#,
-            )
-            .unwrap();
-        fs::write(codex_home.join("session_index.jsonl"), b"").unwrap();
-        let logs = Connection::open(&logs_path).unwrap();
-        logs.execute_batch(
-            r#"
-            CREATE TABLE logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                ts_nanos INTEGER NOT NULL,
-                level TEXT NOT NULL,
-                target TEXT NOT NULL,
-                feedback_log_body TEXT,
-                module_path TEXT,
-                file TEXT,
-                line INTEGER,
-                thread_id TEXT,
-                process_uuid TEXT,
-                estimated_bytes INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX idx_logs_ts ON logs(ts DESC, ts_nanos DESC, id DESC);
-            INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id)
-            VALUES(100, 1, 'INFO', 'test', 'baseline', 'thread-capacity');
-            "#,
-        )
-        .unwrap();
-
-        let server = TestHttpServer::start_n(
-            1,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"code\":200,\"message\":\"ok\"}",
-        );
-        let mut config =
-            Config::for_platform_kind_with_home(nexushub_core::platform::PlatformKind::Macos, &dir);
-        config.codex.home = codex_home.clone();
-        config.paths.db_path = dir.join("nexushub.sqlite");
-        config.probe.notifications.enabled = true;
-        config.probe.notifications.notify_recoverable = true;
-        config.probe.notifications.server_url = server.url();
-        let db = PanelDb::open(&config.paths.db_path).unwrap();
-        db.set_secret_setting_bytes("probe_bark_device_key", b"test-device")
-            .unwrap();
-
-        let executable = dir.join("codex");
-        let capture = dir.join("goal-input.jsonl");
-        let script = format!(
-            r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo 'codex-cli 0.144.4'
-  exit 0
-fi
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> '{}'
-  case "$line" in
-    *'"method":"initialize"'*)
-      echo '{{"id":1,"result":{{"userAgent":"fake","codexHome":"{}","platformFamily":"unix","platformOs":"macos"}}}}'
-      ;;
-    *'"method":"thread/goal/get"'*)
-      echo '{{"id":2,"result":{{"goal":{{"threadId":"thread-capacity","objective":"Finish release","status":"blocked","tokenBudget":9000,"tokensUsed":50,"timeUsedSeconds":5,"createdAt":100,"updatedAt":200}}}}}}'
-      ;;
-    *'"method":"thread/goal/set"'*)
-      echo '{{"id":3,"result":{{"goal":{{"threadId":"thread-capacity","objective":"Finish release","status":"active","tokenBudget":9000,"tokensUsed":50,"timeUsedSeconds":5,"createdAt":100,"updatedAt":201}}}}}}'
-      ;;
-  esac
-done
-"#,
-            capture.display(),
-            codex_home.display(),
-        );
-        fs::write(&executable, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&executable).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&executable, permissions).unwrap();
-        }
-        let goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
-            vec![executable],
-            Duration::from_secs(10),
-        );
-
-        let baseline = run_probe_error_monitor_once(&config, &db, &goal_client)
-            .await
-            .unwrap();
-        assert!(baseline.baseline_only);
-        assert_eq!(baseline.new_incidents, 0);
-
-        let body = "session_loop{thread_id=thread-capacity}:submission_dispatch{submission.id=\"turn-capacity\"}:turn{thread.id=thread-capacity turn.id=turn-capacity model=gpt-5.6-sol}:session_task.run:run_turn: Turn error: Selected model is at capacity. Please try a different model.";
-        logs.execute(
-            "INSERT INTO logs(ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES(101, 2, 'INFO', 'codex_core::session::turn', ?1, 'thread-capacity')",
-            params![body],
-        )
-        .unwrap();
-        let first = run_probe_error_monitor_once(&config, &db, &goal_client)
-            .await
-            .unwrap();
-        assert_eq!(first.new_incidents, 1);
-        assert_eq!(first.deliveries_completed, 1);
-        assert_eq!(first.recoveries_processed, 1);
-
-        let second = run_probe_error_monitor_once(&config, &db, &goal_client)
-            .await
-            .unwrap();
-        assert_eq!(second.new_incidents, 0);
-        assert_eq!(db.probe_error_incident_count().unwrap(), 1);
-        let events = db.list_probe_events(10).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, "recoverable");
-        assert_eq!(events[0].payload["turn_id"], "turn-capacity");
-        assert_eq!(
-            events[0].payload["error_classification"],
-            "server_overloaded"
-        );
-        assert!(!events[0].payload.to_string().contains("session_loop"));
-        let panel = Connection::open(&config.paths.db_path).unwrap();
-        let incident_key: String = panel
-            .query_row(
-                "SELECT incident_key FROM probe_error_incidents LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let incident = db.get_probe_error_incident(&incident_key).unwrap().unwrap();
-        assert_eq!(
-            incident.error_summary,
-            "Selected model is at capacity. Please try a different model."
-        );
-        assert!(!incident.error_summary.contains("session_loop"));
-        assert_eq!(incident.recovery_status, "active");
-        assert_eq!(incident.recovery_attempts, 1);
-        let goal_input = fs::read_to_string(&capture).unwrap();
-        assert_eq!(
-            goal_input.matches("\"method\":\"thread/goal/set\"").count(),
-            1
-        );
-        let bark_request = server.request();
-        assert!(bark_request.contains("Selected model is at capacity"));
-        assert!(bark_request.contains("容量错误验收线程"));
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

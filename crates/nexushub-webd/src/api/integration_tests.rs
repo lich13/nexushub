@@ -314,7 +314,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
 });
 "#).unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
-    state.goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+    state.app_server_client = nexushub_core::codex::CodexAppServerClient::with_candidates(
         vec![executable],
         std::time::Duration::from_secs(5),
     );
@@ -399,7 +399,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
             "thread/read"
         ]
     );
-    state.goal_client = nexushub_core::codex::CodexGoalClient::with_candidates(
+    state.app_server_client = nexushub_core::codex::CodexAppServerClient::with_candidates(
         vec![],
         std::time::Duration::from_secs(2),
     );

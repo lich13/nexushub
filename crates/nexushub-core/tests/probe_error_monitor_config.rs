@@ -10,13 +10,11 @@ use nexushub_core::{
 fn probe_error_monitor_config_defaults_enabled_and_patches_independent_switches() {
     let config = Config::for_platform_kind_with_home(PlatformKind::Macos, "/tmp/nexus-home");
     assert!(config.probe.error_monitor.enabled);
-    assert!(config.probe.error_monitor.auto_resume_goals);
 
     let patch: ProbeConfigFilePatch = serde_json::from_value(serde_json::json!({
         "probe": {
             "error_monitor": {
                 "enabled": false,
-                "auto_resume_goals": true
             }
         }
     }))
@@ -24,7 +22,24 @@ fn probe_error_monitor_config_defaults_enabled_and_patches_independent_switches(
     let updated = patch_probe_config_toml("[probe]\nenabled = true\n", &patch).unwrap();
     assert!(updated.contains("[probe.error_monitor]"));
     assert!(updated.contains("enabled = false"));
-    assert!(updated.contains("auto_resume_goals = true"));
+    assert!(!updated.contains("auto_resume_goals"));
+}
+
+#[test]
+fn retired_goal_switch_is_removed_during_config_load() {
+    let root = std::env::temp_dir().join(format!("nexushub-goal-config-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let text = toml::to_string_pretty(&Config::default()).unwrap().replace(
+        "[probe.error_monitor]\n",
+        "[probe.error_monitor]\nauto_resume_goals = true\n",
+    );
+    std::fs::write(&path, text).unwrap();
+    let config = Config::load(&path).unwrap();
+    assert!(config.probe.error_monitor.enabled);
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(!rewritten.contains("auto_resume_goals"));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

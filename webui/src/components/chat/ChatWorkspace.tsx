@@ -14,6 +14,7 @@ import type { ThreadSummary } from "../../types";
 import { Conversation } from "./Conversation";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
+import { RunningIndicator } from "../common/RunningIndicator";
 
 export const statusTabs = [
   { id: "all", label: "全部" },
@@ -143,9 +144,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
                 <span className="thread-item-title">{title}</span>
                 <span className="thread-item-meta">
                   {running ? (
-                    <span className="thread-running-indicator" aria-label="运行中" title="运行中">
-                      <span className="thread-running-spinner" aria-hidden="true" />
-                    </span>
+                    <RunningIndicator />
                   ) : (
                     <span className={`thread-item-status ${thread.status}`}>{threadListItemStatusText(thread)}</span>
                   )}

@@ -26,7 +26,6 @@ const settings: ProbeSettings = {
     },
     error_monitor: {
       enabled: true,
-      auto_resume_goals: true
     },
     notifications: {
       enabled: true,
@@ -282,7 +281,6 @@ describe("Probe UI helpers", () => {
         recent_limit: 50,
         error_monitor: {
           enabled: true,
-          auto_resume_goals: true
         },
         hooks: {
           manage_stop_hook: true
@@ -406,7 +404,6 @@ describe("Probe UI helpers", () => {
         recent_limit: 50,
         error_monitor: {
           enabled: true,
-          auto_resume_goals: true
         }
       },
       notifications: {
@@ -453,10 +450,8 @@ describe("Probe UI helpers", () => {
     const draft = buildProbeSettingsDraft(settings);
     draft.notifications.enabled = false;
     draft.notifications.device_key = "";
-    draft.probe.error_monitor.auto_resume_goals = true;
     const payload = buildProbeSettingsPayload(draft, settings);
     expect(payload.probe.notifications?.enabled).toBe(false);
-    expect(payload.probe.error_monitor?.auto_resume_goals).toBe(true);
     const reloaded = buildProbeSettingsDraft({
       ...settings,
       notifications: { ...settings.notifications, enabled: false, device_key_configured: true }

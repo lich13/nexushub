@@ -1,6 +1,6 @@
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
-import { MessageBlockView } from "./MessageStream";
+import { ExecutionGroupView, MessageBlockView } from "./MessageStream";
 import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
@@ -8,6 +8,7 @@ import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { ThreadDetail } from "../../types";
+import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
 
 
 
@@ -32,6 +33,7 @@ export function Conversation(props: {
   const scrollState = useRef({ threadId: "", follow: true, prepend: null as number | null });
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
+  const visibleItems = groupCodexCommandBlocks(visibleBlocks);
   const actions = useReadOnlyThreadActions({ csrfToken, onSuccess: () => setRenaming(false) });
   const older = useThreadBlockPageMutation({
     onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
@@ -93,7 +95,7 @@ export function Conversation(props: {
       <div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
         {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
         {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
-        {visibleBlocks.map((block) => <MessageBlockView key={block.id} block={block} historyExpanded={historyExpanded} onShowHistory={() => {
+        {visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} historyExpanded={historyExpanded} onShowHistory={() => {
           if (stream.current) scrollState.current.prepend = stream.current.scrollHeight - stream.current.scrollTop;
           setHistoryExpanded(true);
         }} />)}

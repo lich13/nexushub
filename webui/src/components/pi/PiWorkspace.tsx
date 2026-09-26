@@ -1,5 +1,5 @@
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { usePiActions, usePiDetail, usePiSessions } from "../../lib/query/pi";
 import type { PiDeletePreview, PiHistoryEvent, PiSessionSummary } from "../../types";
@@ -8,6 +8,8 @@ import { MarkdownContent } from "../common/MarkdownContent";
 import { TaskMenu } from "../common/TaskMenu";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
+import { RunningIndicator } from "../common/RunningIndicator";
+import { groupPiCommandEvents, type ExecutionGroup } from "../../lib/domain/executionGroups";
 
 export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const menuTrigger = useRef<HTMLElement>(null);
@@ -66,7 +68,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
       <div className="provider-list-scroll">
         <SessionBatchControls batch={batch} operations={["delete"]} />
         {sessions.error && <div className="form-error" role="alert">{sessions.error.message}</div>}
-        {sessions.data?.map((item) => <div key={item.sessionKey} className="selectable-session">{batch.selecting && <SessionCheckbox batch={batch} sessionKey={item.sessionKey} title={piSessionLabel(item)} />}<button disabled={batch.busy} className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`} onClick={() => { if (batch.selecting) { batch.toggle(item.sessionKey); return; } setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); }}><strong>{piSessionLabel(item)}</strong><span>{item.id}</span><span>{item.cwd}</span><small>{piStatusLabel(item)}</small></button></div>)}
+        {sessions.data?.map((item) => <div key={item.sessionKey} className="selectable-session">{batch.selecting && <SessionCheckbox batch={batch} sessionKey={item.sessionKey} title={piSessionLabel(item)} />}<button disabled={batch.busy} className={`provider-session ${item.sessionKey === selected?.sessionKey ? "selected" : ""}`} onClick={() => { if (batch.selecting) { batch.toggle(item.sessionKey); return; } setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); }}><strong>{piSessionLabel(item)}</strong><span>{item.id}</span><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{piStatusLabel(item)}</small>}</button></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Pi 会话</div>}
       </div>
@@ -89,7 +91,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
-          {(detail.data?.events ?? []).map((event, index) => <PiEvent key={`${event.callId ?? event.timestamp ?? event.kind}-${index}`} event={event} />)}
+          {renderPiEvents(detail.data?.events ?? [])}
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}
         </div>
@@ -108,6 +110,19 @@ function PiEvent({ event }: { event: PiHistoryEvent }) {
     return <details className="grok-tool"><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>;
   }
   return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} /></article>;
+}
+
+function renderPiEvents(events: PiHistoryEvent[]): ReactNode {
+  return groupPiCommandEvents(events).map((entry, index) => entry.kind === "group"
+    ? <PiExecutionGroup key={entry.group.id} group={entry.group} />
+    : <PiEvent key={`${entry.item.callId ?? entry.item.timestamp ?? entry.item.kind}-${index}`} event={entry.item} />);
+}
+
+function PiExecutionGroup({ group }: { group: ExecutionGroup<PiHistoryEvent> }) {
+  return <details className="execution-group" open={group.running || group.failed}>
+    <summary><span>命令执行组</span><small>{group.items.length} 条命令{group.failed ? ` · ${group.items.filter(item => item.status === "failed").length} 条失败` : ""}</small>{group.running && <RunningIndicator />}</summary>
+    {group.items.map((event, index) => <PiEvent key={`${event.callId ?? event.timestamp ?? event.kind}-${index}`} event={event} />)}
+  </details>;
 }
 
 function piEventLabel(event: PiHistoryEvent): string {

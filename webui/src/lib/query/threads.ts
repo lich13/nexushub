@@ -41,7 +41,6 @@ export const threadQueryKeys = {
   thread: (threadId: string | null) => ["thread", threadId] as const,
   threadBlocks: (threadId: string) => ["thread-blocks", threadId] as const,
   plugins: ["plugins"] as const,
-  goal: (threadId: string) => ["thread-goal", threadId] as const,
   jobs: ["jobs"] as const
 };
 

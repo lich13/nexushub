@@ -397,7 +397,6 @@ export type ProbeStatus = {
   is_refreshing?: boolean | null;
   snapshot_status?: string | null;
   error_monitor_enabled?: boolean | null;
-  error_monitor_auto_resume_goals?: boolean | null;
   error_monitor_status?: string | null;
   error_monitor_last_scan_at?: string | number | null;
   error_monitor_last_error?: string | null;
@@ -444,7 +443,6 @@ export type ProbeSettings = {
     };
     error_monitor?: Record<string, unknown> & {
       enabled?: boolean;
-      auto_resume_goals?: boolean;
     };
     notifications?: Record<string, unknown> & {
       enabled?: boolean;
