@@ -1,3 +1,4 @@
+import { visibleMarkdown } from "./visibleMarkdown";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
@@ -69,7 +70,7 @@ export function threadListItemPreviewText(thread: ThreadListItemLike): string {
 }
 
 export function cleanThreadPreviewText(value?: string | null): string {
-  const source = value?.trim();
+  const source = visibleMarkdown(value ?? "").trim();
   if (!source) return "";
   return extractPlanText(source).replace(/\s+/g, " ").trim();
 }

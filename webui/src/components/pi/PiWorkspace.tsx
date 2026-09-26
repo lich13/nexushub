@@ -1,3 +1,5 @@
+import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
+import { isInstructionFileActivity, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
@@ -103,7 +105,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
-          {renderPiEvents(detail.data?.events ?? [])}
+          <DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}
         </div>
@@ -117,17 +119,23 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   </div>;
 }
 
-function PiEvent({ event }: { event: PiHistoryEvent }) {
+function PiEvent({ event, activityId }: { event: PiHistoryEvent; activityId: string }) {
   if (event.kind === "tool_call" || event.kind === "tool_result") {
-    return <details className="grok-tool"><summary>{event.text ?? "工具活动"}<small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small></summary>{event.detail && <pre>{event.detail}</pre>}</details>;
+    const instructionFile = isInstructionFileActivity(event.role, event.text, event.detail);
+    return <ActivityDetails className="grok-tool execution-command" stateKey={activityId} initiallyOpen={false} summary={<>
+      <span className="tool-title">{instructionFile ? "AGENTS.md" : visibleMarkdown(event.text ?? "工具活动")}</span>
+      {event.status === "in_progress" && <RunningIndicator />}
+      <small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small>
+    </>}>{event.detail && <pre>{visibleMarkdown(event.detail)}</pre>}</ActivityDetails>;
   }
-  return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  if (!visibleMarkdown(event.text ?? "").trim()) return null;
+  return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
 function renderPiEvents(events: PiHistoryEvent[]): ReactNode {
-  return groupPiCommandEvents(events).map((entry, index) => entry.kind === "group"
+  return groupPiCommandEvents(events).map(entry => entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : <PiEvent key={`${entry.item.callId ?? entry.item.timestamp ?? entry.item.kind}-${index}`} event={entry.item} />);
+    : <PiEvent key={entry.key} activityId={entry.key} event={entry.item} />);
 }
 
 function piEventLabel(event: PiHistoryEvent): string {

@@ -1,3 +1,4 @@
+import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -6,6 +7,7 @@ export function CopyReplyButton({ text }: { text: string }) {
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const attempt = useRef(0);
   useEffect(() => () => { clearTimeout(timer.current); attempt.current++; }, []);
+  text = visibleMarkdown(text);
   if (!text.trim()) return null;
   return <div className="reply-actions">
     <button type="button" className="icon-button copy-reply" aria-label={state === "copied" ? "已复制回复" : "复制回复"} title={state === "copied" ? "已复制" : "复制回复"} onClick={async () => {

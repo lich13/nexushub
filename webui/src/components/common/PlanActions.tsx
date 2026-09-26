@@ -1,3 +1,4 @@
+import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, Copy, Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { downloadPlanMarkdown, planFilename } from "../../lib/domain/planExport";
@@ -7,6 +8,7 @@ export function PlanActions({ markdown, fallbackTitle }: { markdown: string; fal
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const attempt = useRef(0);
   useEffect(() => () => { clearTimeout(timer.current); attempt.current++; }, []);
+  markdown = visibleMarkdown(markdown);
   if (!markdown.trim()) return null;
   const feedback = (value: typeof state) => {
     clearTimeout(timer.current);

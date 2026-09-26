@@ -1,8 +1,8 @@
-import { ChevronRight } from "lucide-react";
-import { useState } from "react";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
-import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { ActivityDetails } from "../common/ActivityDetails";
+import { RunningIndicator } from "../common/RunningIndicator";
+import { isInstructionFileActivity, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { PlanActions } from "../common/PlanActions";
 import {
   blockKindLabel,
@@ -63,7 +63,7 @@ export function MessageBlockView({
         <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
       </div>
       <div className={presentation.bodyClassName}>
-        <MarkdownContent text={messageBlockText(block)} />
+        <MarkdownContent text={messageBlockText(block)} activityId={block.id} foldInstructions />
         {block.role === "assistant" && <CopyReplyButton text={messageBlockText(block)} />}
       </div>
     </article>
@@ -71,22 +71,19 @@ export function MessageBlockView({
 }
 
 function ToolBlockView({ block }: { block: MessageBlock }) {
-  const [open, setOpen] = useState(false);
   const summary = toolBlockSummary(block);
-  return (
-    <details
-      className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-    >
-      <summary>
-        <span className="tool-title">{toolBlockTitle(block)}</span>
-        <small>{toolBlockStatus(block)}</small>
-        <ChevronRight size={16} />
-      </summary>
-      {summary && <div className="tool-summary">{summary}</div>}
-      {open && <pre>{toolBlockDetailText(block)}</pre>}
-    </details>
-  );
+  const detail = toolBlockDetailText(block);
+  const instructionFile = isInstructionFileActivity(block.tool_name, block.input, summary, detail);
+  return <ActivityDetails className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`} stateKey={block.call_id ?? block.id} initiallyOpen={false} summary={<>
+    <span className="tool-title">{instructionFile ? "AGENTS.md" : visibleMarkdown(toolBlockTitle(block))}</span>
+    {isRunningToolBlock(block) && <RunningIndicator />}
+    <small>{toolBlockStatus(block)}</small>
+  </>}>
+    {() => <>
+      {summary && <div className="tool-summary">{visibleMarkdown(summary)}</div>}
+      <pre>{visibleMarkdown(detail)}</pre>
+    </>}
+  </ActivityDetails>;
 }
 
 function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: MessageBlock; onShowHistory?: () => void; expanded: boolean }) {
@@ -109,8 +106,9 @@ function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: Messag
 }
 
 function ProposedPlanCell({ block, fallbackTitle }: { block: MessageBlock; fallbackTitle: string }) {
-  const markdown = extractPlanText(block.text || "");
-  const hasContent = Boolean((block.text ?? "").replace(/<\/?proposed_plan>/g, "").trim());
+  const content = visibleMarkdown((block.text ?? "").replace(/<\/?proposed_plan>/g, ""));
+  const markdown = content.trim() ? extractPlanText(content) : "暂无计划内容";
+  const hasContent = Boolean(content.trim());
   return (
     <article className="plan-cell">
       <div className="plan-header">
