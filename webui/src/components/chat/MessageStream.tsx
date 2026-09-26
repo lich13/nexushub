@@ -21,6 +21,8 @@ import {
   toolBlockTitle
 } from "../../lib/domain/conversationViewModel";
 import { extractPlanText } from "../../lib/domain/codexViewModel";
+import type { ExecutionGroup } from "../../lib/domain/executionGroups";
+import { RunningIndicator } from "../common/RunningIndicator";
 import type { MessageBlock } from "../../types";
 
 export function MessageBlockView({
@@ -79,6 +81,19 @@ function ToolBlockView({ block }: { block: MessageBlock }) {
       </summary>
       {summary && <div className="tool-summary">{summary}</div>}
       {open && <pre>{toolBlockDetailText(block)}</pre>}
+    </details>
+  );
+}
+
+export function ExecutionGroupView({ group }: { group: ExecutionGroup<MessageBlock> }) {
+  return (
+    <details className="execution-group" open={group.running || group.failed}>
+      <summary>
+        <span>命令执行组</span>
+        <small>{group.items.length} 条命令{group.failed ? ` · ${group.items.filter(item => ["failed", "error", "cancelled", "canceled"].includes(item.status?.toLowerCase() ?? "")).length} 条失败` : ""}</small>
+        {group.running && <RunningIndicator />}
+      </summary>
+      {group.items.map((block) => <MessageBlockView key={block.id} block={block} />)}
     </details>
   );
 }

@@ -241,7 +241,6 @@ cleanup_stale_launchservices_dmg_registrations
 
 (
   cd "${DIST}"
-  shasum -a 256 "${TARBALL_ASSET}" > "${TARBALL_ASSET}.sha256"
   shasum -a 256 "${DMG_ASSET}" > "${DMG_ASSET}.sha256"
 )
 

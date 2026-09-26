@@ -377,7 +377,7 @@ pub async fn apply_thread_state_action_plan(
     }
     if let Some(name) = plan.name.as_deref() {
         state
-            .goal_client
+            .app_server_client
             .rename_thread(&paths, &plan.thread_id, name)
             .await?;
         state.db.record_audit(

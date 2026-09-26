@@ -144,7 +144,6 @@ impl ProbeRuntime {
             bark_notify_reply_needed: self.config.probe.notifications.notify_reply_needed,
             bark_notify_recoverable: self.config.probe.notifications.notify_recoverable,
             error_monitor_enabled: self.config.probe.error_monitor.enabled,
-            error_monitor_auto_resume_goals: self.config.probe.error_monitor.auto_resume_goals,
             error_monitor_status: if self.config.probe.error_monitor.enabled {
                 "enabled"
             } else {
@@ -765,7 +764,6 @@ pub struct ProbeStatus {
     pub bark_notify_reply_needed: bool,
     pub bark_notify_recoverable: bool,
     pub error_monitor_enabled: bool,
-    pub error_monitor_auto_resume_goals: bool,
     pub error_monitor_status: String,
     pub error_monitor_last_scan_at: Option<i64>,
     pub error_monitor_last_error: Option<String>,

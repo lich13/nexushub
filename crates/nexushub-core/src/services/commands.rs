@@ -47,11 +47,6 @@ pub const THREADS_PLAN_ACCEPT: &str = "threads.plan.accept";
 pub const THREADS_PLAN_REVISE: &str = "threads.plan.revise";
 pub const THREADS_ELICITATION_ANSWER: &str = "threads.elicitation.answer";
 pub const THREADS_APPROVAL_ANSWER: &str = "threads.approval.answer";
-pub const THREADS_GOAL_GET: &str = "threads.goal.get";
-pub const THREADS_GOAL_SAVE: &str = "threads.goal.save";
-pub const THREADS_GOAL_CLEAR: &str = "threads.goal.clear";
-pub const THREADS_GOAL_PAUSE: &str = "threads.goal.pause";
-pub const THREADS_GOAL_RESUME: &str = "threads.goal.resume";
 pub const JOBS_LIST: &str = "jobs.list";
 pub const JOBS_DETAIL: &str = "jobs.detail";
 pub const PROBE_STATUS: &str = "probe.status";
@@ -175,11 +170,6 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     THREADS_PLAN_REVISE,
     THREADS_ELICITATION_ANSWER,
     THREADS_APPROVAL_ANSWER,
-    THREADS_GOAL_GET,
-    THREADS_GOAL_SAVE,
-    THREADS_GOAL_CLEAR,
-    THREADS_GOAL_PAUSE,
-    THREADS_GOAL_RESUME,
     JOBS_LIST,
     JOBS_DETAIL,
     PROBE_STATUS,

@@ -21,7 +21,6 @@ export type ProbeSettingsDraft = {
     recent_limit: ProbeNumericDraftValue;
     error_monitor: {
       enabled: boolean;
-      auto_resume_goals: boolean;
     };
   };
   hooks: {
@@ -81,8 +80,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       poll_seconds: toBoundedInteger(probe.poll_seconds, 15) ?? 15,
       recent_limit: toBoundedInteger(probe.recent_limit, 50) ?? 50,
       error_monitor: {
-        enabled: probe.error_monitor?.enabled !== false,
-        auto_resume_goals: probe.error_monitor?.auto_resume_goals !== false
+        enabled: probe.error_monitor?.enabled !== false
       }
     },
     hooks: {
@@ -164,8 +162,7 @@ export function buildProbeSettingsPayload(
       poll_seconds: requiredDraftNumber(draft.probe.poll_seconds),
       recent_limit: requiredDraftNumber(draft.probe.recent_limit),
       error_monitor: {
-        enabled: draft.probe.error_monitor.enabled,
-        auto_resume_goals: draft.probe.error_monitor.auto_resume_goals
+        enabled: draft.probe.error_monitor.enabled
       },
       hooks: {
         manage_stop_hook: draft.hooks.manage_stop_hook

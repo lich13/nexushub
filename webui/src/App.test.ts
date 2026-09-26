@@ -814,7 +814,7 @@ describe("conversation helpers", () => {
     expect(probeSource).toContain('<Metric label="错误监控"');
     expect(probeSource).toContain('<Metric label="错误事件"');
     expect(probeSource).toContain("<span>终止错误监控</span>");
-    expect(probeSource).toContain("<span>受限 Goal 自动恢复</span>");
+    expect(probeSource).not.toContain("受限 Goal 自动恢复");
     expect(probeSource).toContain("status?.error_monitor_status");
     expect(probeSource).toContain("status?.error_monitor_incident_count");
   });

@@ -78,8 +78,6 @@ pub struct ProbeConfig {
 pub struct ProbeErrorMonitorConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_true")]
-    pub auto_resume_goals: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -164,7 +162,6 @@ pub struct ProbeSettingsPatch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeErrorMonitorConfigPatch {
     pub enabled: Option<bool>,
-    pub auto_resume_goals: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,10 +295,7 @@ impl Default for ProbeObservabilityConfig {
 
 impl Default for ProbeErrorMonitorConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            auto_resume_goals: true,
-        }
+        Self { enabled: true }
     }
 }
 
@@ -544,7 +538,10 @@ impl Config {
         }
         let text =
             fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let migrated = migrate_retired_logs_db_section(&text)?;
+        let logs_migrated = migrate_retired_logs_db_section(&text)?;
+        let migration_input = logs_migrated.as_deref().unwrap_or(&text);
+        let goal_migrated = migrate_retired_probe_goal_config(migration_input)?;
+        let migrated = goal_migrated.or(logs_migrated);
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
         config.load_sibling_env(path)?;
@@ -781,11 +778,6 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
         }
         if let Some(error_monitor) = probe.error_monitor.as_ref() {
             editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled);
-            editor.set_bool(
-                "probe.error_monitor",
-                "auto_resume_goals",
-                error_monitor.auto_resume_goals,
-            );
         }
         if let Some(notifications) = probe.notifications.as_ref() {
             editor.set_bool(
@@ -912,6 +904,19 @@ fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
         observability.insert("event_retention_days", toml_edit::value(retention));
     }
     Ok(Some(document.to_string()))
+}
+
+/// Remove the retired NexusHub Goal recovery switch while preserving the rest
+/// of the user's configuration and comments.
+fn migrate_retired_probe_goal_config(text: &str) -> Result<Option<String>> {
+    let mut document = text.parse::<toml_edit::DocumentMut>()?;
+    let removed = document
+        .get_mut("probe")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .and_then(|probe| probe.get_mut("error_monitor"))
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .and_then(|error_monitor| error_monitor.remove("auto_resume_goals"));
+    Ok(removed.map(|_| document.to_string()))
 }
 
 fn replace_config_atomically(path: &Path, original: &str, updated: &str) -> Result<()> {

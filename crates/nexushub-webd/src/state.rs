@@ -1,5 +1,7 @@
 use nexushub_core::{
-    codex::{resolve_codex_paths, CodexGoalClient, CodexPaths, ResolvedCodexPaths, ThreadDetail},
+    codex::{
+        resolve_codex_paths, CodexAppServerClient, CodexPaths, ResolvedCodexPaths, ThreadDetail,
+    },
     config::Config,
     db::PanelDb,
     jobs::JobRunner,
@@ -22,7 +24,7 @@ pub struct AppState {
     platform: PlatformPaths,
     pub db: PanelDb,
     pub jobs: JobRunner,
-    pub goal_client: CodexGoalClient,
+    pub app_server_client: CodexAppServerClient,
     pub http: Client,
     pub login_limiter: Arc<Mutex<LoginLimiter>>,
     pub rollout_detail_cache: Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
@@ -35,14 +37,19 @@ impl AppState {
     }
 
     pub fn new_for_surface(config: Config, db: PanelDb, host_surface: HostSurface) -> Self {
-        Self::new_for_surface_with_goal_client(config, db, host_surface, CodexGoalClient::new())
+        Self::new_for_surface_with_app_server_client(
+            config,
+            db,
+            host_surface,
+            CodexAppServerClient::new(),
+        )
     }
 
-    fn new_for_surface_with_goal_client(
+    fn new_for_surface_with_app_server_client(
         config: Config,
         db: PanelDb,
         host_surface: HostSurface,
-        goal_client: CodexGoalClient,
+        app_server_client: CodexAppServerClient,
     ) -> Self {
         let jobs = JobRunner::new(db.clone());
         let login_rate_limit = config.security.login_rate_limit_per_minute;
@@ -58,7 +65,7 @@ impl AppState {
             platform,
             db,
             jobs,
-            goal_client,
+            app_server_client,
             http: Client::new(),
             login_limiter: Arc::new(Mutex::new(LoginLimiter::new(login_rate_limit))),
             rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),

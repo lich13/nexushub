@@ -498,7 +498,6 @@ pub fn normalize_probe_settings_patch(mut patch: ProbeSettingsPatch) -> Result<P
         .error_monitor
         .map(|patch| ProbeErrorMonitorConfigPatch {
             enabled: patch.enabled,
-            auto_resume_goals: patch.auto_resume_goals,
         });
     Ok(patch)
 }

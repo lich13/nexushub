@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::{fs, path::Path};
 
-mod goal_client;
+mod app_server_client;
 mod identity;
 mod mutations;
 mod name_client;
@@ -17,7 +17,7 @@ mod tests;
 mod thread_rows;
 mod types;
 
-pub use goal_client::{CodexGoalAction, CodexGoalClient, CodexThreadGoal};
+pub use app_server_client::CodexAppServerClient;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
 pub use mutations::{db_integrity, set_thread_archived};
 pub use name_client::set_thread_title;

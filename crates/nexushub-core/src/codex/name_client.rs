@@ -1,7 +1,7 @@
 use super::{
-    goal_client::{read_response, write_message},
+    app_server_client::{read_response, write_message, CodexAppServerClient},
     thread_rows::read_thread_rows_matching,
-    CodexGoalClient, CodexPaths, ThreadStatus,
+    CodexPaths, ThreadStatus,
 };
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
@@ -13,14 +13,14 @@ use tokio::{
 };
 
 pub async fn set_thread_title(paths: &CodexPaths, id: &str, title: &str) -> Result<()> {
-    static CLIENT: OnceLock<CodexGoalClient> = OnceLock::new();
+    static CLIENT: OnceLock<CodexAppServerClient> = OnceLock::new();
     CLIENT
-        .get_or_init(CodexGoalClient::new)
+        .get_or_init(CodexAppServerClient::new)
         .rename_thread(paths, id, title)
         .await
 }
 
-impl CodexGoalClient {
+impl CodexAppServerClient {
     pub async fn rename_thread(&self, paths: &CodexPaths, id: &str, title: &str) -> Result<()> {
         rename_with_client(paths, id, title, self, Duration::from_secs(10)).await
     }
@@ -30,7 +30,7 @@ async fn rename_with_client(
     paths: &CodexPaths,
     id: &str,
     title: &str,
-    client: &CodexGoalClient,
+    client: &CodexAppServerClient,
     timeout: Duration,
 ) -> Result<()> {
     let name = title.trim();

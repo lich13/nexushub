@@ -1,7 +1,7 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 
-fn fixture(script: &str) -> (std::path::PathBuf, CodexGoalClient) {
+fn fixture(script: &str) -> (std::path::PathBuf, CodexAppServerClient) {
     let root = std::env::temp_dir().join(format!("nexushub-name-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();
     let executable = root.join("codex");
@@ -10,13 +10,12 @@ fn fixture(script: &str) -> (std::path::PathBuf, CodexGoalClient) {
     // CLI discovery has separate tests; protocol fixtures start with a resolved executable.
     (
         root,
-        CodexGoalClient::with_resolved_executable(executable, Duration::from_secs(2)),
+        CodexAppServerClient::with_resolved_executable(executable, Duration::from_secs(2)),
     )
 }
 
 #[tokio::test]
 async fn native_rename_uses_fixed_protocol_and_rejects_unverified_success() {
-    let _guard = super::super::goal_client::process_test_guard().await;
     for (returned_id, returned_name, success) in [
         ("fixture", "A quoted \"title\"", true),
         ("fixture", "Wrong name", false),
@@ -77,7 +76,6 @@ done
 
 #[tokio::test]
 async fn native_rename_timeout_reaps_child_and_does_not_fall_back_to_sql() {
-    let _guard = super::super::goal_client::process_test_guard().await;
     let (root, client) = fixture(
         "printf '%s' $$ > \"$CODEX_HOME/pid\"\nwhile read -r request; do read -r next; done\n",
     );
@@ -111,7 +109,7 @@ async fn archived_native_rename_is_rejected_without_changing_metadata_or_spawnin
     conn.execute_batch("CREATE TABLE threads (id TEXT, title TEXT, archived INTEGER, archived_at INTEGER); INSERT INTO threads VALUES ('fixture', 'Archived native title', 1, NULL);").unwrap();
     drop(conn);
     let before = fs::read(root.join("state_5.sqlite")).unwrap();
-    let client = CodexGoalClient::with_candidates(vec![], Duration::from_secs(2));
+    let client = CodexAppServerClient::with_candidates(vec![], Duration::from_secs(2));
     let error = client
         .rename_thread(&CodexPaths::new(&root), "fixture", "New title")
         .await
