@@ -17,9 +17,14 @@
 - `cargo test --workspace`: all current Rust tests pass, including Goal/config/database migration coverage.
 - WebUI typecheck and unit tests pass, including execution-group and probe migration coverage.
 - `bash scripts/test-install-script.sh` passes version, contract, privacy, six-document and release-boundary checks.
+- Final local gates: WebUI 193 unit tests, Chromium/WebKit 80 browser tests, `cargo test --workspace`, Tauri tests and Clippy all pass; `python3 scripts/privacy-check.py --git-objects` and `git diff --check` pass.
 
 ## Acceptance boundary
 
-Formal macOS installation, signed release assets, matching GitHub CI/Release, cloud deployment and authenticated Browser checks must be recorded here after the 1.1.2 commit and tag exist. Linux desktop acceptance is intentionally retired. Cloud hosts without Pi use empty-state and isolated interface checks only.
+Formal macOS acceptance is complete for `v1.1.2`: commit `60b0a8070c3756f9cf7ed9927dc2dd4cf3eba638`, CI run `36219211349`, Release run `36219375861`, and the [seven-asset release](https://github.com/lich13/nexushub/releases/tag/v1.1.2) are green. The downloaded DMG and webd tarball checksums matched their published `.sha256` files; `latest.json` is `1.1.2` and contains only `darwin-aarch64`. The installed macOS App and bundled helper report `1.1.2`.
+
+The installed Tauri entrypoint exposed Codex, Grok Build, Pi, Probe and Settings. A real Grok session rendered native `Execute` records as collapsed command groups, including groups of 2, 6, 1 and 4 commands. Pi showed the explicit empty state because no local Pi session was discovered. After closing the App, the managed Probe monitor remained running and TCP port `15742` had no listener. The local NexusHub database no longer contains `codex_thread_goals`; `probe_error_incidents` retains error/delivery columns only. Historical Probe rows that predate this release remain read-only evidence; no new Goal scheduler, RPC or recovery path is active.
+
+Cloud deployment was not run in this checkout because `scripts/deploy-cloud.sh` requires explicit production `HOST`, domain and archive inputs. No deployment value was guessed or written to Git. Authenticated cloud acceptance therefore remains an external deployment step; cloud hosts without Pi should use the documented empty-state and isolated interface checks. Linux desktop acceptance is intentionally retired.
 
 Future evidence is appended to this document through normal commits. Do not add another plan, summary or archive Markdown.
