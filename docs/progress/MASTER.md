@@ -1,6 +1,6 @@
 # Current status
 
-- Target version: `1.1.5`; implementation and local verification are in progress.
+- Target version: `1.1.5`; implementation, release, installation and deployment are complete.
 - Scope: add Codex ordinary-feedback Bark notifications, source-path Markdown copy/Finder actions, and the merged `更新与维护` settings surface while retaining the 1.1.4 display/export behavior.
 - Current Markdown set: `README.md`, `AGENTS.md`, `DESIGN.md`, `docs/ARCHITECTURE.md`, `docs/cloud-deploy-runbook.md` and this file.
 
@@ -15,18 +15,19 @@
 
 ## Checks and acceptance
 
-Earlier 1.1.4 release evidence remains below as historical context. Current 1.1.5 local gates passed: WebUI frozen install/typecheck/build, 236 unit tests and 108 Chromium/WebKit cases; workspace and Tauri Rust tests, format/Clippy gates, contract/install boundaries, privacy scanning and diff checks. The local macOS helper and renderer build passed; the native Tauri packaging cache required a clean rebuild and is being verified against the release workflow.
+Earlier 1.1.4 release evidence remains below as historical context. Current 1.1.5 local gates passed: WebUI frozen install/typecheck/build, 236 unit tests and 108 Chromium/WebKit cases; workspace and Tauri Rust tests, format/Clippy gates, contract/install boundaries, privacy scanning and diff checks. The local Tauri packaging cache was not reusable because of stale process-macro artifacts; the official macOS and Linux webd assets were built successfully by the release workflow.
 
-- Earlier 1.1.4 release commit: `be7ada223c5815ca6e3c50c7a94af52d3b11ece9`. [CI 36281234627](https://github.com/lich13/nexushub/actions/runs/36281234627) passed frontend, backend and macOS Tauri checks; [release 36281467886](https://github.com/lich13/nexushub/actions/runs/36281467886) published [v1.1.4](https://github.com/lich13/nexushub/releases/tag/v1.1.4) with seven assets. This is prior-release evidence, not 1.1.5 acceptance.
-- Official macOS installation matches all four release bundle files. Real sessions verified hidden metadata, AGENTS.md default collapse, manual expansion retained after refresh, Grok's 19-tool group with independently collapsed rows, and long-history scrolling. A real assistant reply copied without metadata. A Plan saved through the native App as a title-named UTF-8 Markdown file; all 5,180 bytes matched the clipboard, with no metadata or proposed-plan wrapper. Two inspected native session files retained their SHA-256.
-- After closing the App, monitor remained running with zero TCP listening ports. Runtime helper matches the bundled helper. App SHA-256: `92a091eb28a3ea491ced152059812bf999144d8ebd8941ca18a330a74bab3e2f`; helper SHA-256: `c8345db3708e73f53a97b645a39cd1e2f1c1bb3bf2a4d1263f199e0fd66a4d07`.
-- Authenticated HTTPS acceptance used the same real reply that previously exposed memory tags: display and the 810-byte clipboard result both omit metadata. Real Grok history retained 39 groups, including 34 mixed-tool groups; its AGENTS.md row started closed, expanded on request and stayed open after refresh. Outer page overflow was zero. No provider data was deleted or renamed during this acceptance.
-- Cloud binary SHA-256 matches the release payload: `77e0627b050962a2ffe953d6fe6cac7de808c7e0918b60aa469070a17f070756`. Health is `{"ok":true}`, unauthenticated sensitive RPC returns 401, and systemd isolation remains intact. Config/env hashes and persistent notification/security settings were retained; the runtime monitor status and automatically re-encrypted Turnstile secret are excluded from ciphertext equality checks. The authenticated session remained usable.
-- Packaging retains its existing linker ad-hoc macOS signature, without Apple Developer signing/notarization. The updater archive signature is independently verified; local installation preserved published bytes.
+- Implementation commit: `9d67da7e049b7c8652e6232114b2060efc62b81a`. [CI 36290750431](https://github.com/lich13/nexushub/actions/runs/36290750431) passed frontend, backend and macOS Tauri checks. [Release 36291024532](https://github.com/lich13/nexushub/actions/runs/36291024532) published [v1.1.5](https://github.com/lich13/nexushub/releases/tag/v1.1.5) with seven assets; `latest.json` contains only `darwin-aarch64`.
+- The seven release asset digests, checksum sidecars and updater Minisign signature were independently verified. The unpacked macOS app and Linux webd payloads passed the privacy scan (329/344 checked items, zero failures); Git object privacy scan covered 825 objects with zero failures.
+- The official macOS App is installed at version `1.1.5`; its bundled helper reports `nexushub-webd 1.1.5` and has SHA-256 `81b1c05987246462cd610ad62a3f432226bd9dbfea12fd5bb6c7eca2f2ec63e4`. A real session verified settings merged into `更新与维护` plus `账户与安全`, no `系统状态`, path copy to the exact source path, and Finder reveal with the target Markdown file selected. Memory metadata remained hidden, AGENTS.md content stayed collapsed until expanded, and existing reply/Plan controls remained available.
+- After closing the App, the monitor process remained running and `lsof` reported zero NexusHub TCP listeners. The installed helper matched the release payload. macOS keeps its existing linker ad-hoc signature; the updater archive signature is independently verified, without Apple Developer notarization.
+- Authenticated HTTPS acceptance verified the merged settings surface, Grok tool grouping, hidden metadata and AGENTS.md disclosure behavior. Web path controls remained path buttons rather than navigation; browser regression tests cover copying the server path. The live browser clipboard API was not independently observable in the isolated CUA context, so this point is backed by the 108-case Chromium/WebKit suite and DOM/path-control evidence.
+- Cloud version is `1.1.5`; the deployed webd binary SHA-256 is `c8b4eb2823bc963fe07b9d570fef96276205b1c041b0fddddd7d4a4ed8dc31fc`, health is `{"ok":true}`, and systemd hardening remains `ProtectHome=read-only`/`ProtectSystem=full` with the existing provider write allowlist. Persistent sessions, credentials, notification/security settings and configuration were retained.
+- Bark transport was tested through the existing settings flow and the user confirmed receipt of the test notification. The deterministic ordinary-feedback classifier and monitor delivery/deduplication tests passed; a separate fresh production turn deliberately asking for feedback was not generated during this run.
 
-## 1.1.5 verification in progress
+## 1.1.5 final evidence
 
-The current implementation has fresh Rust workspace tests (including two monitor delivery tests), WebUI typecheck, 236 WebUI unit tests, 108 Chromium/WebKit cases and contract/diff checks. Release and production evidence will be appended only after the 1.1.5 commit and matching CI.
+The 1.1.5 implementation, matching CI, seven-asset Release, official macOS installation, cloud deployment and real settings/path acceptance are complete. The task-level cloud recovery archive was removed after acceptance. Remaining cleanup is limited to the exact temporary task root; formal App, monitor, cloud service, dependencies, credentials, configuration, databases and native sessions remain in place.
 
 ## Earlier 1.1.4 cleanup record
 
