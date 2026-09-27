@@ -1327,6 +1327,7 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
         messages: vec![],
         blocks: (0..6)
             .map(|index| MessageBlock {
+                user_message: None,
                 id: format!("block-{index}"),
                 role: "assistant".to_string(),
                 kind: "message".to_string(),
@@ -1384,6 +1385,7 @@ fn thread_block_page_uses_before_cursor() {
         messages: vec![],
         blocks: (0..6)
             .map(|index| MessageBlock {
+                user_message: None,
                 id: format!("block-{index}"),
                 role: "assistant".to_string(),
                 kind: "message".to_string(),
@@ -2528,6 +2530,7 @@ fn app_server_thread_detail_ignores_historical_pending_blocks_without_active_tur
         messages: Vec::new(),
         blocks: vec![
             MessageBlock {
+                user_message: None,
                 id: "choice-old".to_string(),
                 role: "assistant".to_string(),
                 kind: "request_user_input".to_string(),
@@ -2555,6 +2558,7 @@ fn app_server_thread_detail_ignores_historical_pending_blocks_without_active_tur
                 payload: None,
             },
             MessageBlock {
+                user_message: None,
                 id: "assistant-later".to_string(),
                 role: "assistant".to_string(),
                 kind: "message".to_string(),
@@ -2648,6 +2652,7 @@ fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
 #[test]
 fn thread_event_block_key_changes_when_same_block_content_changes() {
     let mut block = MessageBlock {
+        user_message: None,
         id: "tool-1".to_string(),
         role: "tool".to_string(),
         kind: "function_call".to_string(),
@@ -2682,6 +2687,7 @@ fn thread_event_block_key_changes_when_same_block_content_changes() {
 #[test]
 fn seeded_thread_event_blocks_do_not_emit_initial_history_but_emit_changes() {
     let mut block = MessageBlock {
+        user_message: None,
         id: "tool-1".to_string(),
         role: "tool".to_string(),
         kind: "function_call".to_string(),

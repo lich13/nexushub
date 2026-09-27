@@ -7,6 +7,22 @@ use nexushub_core::services::{
     use_cases::NexusHubUseCases,
 };
 
+#[tauri::command(rename = "sessions.attachmentRead")]
+pub async fn readSessionAttachment(
+    state: tauri::State<'_, DesktopState>,
+    request: nexushub_core::user_message::SessionAttachmentRequest,
+) -> Result<nexushub_core::user_message::SessionAttachmentResponse, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        NexusHubUseCases::new(state.platform())
+            .sessions(state.codex_paths())
+            .attachment_read(request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command(rename = "sessions.bulkPreview")]
 pub async fn previewSessionBatch(
     state: tauri::State<'_, DesktopState>,

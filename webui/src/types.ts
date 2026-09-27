@@ -1,3 +1,6 @@
+export type UserAttachment = { id: string; name: string; kind: "image" | "file"; path?: string | null; reason?: string | null };
+export type UserMessageContent = { id: string; text: string; attachments: UserAttachment[] };
+
 export type ThreadStatus = "Recent" | "Running" | "ReplyNeeded" | "Recoverable" | "Archived";
 
 export type GrokSessionSummary = {
@@ -12,6 +15,7 @@ export type GrokSessionSummary = {
 };
 
 export type GrokHistoryEvent = {
+  userMessage?: UserMessageContent | null;
   callId?: string;
   status?: string;
   detail?: string;
@@ -43,7 +47,7 @@ export type PiSessionSummary = {
   deleteBlockReason?: string | null;
   readError?: string | null;
 };
-export type PiHistoryEvent = { timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
+export type PiHistoryEvent = { userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
 export type PiSessionDetail = { summary: PiSessionSummary; events: PiHistoryEvent[] };
 export type PiDeletePreview = { sessionKey: string; id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
 export type PiDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
@@ -127,6 +131,7 @@ export type PendingElicitation = {
 };
 
 export type MessageBlock = {
+  user_message?: UserMessageContent | null;
   id: string;
   role: string;
   kind: string;

@@ -603,3 +603,18 @@ while IFS= read -r request; do sleep 30; done
     assert!(!fs::read_to_string(&session).unwrap().contains("New title"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn user_message_text_and_images_share_the_native_entry_identity() {
+    let entry = json!({"type":"message", "id":"user-entry", "message":{"role":"user", "content":[{"type":"text", "text":"First\n"}, {"type":"image", "mimeType":"image/png", "data":"invalid"}, {"type":"text", "text":"  Last"}]}});
+    let events = event_from_entry(&entry);
+    assert_eq!(events.len(), 1);
+    let message = events[0].user_message.as_ref().unwrap();
+    assert_eq!(message.id, "user-entry");
+    assert_eq!(message.text, "First\n  Last");
+    assert_eq!(message.attachments.len(), 1);
+    let other = json!({"type":"message", "id":"other-branch", "message":{"role":"user", "content":"Hidden"}});
+    let history = history_events(&[entry, other], &["user-entry".into()]);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].user_message.as_ref().unwrap().id, "user-entry");
+}

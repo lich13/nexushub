@@ -88,6 +88,8 @@ pub struct PiSessionDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PiHistoryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<crate::user_message::UserMessage>,
     pub timestamp: Option<String>,
     pub kind: String,
     pub role: Option<String>,
@@ -228,11 +230,17 @@ pub fn pi_session_detail(paths: &PiPaths, session_key: &str) -> Result<PiSession
     let path = parsed.summary.path.clone();
     let active_entry_ids = parsed.file.active_entry_ids.clone();
     let entries = parsed.file.entries.clone();
-    let events = EVENT_CACHE.read(
+    let mut events = EVENT_CACHE.read(
         &path,
         |events, size| size.saturating_add(events.iter().map(event_weight).sum::<u64>()),
         || Ok(history_events(&entries, &active_entry_ids)),
     )?;
+    for message in events
+        .iter_mut()
+        .filter_map(|event| event.user_message.as_mut())
+    {
+        message.refresh_files(Some(&parsed.summary.cwd));
+    }
     Ok(PiSessionDetail {
         summary: parsed.summary,
         events,
@@ -939,8 +947,13 @@ fn event_from_entry(entry: &Value) -> Vec<PiHistoryEvent> {
         .and_then(Value::as_str)
         .map(ToString::to_string);
     match entry.get("type").and_then(Value::as_str) {
-        Some("message") => message_events(timestamp, entry.get("message").unwrap_or(&Value::Null)),
+        Some("message") => message_events(
+            entry.get("id").and_then(Value::as_str).unwrap_or(""),
+            timestamp,
+            entry.get("message").unwrap_or(&Value::Null),
+        ),
         Some("compaction") => vec![PiHistoryEvent {
+            user_message: None,
             timestamp,
             kind: "compaction".to_string(),
             role: Some("summary".to_string()),
@@ -955,6 +968,7 @@ fn event_from_entry(entry: &Value) -> Vec<PiHistoryEvent> {
                 .map(|tokens| format!("压缩前 tokens: {}", tokens.as_u64().unwrap_or_default())),
         }],
         Some("branch_summary") => vec![PiHistoryEvent {
+            user_message: None,
             timestamp,
             kind: "branch_summary".to_string(),
             role: Some("summary".to_string()),
@@ -971,6 +985,7 @@ fn event_from_entry(entry: &Value) -> Vec<PiHistoryEvent> {
         }],
         Some("custom_message") if entry.get("display").and_then(Value::as_bool) != Some(false) => {
             vec![PiHistoryEvent {
+                user_message: None,
                 timestamp,
                 kind: "custom_message".to_string(),
                 role: Some("custom".to_string()),
@@ -987,16 +1002,37 @@ fn event_from_entry(entry: &Value) -> Vec<PiHistoryEvent> {
     }
 }
 
-fn message_events(timestamp: Option<String>, message: &Value) -> Vec<PiHistoryEvent> {
+fn message_events(
+    message_id: &str,
+    timestamp: Option<String>,
+    message: &Value,
+) -> Vec<PiHistoryEvent> {
     let role = message
         .get("role")
         .and_then(Value::as_str)
         .unwrap_or("event");
+    if role == "user" {
+        let user_message = crate::user_message::parse_user_message(
+            message_id,
+            message.get("content").unwrap_or(message),
+        );
+        return vec![PiHistoryEvent {
+            timestamp,
+            kind: "user_message".into(),
+            role: Some("user".into()),
+            text: Some(user_message.text.clone()),
+            call_id: None,
+            status: None,
+            detail: None,
+            user_message: Some(user_message),
+        }];
+    }
     if role == "system" {
         return Vec::new();
     }
     if role == "toolResult" {
         return vec![PiHistoryEvent {
+            user_message: None,
             timestamp,
             kind: "tool_result".to_string(),
             role: Some(role.to_string()),
@@ -1025,6 +1061,7 @@ fn message_events(timestamp: Option<String>, message: &Value) -> Vec<PiHistoryEv
             .and_then(Value::as_i64)
             .is_some_and(|code| code != 0);
         return vec![PiHistoryEvent {
+            user_message: None,
             timestamp,
             kind: "tool_result".to_string(),
             role: Some(role.to_string()),
@@ -1046,6 +1083,7 @@ fn message_events(timestamp: Option<String>, message: &Value) -> Vec<PiHistoryEv
     let content = message.get("content").unwrap_or(message);
     if let Value::String(text) = content {
         return vec![PiHistoryEvent {
+            user_message: None,
             timestamp,
             kind: format!("{role}_message"),
             role: Some(role.to_string()),
@@ -1100,6 +1138,7 @@ fn message_events(timestamp: Option<String>, message: &Value) -> Vec<PiHistoryEv
                     _ => return None,
                 };
             Some(PiHistoryEvent {
+                user_message: None,
                 timestamp: timestamp.clone(),
                 kind: event_kind,
                 role: Some(role.to_string()),
@@ -1136,7 +1175,11 @@ fn truncate_utf8(text: &mut String, max_bytes: usize) {
 }
 
 fn event_weight(event: &PiHistoryEvent) -> u64 {
-    192 + event.text.as_ref().map_or(0, String::len) as u64
+    192 + event
+        .user_message
+        .as_ref()
+        .map_or(0, crate::user_message::UserMessage::weight)
+        + event.text.as_ref().map_or(0, String::len) as u64
         + event.detail.as_ref().map_or(0, String::len) as u64
 }
 

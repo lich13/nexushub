@@ -1,4 +1,6 @@
 pub const CONTRACT_DTO_NAMES: &[&str] = &[
+    "SessionAttachmentRequest",
+    "SessionAttachmentResponse",
     "SessionBatchRequest",
     "SessionBatchPreview",
     "SessionBatchExecuteRequest",

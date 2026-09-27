@@ -288,3 +288,42 @@ fn grok_history_merges_tool_updates_by_call_identity() {
     assert_eq!(detail.events[1].text.as_deref(), Some("List files"));
     fs::remove_dir_all(paths.home).unwrap();
 }
+
+#[test]
+fn user_chunks_keep_images_and_boundaries_with_stable_ids() {
+    use serde_json::json;
+    let (paths, id, _) = fixture();
+    let summary = resolve_session(&paths, &id).unwrap();
+    let history = summary.path.join("updates.jsonl");
+    let records = [
+        json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"p1","updateId":"u1","content":{"type":"text","text":"First\n"}}}}),
+        json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"p1","updateId":"u1","content":{"type":"text","text":"First\n"}}}}),
+        json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"p1","content":{"type":"image","url":"https://example.com/image.png"}}}}),
+        json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"p2","content":{"type":"text","text":"Second"}}}}),
+    ];
+    fs::write(
+        &history,
+        records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\r\n")
+            + "\r\n",
+    )
+    .unwrap();
+    let events = read_history(&history).unwrap();
+    assert_eq!(events.len(), 2);
+    let first = events[0].user_message.as_ref().unwrap();
+    assert_eq!(first.text, "First\n");
+    assert_eq!(first.attachments.len(), 1);
+    assert_ne!(first.id, events[1].user_message.as_ref().unwrap().id);
+    assert_eq!(
+        first.id,
+        read_history(&history).unwrap()[0]
+            .user_message
+            .as_ref()
+            .unwrap()
+            .id
+    );
+    fs::remove_dir_all(paths.home).unwrap();
+}

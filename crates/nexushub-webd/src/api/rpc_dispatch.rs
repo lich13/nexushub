@@ -58,6 +58,14 @@ pub(super) async fn rpc_dispatch(
     }
 
     match command.as_str() {
+        rpc_commands::SESSIONS_ATTACHMENT_READ => {
+            super::sessions::attachment_read(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
         rpc_commands::SESSIONS_BULK_PREVIEW => {
             super::sessions::bulk_preview(
                 State(state),
@@ -382,6 +390,23 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    #[tokio::test]
+    async fn attachments_require_auth_and_reject_client_paths() {
+        let (state, token, _) = authenticated_test_state();
+        let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a"}}"#;
+        let app = super::super::router(state.clone());
+        assert_eq!(
+            request_rpc_status(app, "sessions.attachmentRead", body, None, None).await,
+            StatusCode::UNAUTHORIZED
+        );
+        let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a","path":"/etc/passwd"}}"#;
+        let app = super::super::router(state);
+        assert_eq!(
+            request_rpc_status(app, "sessions.attachmentRead", body, Some(&token), None).await,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]

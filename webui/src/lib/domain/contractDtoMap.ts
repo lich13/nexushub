@@ -1,4 +1,6 @@
 export const contractDtoNames = [
+  "SessionAttachmentRequest",
+  "SessionAttachmentResponse",
   "SessionBatchRequest",
   "SessionBatchPreview",
   "SessionBatchExecuteRequest",

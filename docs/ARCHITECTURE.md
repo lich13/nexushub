@@ -1,4 +1,4 @@
-# Architecture — 1.1.5
+# Architecture — 1.1.6
 
 ## Boundaries
 
@@ -27,6 +27,12 @@ Batch actions use explicit provider keys and return per-item preview/execute res
 ## Visible Markdown
 
 `visibleMarkdown.ts` removes structured memory metadata by source range before rendering and export. CommonMark code positions protect literal examples; a rendering guard also removes metadata elements. Copy buttons, thread previews and Plan filenames/downloads use the same cleaner. Instruction-file recognition feeds native disclosures and execution groups. A bounded in-memory map scoped by provider, session and activity preserves explicit disclosure choices; no database or native session file stores this UI state.
+
+## User message attachments
+
+Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Pi groups text and images within the active native entry. Native files are never rewritten.
+
+`sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and cleared at logout. Remote-only references are not fetched. Polling contains descriptors, not image data.
 
 ## Files, settings and notifications
 
