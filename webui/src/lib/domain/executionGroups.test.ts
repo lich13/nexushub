@@ -34,7 +34,11 @@ describe("execution groups", () => {
     ]);
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("group");
-    if (result[0].kind === "group") expect(result[0].group.commands).toHaveLength(2);
+    if (result[0].kind === "group") {
+      expect(result[0].group.commands).toHaveLength(2);
+      expect(result[0].group.commands[0].preview).toBe("Execute `pwd`");
+      expect(result[0].group.commands[0].sections).toContainEqual({ label: "命令", text: "Execute `pwd`" });
+    }
   });
 
   test("folds mixed native Grok tools and keeps paired results inside one row", () => {
@@ -72,11 +76,15 @@ describe("execution groups", () => {
 
   test("recognizes Pi bashExecution without a call id", () => {
     const result = groupPiCommandEvents([
-      { kind: "tool_result", role: "bashExecution", status: "completed", detail: "echo ok" },
+      { kind: "tool_result", role: "bashExecution", status: "completed", text: "printf example", detail: "example" },
       { kind: "assistant_message", text: "done" }
     ]);
     expect(result[0].kind).toBe("group");
     expect(result[1].kind).toBe("item");
+    if (result[0].kind === "group") {
+      expect(result[0].group.commands[0].preview).toBe("printf example");
+      expect(result[0].group.commands[0].sections.map(section => section.text)).toEqual(["printf example", "example"]);
+    }
   });
 
   test("recognizes Pi tool calls when the message role is assistant", () => {
