@@ -1,4 +1,4 @@
-# Architecture — 1.1.7
+# Architecture — 1.1.8
 
 ## Boundaries
 
@@ -35,6 +35,8 @@ Codex retains completed tool blocks and positions paired results at the native c
 ## User message attachments
 
 Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Pi groups text and images within the active native entry. Native files are never rewritten.
+
+The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All three renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
 
 `sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and cleared at logout. Remote-only references are not fetched. Polling contains descriptors, not image data.
 

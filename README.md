@@ -1,4 +1,4 @@
-# NexusHub 1.1.7
+# NexusHub 1.1.8
 
 NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The shared React UI runs in the macOS ARM64 Tauri app and the headless Linux `webd` service. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -15,6 +15,8 @@ NexusHub has no Goal management or automatic recovery path. Codex native logs re
 Batch operations accept at most 100 explicit session keys. Preview results show scope, size, fingerprints and blockers. Execution rechecks identity, activity, symlinks and fingerprints; failures remain visible and require a new preview.
 
 User messages share a plain-text bubble across Codex, Grok and Pi. Native attachment envelopes are separated from the request; images appear above the bubble and open in a keyboard-accessible preview. Native embedded images survive expired temporary file paths. Unavailable attachments remain compact file cards. Message history remains read-only.
+
+Native question replies display a muted, expandable question above the literal answer; the neighboring copy action copies only that answer. Internal envelope fields remain hidden. User AGENTS.md sections start folded with line/byte counts and retain manual disclosure choices. Ordinary prose, quoted/code examples and unrecognized envelopes retain their source text.
 
 ## Development
 
@@ -47,7 +49,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Grok a
 
 ## Release and deployment
 
-Release `v1.1.7` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
+Release `v1.1.8` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
 
 ```bash
 bash scripts/package-darwin-arm64.sh

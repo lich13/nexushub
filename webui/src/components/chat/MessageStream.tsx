@@ -57,7 +57,7 @@ export function MessageBlockView({
   if (!shouldRenderConversationMessage(block)) {
     return null;
   }
-  if (block.role === "user") return <UserMessage message={block.user_message} text={block.text ?? ""} />;
+  if (block.role === "user") return <UserMessage message={block.user_message} text={block.text ?? ""} activityId={block.id} />;
   const presentation = conversationMessagePresentation(block);
   return (
     <article className={presentation.rowClassName}>

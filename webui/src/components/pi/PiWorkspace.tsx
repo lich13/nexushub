@@ -123,7 +123,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 }
 
 function PiEvent({ event, activityId }: { event: PiHistoryEvent; activityId: string }) {
-  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} />;
+  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} />;
   if (event.kind === "tool_call" || event.kind === "tool_result") {
     const instructionFile = isInstructionFileActivity(event.role, event.text, event.detail);
     return <ActivityDetails className="grok-tool execution-command" stateKey={activityId} initiallyOpen={false} summary={<>
