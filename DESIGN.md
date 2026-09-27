@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.1.7 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.1.8 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -18,6 +18,10 @@ NexusHub 1.1.7 follows a quiet, compact reading workspace aligned with Codex Des
 ## User messages and attachments
 
 User messages use a shared right-aligned blue bubble with normal-weight system text and preserved whitespace. Markdown characters are literal in user requests; assistant Markdown and Plan rendering keep their existing rules. User role labels are omitted. The bubble stays within the reading column and narrows on mobile.
+
+Confirmed native question-reply envelopes become one bubble per answer. A muted one-line question can expand by pointer or keyboard; the answer remains fully visible and literal. The copy button beside each bubble copies only its answer and reports success/failure locally. Native IDs and JSON/XML transport syntax are not displayed.
+
+User AGENTS.md instructions use a compact, initially closed native disclosure at their original position, with only the basename and line/byte counts in the summary. Expanded contents preserve source whitespace and have bounded scrolling. A complete native INSTRUCTIONS envelope includes its internal headings; trailing ordinary requests stay outside. Stable message/section identities preserve toggles across polling, pagination and mobile navigation. Literal examples never become interactive message metadata.
 
 Image attachments sit above the bubble in reserved 96px square thumbnails, with a modal image preview, Escape dismissal and focus restoration. Loading and failed states retain their footprint. File cards show basenames and reuse path controls. Only confirmed native attachment envelopes are removed; unknown text and literal examples are preserved. Image-only messages have no empty bubble.
 

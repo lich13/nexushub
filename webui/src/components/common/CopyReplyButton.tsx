@@ -2,7 +2,7 @@ import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-export function CopyReplyButton({ text }: { text: string }) {
+export function CopyReplyButton({ text, label = "复制回复", copiedLabel = "已复制回复" }: { text: string; label?: string; copiedLabel?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const attempt = useRef(0);
@@ -10,7 +10,7 @@ export function CopyReplyButton({ text }: { text: string }) {
   text = visibleMarkdown(text);
   if (!text.trim()) return null;
   return <div className="reply-actions">
-    <button type="button" className="icon-button copy-reply" aria-label={state === "copied" ? "已复制回复" : "复制回复"} title={state === "copied" ? "已复制" : "复制回复"} onClick={async () => {
+    <button type="button" className="icon-button copy-reply" aria-label={state === "copied" ? copiedLabel : label} title={state === "copied" ? "已复制" : label} onClick={async () => {
       const current = ++attempt.current;
       clearTimeout(timer.current);
       try {

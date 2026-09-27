@@ -114,7 +114,7 @@ function renderGrokEvents(events: GrokHistoryEvent[], sessionTitle: string): Rea
 }
 
 function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: string): ReactNode {
-  if (event.kind === "user_message_chunk") return <UserMessage key={event.userMessage?.id ?? key} message={event.userMessage} text={event.text ?? ""} />;
+  if (event.kind === "user_message_chunk") return <UserMessage key={event.userMessage?.id ?? key} message={event.userMessage} text={event.text ?? ""} activityId={key} />;
   if (!visibleMarkdown(event.text ?? "").trim() && event.kind !== "plan") return null;
   return <article className={`provider-event ${event.kind}`} key={key}>
     <div className={event.kind === "plan" ? "plan-header" : "chat-meta"}>

@@ -1,19 +1,35 @@
 import { File, ImageOff, X } from "lucide-react";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionProvider } from "../../lib/api/sessions";
 import type { UserAttachment, UserMessageContent } from "../../types";
 import { readAttachment } from "../../lib/query/attachments";
-import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
+import { userMessageSegments } from "../../lib/domain/userMessageViewModel";
+import { ActivityDetails } from "./ActivityDetails";
+import { CopyReplyButton } from "./CopyReplyButton";
 import { FilePathLink } from "./FilePathLink";
 
 export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string } | null>(null);
 
-export function UserMessage({ message, text = "" }: { message?: UserMessageContent | null; text?: string }) {
-  const body = visibleMarkdown(message?.text ?? text);
-  if (!body.trim() && !message?.attachments.length) return null;
+export function UserMessage({ message, text = "", activityId = "user-message" }: { message?: UserMessageContent | null; text?: string; activityId?: string }) {
+  const body = message?.text ?? text;
+  const segments = useMemo(() => userMessageSegments(body), [body]);
+  const identity = message?.id ?? activityId;
+  if (!segments.length && !message?.attachments.length) return null;
   return <article className="user-message">
     {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
-    {!!body.trim() && <div className="user-message-bubble">{body}</div>}
+    {segments.map(segment => segment.kind === "instructions"
+      ? <ActivityDetails key={segment.id} className="user-instructions instruction-file execution-command" stateKey={`${identity}:${segment.id}`} initiallyOpen={false} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
+        {() => <div className="user-instructions-body instruction-file-body">{segment.text}</div>}
+      </ActivityDetails>
+      : segment.kind === "reply" ? <div className="user-question-reply" key={segment.id}>
+        <CopyReplyButton text={segment.answer} label="复制回答" copiedLabel="已复制回答" />
+        <div className="user-message-bubble user-answer-bubble">
+          {!!segment.question.trim() && <ActivityDetails className="user-question-context" stateKey={`${identity}:${segment.id}:question`} initiallyOpen={false} summary={<span>{segment.question}</span>}>
+            {() => <div className="user-question-full">{segment.question}</div>}
+          </ActivityDetails>}
+          <div className="user-answer">{segment.answer}</div>
+        </div>
+      </div> : <div key={segment.id} className="user-message-bubble">{segment.text}</div>)}
   </article>;
 }
 

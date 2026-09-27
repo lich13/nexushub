@@ -30,3 +30,23 @@ test("normalized body wins over legacy envelope and attachments stay outside the
   expect(html.indexOf("user-attachments")).toBeLessThan(html.indexOf("user-message-bubble"));
   expect(html).toContain("Request only");
 });
+
+test("legacy Codex instruction messages default closed and keep following request visible", () => {
+  const text = "# AGENTS.md instructions\n<INSTRUCTIONS>\n# Rules\nGuidance\n</INSTRUCTIONS>\n\nRequest";
+  const html = renderToStaticMarkup(<MessageBlockView block={{ id: "legacy", role: "user", kind: "message", questions: [], text }} />);
+  expect(html).toContain("user-instructions");
+  expect(html).not.toMatch(/<details[^>]*\bopen=/);
+  expect(html).not.toContain("Guidance");
+  expect(html).toContain("Request");
+});
+
+test("native question reply renders a question and answer with an answer-only copy action", () => {
+  const text = '<send_user_message_question_reply>[{"questionItemId":"example","question":"Please confirm","answer":"Confirmed"}]</send_user_message_question_reply>';
+  const html = renderToStaticMarkup(<UserMessage text={text} activityId="reply" />);
+  expect(html).toContain("user-question-context");
+  expect(html).toContain("Please confirm");
+  expect(html).toContain("Confirmed");
+  expect(html).toContain('aria-label="复制回答"');
+  expect(html).not.toContain("questionItemId");
+  expect(html).not.toContain("send_user_message_question_reply");
+});

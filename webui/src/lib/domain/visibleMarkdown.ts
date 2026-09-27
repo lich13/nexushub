@@ -3,10 +3,10 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 type Range = { start: number; end: number };
 type MarkdownNode = { type: string; children?: MarkdownNode[]; position?: { start: { offset?: number }; end: { offset?: number } } };
 
-function codeRanges(text: string, inline = true): Range[] {
+function codeRanges(text: string, inline = true, quotes = false): Range[] {
   const ranges: Range[] = [];
   function visit(node: MarkdownNode) {
-    if (node.type === "code" || (inline && node.type === "inlineCode")) {
+    if (node.type === "code" || (inline && node.type === "inlineCode") || (quotes && node.type === "blockquote")) {
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       if (start !== undefined && end !== undefined) ranges.push({ start, end });
@@ -14,6 +14,10 @@ function codeRanges(text: string, inline = true): Range[] {
   }
   visit(fromMarkdown(text));
   return ranges;
+}
+
+export function literalMarkdownRanges(text: string): Range[] {
+  return codeRanges(text, true, true);
 }
 
 // Keep source slices, rather than serializing Markdown and changing its formatting.
@@ -104,7 +108,7 @@ function instructionLabel(line: string): boolean {
 
 export function instructionSegments(text: string): InstructionSegment[] {
   if (!/agents\.md/i.test(text)) return [{ kind: "markdown", id: "text", text, lines: text.split(/\r?\n/).length, bytes: new TextEncoder().encode(text).length }];
-  const code = codeRanges(text, false);
+  const code = codeRanges(text, false, true);
   const lines = Array.from(text.matchAll(/[^\n]*(?:\n|$)/g)).filter(match => match[0]);
   const markers = lines.filter(line => !code.some(range => range.start <= line.index! && line.index! < range.end) && instructionLabel(line[0]));
   if (!markers.length) return [{ kind: "markdown", id: "text", text, lines: text.split(/\r?\n/).length, bytes: new TextEncoder().encode(text).length }];
@@ -123,8 +127,14 @@ export function instructionSegments(text: string): InstructionSegment[] {
     const next = lines.find(line => line.index! > start && !code.some(range => range.start <= line.index! && line.index! < range.end)
       && ((line[0].match(/^ {0,3}(#{1,6})\s/)?.[1].length ?? 7) <= depth || instructionLabel(line[0])));
     let end = next?.index ?? text.length;
-    const close = text.indexOf("</INSTRUCTIONS>", start);
-    if (close >= 0 && (close < end || /^\s*<INSTRUCTIONS>/i.test(text.slice(start + marker[0].length)))) end = close + "</INSTRUCTIONS>".length;
+    // Native envelopes may contain their own top-level headings and literal
+    // closing-tag examples. Only a standalone, unquoted closing line ends them.
+    const bodyStart = start + marker[0].length;
+    if (/^\s*<INSTRUCTIONS>[ \t]*(?:\r?\n|$)/i.test(text.slice(bodyStart))) {
+      const close = lines.find(line => line.index! >= bodyStart && /^\s*<\/INSTRUCTIONS>\s*$/i.test(line[0])
+        && !code.some(range => range.start <= line.index! && line.index! < range.end));
+      if (close) end = close.index! + close[0].trimEnd().length;
+    }
     add("instructions", start, end);
     cursor = end;
   }

@@ -396,6 +396,21 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 /* User content has its own plain-text surface, independent of assistant Markdown. */
 .user-message { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; width: 100%; min-width: 0; margin: 6px 0 22px; }
 .user-message-bubble { max-width: min(90%, 680px); padding: 14px 18px; border-radius: 22px; background: var(--user-bubble); color: var(--user-text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.7; font-weight: 400; }
+.user-question-reply { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 6px 8px; width: min(94%, 718px); min-width: 0; }
+.user-question-reply > .reply-actions { display: contents; }
+.user-question-reply .copy-reply { grid-column: 1; grid-row: 1; border-color: transparent; color: var(--muted); }
+.user-question-reply .reply-copy-error { grid-column: 2; grid-row: 2; }
+.user-answer-bubble { grid-column: 2; grid-row: 1; min-width: 0; max-width: none; }
+.user-question-context { min-width: 0; margin-bottom: 6px; color: var(--user-text); }
+.user-question-context > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; opacity: .72; }
+.user-question-context > summary::-webkit-details-marker { display: none; }
+.user-question-context > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-question-context > summary > svg { flex: none; color: currentColor; }
+.user-question-context[open] > summary .execution-chevron { transform: rotate(90deg); }
+.user-question-full { max-height: 240px; overflow: auto; padding-top: 6px; white-space: pre-wrap; opacity: .8; }
+.user-instructions { max-width: min(90%, 680px); min-width: 0; box-sizing: border-box; margin: 0; }
+.user-instructions > summary { gap: 10px; }
+.user-instructions-body { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.7 var(--font-sans, system-ui); }
 .user-attachments { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-start; gap: 8px; max-width: 90%; min-width: 0; }
 .user-attachment { min-width: 0; max-width: 220px; }
 .attachment-thumbnail { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 96px; height: 96px; padding: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 12px; }
