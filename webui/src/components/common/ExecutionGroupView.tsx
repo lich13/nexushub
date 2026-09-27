@@ -1,3 +1,4 @@
+import { ToolOutput } from "./FilePathLink";
 import { ActivityDetails } from "./ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import type { ExecutionCommand, ExecutionGroup } from "../../lib/domain/executionGroups";
@@ -10,7 +11,7 @@ function CommandView({ command }: { command: ExecutionCommand }) {
     <small>{command.status}</small>
   </>}>
     {command.sections.length ? command.sections.map((section, index) => <div className="execution-section" key={`${section.label}-${index}`}>
-      <span>{section.label}</span><pre>{visibleMarkdown(section.text)}</pre>
+      <span>{section.label}</span><ToolOutput text={section.text} />
     </div>) : <p className="muted-text">暂无输出</p>}
   </ActivityDetails>;
 }

@@ -1,13 +1,13 @@
-import type { AgentProviderInfo, PlatformOverview, SystemStatus, SystemVersion } from "../../types";
+import type { AgentProviderInfo, PlatformOverview, SystemCapabilitiesResponse, SystemVersion } from "../../types";
 import { callCommand } from "./transport";
 import { currentDemoFixtureKey, USE_DEMO } from "./shared";
-import { demoProviders, demoPlatformOverview, demoSystemStatus, demoSystemVersion } from "./demo";
+import { demoProviders, demoPlatformOverview, demoSystemCapabilities, demoSystemVersion } from "./demo";
 
-export async function getSystemStatus(): Promise<SystemStatus> {
+export async function getSystemCapabilities(): Promise<SystemCapabilitiesResponse> {
   if (USE_DEMO) {
-    return demoSystemStatus(currentDemoFixtureKey());
+    return demoSystemCapabilities(currentDemoFixtureKey());
   }
-  return callCommand<SystemStatus>("system.status");
+  return callCommand<SystemCapabilitiesResponse>("system.capabilities");
 }
 
 export async function getSystemVersion(): Promise<SystemVersion> {

@@ -5,9 +5,9 @@ use super::{
     hidden_threads_delete_execute, job_detail, list_jobs, list_providers, login, logout, me,
     patch_probe_settings, patch_security, pi_delete_execute, pi_delete_preview, pi_detail, pi_list,
     pi_rename, platform_overview, public_settings, rename_thread, restore_thread,
-    start_probe_action, start_update_action, system_status, system_update_status, system_version,
-    thread_blocks, thread_detail, ApiResponse, GrokListQuery, PiListQuery, ProbeEventsQuery,
-    ProbeStatusQuery,
+    start_probe_action, start_update_action, system_capabilities, system_update_status,
+    system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery, PiListQuery,
+    ProbeEventsQuery, ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
@@ -297,7 +297,7 @@ pub(super) async fn rpc_dispatch(
             )
             .await
         }
-        rpc_commands::SYSTEM_STATUS => system_status(State(state), headers).await,
+        rpc_commands::SYSTEM_CAPABILITIES => system_capabilities(State(state), headers).await,
         rpc_commands::SYSTEM_VERSION => system_version(State(state), headers).await,
         rpc_commands::JOBS_LIST => {
             list_jobs(

@@ -28,7 +28,6 @@ fn linux_capabilities_expose_web_host_only_features() {
     assert!(capabilities.threads);
     assert!(capabilities.jobs);
     assert!(capabilities.probe);
-    assert!(capabilities.status);
     assert!(capabilities.settings);
     assert!(capabilities.job_history);
     assert!(capabilities.app_updater);
@@ -59,7 +58,6 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
     assert!(capabilities.threads);
     assert!(capabilities.jobs);
     assert!(capabilities.probe);
-    assert!(capabilities.status);
     assert!(capabilities.settings);
     assert!(capabilities.job_history);
     assert!(capabilities.app_updater);

@@ -38,7 +38,7 @@ export async function mockApi(page: Page, signedIn = true) {
       "auth.publicSettings": demo.demoPublicSettings,
       "auth.login": demo.demoSessionUser,
       "auth.me": demo.demoSessionUser,
-      "system.status": demo.demoSystemStatus,
+      "system.capabilities": demo.demoSystemCapabilities,
       "system.version": demo.demoSystemVersion,
       "system.platform": demo.demoPlatformOverview,
       "threads.list": () => demo.demoThreads("all", "").map((thread) => ({ ...thread, title: titles.get(thread.id) ?? thread.title, status: archived.has(thread.id) ? "Archived" : thread.status })).filter((thread) => {

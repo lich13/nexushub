@@ -24,7 +24,7 @@ import queryThreadsSource from "./query/threads.ts?raw";
 import runtimeSource from "./runtime.ts?raw";
 import domainCapabilitiesSource from "./domain/capabilities.ts?raw";
 import demoCoreSource from "./domain/demoCore.ts?raw";
-import type { MessageBlock, ProbeStatus, SystemStatus, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetail, ThreadSummary } from "../types";
 
 const domainApiSource = [
   apiAuthSource,
@@ -460,24 +460,24 @@ describe("archive delete API compatibility", () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
-    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSecurity, getSystemStatus, getUpdateStatus, listJobs } = await import("./api");
+    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSecurity, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
 
-    const systemStatus = await getSystemStatus();
+    const systemCapabilities = await getSystemCapabilities();
     const fixtures = [
       await getPlatformOverview(),
       (await getProbeStatus()).data,
       (await getProbeSettings()).data,
       await getSecurity(),
-      { ...systemStatus, capabilities: undefined },
+      { ...systemCapabilities, capabilities: undefined },
       await getUpdateStatus(),
       await listJobs()
     ];
     const serialized = JSON.stringify(fixtures);
 
     expect(demoCoreSource).toContain("function buildDemoPlatformOverview");
-    expect(demoCoreSource).toContain("function buildDemoSystemStatus");
+    expect(demoCoreSource).toContain("function buildDemoSystemCapabilities");
     expect(demoCoreSource).toContain("function buildDemoSecurity");
-    expect(systemStatus.capabilities).toMatchObject({
+    expect(systemCapabilities.capabilities).toMatchObject({
       web_auth: false,
       security_settings: false,
       turnstile: false,
@@ -496,7 +496,7 @@ describe("archive delete API compatibility", () => {
       buildDemoFixture,
       buildDemoPlatformOverview,
       buildDemoSecurity,
-      buildDemoSystemStatus
+      buildDemoSystemCapabilities
     } = await import("./domain/demoCore");
     const capabilityKeys = [
       "admin_password",
@@ -511,7 +511,6 @@ describe("archive delete API compatibility", () => {
       "public_endpoint",
       "security_settings",
       "settings",
-      "status",
       "systemd",
       "thread_archive_actions",
       "thread_cleanup",
@@ -525,17 +524,16 @@ describe("archive delete API compatibility", () => {
       "jobs",
       "probe",
       "settings",
-      "status",
       "thread_archive_actions",
       "thread_cleanup",
       "threads"
     ];
 
     const linuxPlatform = buildDemoPlatformOverview("linux-web");
-    const linuxSystem = buildDemoSystemStatus("linux-web");
+    const linuxSystem = buildDemoSystemCapabilities("linux-web");
     const linuxSecurity = buildDemoSecurity("linux-web");
     const macPlatform = buildDemoPlatformOverview("macos-tauri");
-    const macSystem = buildDemoSystemStatus("macos-tauri");
+    const macSystem = buildDemoSystemCapabilities("macos-tauri");
     const macSecurity = buildDemoSecurity("macos-tauri");
 
     expect(Object.keys(linuxSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
@@ -731,7 +729,7 @@ describe("archive delete API compatibility", () => {
 
   test("status path display helpers prefer resolved backend paths and source labels", async () => {
     const app = await import("../test/domain");
-    const status: SystemStatus = {
+    const status = {
       host_label: "cloud",
       codex_home: "/root/.codex",
       configured_codex_home: null,
@@ -745,12 +743,11 @@ describe("archive delete API compatibility", () => {
   });
 
   test("runtime UI capabilities derive from core system capabilities", async () => {
-    const { runtimeCapabilities, runtimeCapabilitiesFromSystemStatus, runtimeCapabilitiesForRuntime } = await loadRealApi();
-    const linuxCore: SystemStatus["capabilities"] = {
+    const { runtimeCapabilities, runtimeCapabilitiesFromResponse, runtimeCapabilitiesForRuntime } = await loadRealApi();
+    const linuxCore: SystemCapabilitiesResponse["capabilities"] = {
       threads: true,
       jobs: true,
       probe: true,
-      status: true,
       settings: true,
       job_history: true,
       app_updater: true,
@@ -767,7 +764,7 @@ describe("archive delete API compatibility", () => {
       thread_cleanup: true,
       thread_archive_actions: true,
     };
-    const macCore: SystemStatus["capabilities"] = {
+    const macCore: SystemCapabilitiesResponse["capabilities"] = {
       ...linuxCore,
       web_auth: false,
       csrf: false,
@@ -792,7 +789,6 @@ describe("archive delete API compatibility", () => {
       webAuth: true,
       logout: true,
       securitySettings: false,
-      publicEndpointStatus: false,
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: false,
@@ -805,7 +801,6 @@ describe("archive delete API compatibility", () => {
       webAuth: false,
       logout: false,
       securitySettings: false,
-      publicEndpointStatus: false,
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: false,
@@ -813,64 +808,52 @@ describe("archive delete API compatibility", () => {
       updateServiceLabels: false,
     });
 
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore, host_surface: "linux_server_webui" }, webBootstrap)).toMatchObject({
+    expect(runtimeCapabilitiesFromResponse({ capabilities: linuxCore, host_surface: "linux_server_webui" }, webBootstrap)).toMatchObject({
       runtimeKind: "web",
       hostSurface: "linux_server_webui",
       webAuth: true,
       securitySettings: true,
-      publicEndpointStatus: true,
       updatePrune: true,
       threadCleanup: true,
       threadArchiveActions: true,
       updateServiceLabels: true,
     });
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: macCore, host_surface: "desktop_embedded_tauri" }, desktopBootstrap)).toMatchObject({
+    expect(runtimeCapabilitiesFromResponse({ capabilities: macCore, host_surface: "desktop_embedded_tauri" }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
       hostSurface: "desktop_embedded_tauri",
       webAuth: false,
       securitySettings: false,
-      publicEndpointStatus: false,
       updatePrune: false,
       threadCleanup: true,
       threadArchiveActions: true,
       updateServiceLabels: false,
     });
-    expect(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, desktopBootstrap)).toMatchObject({
+    expect(runtimeCapabilitiesFromResponse({ capabilities: linuxCore }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
       webAuth: false,
       logout: false,
       securitySettings: false,
-      publicEndpointStatus: false,
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: true,
       threadArchiveActions: true,
       updateServiceLabels: false,
     });
-    expect(Object.keys(runtimeCapabilitiesFromSystemStatus({ capabilities: linuxCore }, webBootstrap))).not.toEqual(expect.arrayContaining([
+    expect(Object.keys(runtimeCapabilitiesFromResponse({ capabilities: linuxCore }, webBootstrap))).not.toEqual(expect.arrayContaining([
       "linuxBackupPrune",
       "linuxUpdateLabels"
     ]));
   });
 
   test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
-    const { getPublicSettings, getSystemStatus, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
+    const { getPublicSettings, getSystemCapabilities, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
 
     const publicSettings = await getPublicSettings();
-    const systemStatus = await getSystemStatus();
+    const systemCapabilities = await getSystemCapabilities();
     const updateStatus = await getUpdateStatus();
     const platformOverview = await getPlatformOverview();
     const visibleValues = [
       publicSettings.site_name,
-      systemStatus.host_label,
-      systemStatus.hostname,
-      systemStatus.public_endpoint,
-      systemStatus.codex_home,
-      systemStatus.configured_codex_home,
-      systemStatus.resolved_codex_home,
-      systemStatus.codex_home_source,
-      systemStatus.panel_db,
-      systemStatus.state_db_integrity,
       updateStatus.method,
       updateStatus.recommended_action,
       ...(updateStatus.capabilities ?? []),
@@ -1263,7 +1246,7 @@ describe("archive delete API compatibility", () => {
       "security.save",
       "system.platform",
       "system.providers",
-      "system.status",
+      "system.capabilities",
       "system.version",
       "threads.archive",
       "threads.blocks",
@@ -1381,23 +1364,23 @@ describe("archive delete API compatibility", () => {
       buildDemoFixture,
       buildDemoPlatformOverview,
       buildDemoSecurity,
-      buildDemoSystemStatus
+      buildDemoSystemCapabilities
     } = await import("./domain/demoCore");
     const {
       demoCodexConfig,
       demoPlatformOverview,
       demoProbeSettings,
-      demoSystemStatus,
+      demoSystemCapabilities,
       demoUpdateStatus
     } = await import("./api/demo");
 
     const macosFixtures = [
       buildDemoFixture("macos-tauri"),
       buildDemoPlatformOverview("macos-tauri"),
-      buildDemoSystemStatus("macos-tauri"),
+      buildDemoSystemCapabilities("macos-tauri"),
       buildDemoSecurity("macos-tauri"),
       demoPlatformOverview("macos-tauri"),
-      demoSystemStatus("macos-tauri"),
+      demoSystemCapabilities("macos-tauri"),
       demoUpdateStatus("macos-tauri"),
       demoCodexConfig("macos-tauri"),
       demoProbeSettings("macos-tauri")

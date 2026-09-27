@@ -269,9 +269,9 @@ small { font-size: 12px; }
 .metric { display: grid; grid-template-columns: minmax(72px, .46fr) minmax(0, 1fr); align-items: center; gap: 12px; min-width: 0; min-height: 38px; }
 .metric span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .metric strong { min-width: 0; text-align: right; font-size: 14px; overflow-wrap: anywhere; }
-.ops-status-overview, .archive-plan, .version-grid, .probe-core-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
-.ops-status-overview .metric, .archive-plan .metric, .version-grid .metric, .probe-core-metrics .metric { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 6px; }
-.ops-status-overview .metric strong, .archive-plan .metric strong, .version-grid .metric strong, .probe-core-metrics .metric strong { text-align: left; }
+.archive-plan, .version-grid, .probe-core-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.archive-plan .metric, .version-grid .metric, .probe-core-metrics .metric { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 6px; }
+.archive-plan .metric strong, .version-grid .metric strong, .probe-core-metrics .metric strong { text-align: left; }
 .settings-meta-grid { display: grid; gap: 4px; margin-bottom: 12px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .cleanup-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
@@ -328,6 +328,10 @@ small { font-size: 12px; }
 .turnstile-box > div { max-width: 100%; overflow: hidden; }
 .turnstile-box span { color: var(--muted); font-size: 12px; }
 .empty-state { height: 100%; min-height: 120px; display: grid; align-content: center; justify-items: center; padding: 24px; color: var(--muted); gap: 12px; }
+.markdown-file-link { display: inline; position: relative; overflow-wrap: anywhere; }
+.file-path-label { display: inline; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; text-align: inherit; text-decoration: underline; text-underline-offset: 3px; white-space: inherit; overflow-wrap: anywhere; cursor: pointer; }
+.file-path-copy.icon-button { display: inline-flex; width: 28px; height: 28px; min-height: 28px; vertical-align: middle; margin: 0 2px; }
+.file-path-feedback.form-error { display: inline-block; margin: 0 4px; font-size: 12px; white-space: normal; }
 .mobile-topbar, .mobile-tabs, .mobile-back { display: none; }
 
 @media (max-width: 1000px) {
@@ -361,7 +365,7 @@ small { font-size: 12px; }
   .settings-workspace, .probe-layout { padding: 20px 16px; }
   .settings-header h1, .probe-header h1 { font-size: 22px; }
   .settings-tabs { gap: 16px; }
-  .ops-status-overview, .archive-plan, .version-grid, .probe-core-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .archive-plan, .version-grid, .probe-core-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid.three, .form-grid.compact-three, .probe-toggle-grid { grid-template-columns: minmax(0, 1fr); }
   .probe-status-banner { align-items: stretch; flex-direction: column; }
   .history-collapse-cell { flex-wrap: wrap; }

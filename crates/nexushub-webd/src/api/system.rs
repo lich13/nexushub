@@ -17,18 +17,21 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
 
-pub(crate) async fn system_status(
+pub(crate) async fn system_capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let platform = state.platform().clone();
-    ok(nexushub_core::system::system_status_with_surface(
-        &state.config(),
-        &platform,
-        state.host_surface(),
+    ok(
+        nexushub_core::services::use_cases::NexusHubUseCases::with_config_for_surface(
+            &state.config(),
+            &platform,
+            state.host_surface(),
+        )
+        .system()?
+        .runtime_capabilities(),
     )
-    .await?)
 }
 
 pub(crate) async fn system_version(

@@ -641,6 +641,145 @@ pub fn rollout_has_completed_turn(path: &Path, turn_id: Option<&str>) -> Result<
     Ok(false)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantFeedback {
+    pub turn_id: String,
+    pub body: String,
+    pub completed_at_ms: i64,
+}
+
+/// Only a complete, latest terminal turn can wait for ordinary-language feedback.
+/// Bounded tail reads also make polling large sessions inexpensive.
+pub fn rollout_pending_feedback(path: &Path) -> Result<Option<AssistantFeedback>> {
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
+    let size = metadata.len();
+    let start = size.saturating_sub(2 * 1024 * 1024);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if !bytes.ends_with(b"\n") {
+        return Ok(None);
+    }
+    if start > 0 {
+        let Some(end) = bytes.iter().position(|b| *b == b'\n') else {
+            return Ok(None);
+        };
+        bytes.drain(..=end);
+    }
+    let mut current_turn = None;
+    let mut final_reply: Option<String> = None;
+    let mut completed = None;
+    let mut pending = HashMap::new();
+    for line in String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+    {
+        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+            return Ok(None);
+        };
+        let previous_turn = current_turn.clone();
+        normalize_canonical_turn(&mut value, &mut current_turn);
+        let kind = rollout_event_type(&value);
+        if previous_turn != current_turn
+            || matches!(kind, "task_started" | "turn_started" | "turn/started")
+        {
+            final_reply = None;
+            completed = None;
+            pending.clear();
+        }
+        if let Some(message) = parse_message_event(&value) {
+            if message.role == "user" {
+                final_reply = None;
+                completed = None;
+            } else if message.role == "assistant" && is_final_assistant_message(&value) {
+                if final_reply.as_deref() != Some(&message.text) {
+                    completed = None;
+                }
+                final_reply = Some(message.text);
+            } else if message.role == "assistant" {
+                completed = None;
+            }
+        }
+        let before = pending.clone();
+        update_pending_tool_calls(&value, &mut pending, current_turn.as_deref());
+        let interactive_request = kind.contains("request_user_input")
+            || kind.contains("elicitation")
+            || value
+                .get("payload")
+                .map(|payload| payload.to_string().to_ascii_lowercase())
+                .is_some_and(|payload| {
+                    payload.contains("request_user_input") || payload.contains("elicitation")
+                });
+        if before != pending
+            || interactive_request
+            || matches!(
+                kind,
+                "function_call"
+                    | "function_call_output"
+                    | "custom_tool_call"
+                    | "custom_tool_call_output"
+                    | "tool_call"
+                    | "tool_result"
+            )
+        {
+            completed = None;
+        }
+        if matches!(kind, "turn_aborted" | "turn/aborted" | "turn_error") {
+            final_reply = None;
+            completed = None;
+        }
+        if matches!(kind, "task_complete" | "turn_completed" | "turn/completed") {
+            let payload = value.get("payload").unwrap_or(&value);
+            if let Some(message) = payload
+                .get("last_agent_message")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                final_reply = Some(message.to_string());
+            }
+            if payload
+                .get("status")
+                .or_else(|| payload.pointer("/turn/status"))
+                .and_then(Value::as_str)
+                .is_some_and(|status| !matches!(status, "completed" | "complete" | "success"))
+            {
+                final_reply = None;
+                completed = None;
+                continue;
+            }
+            let turn = event_turn_id(&value).or_else(|| current_turn.clone());
+            let timestamp = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|time| time.timestamp_millis());
+            completed = turn.zip(timestamp);
+        }
+    }
+    let after = std::fs::metadata(path)?;
+    if metadata.len() != after.len() || metadata.modified()? != after.modified()? {
+        return Ok(None);
+    }
+    if !pending.is_empty() {
+        return Ok(None);
+    }
+    let Some((turn_id, completed_at_ms)) = completed else {
+        return Ok(None);
+    };
+    let Some(body) = final_reply
+        .as_deref()
+        .and_then(super::assistant_feedback_request)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AssistantFeedback {
+        turn_id,
+        body,
+        completed_at_ms,
+    }))
+}
+
 pub fn rollout_request_user_input_state(
     path: &Path,
     turn_id: &str,

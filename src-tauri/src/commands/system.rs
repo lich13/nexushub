@@ -2,13 +2,11 @@
 
 use crate::{overview::DesktopState, services::system as system_service};
 
-#[tauri::command(rename = "system.status")]
-pub async fn getSystemStatus(
+#[tauri::command(rename = "system.capabilities")]
+pub async fn getSystemCapabilities(
     state: tauri::State<'_, DesktopState>,
-) -> Result<nexushub_core::system::SystemStatus, String> {
-    system_service::system_status_with_state(&state)
-        .await
-        .map_err(|err| err.to_string())
+) -> Result<nexushub_core::services::system::SystemCapabilitiesResponse, String> {
+    system_service::system_capabilities(&state).map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "system.version")]

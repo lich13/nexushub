@@ -35,7 +35,7 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
         setResult(response);
         setSelection(current => current.filter(key => !succeeded.includes(key)));
       }
-      void client.invalidateQueries({ predicate: query => provider === "codex" ? /thread|system-status|probe-status/.test(String(query.queryKey[0])) : query.queryKey[0] === provider });
+      void client.invalidateQueries({ predicate: query => provider === "codex" ? /thread|system-capabilities|probe-status/.test(String(query.queryKey[0])) : query.queryKey[0] === provider });
     }
   });
   useEffect(() => { setSelection([]); setPreview(null); setResult(null); setSelecting(false); prepare.reset(); execute.reset(); }, [provider, filterKey]);

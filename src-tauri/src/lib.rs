@@ -19,7 +19,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sessions::previewSessionBatch,
             commands::sessions::executeSessionBatch,
-            commands::system::getSystemStatus,
+            commands::system::getSystemCapabilities,
             commands::system::getSystemVersion,
             commands::system::listProviders,
             commands::system::getPlatformOverview,

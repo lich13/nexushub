@@ -8,7 +8,6 @@ import type {
   ProbeJobAction,
   ProbeSettings,
   ProbeStatus,
-  SystemStatus,
   ThreadDetail,
   ThreadSummary,
   UpdateStatus
@@ -26,7 +25,6 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 }
 
 export const OPS_PANEL_TITLES = {
-  system: "系统状态",
   updates: "NexusHub 更新",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
@@ -36,7 +34,6 @@ export const OPS_PANEL_TITLES = {
 export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[] {
   const capabilities = capabilitiesForInput(input);
   return [
-    OPS_PANEL_TITLES.system,
     OPS_PANEL_TITLES.updates,
     ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
     OPS_PANEL_TITLES.jobs
@@ -47,11 +44,6 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
   const capabilities = capabilitiesForInput(input);
   return [
     ...opsWorkspacePanelTitles(input),
-    "Hostname",
-    ...(capabilities.publicEndpointStatus ? ["Public endpoint"] : []),
-    ...(capabilities.codexStatePaths ? ["state DB", "Codex Home", "State DB"] : []),
-    "Hidden threads",
-    "Sources",
     "Current",
     "Latest",
     "Update",
@@ -141,9 +133,6 @@ export type HiddenThreadDeleteStatsView = {
 };
 
 export type OpsWorkspaceView = {
-  hostname: string;
-  publicEndpoint: string | null;
-  systemMetrics: RuntimeMetricView[];
   hiddenStats: HiddenThreadDeleteStatsView;
   archivedCleanupStage: CleanupStageView;
   hiddenCleanupStage: CleanupStageView;
@@ -165,7 +154,6 @@ export type CleanupMutationState = {
 
 export type OpsWorkspaceViewModel = {
   panelTitles: string[];
-  systemMetrics: RuntimeMetricView[];
   updateActions: ReturnType<typeof opsUpdateActionView>;
   archiveCleanup: {
     stage: CleanupStageView;
@@ -181,7 +169,6 @@ export type OpsWorkspaceViewModel = {
 };
 
 export function opsWorkspaceView(input: {
-  status?: SystemStatus | null;
   update?: UpdateStatus | null;
   hiddenPlan?: HiddenThreadDeletePlan | null;
   archivePlan?: ArchiveDeletePlan | null;
@@ -193,11 +180,8 @@ export function opsWorkspaceView(input: {
   hiddenExecutePending?: boolean;
   capabilities?: RuntimeCapabilityInput;
 }): OpsWorkspaceView {
-  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null, input.status);
+  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null);
   return {
-    hostname: cleanHostValue(input.status?.hostname) ?? "读取中",
-    publicEndpoint: cleanHostValue(input.status?.public_endpoint),
-    systemMetrics: opsSystemMetrics(input.status, input.capabilities),
     hiddenStats,
     archivedCleanupStage: cleanupStageLabel({
       hasPlan: Boolean(input.archivePlan),
@@ -219,7 +203,6 @@ export function opsWorkspaceView(input: {
 
 export function opsWorkspaceViewModel(input: {
   capabilities?: RuntimeCapabilityInput;
-  status?: Partial<SystemStatus> | null;
   updateStatus?: UpdateStatus | null;
   archivePlan?: ArchiveDeletePlan | null;
   archiveExecuteResult?: Pick<ArchiveDeleteResult, "after_total_threads" | "after_active_threads" | "after_archived_threads" | "after_integrity"> | null;
@@ -229,13 +212,12 @@ export function opsWorkspaceViewModel(input: {
   hiddenCleanup: CleanupMutationState;
 }): OpsWorkspaceViewModel {
   const capabilities = capabilitiesForInput(input.capabilities);
-  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null, input.status);
+  const hiddenStats = hiddenThreadDeleteStats(input.hiddenPlan ?? null);
   const archivePlan = input.archiveExecuteResult
     ? archivePlanAfterExecute(input.archivePlan ?? null, input.archiveExecuteResult)
     : input.archivePlan ?? null;
   return {
     panelTitles: opsWorkspacePanelTitles(capabilities),
-    systemMetrics: opsSystemMetrics(input.status, capabilities),
     updateActions: opsUpdateActionView(input.updateStatus, capabilities),
     archiveCleanup: {
       stage: cleanupStageLabel({
@@ -259,61 +241,15 @@ export function opsWorkspaceViewModel(input: {
   };
 }
 
-function opsSystemMetrics(
-  status: Partial<SystemStatus> | null | undefined,
-  input?: RuntimeCapabilityInput
-): RuntimeMetricView[] {
-  const capabilities = capabilitiesForInput(input);
-  const hiddenThreadCount = status?.hidden_thread_count ?? 0;
-  return [
-    {
-      label: "Hostname",
-      value: cleanHostValue(status?.hostname) ?? "读取中"
-    },
-    ...(capabilities.publicEndpointStatus ? [{
-      label: "Public endpoint",
-      value: cleanHostValue(status?.public_endpoint) ?? "未配置",
-      tone: cleanHostValue(status?.public_endpoint) ? "success" as const : "warning" as const
-    }] : []),
-    ...(capabilities.codexStatePaths ? [
-      {
-        label: "state DB",
-        value: status?.state_db_integrity ?? "unknown",
-        tone: status?.state_db_integrity === "ok" ? "success" as const : "warning" as const
-      },
-      {
-        label: "Codex Home",
-        value: codexHomeStatusValue(status),
-        wide: true
-      },
-      {
-        label: "State DB",
-        value: status?.state_db ?? "unknown",
-        wide: true
-      }
-    ] : []),
-    {
-      label: "Hidden threads",
-      value: String(hiddenThreadCount),
-      tone: hiddenThreadCount > 0 ? "warning" as const : undefined
-    },
-    {
-      label: "Sources",
-      value: sourceCountsText(status?.thread_source_counts)
-    }
-  ];
-}
-
 export function hiddenThreadDeleteStats(
-  plan: HiddenThreadDeletePlan | null,
-  status?: Pick<SystemStatus, "hidden_thread_count" | "state_db_integrity"> | null
+  plan: HiddenThreadDeletePlan | null
 ): HiddenThreadDeleteStatsView {
-  const hidden = plan?.hidden_threads ?? status?.hidden_thread_count ?? 0;
+  const hidden = plan?.hidden_threads ?? 0;
   return {
     hidden,
     visible: plan?.visible_threads ?? 0,
     sourceCounts: sourceCountsText(plan?.hidden_source_counts),
-    integrity: plan?.integrity ?? status?.state_db_integrity ?? "未知"
+    integrity: plan?.integrity ?? "dry-run 未执行"
   };
 }
 

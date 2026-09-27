@@ -6,7 +6,7 @@ configureDemoFixtureKey(runtimeContext().kind === "desktop" ? "macos-tauri" : "l
 export {
   runtimeCapabilities,
   runtimeCapabilitiesForRuntime,
-  runtimeCapabilitiesFromSystemStatus,
+  runtimeCapabilitiesFromResponse,
   type RuntimeCapabilityMatrix
 } from "./domain/capabilities";
 
@@ -14,7 +14,7 @@ export { ApiError } from "./api/shared";
 export { desktopRuntimeSessionUser, getPublicSettings, login, logout, me } from "./api/auth";
 export { getSecurity, saveSecurity, changePassword } from "./api/settings";
 export {
-  getSystemStatus,
+  getSystemCapabilities,
   getSystemVersion,
   listProviders,
   getPlatformOverview,

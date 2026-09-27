@@ -4,7 +4,6 @@ use nexushub_core::{
     platform::{PlatformKind, PlatformPaths},
     probe::{ProbeActionPlanKind, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
     providers::{AgentProviderId, ProviderRegistry},
-    system::system_status_with_paths,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -431,35 +430,20 @@ fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() 
     fs::remove_dir_all(home).unwrap();
 }
 
-#[tokio::test]
-async fn macos_system_status_exposes_tauri_app_overview() {
-    let home = temp_dir("nexushub-macos-system-home");
-    let codex_home = home.join(".codex");
-    fs::create_dir_all(&codex_home).unwrap();
-    let mut config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    config.codex.home = codex_home;
-    let paths = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
-
-    let status = system_status_with_paths(&config, &paths).await.unwrap();
-
-    assert_eq!(status.platform, PlatformKind::Macos);
-    assert_eq!(status.service_kind, "tauri");
-    assert_eq!(status.service_name, "NexusHub.app");
-    assert_eq!(
-        status.config_path,
-        home.join("Library/Application Support/NexusHub/config.toml")
-            .display()
-            .to_string()
-    );
-    assert_eq!(
-        status.webui_dir,
-        home.join("Library/Application Support/NexusHub/desktop-assets")
-            .display()
-            .to_string()
-    );
-    assert_eq!(status.service_file.as_deref(), None);
-
-    fs::remove_dir_all(home).unwrap();
+#[test]
+fn capabilities_response_has_no_status_collection_or_private_paths() {
+    let config = Config::default();
+    let paths = PlatformPaths::for_kind(PlatformKind::Macos);
+    let response =
+        nexushub_core::services::use_cases::NexusHubUseCases::with_config(&config, &paths)
+            .system()
+            .unwrap()
+            .runtime_capabilities();
+    let json = serde_json::to_value(response).unwrap();
+    assert_eq!(json["host_surface"], "desktop_embedded_tauri");
+    assert_eq!(json["capabilities"]["thread_cleanup"], true);
+    assert_eq!(json.as_object().unwrap().len(), 2);
+    assert!(json["capabilities"].get("status").is_none());
 }
 
 #[test]

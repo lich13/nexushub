@@ -35,7 +35,7 @@ export const contractDtoNames = [
   "ProbeStatusResponse",
   "SystemPlatformResponse",
   "SystemProvidersResponse",
-  "SystemStatusResponse",
+  "SystemCapabilitiesResponse",
   "SystemVersionResponse",
   "ThreadEventsResponse",
   "ThreadsArchiveResponse",

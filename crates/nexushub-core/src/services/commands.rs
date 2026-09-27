@@ -17,7 +17,7 @@ pub const AUTH_ME: &str = "auth.me";
 pub const SECURITY_GET: &str = "security.get";
 pub const SECURITY_SAVE: &str = "security.save";
 pub const SECURITY_CHANGE_PASSWORD: &str = "security.changePassword";
-pub const SYSTEM_STATUS: &str = "system.status";
+pub const SYSTEM_CAPABILITIES: &str = "system.capabilities";
 pub const SYSTEM_VERSION: &str = "system.version";
 pub const SYSTEM_PLATFORM: &str = "system.platform";
 pub const SYSTEM_PROVIDERS: &str = "system.providers";
@@ -76,7 +76,7 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     SECURITY_GET,
     SECURITY_SAVE,
     SECURITY_CHANGE_PASSWORD,
-    SYSTEM_STATUS,
+    SYSTEM_CAPABILITIES,
     SYSTEM_VERSION,
     SYSTEM_PLATFORM,
     SYSTEM_PROVIDERS,
@@ -140,7 +140,7 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     SECURITY_GET,
     SECURITY_SAVE,
     SECURITY_CHANGE_PASSWORD,
-    SYSTEM_STATUS,
+    SYSTEM_CAPABILITIES,
     SYSTEM_VERSION,
     SYSTEM_PLATFORM,
     SYSTEM_PROVIDERS,
@@ -192,6 +192,7 @@ pub const DECLARED_COMMANDS: &[&str] = &[
 ];
 
 pub const RETIRED_COMMANDS: &[&str] = &[
+    "system.status",
     "system.plugins",
     "system.models",
     "system.permissionProfiles",
@@ -277,7 +278,7 @@ pub const RETIRED_COMMANDS: &[&str] = &[
     "answerElicitation",
     "answerApproval",
     "deleteUpload",
-    "getSystemStatus",
+    "getSystemCapabilities",
     "getSystemVersion",
     "listModels",
     "listPermissionProfiles",

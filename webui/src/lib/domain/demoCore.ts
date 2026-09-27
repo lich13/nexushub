@@ -1,9 +1,9 @@
-import type { PlatformOverview, SecuritySettings, SystemCapabilities, SystemStatus } from "../../types";
+import type { PlatformOverview, SecuritySettings, SystemCapabilities, SystemCapabilitiesResponse } from "../../types";
 
 export type DemoFixtureKey = "linux-web" | "macos-tauri";
 export type DemoFixture = {
   platform: PlatformOverview;
-  system: SystemStatus;
+  system: SystemCapabilitiesResponse;
   security: SecuritySettings;
 };
 
@@ -16,7 +16,6 @@ const capabilityFields = {
   threads: { "linux-web": true, "macos-tauri": true },
   jobs: { "linux-web": true, "macos-tauri": true },
   probe: { "linux-web": true, "macos-tauri": true },
-  status: { "linux-web": true, "macos-tauri": true },
   settings: { "linux-web": true, "macos-tauri": true },
   job_history: { "linux-web": true, "macos-tauri": true },
   app_updater: { "linux-web": true, "macos-tauri": true },
@@ -38,7 +37,6 @@ const macosEnumerableCapabilityKeys: readonly (keyof SystemCapabilities)[] = [
   "threads",
   "jobs",
   "probe",
-  "status",
   "settings",
   "job_history",
   "app_updater",
@@ -65,59 +63,23 @@ function buildDemoCapabilities(fixture: DemoFixtureKey): SystemCapabilities {
 
 export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
   if (fixture !== "linux-web" && fixture !== "macos-tauri") throw new Error("Unsupported host surface");
-  if (fixture === "macos-tauri") {
-    return {
-      platform: {
-        kind: "macos",
-        data_dir: macApplicationSupport,
-        config_file: `${macApplicationSupport}/config.toml`,
-        webui_dir: "",
-        log_dir: "~/Library/Logs/NexusHub",
-        service_name: "NexusHub.app",
-        service_kind: "tauri"
-      },
-      system: {
-        platform: "macos",
-        host_surface: "desktop_embedded_tauri",
-        host_label: "local-macos",
-        hostname: "macos",
-        public_endpoint: null,
-        capabilities: buildDemoCapabilities("macos-tauri"),
-        codex_home: "~/.codex",
-        configured_codex_home: "~/.codex",
-        resolved_codex_home: "~/.codex",
-        codex_home_source: "default",
-        panel_db: `${macApplicationSupport}/nexushub.sqlite`,
-        state_db_integrity: "ok"
-      },
-      security: {} as SecuritySettings
-    };
-  }
+  const desktop = fixture === "macos-tauri";
+  const root = desktop ? macApplicationSupport : linuxDemoRoot;
   return {
     platform: {
-      kind: "linux",
-      data_dir: linuxDemoRoot,
-      config_file: `${linuxDemoRoot}/config.toml`,
-      webui_dir: `${linuxDemoRoot}/webui`,
-      log_dir: `${linuxDemoRoot}/logs`,
-      service_name: "nexushub-webd",
-      service_kind: "systemd"
+      kind: desktop ? "macos" : "linux",
+      data_dir: root,
+      config_file: `${root}/config.toml`,
+      webui_dir: desktop ? "" : `${root}/webui`,
+      log_dir: desktop ? "~/Library/Logs/NexusHub" : `${root}/logs`,
+      service_name: desktop ? "NexusHub.app" : "nexushub-webd",
+      service_kind: desktop ? "tauri" : "systemd"
     },
     system: {
-      platform: "linux",
-      host_surface: "linux_server_webui",
-      host_label: "demo-linux-web",
-      hostname: "demo-linux-web",
-      public_endpoint: "https://demo.nexushub.local/nexushub/",
-      capabilities: buildDemoCapabilities("linux-web"),
-      codex_home: "/root/.codex",
-      configured_codex_home: "/root/.codex",
-      resolved_codex_home: "/root/.codex",
-      codex_home_source: "config",
-      panel_db: `${linuxDemoRoot}/panel.sqlite`,
-      state_db_integrity: "ok"
+      host_surface: desktop ? "desktop_embedded_tauri" : "linux_server_webui",
+      capabilities: buildDemoCapabilities(fixture)
     },
-    security: {
+    security: desktop ? {} as SecuritySettings : {
       turnstile_enabled: false,
       turnstile_required: false,
       turnstile_site_key: "",
@@ -133,7 +95,7 @@ export function buildDemoPlatformOverview(fixture: DemoFixtureKey): PlatformOver
   return buildDemoFixture(fixture).platform;
 }
 
-export function buildDemoSystemStatus(fixture: DemoFixtureKey): SystemStatus {
+export function buildDemoSystemCapabilities(fixture: DemoFixtureKey): SystemCapabilitiesResponse {
   return buildDemoFixture(fixture).system;
 }
 
@@ -146,7 +108,7 @@ const demoDesktopFixture = buildDemoFixture("macos-tauri");
 
 export const demoWebPlatformOverview: PlatformOverview = demoWebFixture.platform;
 export const demoDesktopPlatformOverview: PlatformOverview = demoDesktopFixture.platform;
-export const demoWebSystemStatus: SystemStatus = demoWebFixture.system;
-export const demoDesktopSystemStatus: SystemStatus = demoDesktopFixture.system;
+export const demoWebSystemCapabilities: SystemCapabilitiesResponse = demoWebFixture.system;
+export const demoDesktopSystemCapabilities: SystemCapabilitiesResponse = demoDesktopFixture.system;
 export const demoWebSecurity: SecuritySettings = demoWebFixture.security;
 export const demoDesktopSecurity: SecuritySettings = demoDesktopFixture.security;

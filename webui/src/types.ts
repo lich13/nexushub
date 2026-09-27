@@ -183,7 +183,6 @@ export type SystemCapabilities = {
   threads: boolean;
   jobs: boolean;
   probe: boolean;
-  status: boolean;
   settings: boolean;
   job_history: boolean;
   app_updater: boolean;
@@ -201,24 +200,9 @@ export type SystemCapabilities = {
   thread_archive_actions?: boolean;
 };
 
-export type SystemStatus = {
-  platform?: "linux" | "macos" | "windows";
-  host_surface?: HostSurface;
-  host_label: string;
-  hostname?: string | null;
-  public_endpoint?: string | null;
-  capabilities?: SystemCapabilities | null;
-  codex_home: string;
-  configured_codex_home?: string | null;
-  resolved_codex_home?: string | null;
-  codex_home_source?: string | null;
-  logs_db_source?: string | null;
-  discovery_warnings?: string[] | null;
-  state_db?: string | null;
-  panel_db: string;
-  state_db_integrity?: string | null;
-  hidden_thread_count?: number | null;
-  thread_source_counts?: Record<string, number> | null;
+export type SystemCapabilitiesResponse = {
+  host_surface: HostSurface;
+  capabilities: SystemCapabilities;
 };
 
 export type SystemVersion = {

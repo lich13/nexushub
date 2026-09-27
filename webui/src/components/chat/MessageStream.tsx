@@ -1,3 +1,4 @@
+import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
 import { ActivityDetails } from "../common/ActivityDetails";
@@ -81,7 +82,7 @@ function ToolBlockView({ block }: { block: MessageBlock }) {
   </>}>
     {() => <>
       {summary && <div className="tool-summary">{visibleMarkdown(summary)}</div>}
-      <pre>{visibleMarkdown(detail)}</pre>
+      <ToolOutput text={detail} />
     </>}
   </ActivityDetails>;
 }

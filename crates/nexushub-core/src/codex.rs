@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::{fs, path::Path};
 
 mod app_server_client;
+mod assistant_question;
 mod identity;
 mod mutations;
 mod name_client;
@@ -18,6 +19,7 @@ mod thread_rows;
 mod types;
 
 pub use app_server_client::CodexAppServerClient;
+pub use assistant_question::assistant_feedback_request;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
 pub use mutations::{db_integrity, set_thread_archived};
 pub use name_client::set_thread_title;
@@ -38,8 +40,8 @@ pub use rollout_events::{
     rollout_completion_last_agent_message_with_source, rollout_has_completed_turn,
     rollout_hook_stop_message, rollout_hook_stop_message_selection,
     rollout_hook_stop_message_with_source, rollout_latest_assistant_message,
-    rollout_request_user_input_state, thread_detail_from_summary, window_thread_detail,
-    RolloutMessageSelection, RolloutRequestUserInputState,
+    rollout_pending_feedback, rollout_request_user_input_state, thread_detail_from_summary,
+    window_thread_detail, AssistantFeedback, RolloutMessageSelection, RolloutRequestUserInputState,
 };
 #[cfg(test)]
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};
@@ -100,6 +102,15 @@ pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<Threa
     };
     let index = read_session_index(paths).unwrap_or_default();
     Ok(enrich_local_thread_row(paths, &mut row, index.get(id)).then_some(row.summary))
+}
+
+/// Notification discovery reads headers only; it never scans every historical rollout.
+pub fn notification_thread_headers(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
+    Ok(read_thread_rows(paths)?
+        .into_iter()
+        .map(|row| row.summary)
+        .filter(|thread| !matches!(thread.status, ThreadStatus::Archived))
+        .collect())
 }
 
 fn enrich_local_thread_row(

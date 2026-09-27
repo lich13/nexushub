@@ -55,7 +55,8 @@ pub(crate) use probe::{
 pub(crate) use routes::router;
 pub(crate) use security::{change_password, get_security, patch_security, public_settings};
 pub(crate) use system::{
-    http_update_platform, start_update_action, system_status, system_update_status, system_version,
+    http_update_platform, start_update_action, system_capabilities, system_update_status,
+    system_version,
 };
 pub(crate) use threads::{
     archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,

@@ -67,7 +67,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await assertNoOverflow(page);
       await page.screenshot({ path: info.outputPath("probe.png"), fullPage: true });
       await nav.getByRole("button", { name: "设置", exact: true }).click();
-      await page.getByRole("tab", { name: "维护", exact: true }).click();
+      await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
       await expect(page.getByText("Codex 日志库维护", { exact: true })).toHaveCount(0);
       await assertContrast(page, ".panel header, .metric span, .metric strong, .status-chip");
       await assertNoOverflow(page);
@@ -220,7 +220,8 @@ test("hidden histories stop polling while started jobs continue to terminal", as
   await page.goto("/");
   const nav = page.locator(".side-nav");
   await nav.getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByText("系统状态", { exact: true })).toBeVisible();
+  await expect(page.getByText("系统状态", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("NexusHub 更新", { exact: true })).toBeVisible();
   expect(calls).not.toContain("jobs.list");
   await page.locator(".execution-history > summary").click();
   await expect(page.locator(".job-item").first()).toBeVisible();
@@ -228,11 +229,11 @@ test("hidden histories stop polling while started jobs continue to terminal", as
   const before = calls.filter(name => name === "jobs.list").length;
   await page.clock.fastForward(16000);
   expect(calls.filter(name => name === "jobs.list")).toHaveLength(before);
-  await page.getByRole("tab", { name: "维护", exact: true }).click();
+  await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
   await expect(page.getByText("Codex 日志库维护", { exact: true })).toHaveCount(0);
   const maintenance = calls.length;
   await page.clock.fastForward(31000);
-  expect(calls.slice(maintenance).filter(name => ["probe.events", "probe.settings.get", "updates.status", "jobs.list", "system.status"].includes(name))).toEqual([]);
+  expect(calls.slice(maintenance).filter(name => ["probe.events", "probe.settings.get", "jobs.list", "system.status"].includes(name))).toEqual([]);
   await nav.getByRole("button", { name: "Probe", exact: true }).click();
   await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
   await page.getByLabel("Device Key", { exact: true }).fill("isolated-fixture-key");

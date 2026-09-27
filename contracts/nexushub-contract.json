@@ -8,7 +8,6 @@
     "threads",
     "jobs",
     "probe",
-    "status",
     "settings",
     "job_history",
     "app_updater",
@@ -30,7 +29,6 @@
       "threads",
       "jobs",
       "probe",
-      "status",
       "settings",
       "job_history",
       "app_updater",
@@ -51,7 +49,6 @@
       "threads",
       "jobs",
       "probe",
-      "status",
       "settings",
       "job_history",
       "app_updater",
@@ -78,8 +75,7 @@
       "设置"
     ],
     "corePanelTitles": [
-      "系统与更新",
-      "维护",
+      "更新与维护",
       "执行记录",
       "归档任务清理",
       "隐藏任务清理"
@@ -195,16 +191,16 @@
       "hostOnlyReason": "Linux server WebUI admin password realm only"
     },
     {
-      "id": "system.status",
+      "id": "system.capabilities",
       "kind": "rpc",
       "scope": "shared",
-      "coreUseCase": "system.status",
-      "linuxRpc": "system.status",
-      "tauriCommand": "commands::system::getSystemStatus",
-      "webuiWrapper": "getSystemStatus",
+      "coreUseCase": "system.capabilities",
+      "linuxRpc": "system.capabilities",
+      "tauriCommand": "commands::system::getSystemCapabilities",
+      "webuiWrapper": "getSystemCapabilities",
       "dtoOwner": "system",
       "requestDto": "NoRequest",
-      "responseDto": "SystemStatusResponse"
+      "responseDto": "SystemCapabilitiesResponse"
     },
     {
       "id": "system.version",
@@ -656,6 +652,14 @@
       "dtoOwner": "sessions",
       "requestDto": "SessionBatchExecuteRequest",
       "responseDto": "SessionBatchResult"
+    },
+    {
+      "id": "plugin:opener|reveal_item_in_dir",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.opener",
+      "webuiWrapper": "revealLocalPath",
+      "hostOnlyReason": "Existing Tauri opener plugin; explicit user gesture, no Linux HTTP route or shell execution"
     }
   ],
   "dtoCatalog": {
@@ -771,10 +775,6 @@
       "core": "SystemProvidersResponse",
       "webui": "SystemProvidersResponse"
     },
-    "SystemStatusResponse": {
-      "core": "SystemStatusResponse",
-      "webui": "SystemStatusResponse"
-    },
     "SystemVersionResponse": {
       "core": "SystemVersionResponse",
       "webui": "SystemVersionResponse"
@@ -850,6 +850,10 @@
     "PiSessionRequest": {
       "core": "PiSessionRequest",
       "webui": "PiSessionRequest"
+    },
+    "SystemCapabilitiesResponse": {
+      "core": "SystemCapabilitiesResponse",
+      "webui": "SystemCapabilitiesResponse"
     }
   },
   "retiredActions": [
@@ -888,6 +892,7 @@
     "desktopWebUi.password.reset",
     "probe.logsDb.status",
     "probe.logsDbDryRun",
-    "probe.logsDbExecute"
+    "probe.logsDbExecute",
+    "system.status"
   ]
 }

@@ -4,7 +4,7 @@ import {
   buildDemoFixture,
   buildDemoPlatformOverview,
   buildDemoSecurity,
-  buildDemoSystemStatus,
+  buildDemoSystemCapabilities,
   type DemoFixtureKey
 } from "./demoCore";
 
@@ -23,7 +23,6 @@ const expectedCapabilityKeys = [
   "public_endpoint",
   "security_settings",
   "settings",
-  "status",
   "systemd",
   "thread_archive_actions",
   "thread_cleanup",
@@ -38,7 +37,6 @@ const macosVisibleCapabilityKeys = [
   "jobs",
   "probe",
   "settings",
-  "status",
   "thread_archive_actions",
   "thread_cleanup",
   "threads"
@@ -55,11 +53,9 @@ describe("demo fixture builder", () => {
       webui_dir: "/srv/nexushub-demo/webui",
       log_dir: "/srv/nexushub-demo/logs"
     });
-    expect(buildDemoSystemStatus("linux-web")).toMatchObject({
+    expect(buildDemoSystemCapabilities("linux-web")).toMatchObject({
       host_surface: "linux_server_webui",
-      host_label: "demo-linux-web",
-      public_endpoint: "https://demo.nexushub.local/nexushub/",
-      panel_db: "/srv/nexushub-demo/panel.sqlite"
+      capabilities: { threads: true, web_auth: true }
     });
     expect(buildDemoSecurity("linux-web")).toMatchObject({
       turnstile_expected_hostname: "demo.nexushub.local"
@@ -71,7 +67,7 @@ describe("demo fixture builder", () => {
     expect(demoCoreSource).toContain("satisfies Record<keyof SystemCapabilities,");
     expect(demoCoreSource).not.toContain("const shared = {");
 
-    const fixtureCapabilities = fixtureKeys.map((fixture) => buildDemoSystemStatus(fixture).capabilities ?? {});
+    const fixtureCapabilities = fixtureKeys.map((fixture) => buildDemoSystemCapabilities(fixture).capabilities ?? {});
     expect(Object.keys(fixtureCapabilities[0]).sort()).toEqual(expectedCapabilityKeys);
     expect(Object.keys(fixtureCapabilities[1]).sort()).toEqual(macosVisibleCapabilityKeys);
 
@@ -109,7 +105,6 @@ describe("demo fixture builder", () => {
       threads: true,
       jobs: true,
       probe: true,
-      status: true,
       settings: true,
       job_history: true,
       thread_cleanup: true,
