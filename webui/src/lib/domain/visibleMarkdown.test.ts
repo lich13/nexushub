@@ -26,6 +26,10 @@ describe("visible Markdown", () => {
     expect(visibleMarkdown("The memory_citation: field is documented here.")).toBe("The memory_citation: field is documented here.");
   });
 
+  test("removes tagged metadata with attributes and adjacent blocks", () => {
+    expect(visibleMarkdown('Before <oai-mem-citation source="internal"><citation_entries id="x">secret</citation_entries></oai-mem-citation><rollout_ids source="internal">id</rollout_ids> after.')).toBe("Before  after.");
+  });
+
   test("uses only the cleaned title for plan filenames", () => {
     expect(planFilename("<citation_entries>\n# Internal\n</citation_entries>\n# Visible: /Plan?\nBody", "Fallback")).toBe("Visible Plan.md");
     expect(planFilename("<rollout_ids>id</rollout_ids>", "Thread title")).toBe("Thread title.md");

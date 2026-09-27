@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-core"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-webd"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1191,12 +1191,14 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "hex",
  "nexushub-core",
  "rand 0.8.6",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "toml",
  "tower",

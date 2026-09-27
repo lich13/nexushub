@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod linux_adapter;
 mod provider_monitor;
+mod question_monitor;
 mod rpc_payload;
 mod rpc_surface;
 mod state;
@@ -183,8 +184,6 @@ async fn main() -> Result<()> {
             println!("listen={}", config.server.listen);
             println!("admin_count={}", db.admin_count()?);
             println!("codex_read_model=local_state_rollout_logs");
-            let status = nexushub_core::system::system_status(&config).await?;
-            println!("{}", serde_json::to_string_pretty(&status)?);
         }
         Command::Admin { command } => {
             let config = Config::load(&cli.config)?;
@@ -1658,6 +1657,27 @@ async fn record_probe_event_with_bark_timeout(
             ),
         ));
     }
+    let event = question_monitor::prepare_event(config, db, event)?;
+    if let Some(reason) = event.suppression_reason.as_deref() {
+        return Ok((
+            ProbeEventOutcome::from_claim(&event, false),
+            ProbeBarkOutcome::skipped(
+                reason,
+                config.probe.notifications.enabled,
+                probe_service::probe_event_bark_switch_enabled(config, &event.kind),
+                false,
+            ),
+        ));
+    }
+    let feedback_key = question_monitor::delivery_key(&event);
+    if let Some(key) = feedback_key.as_deref() {
+        if !db.claim_feedback_delivery(key)? {
+            return Ok((
+                ProbeEventOutcome::from_claim(&event, false),
+                ProbeBarkOutcome::skipped("feedback_already_claimed", true, true, true),
+            ));
+        }
+    }
     let record_plan = probe_service::probe_event_record_plan(event);
     let event = record_plan.event;
     if passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())? {
@@ -1681,6 +1701,9 @@ async fn record_probe_event_with_bark_timeout(
         event.ttl_seconds,
     )?;
     let bark = handle_probe_event_bark(config, db, &event, claimed, bark_timeout).await?;
+    if let Some(key) = feedback_key.as_deref() {
+        db.set_setting(key, &serde_json::to_string(&bark)?)?;
+    }
     let write_plan = probe_service::probe_event_record_write_plan(
         &event,
         claimed,
@@ -2201,6 +2224,12 @@ async fn run_probe_error_monitor_once(
     db: &PanelDb,
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
+    if let Err(error) = question_monitor::run(config, db).await {
+        tracing::warn!(
+            "Codex feedback monitor failed: {}",
+            safe_probe_monitor_error(&error.to_string())
+        );
+    }
     if let Err(error) = provider_monitor::run(config, db).await {
         tracing::warn!(
             "native provider notification monitor failed: {}",

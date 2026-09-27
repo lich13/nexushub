@@ -752,11 +752,11 @@ fn linux_entry_does_not_reimplement_migrated_goal_or_followup_transactions() {
 }
 
 #[tokio::test]
-async fn rpc_system_status_exposes_capabilities_dto_shape() {
+async fn rpc_runtime_capabilities_has_minimal_dto_shape() {
     let (state, session_token, _) = authenticated_test_state();
     let app = router(state);
 
-    let rpc = request_rpc_json(app, "system.status", "{}", &session_token, None).await;
+    let rpc = request_rpc_json(app, "system.capabilities", "{}", &session_token, None).await;
 
     assert_eq!(rpc["capabilities"]["threads"], true);
     assert_eq!(rpc["capabilities"]["web_auth"], true);
@@ -896,16 +896,17 @@ async fn unified_update_status_requires_auth_and_uses_shared_shape() {
 }
 
 #[tokio::test]
-async fn system_status_exposes_linux_capabilities_without_macos_web_entries() {
+async fn runtime_capabilities_preserve_linux_features() {
     let (state, session_token, _) = authenticated_test_state();
     let app = router(state);
 
-    let payload = request_rpc_json(app, "system.status", "{}", &session_token, None).await;
-    assert_eq!(payload["platform"], "linux");
+    let payload = request_rpc_json(app, "system.capabilities", "{}", &session_token, None).await;
+    assert_eq!(payload["host_surface"], "linux_server_webui");
+    assert_eq!(payload.as_object().unwrap().len(), 2);
     assert_eq!(payload["capabilities"]["threads"], true);
     assert_eq!(payload["capabilities"]["jobs"], true);
     assert_eq!(payload["capabilities"]["probe"], true);
-    assert_eq!(payload["capabilities"]["status"], true);
+    assert!(payload["capabilities"].get("status").is_none());
     assert_eq!(payload["capabilities"]["settings"], true);
     assert_eq!(payload["capabilities"]["job_history"], true);
     assert_eq!(payload["capabilities"]["web_auth"], true);

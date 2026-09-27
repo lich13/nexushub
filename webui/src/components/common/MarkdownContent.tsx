@@ -1,9 +1,11 @@
 import { Check, Copy } from "lucide-react";
 import { useMemo, useState, type ComponentProps } from "react";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { instructionSegments, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { ActivityDetails } from "./ActivityDetails";
+import { fileLinkTarget } from "../../lib/domain/fileLinks";
+import { FilePathLink } from "./FilePathLink";
 
 type Element = { tagName?: string; children?: Element[] };
 function omitMemoryElements() {
@@ -28,9 +30,11 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
 }
 
 function MarkdownBody({ text }: { text: string }) {
-  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[omitMemoryElements]} components={{
+  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[omitMemoryElements]} urlTransform={(url, key, node) => key === "href" && node.tagName === "a" && fileLinkTarget(url) ? url : defaultUrlTransform(url)} components={{
     pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
-    a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />
+    a: ({ node: _node, href, children, ...props }) => href && fileLinkTarget(href)
+      ? <FilePathLink href={href}>{children}</FilePathLink>
+      : <a {...props} href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a>
   }}>{text}</Markdown>;
 }
 

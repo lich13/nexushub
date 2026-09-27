@@ -27,7 +27,7 @@ export function memoryMetadataRanges(text: string): Range[] {
   const protectedAt = (offset: number) => code.some(range => range.start <= offset && offset < range.end);
   const ranges: Range[] = [];
   const stack: Array<{ name: string; start: number }> = [];
-  const tags = /(?:<|&lt;)(\/?)(oai-mem-citation|citation_entries|rollout_ids)\s*(?:>|&gt;)/gi;
+  const tags = /(?:<|&lt;)(\/?)(oai-mem-citation|citation_entries|rollout_ids)(?:\s+[^<>]*?)?\s*(?:>|&gt;)/gi;
   for (const match of text.matchAll(tags)) {
     const start = match.index!;
     if (protectedAt(start) && !stack.length) continue;

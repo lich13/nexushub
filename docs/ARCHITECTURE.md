@@ -1,4 +1,4 @@
-# Architecture — 1.1.4
+# Architecture — 1.1.5
 
 ## Boundaries
 
@@ -27,6 +27,14 @@ Batch actions use explicit provider keys and return per-item preview/execute res
 ## Visible Markdown
 
 `visibleMarkdown.ts` removes structured memory metadata by source range before rendering and export. CommonMark code positions protect literal examples; a rendering guard also removes metadata elements. Copy buttons, thread previews and Plan filenames/downloads use the same cleaner. Instruction-file recognition feeds native disclosures and execution groups. A bounded in-memory map scoped by provider, session and activity preserves explicit disclosure choices; no database or native session file stores this UI state.
+
+## Files, settings and notifications
+
+File links are parsed from the original Markdown target before browser URL resolution. The shared path component strips line/column suffixes, resolves relative paths against the selected thread workspace, copies the server path on web, and delegates Finder reveal to the existing Tauri opener on macOS.
+
+The settings surface is a single `更新与维护` page plus platform-appropriate account/security controls. `system.status` is a retired tombstone; `system.capabilities` returns only host surface and the capability matrix. Updates and cleanup retain their own dry-run records.
+
+Codex final replies are classified locally for explicit user feedback requests after a verified terminal turn. The monitor, Stop Hook and completion path share the `assistant_question` source and persistent delivery claims. Existing provider completion/error rules remain unchanged.
 
 ## Probe and notifications
 

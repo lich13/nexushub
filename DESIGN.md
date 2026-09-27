@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.1.4 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.1.5 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -12,7 +12,8 @@ NexusHub 1.1.4 follows a quiet, compact reading workspace aligned with Codex Des
 - Visible assistant replies in all three providers expose a compact copy button that copies Markdown after structured memory metadata is removed. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
-- Probe settings show notification and error-monitor controls only. Goal recovery controls are removed.
+- Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
+- Markdown file links copy their source path in web, while macOS reveals a resolved path in Finder and offers a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event.
 
 ## Visual tokens
 

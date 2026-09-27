@@ -9,12 +9,12 @@ import {
 } from "../../lib/domain/runtimeViewModel";
 import { defaultSessionTtlDays } from "../../lib/domain/codexViewModel";
 import { useSecurityActions, useSecurityQuery } from "../../lib/query/security";
-import { useSystemStatusQuery } from "../../lib/query/system";
+import { usePublicSettingsQuery } from "../../lib/query/auth";
 import type { SecuritySettings } from "../../types";
 
 export function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string | null; username: string }) {
   const security = useSecurityQuery();
-  const systemStatus = useSystemStatusQuery();
+  const publicSettings = usePublicSettingsQuery();
   const [draft, setDraft] = useState<Partial<SecuritySettings> & { turnstile_secret_key?: string }>({});
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
   const [passwordFeedback, setPasswordFeedback] = useState<string | null>(null);
@@ -33,7 +33,7 @@ export function SecurityWorkspace({ csrfToken, username }: { csrfToken?: string 
   const passwordMutation = securityActions.password;
   const merged = { ...security.data, ...draft } as SecuritySettings & { turnstile_secret_key?: string };
   const ttlDays = secondsToDays(merged.session_ttl_seconds ?? defaultSessionTtlDays * 86400);
-  const defaultExpectedHostname = hostnameFromPublicEndpoint(systemStatus.data?.public_endpoint);
+  const defaultExpectedHostname = hostnameFromPublicEndpoint(publicSettings.data?.base_url);
   const expectedHostname = cleanHostValue(merged.turnstile_expected_hostname) ?? defaultExpectedHostname;
   const expectedAction = normalizeTurnstileAction(merged.turnstile_expected_action);
   const passwordReady = passwordForm.current && passwordForm.next.length >= 12 && passwordForm.next === passwordForm.confirm;

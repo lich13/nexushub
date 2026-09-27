@@ -511,6 +511,41 @@ impl PanelDb {
         Ok(())
     }
 
+    /// Atomically establish a first-enable baseline shared by hooks and the monitor.
+    pub fn feedback_notification_baseline(&self, enabled: bool) -> Result<Option<i64>> {
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key='probe_feedback_baseline'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let previous =
+            previous.and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
+        let since = if previous.as_ref().and_then(|v| v["enabled"].as_bool()) == Some(true) {
+            previous
+                .as_ref()
+                .and_then(|v| v["since_ms"].as_i64())
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+        } else {
+            chrono::Utc::now().timestamp_millis()
+        };
+        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES('probe_feedback_baseline',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            rusqlite::params![serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
+        tx.commit()?;
+        Ok(enabled.then_some(since))
+    }
+
+    pub fn claim_feedback_delivery(&self, key: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(conn.execute(
+            "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES(?1,'delivering',?2)",
+            rusqlite::params![key, Self::now()],
+        )? == 1)
+    }
+
     pub fn set_secret_setting_bytes(&self, key: &str, plaintext: &[u8]) -> Result<()> {
         if plaintext.is_empty() {
             return Ok(());
@@ -1159,6 +1194,7 @@ impl PanelDb {
             )",
             params![Self::now(), limit],
         )?;
+        conn.execute("DELETE FROM settings WHERE key IN (SELECT key FROM settings WHERE key LIKE 'probe_feedback_delivery:%' AND updated_at < ?1 LIMIT ?2)", params![cutoff, limit])?;
         Ok((events_deleted, dedupe_deleted))
     }
 }

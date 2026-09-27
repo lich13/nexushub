@@ -1,18 +1,18 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getSystemStatus } from "../api";
+import { getSystemCapabilities } from "../api";
 import {
   runtimeCapabilities,
   runtimeCapabilitiesForRuntime,
-  runtimeCapabilitiesFromSystemStatus,
+  runtimeCapabilitiesFromResponse,
   type RuntimeCapabilityMatrix
 } from "../domain/capabilities";
 import { currentRuntimeContext } from "../api/transport";
-import type { SystemStatus } from "../../types";
+import type { SystemCapabilitiesResponse } from "../../types";
 import { preservePreviousQueryData } from "./shared";
 
 export const systemQueryKeys = {
-  status: ["system-status"] as const
+  capabilities: ["system-capabilities"] as const
 };
 
 export function bootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
@@ -24,19 +24,19 @@ export function useBootstrapRuntimeCapabilities(): RuntimeCapabilityMatrix {
 }
 
 export function useRuntimeCapabilities(
-  status?: Pick<SystemStatus, "capabilities" | "host_surface"> | null,
+  status?: Partial<SystemCapabilitiesResponse> | null,
   fallback: RuntimeCapabilityMatrix = bootstrapRuntimeCapabilities(),
 ): RuntimeCapabilityMatrix {
   return useMemo(
-    () => runtimeCapabilitiesFromSystemStatus(status, fallback),
+    () => runtimeCapabilitiesFromResponse(status, fallback),
     [fallback, status]
   );
 }
 
-export function useSystemStatusQuery(options: { enabled?: boolean; refetchInterval?: number } = {}) {
+export function useSystemCapabilitiesQuery(options: { enabled?: boolean; refetchInterval?: number } = {}) {
   return useQuery({
-    queryKey: systemQueryKeys.status,
-    queryFn: getSystemStatus,
+    queryKey: systemQueryKeys.capabilities,
+    queryFn: getSystemCapabilities,
     enabled: options.enabled,
     refetchInterval: options.refetchInterval,
     staleTime: 5000,

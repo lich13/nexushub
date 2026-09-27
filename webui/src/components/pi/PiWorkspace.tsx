@@ -1,3 +1,5 @@
+import { ToolOutput } from "../common/FilePathLink";
+import { MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
 import { isInstructionFileActivity, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
@@ -105,7 +107,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
-          <DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider>
+          <MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider></MarkdownPathScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}
         </div>
@@ -126,7 +128,7 @@ function PiEvent({ event, activityId }: { event: PiHistoryEvent; activityId: str
       <span className="tool-title">{instructionFile ? "AGENTS.md" : visibleMarkdown(event.text ?? "工具活动")}</span>
       {event.status === "in_progress" && <RunningIndicator />}
       <small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small>
-    </>}>{event.detail && <pre>{visibleMarkdown(event.detail)}</pre>}</ActivityDetails>;
+    </>}>{event.detail && <ToolOutput text={event.detail} />}</ActivityDetails>;
   }
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
   return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;

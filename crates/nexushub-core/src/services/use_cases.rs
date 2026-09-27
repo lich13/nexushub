@@ -468,6 +468,13 @@ pub struct SystemUseCases<'a> {
 }
 
 impl<'a> SystemUseCases<'a> {
+    pub fn runtime_capabilities(self) -> system::SystemCapabilitiesResponse {
+        system::SystemCapabilitiesResponse {
+            host_surface: self.host_surface,
+            capabilities: self.capabilities(),
+        }
+    }
+
     pub fn capabilities(self) -> SystemCapabilities {
         system::system_capabilities_for_surface(self.config, self.platform, self.host_surface)
     }

@@ -2,7 +2,6 @@ import {
   Archive,
   CheckCircle2,
   Database,
-  HardDrive,
   Play,
   RefreshCw,
   TerminalSquare,
@@ -28,9 +27,9 @@ import type {
   UpdateStatus
 } from "../../types";
 
-export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix; section?: "system" | "maintenance" }) {
+export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { status, update, jobs } = useOpsQueries({ section, historyOpen });
+  const { update, jobs } = useOpsQueries({ historyOpen });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
   const [hiddenPlan, setHiddenPlan] = useState<HiddenThreadDeletePlan | null>(null);
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
@@ -76,7 +75,6 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
       ? cleanupErrorMessage("隐藏线程扫描失败", hiddenDryRun.error)
       : null;
   const opsView = opsWorkspaceView({
-    status: status.data,
     update: update.data,
     hiddenPlan,
     archivePlan: plan,
@@ -91,14 +89,6 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
 
   return (
     <div className="ops-grid">
-      {section === "system" && <><Panel title={OPS_PANEL_TITLES.system} icon={<HardDrive size={18} />} className="wide-panel ops-status-panel">
-        {status.error && <div role="alert" className="form-error">{status.error.message}</div>}
-        <div className="ops-status-overview">
-          {opsView.systemMetrics.map((metric) => (
-            <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} wide={metric.wide} />
-          ))}
-        </div>
-      </Panel>
       <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
         {update.error && <div role="alert" className="form-error">{update.error.message}</div>}
         {jobMutation.error && <div role="alert" className="form-error">{jobMutation.error.message}</div>}
@@ -117,8 +107,7 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
           })}
         </div>
       </Panel>
-      </>}
-      {section === "maintenance" && capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
+      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
           <span className={`status-chip ${opsView.archivedCleanupStage.tone ? `tone-${opsView.archivedCleanupStage.tone}` : "tone-muted"}`}>{opsView.archivedCleanupStage.label}</span>
@@ -126,7 +115,7 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
         <div className="archive-plan">
           <Metric label="active" value={plan ? String(plan.active_threads) : "dry-run 未执行"} />
           <Metric label="archived" value={String(plan?.archived_threads ?? 0)} tone={(plan?.archived_threads ?? 0) > 0 ? "warning" : undefined} />
-          <Metric label="integrity" value={plan?.integrity ?? status.data?.state_db_integrity ?? "unknown"} tone={(plan?.integrity ?? status.data?.state_db_integrity) === "ok" ? "success" : "danger"} />
+          <Metric label="integrity" value={plan?.integrity ?? "dry-run 未执行"} tone={plan?.integrity === "ok" ? "success" : "danger"} />
           <Metric label="session index" value={plan ? String(plan.session_index_lines) : "dry-run 未执行"} />
           <Metric label="rollout 文件" value={plan ? String(plan.rollout_files) : "dry-run 未执行"} />
         </div>
@@ -143,7 +132,7 @@ export function OpsWorkspace({ csrfToken, capabilities, section = "system" }: { 
           )}
         </div>
       </Panel>}
-      {section === "maintenance" && capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
+      {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 non-archived subagent/internal</span>
           <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>

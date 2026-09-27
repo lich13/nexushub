@@ -35,7 +35,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "ProbeStatusResponse",
     "SystemPlatformResponse",
     "SystemProvidersResponse",
-    "SystemStatusResponse",
+    "SystemCapabilitiesResponse",
     "SystemVersionResponse",
     "ThreadEventsResponse",
     "ThreadsArchiveResponse",

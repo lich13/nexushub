@@ -6,6 +6,12 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemCapabilitiesResponse {
+    pub host_surface: HostSurface,
+    pub capabilities: SystemCapabilities,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostSurface {
@@ -58,7 +64,6 @@ pub enum Capability {
     Threads,
     Jobs,
     Probe,
-    Status,
     Settings,
     JobHistory,
     AppUpdater,
@@ -81,7 +86,6 @@ impl Capability {
         Capability::Threads,
         Capability::Jobs,
         Capability::Probe,
-        Capability::Status,
         Capability::Settings,
         Capability::JobHistory,
         Capability::AppUpdater,
@@ -108,7 +112,6 @@ impl Capability {
             Self::Threads => "threads",
             Self::Jobs => "jobs",
             Self::Probe => "probe",
-            Self::Status => "status",
             Self::Settings => "settings",
             Self::JobHistory => "job_history",
             Self::AppUpdater => "app_updater",
@@ -140,7 +143,6 @@ impl Capability {
             Self::Threads
             | Self::Jobs
             | Self::Probe
-            | Self::Status
             | Self::Settings
             | Self::JobHistory
             | Self::ThreadCleanup
@@ -164,7 +166,6 @@ pub struct SystemCapabilities {
     pub threads: bool,
     pub jobs: bool,
     pub probe: bool,
-    pub status: bool,
     pub settings: bool,
     pub job_history: bool,
     pub app_updater: bool,
@@ -265,7 +266,6 @@ pub fn system_capabilities_for_surface(
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
         jobs: Capability::Jobs.is_supported_on_surface(platform, host_surface),
         probe: Capability::Probe.is_supported_on_surface(platform, host_surface),
-        status: Capability::Status.is_supported_on_surface(platform, host_surface),
         settings: Capability::Settings.is_supported_on_surface(platform, host_surface),
         job_history: Capability::JobHistory.is_supported_on_surface(platform, host_surface),
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),

@@ -15,7 +15,7 @@ import type {
   ProbeStatus,
   SecuritySettings,
   SessionUser,
-  SystemStatus,
+  SystemCapabilitiesResponse,
   SystemVersion,
   ThreadBlockPage,
   ThreadDetail,
@@ -25,7 +25,7 @@ import type {
 import {
   buildDemoPlatformOverview,
   buildDemoSecurity,
-  buildDemoSystemStatus,
+  buildDemoSystemCapabilities,
   type DemoFixtureKey
 } from "../domain/demoCore";
 
@@ -59,8 +59,8 @@ export function demoPlatformOverview(fixture: DemoFixtureKey = "linux-web"): Pla
   return buildDemoPlatformOverview(fixture);
 }
 
-export function demoSystemStatus(fixture: DemoFixtureKey = "linux-web"): SystemStatus {
-  return buildDemoSystemStatus(fixture);
+export function demoSystemCapabilities(fixture: DemoFixtureKey = "linux-web"): SystemCapabilitiesResponse {
+  return buildDemoSystemCapabilities(fixture);
 }
 
 export function demoSecurity(fixture: DemoFixtureKey = "linux-web"): SecuritySettings {
@@ -158,7 +158,7 @@ export function demoProviders(): AgentProviderInfo[] {
 
 export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeStatus {
   const platform = demoPlatformOverview(fixture);
-  const system = demoSystemStatus(fixture);
+  const codexHome = fixture === "macos-tauri" ? "~/.codex" : "/root/.codex";
   return {
     label: "Probe",
     enabled: true,
@@ -184,12 +184,12 @@ export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeSta
     doctor_status: "ok",
     runtime_version: "demo",
     config_path: platform.config_file,
-    codex_home: system.codex_home,
-    configured_codex_home: system.configured_codex_home,
-    resolved_codex_home: system.resolved_codex_home,
-    codex_home_source: system.codex_home_source,
+    codex_home: codexHome,
+    configured_codex_home: codexHome,
+    resolved_codex_home: codexHome,
+    codex_home_source: "default",
     logs_db_source: "resolved_codex_home",
-    host_label: system.host_label,
+    host_label: fixture,
     snapshot_age_seconds: 0,
     is_refreshing: false,
     snapshot_status: "cached"
@@ -197,7 +197,7 @@ export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeSta
 }
 
 export function demoProbeSettings(fixture: DemoFixtureKey = "linux-web"): ProbeSettings {
-  const system = demoSystemStatus(fixture);
+  const codexHome = fixture === "macos-tauri" ? "~/.codex" : "/root/.codex";
   const runtimeProbeSettings = fixture === "macos-tauri"
     ? {
       logsPath: "~/Library/Application Support/NexusHub/logs_2.sqlite",
@@ -209,14 +209,14 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-web"): ProbeS
     };
   return {
     codex: {
-      home: system.codex_home,
-      configured_codex_home: system.configured_codex_home,
-      resolved_codex_home: system.resolved_codex_home,
-      codex_home_source: system.codex_home_source,
+      home: codexHome,
+      configured_codex_home: codexHome,
+      resolved_codex_home: codexHome,
+      codex_home_source: "default",
       logs_db_source: "resolved_codex_home",
       discovery_warnings: [],
       workspace: runtimeProbeSettings.workspace,
-      host_label: system.host_label
+      host_label: fixture
     },
     probe: {
       enabled: true,

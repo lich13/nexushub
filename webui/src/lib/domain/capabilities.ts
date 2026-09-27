@@ -1,4 +1,4 @@
-import type { HostSurface, SystemCapabilities, SystemStatus } from "../../types";
+import type { HostSurface, SystemCapabilities, SystemCapabilitiesResponse } from "../../types";
 
 export type RuntimeContext = {
   kind: "web" | "desktop";
@@ -10,7 +10,6 @@ export type RuntimeCapabilityMatrix = {
   webAuth: boolean;
   logout: boolean;
   securitySettings: boolean;
-  publicEndpointStatus: boolean;
   codexStatePaths: boolean;
   updatePrune: boolean;
   threadCleanup: boolean;
@@ -24,7 +23,6 @@ export const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
   webAuth: true,
   logout: true,
   securitySettings: false,
-  publicEndpointStatus: false,
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: false,
@@ -38,7 +36,6 @@ export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
   webAuth: false,
   logout: false,
   securitySettings: false,
-  publicEndpointStatus: false,
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: false,
@@ -72,7 +69,6 @@ function runtimeCapabilitiesFromCore(
     webAuth: core.web_auth,
     logout: core.web_auth,
     securitySettings: core.security_settings || core.turnstile || core.admin_password,
-    publicEndpointStatus: core.public_endpoint,
     codexStatePaths: core.systemd,
     updatePrune: core.prune_backups,
     threadCleanup: core.thread_cleanup === true,
@@ -93,8 +89,8 @@ export function runtimeCapabilitiesForRuntime(
     : webBootstrapCapabilities;
 }
 
-export function runtimeCapabilitiesFromSystemStatus(
-  status?: Pick<SystemStatus, "capabilities" | "host_surface"> | null,
+export function runtimeCapabilitiesFromResponse(
+  status?: Partial<SystemCapabilitiesResponse> | null,
   fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
 ): RuntimeCapabilityMatrix {
   const core = status?.capabilities;

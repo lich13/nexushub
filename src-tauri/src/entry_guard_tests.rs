@@ -193,7 +193,7 @@ mod tests {
     fn tauri_invoke_handler_keeps_desktop_compat_out_of_frontend_workflows() {
         let commands = registered_invoke_command_paths();
         for typed in [
-            command_path("system", "getSystemStatus"),
+            command_path("system", "getSystemCapabilities"),
             command_path("system", "getSystemVersion"),
             command_path("system", "listProviders"),
             command_path("system", "getPlatformOverview"),
@@ -427,7 +427,7 @@ mod tests {
             "DesktopGoal",
             "ProbeRuntime",
             "ProbeStatus",
-            "SystemStatus",
+            "SystemCapabilitiesResponse",
             "ArchiveDeletePlan",
             "HiddenThreadDeletePlan",
             "first_thread_goal",
@@ -643,7 +643,6 @@ mod tests {
             "commands/system.rs must delegate native work to services/system.rs"
         );
         for forbidden in [
-            "nexushub_core::system::system_status_with_paths",
             "nexushub_core::local::local_plugin_catalog",
             "nexushub_core::local::default_codex_models",
             "nexushub_core::local::default_permission_profiles",

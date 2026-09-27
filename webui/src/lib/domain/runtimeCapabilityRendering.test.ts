@@ -23,7 +23,6 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   webAuth: true,
   logout: true,
   securitySettings: true,
-  publicEndpointStatus: true,
   codexStatePaths: true,
   updatePrune: true,
   threadCleanup: true,
@@ -37,7 +36,6 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   webAuth: false,
   logout: false,
   securitySettings: false,
-  publicEndpointStatus: false,
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: true,
@@ -98,7 +96,8 @@ describe("runtime capability rendering", () => {
     ].join("\n");
 
     expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", webAuth: false, securitySettings: false });
-    expect(visibleCopy).toMatch(/系统状态|NexusHub 更新|Check|Install/);
+    expect(visibleCopy).toMatch(/NexusHub 更新|Check|Install/);
+    expect(visibleCopy).not.toContain("系统状态");
     expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
     expect(visibleCopy).toMatch(/归档线程清理|隐藏线程清理|Job History/);
     expect(contract.updateActions).toEqual(["Check", "Install"]);

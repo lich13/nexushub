@@ -3,7 +3,7 @@ use anyhow::Result;
 use nexushub_core::{
     local::{local_plugin_catalog, LocalPluginInfo},
     platform::PlatformPaths,
-    system::{system_status_with_surface, SystemStatus},
+    services::{system::SystemCapabilitiesResponse, use_cases::NexusHubUseCases},
 };
 use serde::Serialize;
 
@@ -17,9 +17,13 @@ pub struct DesktopSystemVersion {
     pub codex_update_available: Option<bool>,
 }
 
-pub(crate) async fn system_status_with_state(state: &DesktopState) -> Result<SystemStatus> {
+pub(crate) fn system_capabilities(state: &DesktopState) -> Result<SystemCapabilitiesResponse> {
     let config = state.config();
-    system_status_with_surface(&config, state.platform(), state.host_surface()).await
+    Ok(
+        NexusHubUseCases::with_config_for_surface(&config, state.platform(), state.host_surface())
+            .system()?
+            .runtime_capabilities(),
+    )
 }
 
 pub(crate) fn system_version() -> DesktopSystemVersion {

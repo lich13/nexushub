@@ -89,3 +89,36 @@ test("running and failed AGENTS tools stay folded inside mixed Grok activity", a
   await expect(commands.nth(0)).toContainText("Updated file contents", { timeout: 3500 });
   await expect(commands.nth(0)).toHaveAttribute("open", "");
 });
+
+for (const provider of ["codex", "grok", "pi"]) {
+  test(`${provider} file Markdown copies the source path without navigation`, async ({ page }) => {
+    await mockApi(page);
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copiedPath = value; } } });
+    });
+    const markdown = "[文件](file:///isolated/workspace/%E6%96%87%E4%BB%B6%20A.md#L12-C4) and [relative](docs/notes.md)";
+    if (provider === "codex") {
+      await page.route("**/threads.detail", route => {
+        const detail = demo.demoThreadDetail("019e95a0-demo");
+        detail.summary.cwd = "/isolated/workspace";
+        detail.blocks = [{ id: "path-reply", role: "assistant", kind: "message", text: markdown, questions: [] }];
+        return route.fulfill({ json: detail });
+      });
+    } else {
+      await page.route(`**/${provider}.detail`, route => route.fulfill({ json: {
+        summary: provider === "grok" ? { cwd: "/isolated/workspace" } : { cwd: "/isolated/workspace" },
+        events: [{ kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: markdown }]
+      } }));
+    }
+    await page.goto("/");
+    if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+    else await page.locator(".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+    const first = page.locator(".file-path-label").first();
+    await expect(first).toBeVisible();
+    await first.click();
+    await expect(page.locator("html")).toHaveAttribute("data-copied-path", "/isolated/workspace/文件 A.md");
+    await expect(page).toHaveURL(/\/$/);
+    await page.getByRole("button", { name: "复制文件路径", exact: true }).last().click();
+    await expect(page.locator("html")).toHaveAttribute("data-copied-path", provider === "pi" ? "/isolated/pi-workspace/docs/notes.md" : "/isolated/workspace/docs/notes.md");
+  });
+}

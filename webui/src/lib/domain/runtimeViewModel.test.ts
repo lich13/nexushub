@@ -3,7 +3,6 @@ import type {
   ArchiveDeletePlan,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
-  SystemStatus,
   UpdateStatus
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
@@ -23,7 +22,6 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   webAuth: true,
   logout: true,
   securitySettings: true,
-  publicEndpointStatus: true,
   codexStatePaths: true,
   updatePrune: true,
   threadCleanup: true,
@@ -40,7 +38,6 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   webAuth: false,
   logout: false,
   securitySettings: false,
-  publicEndpointStatus: false,
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: true,
@@ -97,12 +94,6 @@ describe("runtime view-model helpers", () => {
       recommended_action: "Confirm install in the Tauri updater.",
       capabilities: ["check", "confirm_install"]
     };
-    const systemStatus: SystemStatus = {
-      hostname: "macos",
-      public_endpoint: "https://panel.example.com/nexushub/",
-      hidden_thread_count: 3,
-      state_db_integrity: "ok"
-    };
     const hiddenDeleteResult: HiddenThreadDeleteResult = {
       before: hiddenPlan(),
       deleted_threads: 2,
@@ -119,7 +110,6 @@ describe("runtime view-model helpers", () => {
 
     const view = opsWorkspaceViewModel({
       capabilities: macosTauriCapabilities,
-      status: systemStatus,
       updateStatus,
       archivePlan: archivePlan(),
       hiddenPlan: hiddenPlan(),
@@ -129,7 +119,6 @@ describe("runtime view-model helpers", () => {
     });
 
     expect(view.panelTitles).toEqual(opsWorkspacePanelTitles(macosTauriCapabilities));
-    expect(view.systemMetrics.map((metric) => metric.label)).toEqual(["Hostname", "Hidden threads", "Sources"]);
     expect(view.updateActions).toEqual(opsUpdateActionView(updateStatus, macosTauriCapabilities));
     expect(view.archiveCleanup.stage).toEqual({ label: "等待确认", tone: "danger" });
     expect(view.archiveCleanup.canArm).toBe(true);
@@ -147,14 +136,6 @@ describe("runtime view-model helpers", () => {
   test("keeps Linux service labels when capabilities advertise the Linux WebUI surface", () => {
     const view = opsWorkspaceViewModel({
       capabilities: linuxWebCapabilities,
-      status: {
-        hostname: "codex-cloud-root",
-        public_endpoint: "https://panel.example.com/nexushub/",
-        state_db_integrity: "ok",
-        codex_home: "/root/.codex",
-        state_db: "/var/lib/nexushub-webd/nexushub.sqlite",
-        hidden_thread_count: 0
-      },
       updateStatus: {
         current_version: "0.1.100",
         latest_version: "v0.1.103",
@@ -173,15 +154,6 @@ describe("runtime view-model helpers", () => {
       hiddenCleanup: { dryRunPending: true, armed: false, executePending: false }
     });
 
-    expect(view.systemMetrics.map((metric) => metric.label)).toEqual([
-      "Hostname",
-      "Public endpoint",
-      "state DB",
-      "Codex Home",
-      "State DB",
-      "Hidden threads",
-      "Sources"
-    ]);
     expect(view.updateActions.map((action) => action.label)).toEqual(["Precheck", "Update", "Prune"]);
     expect(failureCategoryLabel("systemd_failure", linuxWebCapabilities)).toBe("systemd 失败");
     expect(view.hiddenCleanup.stage).toEqual({ label: "扫描中", tone: "warning" });

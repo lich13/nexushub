@@ -137,7 +137,6 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   webAuth: true,
   logout: true,
   securitySettings: true,
-  publicEndpointStatus: true,
   codexStatePaths: true,
   updatePrune: true,
   threadCleanup: true,
@@ -154,7 +153,6 @@ const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   webAuth: false,
   logout: false,
   securitySettings: false,
-  publicEndpointStatus: false,
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: true,
@@ -759,12 +757,10 @@ describe("conversation helpers", () => {
     const retiredMissingCopy = ["CSRF", "未恢复"].join(" ");
 
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
-      "系统状态",
       "NexusHub 更新",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(linuxWebCapabilities)).toEqual([
-      "系统状态",
       "NexusHub 更新",
       "归档线程清理",
       "隐藏线程清理",
@@ -789,9 +785,9 @@ describe("conversation helpers", () => {
   });
 
   test("desktop read-only task surface retains copy and archive without web authentication controls", async () => {
-    const { runtimeCapabilitiesFromSystemStatus } = await import("./lib/domain/capabilities");
-    const { demoSystemStatus } = await import("./lib/api/demo");
-    const capabilities = runtimeCapabilitiesFromSystemStatus(demoSystemStatus("macos-tauri"));
+    const { runtimeCapabilitiesFromResponse } = await import("./lib/domain/capabilities");
+    const { demoSystemCapabilities } = await import("./lib/api/demo");
+    const capabilities = runtimeCapabilitiesFromResponse(demoSystemCapabilities("macos-tauri"));
     expect(capabilities.webAuth).toBe(false);
     expect(capabilities.securitySettings).toBe(false);
     expect(capabilities.threadArchiveActions).toBe(true);

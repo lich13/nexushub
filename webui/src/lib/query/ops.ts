@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
-  getSystemStatus,
   getUpdateStatus,
   listJobs,
   startArchiveDelete,
@@ -12,31 +11,20 @@ import {
   type UnifiedUpdateAction
 } from "../api";
 import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
-import { systemQueryKeys } from "./system";
 import { preservePreviousQueryData } from "./shared";
 import { backgroundJobKey } from "./jobs";
 
 export const opsQueryKeys = {
-  systemStatus: systemQueryKeys.status,
   updateStatus: ["update-status"] as const,
   jobs: ["jobs"] as const,
   threads: ["threads"] as const
 };
 
-export function useOpsQueries({ section, historyOpen }: { section: "system" | "maintenance"; historyOpen: boolean }) {
+export function useOpsQueries({ historyOpen }: { historyOpen: boolean }) {
   return {
-    status: useQuery({
-      queryKey: opsQueryKeys.systemStatus,
-      queryFn: getSystemStatus,
-      enabled: section === "system",
-      refetchInterval: 8000,
-      staleTime: 5000,
-      placeholderData: preservePreviousQueryData
-    }),
     update: useQuery({
       queryKey: opsQueryKeys.updateStatus,
       queryFn: getUpdateStatus,
-      enabled: section === "system",
       refetchInterval: 30000,
       staleTime: 15000,
       placeholderData: preservePreviousQueryData
@@ -62,7 +50,6 @@ export function useOpsActions(input: {
   const qc = useQueryClient();
   const { csrfToken, capabilities } = input;
   const invalidateJobs = () => qc.invalidateQueries({ queryKey: opsQueryKeys.jobs });
-  const invalidateSystem = () => qc.invalidateQueries({ queryKey: opsQueryKeys.systemStatus });
   const invalidateThreads = () => qc.invalidateQueries({ queryKey: opsQueryKeys.threads });
   const requireThreadCleanup = () => {
     if (!capabilities.threadCleanup) {
@@ -102,7 +89,6 @@ export function useOpsActions(input: {
       onSuccess: (result) => {
         input.onArchiveExecute(result);
         invalidateJobs();
-        invalidateSystem();
         invalidateThreads();
       }
     }),
@@ -121,7 +107,6 @@ export function useOpsActions(input: {
       onSuccess: (result) => {
         input.onHiddenExecute(result);
         invalidateJobs();
-        invalidateSystem();
         invalidateThreads();
       }
     })

@@ -65,7 +65,7 @@ test("archive and hidden cleanup require previews, explicit confirmation, and vi
   });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("tab", { name: "维护", exact: true }).click();
+  await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
   const archive = page.locator(".panel").filter({ has: page.getByText("归档线程清理", { exact: true }) });
   await expect(archive.getByRole("button", { name: "清理归档", exact: true })).toBeDisabled();
   await archive.getByRole("button", { name: "Dry-run", exact: true }).click();
@@ -92,7 +92,7 @@ test("native log maintenance is retired on every settings surface", async ({ pag
   const calls = await mockApi(page);
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("tab", { name: "维护", exact: true }).click();
+  await page.getByRole("tab", { name: "更新与维护", exact: true }).click();
   await expect(page.getByText("Codex 日志库维护", { exact: true })).toHaveCount(0);
   expect(calls.some(name => name.startsWith("probe.logsDb"))).toBe(false);
 });

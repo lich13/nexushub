@@ -1,40 +1,7 @@
-use crate::{
-    codex::{resolve_codex_paths, CodexPaths},
-    config::Config,
-    platform::{PlatformKind, PlatformPaths},
-    services::system::{system_capabilities_for_surface, HostSurface, SystemCapabilities},
-};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::process::Command;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemStatus {
-    pub platform: PlatformKind,
-    pub host_surface: HostSurface,
-    pub capabilities: SystemCapabilities,
-    pub service_kind: String,
-    pub service_name: String,
-    pub service_file: Option<String>,
-    pub config_path: String,
-    pub data_dir: String,
-    pub webui_dir: String,
-    pub log_dir: String,
-    pub host_label: String,
-    pub hostname: Option<String>,
-    pub public_endpoint: Option<String>,
-    pub codex_home: String,
-    pub configured_codex_home: Option<String>,
-    pub resolved_codex_home: String,
-    pub codex_home_source: String,
-    pub discovery_warnings: Vec<String>,
-    pub state_db: String,
-    pub panel_db: String,
-    pub state_db_integrity: Option<String>,
-    pub hidden_thread_count: usize,
-    pub thread_source_counts: std::collections::HashMap<String, usize>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceStatus {
@@ -60,64 +27,6 @@ pub struct VersionInfo {
 pub struct VersionInfoInputs {
     pub panel_latest: Option<String>,
     pub codex_latest: Option<String>,
-}
-
-pub async fn system_status(config: &Config) -> Result<SystemStatus> {
-    system_status_with_paths(config, &PlatformPaths::current()).await
-}
-
-pub async fn system_status_with_paths(
-    config: &Config,
-    platform: &PlatformPaths,
-) -> Result<SystemStatus> {
-    system_status_with_surface(
-        config,
-        platform,
-        HostSurface::default_for_platform(platform),
-    )
-    .await
-}
-
-pub async fn system_status_with_surface(
-    config: &Config,
-    platform: &PlatformPaths,
-    host_surface: HostSurface,
-) -> Result<SystemStatus> {
-    let resolved = resolve_codex_paths(&config.codex.home);
-    let paths = CodexPaths::new(&resolved.home);
-    let state_db_integrity = crate::codex::db_integrity(&paths).ok();
-    let hidden_thread_count = crate::codex::hidden_thread_ids(&paths)
-        .map(|ids| ids.len())
-        .unwrap_or(0);
-    let thread_source_counts = crate::codex::thread_source_counts(&paths).unwrap_or_default();
-    Ok(SystemStatus {
-        platform: platform.kind,
-        host_surface,
-        capabilities: system_capabilities_for_surface(config, platform, host_surface),
-        service_kind: platform.service_kind.clone(),
-        service_name: platform.service_name.clone(),
-        service_file: platform
-            .service_file
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        config_path: platform.config_file.display().to_string(),
-        data_dir: platform.data_dir.display().to_string(),
-        webui_dir: platform.webui_dir.display().to_string(),
-        log_dir: platform.log_dir.display().to_string(),
-        host_label: config.codex.host_label.clone(),
-        hostname: command_stdout("hostname", &[]).await.ok(),
-        public_endpoint: config.server.public_base_url.clone(),
-        codex_home: resolved.home.display().to_string(),
-        configured_codex_home: resolved.configured_codex_home.clone(),
-        resolved_codex_home: resolved.home.display().to_string(),
-        codex_home_source: resolved.codex_home_source,
-        discovery_warnings: resolved.discovery_warnings,
-        state_db: paths.state_db().display().to_string(),
-        panel_db: config.paths.db_path.display().to_string(),
-        state_db_integrity,
-        hidden_thread_count,
-        thread_source_counts,
-    })
 }
 
 pub async fn version_info() -> Result<VersionInfo> {

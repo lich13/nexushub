@@ -23,7 +23,7 @@ import { useBackgroundJobs } from "./lib/query/jobs";
 import {
   useBootstrapRuntimeCapabilities,
   useRuntimeCapabilities,
-  useSystemStatusQuery,
+  useSystemCapabilitiesQuery,
   type RuntimeCapabilityMatrix
 } from "./lib/query/system";
 import {
@@ -64,11 +64,11 @@ export function initialSessionForRuntime(desktop?: RuntimeCapabilityInput): Sess
 export default function App() {
   const bootstrapCapabilities = useBootstrapRuntimeCapabilities();
   const [session, setSession] = useState<SessionUser | null>(() => initialSessionForRuntime(bootstrapCapabilities));
-  const systemStatus = useSystemStatusQuery({ enabled: Boolean(session) });
+  const systemCapabilities = useSystemCapabilitiesQuery({ enabled: Boolean(session) });
   useBackgroundJobs(Boolean(session));
-  const capabilities = useRuntimeCapabilities(systemStatus.data, bootstrapCapabilities);
+  const capabilities = useRuntimeCapabilities(systemCapabilities.data, bootstrapCapabilities);
   const [view, setView] = useState<View>("codex");
-  const [settingsSection, setSettingsSection] = useState<"system" | "maintenance" | "security">("system");
+  const [settingsSection, setSettingsSection] = useState<"maintenance" | "security">("maintenance");
   const [mobileThreadsOpen, setMobileThreadsOpen] = useState(true);
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("nexushub.nav-collapsed") === "1");
 
@@ -114,11 +114,10 @@ export default function App() {
             {view === "probe" && session && <ProbeWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
             {view === "ops" && session && <div className="settings-workspace">
               <header className="settings-header"><h1>设置</h1><div className="settings-tabs" role="tablist">
-                <button role="tab" aria-selected={settingsSection === "system"} onClick={() => setSettingsSection("system")}>系统与更新</button>
-                <button role="tab" aria-selected={settingsSection === "maintenance"} onClick={() => setSettingsSection("maintenance")}>维护</button>
+                <button role="tab" aria-selected={settingsSection === "maintenance"} onClick={() => setSettingsSection("maintenance")}>更新与维护</button>
                 {capabilities.securitySettings && <button role="tab" aria-selected={settingsSection === "security"} onClick={() => setSettingsSection("security")}>账户与安全</button>}
               </div></header>
-              {settingsSection === "security" && capabilities.securitySettings ? <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} /> : <OpsWorkspace section={settingsSection === "maintenance" ? "maintenance" : "system"} csrfToken={session.csrf_token} capabilities={capabilities} />}
+              {settingsSection === "security" && capabilities.securitySettings ? <SecurityWorkspace csrfToken={session.csrf_token} username={session.username} /> : <OpsWorkspace csrfToken={session.csrf_token} capabilities={capabilities} />}
             </div>}
           </WorkspaceErrorBoundary>
         </main>
