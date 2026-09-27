@@ -45,7 +45,13 @@ pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail
             block_builder.push_event(&value, raw_event_count);
         }
     }
-    let blocks = block_builder.finish();
+    let mut blocks = block_builder.finish();
+    for message in blocks
+        .iter_mut()
+        .filter_map(|block| block.user_message.as_mut())
+    {
+        message.refresh_files(summary.cwd.as_deref());
+    }
     let total_blocks = blocks.len();
     Ok(ThreadDetail {
         summary,
@@ -1358,7 +1364,19 @@ impl MessageBlockBuilder {
         }
 
         if let Some(mut block) = parse_message_block(value, raw_index) {
-            if block.text.as_deref().is_some_and(contains_proposed_plan) {
+            if block.user_message.as_ref().is_some_and(|message| {
+                self.blocks.iter().any(|existing| {
+                    existing
+                        .user_message
+                        .as_ref()
+                        .is_some_and(|previous| previous.id == message.id)
+                })
+            }) {
+                return;
+            }
+            if block.role == "assistant"
+                && block.text.as_deref().is_some_and(contains_proposed_plan)
+            {
                 block.kind = "plan".to_string();
                 block.status = block.status.or_else(|| Some("pending".to_string()));
                 block.display_kind = Some("plan".to_string());
@@ -1530,6 +1548,7 @@ fn compact_completed_tool_history(
         .copied()
         .collect::<HashSet<_>>();
     let collapsed = MessageBlock {
+        user_message: None,
         id: "completed-tool-history-collapsed".to_string(),
         role: "tool".to_string(),
         kind: "tool_history_collapsed".to_string(),
@@ -1588,6 +1607,7 @@ fn compact_chat_history(blocks: Vec<MessageBlock>, max_chat_messages: usize) -> 
         .copied()
         .collect::<HashSet<_>>();
     let collapsed = MessageBlock {
+        user_message: None,
         id: "chat-history-collapsed".to_string(),
         role: "tool".to_string(),
         kind: "chat_history_collapsed".to_string(),
@@ -1685,6 +1705,7 @@ impl PendingToolCall {
 
     fn into_running_block(self) -> MessageBlock {
         MessageBlock {
+            user_message: None,
             id: self.id,
             role: "tool".to_string(),
             kind: self.kind,
@@ -1735,7 +1756,16 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
     if payload_type != "message" && !is_action_display_kind(payload_type) {
         return None;
     }
-    let text = structured_text(payload)
+    let user_message = (role == "user").then(|| {
+        crate::user_message::parse_user_message(
+            &block_id(value, raw_index),
+            payload.get("content").unwrap_or(payload),
+        )
+    });
+    let text = user_message
+        .as_ref()
+        .map(|message| message.text.clone())
+        .or_else(|| structured_text(payload))
         .or_else(|| structured_text(value))
         .or_else(|| parse_message_event(value).map(|message| message.text));
     if text
@@ -1744,10 +1774,16 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
     {
         return None;
     }
-    if text.as_deref().unwrap_or("").trim().is_empty() && !is_action_display_kind(payload_type) {
+    if text.as_deref().unwrap_or("").trim().is_empty()
+        && user_message
+            .as_ref()
+            .is_none_or(|message| message.attachments.is_empty())
+        && !is_action_display_kind(payload_type)
+    {
         return None;
     }
     Some(MessageBlock {
+        user_message,
         id: block_id(value, raw_index),
         role: role.to_string(),
         kind: normalize_kind(payload_type).to_string(),
@@ -1783,6 +1819,7 @@ fn is_plan_item_completed(value: &Value) -> bool {
 fn pending_elicitation_block(value: &Value, raw_index: usize) -> Option<MessageBlock> {
     let elicitation = parse_pending_elicitation(value)?;
     Some(MessageBlock {
+        user_message: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input".to_string(),
@@ -1871,6 +1908,7 @@ fn plan_delta_block(value: &Value, raw_index: usize) -> Option<MessageBlock> {
         "streaming".to_string()
     };
     Some(MessageBlock {
+        user_message: None,
         id: plan_block_id(value, payload, raw_index),
         role: "assistant".to_string(),
         kind: "plan".to_string(),
@@ -1916,6 +1954,7 @@ fn user_input_answer_block(value: &Value, raw_index: usize) -> Option<MessageBlo
         .or_else(|| payload_call_id(payload))
         .or_else(|| payload_item_id(value, payload));
     Some(MessageBlock {
+        user_message: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input_result".to_string(),
@@ -1959,6 +1998,7 @@ fn user_input_output_block(
 ) -> MessageBlock {
     let answers = parse_user_input_output_answers(payload);
     MessageBlock {
+        user_message: None,
         id: block_id(value, raw_index),
         role: "assistant".to_string(),
         kind: "request_user_input_result".to_string(),
@@ -2008,6 +2048,7 @@ fn tool_output_block(
         Some(tool_summary(&text))
     };
     MessageBlock {
+        user_message: None,
         id: pending
             .as_ref()
             .map(|call| call.id.clone())

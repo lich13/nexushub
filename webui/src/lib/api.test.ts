@@ -1229,6 +1229,7 @@ describe("archive delete API compatibility", () => {
       "jobs.detail",
       "jobs.list",
       "pi.deleteExecute",
+      "sessions.attachmentRead",
       "sessions.bulkPreview",
       "sessions.bulkExecute",
       "pi.deletePreview",

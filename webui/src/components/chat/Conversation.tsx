@@ -1,3 +1,4 @@
+import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
@@ -103,10 +104,10 @@ export function Conversation(props: {
       <div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
         {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
         {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
-        <MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
+        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
           if (stream.current) scrollState.current.prepend = stream.current.scrollHeight - stream.current.scrollTop;
           setHistoryExpanded(true);
-        }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider>
+        }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div>
     </main>

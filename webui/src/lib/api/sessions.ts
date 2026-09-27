@@ -8,3 +8,7 @@ export type SessionBatchExecuteRequest = { provider: SessionProvider; operation:
 export type SessionBatchResult = { items: Array<{ sessionKey: string; status: "succeeded" | "blocked" | "failed"; message: string | null }> };
 export function previewSessionBatch(request: SessionBatchRequest, csrfToken?: string | null): Promise<SessionBatchPreview> { return callCommand("sessions.bulkPreview", { request, csrfToken }); }
 export function executeSessionBatch(request: SessionBatchExecuteRequest, csrfToken?: string | null): Promise<SessionBatchResult> { return callCommand("sessions.bulkExecute", { request, csrfToken }); }
+
+export type SessionAttachmentRequest = { provider: SessionProvider; sessionKey: string; messageId: string; attachmentId: string };
+export type SessionAttachmentResponse = { mimeType: string; base64: string };
+export function readSessionAttachment(request: SessionAttachmentRequest): Promise<SessionAttachmentResponse> { return callCommand("sessions.attachmentRead", { request }); }

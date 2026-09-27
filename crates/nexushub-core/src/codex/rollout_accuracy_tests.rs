@@ -116,3 +116,29 @@ fn rollout_accuracy_completed_body_is_authoritative_and_words_are_not_filters() 
     assert_eq!(selection.message, final_answer);
     assert_eq!(selection.source, "task_complete.last_agent_message");
 }
+
+#[test]
+fn user_images_survive_without_text_and_native_replays_are_not_duplicate_bubbles() {
+    let first = json!({"type":"response_item","payload":{"id":"user-one","type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}});
+    let second = json!({"type":"response_item","payload":{"id":"user-two","type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}});
+    let blocks = message_blocks_from_events([&first, &first, &second]);
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(
+        blocks[0].user_message.as_ref().unwrap().attachments.len(),
+        1
+    );
+    assert_eq!(blocks[1].user_message.as_ref().unwrap().id, "user-two");
+}
+
+#[test]
+fn user_plan_examples_are_never_promoted_to_assistant_plan_cards() {
+    let value = json!({"type":"response_item","payload":{"id":"user","type":"message","role":"user","content":[{"type":"input_text","text":"<proposed_plan># literal</proposed_plan>"}]}});
+    let blocks = message_blocks_from_events([&value]);
+    assert_eq!(blocks[0].kind, "message");
+    assert!(blocks[0]
+        .user_message
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("<proposed_plan>"));
+}

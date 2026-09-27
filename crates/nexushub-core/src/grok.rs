@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
@@ -57,6 +57,8 @@ pub struct GrokSessionDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokHistoryEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<crate::user_message::UserMessage>,
     pub timestamp: Option<String>,
     pub kind: String,
     pub text: Option<String>,
@@ -187,19 +189,29 @@ pub fn grok_session_detail(
     let history = summary.path.join("updates.jsonl");
     static CACHE: crate::read_cache::ReadCache<Vec<GrokHistoryEvent>> =
         crate::read_cache::ReadCache::new(8 * 1024 * 1024);
-    let events = CACHE.read(
+    let mut events = CACHE.read(
         &history,
         |events, _| {
             events
                 .iter()
                 .map(|event| {
-                    256 + event.text.as_ref().map_or(0, String::len) as u64
+                    256 + event
+                        .user_message
+                        .as_ref()
+                        .map_or(0, crate::user_message::UserMessage::weight)
+                        + event.text.as_ref().map_or(0, String::len) as u64
                         + event.detail.as_ref().map_or(0, String::len) as u64
                 })
                 .sum()
         },
         || read_history(&history),
     )?;
+    for message in events
+        .iter_mut()
+        .filter_map(|event| event.user_message.as_mut())
+    {
+        message.refresh_files(Some(&summary.cwd));
+    }
     Ok(GrokSessionDetail { summary, events })
 }
 
@@ -213,15 +225,26 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
     let mut tool_indices: HashMap<String, usize> = HashMap::new();
     if history.is_file() {
         let mut file = fs::File::open(history)?;
-        let offset = file.metadata()?.len().saturating_sub(8 * 1024 * 1024);
+        let offset = file.metadata()?.len().saturating_sub(64 * 1024 * 1024);
         file.seek(SeekFrom::Start(offset))?;
         let mut reader = BufReader::new(file);
+        let mut position = offset;
         if offset > 0 {
             let mut partial = String::new();
-            reader.read_line(&mut partial)?;
+            position += reader.read_line(&mut partial)? as u64;
         }
-        for line in reader.lines() {
-            let line = line?;
+        let mut user_parts = Vec::new();
+        let mut user_native_key = None;
+        let mut user_start = 0;
+        let mut seen_user_updates = HashSet::new();
+        loop {
+            let mut line = String::new();
+            let bytes = reader.read_line(&mut line)?;
+            if bytes == 0 {
+                break;
+            }
+            let line_start = position;
+            position += bytes as u64;
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
@@ -232,6 +255,9 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                 .and_then(Value::as_str)
                 .unwrap_or("event")
                 .to_string();
+            if kind != "user_message_chunk" {
+                user_parts.clear();
+            }
             if !matches!(
                 kind.as_str(),
                 "user_message_chunk"
@@ -268,6 +294,64 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                         .join("\n")
                 })
                 .filter(|text| !text.is_empty());
+            if kind == "user_message_chunk" {
+                if let Some(id) = update.get("updateId").and_then(Value::as_str) {
+                    if !seen_user_updates.insert(id.to_owned()) {
+                        continue;
+                    }
+                }
+                let native_key = update
+                    .get("messageId")
+                    .or_else(|| update.get("promptId"))
+                    .or_else(|| params.get("prompt_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let same = !user_parts.is_empty()
+                    && events
+                        .last()
+                        .is_some_and(|event: &GrokHistoryEvent| event.kind == kind)
+                    && user_native_key == native_key;
+                if !same {
+                    user_parts.clear();
+                    user_start = line_start;
+                    user_native_key = native_key;
+                }
+                let content = update.get("content").cloned().unwrap_or_else(
+                    || serde_json::json!({"type":"text", "text":text.clone().unwrap_or_default()}),
+                );
+                match content {
+                    Value::Array(parts) => user_parts.extend(parts),
+                    other => user_parts.push(other),
+                }
+                let message = crate::user_message::parse_user_message(
+                    &format!("grok:{user_start}"),
+                    &Value::Array(user_parts.clone()),
+                );
+                if same {
+                    let previous = events.last_mut().unwrap();
+                    previous.text = Some(message.text.clone());
+                    previous.user_message = Some(message);
+                } else {
+                    events.push(GrokHistoryEvent {
+                        user_message: Some(message.clone()),
+                        timestamp: value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        kind,
+                        text: Some(message.text),
+                        method: value
+                            .get("method")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        call_id,
+                        status,
+                        detail,
+                    });
+                }
+                continue;
+            }
+            user_parts.clear();
             if kind.starts_with("tool_") {
                 if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
                     let previous: &mut GrokHistoryEvent = &mut events[*index];
@@ -299,6 +383,7 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                 }
             }
             events.push(GrokHistoryEvent {
+                user_message: None,
                 timestamp: value.get("timestamp").map(|value| {
                     value
                         .as_str()

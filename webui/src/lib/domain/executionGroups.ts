@@ -147,7 +147,7 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
     const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
     return {
       item: event,
-      key: `grok:${event.callId ?? `${event.timestamp ?? ""}:${event.kind}`}`,
+      key: `grok:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}`}`,
       callId: event.callId,
       tool: event.kind.startsWith("tool_"),
       instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),
@@ -163,7 +163,7 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
 export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {
   return groupActivities(events.map(event => ({
     item: event,
-    key: `pi:${event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}`}`,
+    key: `pi:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}`}`,
     callId: event.callId,
     tool: event.kind === "tool_call" || event.kind === "tool_result",
     instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),

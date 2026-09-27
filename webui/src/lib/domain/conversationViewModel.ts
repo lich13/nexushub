@@ -132,6 +132,7 @@ export function threadRolloutPath(rolloutPath?: string | null): string | null {
 }
 
 export function isPlanBlock(block: MessageBlock): boolean {
+  if (block.role === "user") return false;
   const kind = normalizedBlockKind(block);
   const displayKind = normalizedDisplayKind(block);
   return displayKind === "plan" || kind.includes("plan") || Boolean(block.text?.includes("<proposed_plan>"));

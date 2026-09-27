@@ -1,3 +1,4 @@
+pub const SESSIONS_ATTACHMENT_READ: &str = "sessions.attachmentRead";
 pub const GROK_LIST: &str = "grok.list";
 pub const SESSIONS_BULK_PREVIEW: &str = "sessions.bulkPreview";
 pub const SESSIONS_BULK_EXECUTE: &str = "sessions.bulkExecute";
@@ -112,6 +113,7 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     PI_RENAME,
     PI_DELETE_PREVIEW,
     PI_DELETE_EXECUTE,
+    SESSIONS_ATTACHMENT_READ,
     SESSIONS_BULK_PREVIEW,
     SESSIONS_BULK_EXECUTE,
 ];
@@ -121,6 +123,7 @@ pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_THREAD_EVENTS];
 pub const INTERNAL_COMMANDS: &[&str] = &[];
 
 pub const DECLARED_COMMANDS: &[&str] = &[
+    SESSIONS_ATTACHMENT_READ,
     SESSIONS_BULK_PREVIEW,
     SESSIONS_BULK_EXECUTE,
     GROK_LIST,

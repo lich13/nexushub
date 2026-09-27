@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.1.5 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.1.6 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -14,6 +14,12 @@ NexusHub 1.1.5 follows a quiet, compact reading workspace aligned with Codex Des
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
 - Markdown file links copy their source path in web, while macOS reveals a resolved path in Finder and offers a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event.
+
+## User messages and attachments
+
+User messages use a shared right-aligned blue bubble with normal-weight system text and preserved whitespace. Markdown characters are literal in user requests; assistant Markdown and Plan rendering keep their existing rules. User role labels are omitted. The bubble stays within the reading column and narrows on mobile.
+
+Image attachments sit above the bubble in reserved 96px square thumbnails, with a modal image preview, Escape dismissal and focus restoration. Loading and failed states retain their footprint. File cards show basenames and reuse path controls. Only confirmed native attachment envelopes are removed; unknown text and literal examples are preserved. Image-only messages have no empty bubble.
 
 ## Visual tokens
 

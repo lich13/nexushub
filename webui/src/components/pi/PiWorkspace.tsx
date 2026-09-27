@@ -1,3 +1,4 @@
+import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
@@ -107,7 +108,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
-          <MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider></MarkdownPathScope.Provider>
+          <UserMessageScope.Provider value={{ provider: "pi", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}
         </div>
@@ -122,6 +123,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
 }
 
 function PiEvent({ event, activityId }: { event: PiHistoryEvent; activityId: string }) {
+  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} />;
   if (event.kind === "tool_call" || event.kind === "tool_result") {
     const instructionFile = isInstructionFileActivity(event.role, event.text, event.detail);
     return <ActivityDetails className="grok-tool execution-command" stateKey={activityId} initiallyOpen={false} summary={<>

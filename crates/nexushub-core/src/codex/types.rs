@@ -88,6 +88,8 @@ pub fn extract_proposed_plan_text(text: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<crate::user_message::UserMessage>,
     pub id: String,
     pub role: String,
     pub kind: String,

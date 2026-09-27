@@ -1,3 +1,4 @@
+import { clearAttachmentCache } from "./query/attachments";
 import type { SessionUser } from "../types";
 
 const KEY = "nexushub-session";
@@ -16,5 +17,6 @@ export function loadSession(): SessionUser | null {
 }
 
 export function clearSession() {
+  clearAttachmentCache();
   window.localStorage.removeItem(KEY);
 }

@@ -9,6 +9,22 @@ use nexushub_core::services::{
     use_cases::NexusHubUseCases,
 };
 
+pub(crate) async fn attachment_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<nexushub_core::user_message::SessionAttachmentRequest>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let result = tokio::task::spawn_blocking(move || {
+        NexusHubUseCases::new(state.platform())
+            .sessions(state.codex_paths())
+            .attachment_read(request)
+    })
+    .await
+    .map_err(anyhow::Error::from)??;
+    ok(result)
+}
+
 pub(crate) async fn bulk_preview(
     State(state): State<AppState>,
     headers: HeaderMap,

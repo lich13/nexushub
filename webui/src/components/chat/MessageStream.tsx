@@ -1,3 +1,4 @@
+import { UserMessage } from "../common/UserMessage";
 import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
@@ -56,6 +57,7 @@ export function MessageBlockView({
   if (!shouldRenderConversationMessage(block)) {
     return null;
   }
+  if (block.role === "user") return <UserMessage message={block.user_message} text={block.text ?? ""} />;
   const presentation = conversationMessagePresentation(block);
   return (
     <article className={presentation.rowClassName}>

@@ -660,6 +660,18 @@
       "coreUseCase": "desktop.opener",
       "webuiWrapper": "revealLocalPath",
       "hostOnlyReason": "Existing Tauri opener plugin; explicit user gesture, no Linux HTTP route or shell execution"
+    },
+    {
+      "id": "sessions.attachmentRead",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "sessions.attachment_read",
+      "linuxRpc": "sessions.attachmentRead",
+      "tauriCommand": "commands::sessions::readSessionAttachment",
+      "webuiWrapper": "readSessionAttachment",
+      "dtoOwner": "sessions",
+      "requestDto": "SessionAttachmentRequest",
+      "responseDto": "SessionAttachmentResponse"
     }
   ],
   "dtoCatalog": {
@@ -854,6 +866,14 @@
     "SystemCapabilitiesResponse": {
       "core": "SystemCapabilitiesResponse",
       "webui": "SystemCapabilitiesResponse"
+    },
+    "SessionAttachmentRequest": {
+      "core": "SessionAttachmentRequest",
+      "webui": "SessionAttachmentRequest"
+    },
+    "SessionAttachmentResponse": {
+      "core": "SessionAttachmentResponse",
+      "webui": "SessionAttachmentResponse"
     }
   },
   "retiredActions": [

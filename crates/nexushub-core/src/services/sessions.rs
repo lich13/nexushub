@@ -114,6 +114,43 @@ fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[Stri
 }
 
 impl SessionUseCases {
+    pub fn attachment_read(
+        &self,
+        request: crate::user_message::SessionAttachmentRequest,
+    ) -> Result<crate::user_message::SessionAttachmentResponse> {
+        for value in [
+            &request.session_key,
+            &request.message_id,
+            &request.attachment_id,
+        ] {
+            ensure!(
+                !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control),
+                "无效的附件定位键"
+            );
+        }
+        let message = match request.provider {
+            SessionProvider::Codex => codex::thread_detail(&self.codex, &request.session_key)?
+                .into_iter()
+                .flat_map(|detail| detail.blocks)
+                .filter_map(|block| block.user_message)
+                .find(|message| message.id == request.message_id),
+            SessionProvider::Grok => {
+                grok::grok_session_detail(&self.grok, &request.session_key, None)?
+                    .events
+                    .into_iter()
+                    .filter_map(|event| event.user_message)
+                    .find(|message| message.id == request.message_id)
+            }
+            SessionProvider::Pi => pi::pi_session_detail(&self.pi, &request.session_key)?
+                .events
+                .into_iter()
+                .filter_map(|event| event.user_message)
+                .find(|message| message.id == request.message_id),
+        }
+        .ok_or_else(|| anyhow::anyhow!("会话消息已变化或不存在，请刷新会话"))?;
+        message.read_attachment(&request.attachment_id)
+    }
+
     pub fn bulk_preview(&self, request: SessionBatchRequest) -> Result<SessionBatchPreview> {
         crate::services::system::require_capability(
             &self.platform,
