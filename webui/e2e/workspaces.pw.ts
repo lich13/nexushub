@@ -115,7 +115,11 @@ test("menus support keyboard, rename, archive and restore from their visible ent
   await page.getByRole("button", { name: "归档", exact: true }).last().click();
   await page.locator(".thread-list .segmented").getByRole("button", { name: "归档", exact: true }).click();
   await page.locator(".thread-item").filter({ hasText: title }).click();
-  await expect(page.locator(".conversation-title")).toBeVisible();
+  // A pointer click waits for the double-click rename window. The previous
+  // conversation can still be visible until selection completes.
+  await expect(page.locator(".thread-item.selected")).toContainText(title);
+  await expect(page.locator(".conversation-title")).toHaveText(title);
+  await expect(page.locator(".conversation-header .status-chip")).toHaveText("归档");
   await menu.click();
   await expect(page.getByRole("button", { name: "改名", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveAttribute("title", "取消归档后可改名");
