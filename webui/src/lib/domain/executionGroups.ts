@@ -1,11 +1,12 @@
-import { isInstructionFileActivity } from "./visibleMarkdown";
+import { isInstructionFileActivity, visibleMarkdown } from "./visibleMarkdown";
 import type { MessageBlock, GrokHistoryEvent, PiHistoryEvent } from "../../types";
-import { isToolBlock, toolBlockDetailText } from "./conversationViewModel";
+import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQuestionResultBlock, toolBlockDetailText } from "./conversationViewModel";
 
 export type ExecutionStatus = "running" | "failed" | "completed";
 export type ExecutionCommand = {
   id: string;
   title: string;
+  preview?: string;
   status: ExecutionStatus;
   instructionFile?: boolean;
   sections: Array<{ label: string; text: string }>;
@@ -14,6 +15,7 @@ export type ExecutionGroup = {
   id: string;
   commands: ExecutionCommand[];
   kind: "command" | "tool";
+  provider: "Codex" | "Grok" | "Pi";
   running: boolean;
   failedCount: number;
 };
@@ -53,6 +55,30 @@ function commandTitle(...values: Array<string | null | undefined>): string {
   return values.find(value => value?.trim())?.trim().split(/\s+/, 1)[0] || "命令";
 }
 
+// Prefer native identities; content fingerprints are only a fallback for old events.
+export function activityFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(36);
+}
+
+function activityPreview(...sources: Array<string | null | undefined>): string | undefined {
+  for (const source of sources) {
+    if (!source?.trim()) continue;
+    let text = source;
+    try {
+      const value: unknown = JSON.parse(source);
+      if (value && typeof value === "object") {
+        const fields = value as Record<string, unknown>;
+        text = ["cmd", "command", "title", "path", "file_path", "query", "code"].map(key => fields[key]).find(value => typeof value === "string") as string || source;
+      }
+    } catch { /* Native commands and titles may already be plain text. */ }
+    const cleaned = visibleMarkdown(text).replace(/\s+/g, " ").trim();
+    if (cleaned) return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
+  }
+  return undefined;
+}
+
 type Activity<T> = {
   item: T;
   key: string;
@@ -62,13 +88,14 @@ type Activity<T> = {
   command: boolean;
   instructionFile: boolean;
   title: string;
+  preview?: string;
   phase: "call" | "result" | "update";
   status?: string | null;
   sections: ExecutionCommand["sections"];
 };
 
-function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): ExecutionRenderItem<T>[] {
-  type Entry = { kind: "item"; item: T; key: string } | { kind: "command"; command: ExecutionCommand; isCommand: boolean };
+function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup["provider"]): ExecutionRenderItem<T>[] {
+  type Entry = { kind: "item"; item: T; key: string } | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean };
   const entries: Entry[] = [];
   const pending = new Map<string, ExecutionCommand>();
   const occurrences = new Map<string, number>();
@@ -77,9 +104,10 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
     const occurrence = occurrences.get(activity.key) ?? 0;
     occurrences.set(activity.key, occurrence + 1);
     const key = `${activity.key}:${occurrence}`;
-    if (!activity.tool || (activity.turnId && turn && activity.turnId !== turn)) pending.clear();
+    const newTurn = Boolean(activity.turnId && turn && activity.turnId !== turn);
+    if (newTurn) pending.clear();
     if (activity.turnId) turn = activity.turnId;
-    const previous = activity.callId && activity.phase !== "call" ? pending.get(activity.callId) : undefined;
+    const previous = activity.tool && activity.callId && activity.phase !== "call" ? pending.get(activity.callId) : undefined;
     if (previous) {
       previous.instructionFile ||= activity.instructionFile;
       if (activity.status || activity.phase === "result") previous.status = executionStatus(activity.status);
@@ -88,19 +116,20 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
       }
       continue;
     }
-    if (!activity.command && !(groupAllTools && activity.tool)) {
+    if (!activity.tool) {
       entries.push({ kind: "item", item: activity.item, key });
       continue;
     }
     const command: ExecutionCommand = {
       id: key,
       title: activity.title,
+      preview: activity.preview,
       instructionFile: activity.instructionFile,
       status: activity.status ? executionStatus(activity.status) : activity.phase === "call" ? "running" : "completed",
       sections: [...activity.sections]
     };
     if (activity.callId) pending.set(activity.callId, command);
-    entries.push({ kind: "command", command, isCommand: activity.command });
+    entries.push({ kind: "command", command, isCommand: activity.command, newTurn });
   }
   const output: ExecutionRenderItem<T>[] = [];
   for (const entry of entries) {
@@ -109,11 +138,11 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
       continue;
     }
     const previous = output[output.length - 1];
-    const group = previous?.kind === "group" ? previous.group : undefined;
+    const group = previous?.kind === "group" && !entry.newTurn ? previous.group : undefined;
     if (group) {
       group.commands.push(entry.command);
       if (!entry.isCommand) group.kind = "tool";
-    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", running: false, failedCount: 0 } });
+    } else output.push({ kind: "group", group: { id: `group:${entry.command.id}`, commands: [entry.command], kind: entry.isCommand ? "command" : "tool", provider, running: false, failedCount: 0 } });
   }
   for (const entry of output) {
     if (entry.kind !== "group") continue;
@@ -126,20 +155,22 @@ function groupActivities<T>(activities: Activity<T>[], groupAllTools = false): E
 export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRenderItem<MessageBlock>[] {
   return groupActivities(blocks.map(block => {
     const result = /output|result/i.test(block.kind);
+    const tool = isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isPlanBlock(block) && !isQuestionBlock(block) && !isQuestionResultBlock(block);
     return {
       item: block,
       key: `codex:${block.turn_id ?? ""}:${block.call_id ?? block.item_id ?? block.id}`,
       callId: block.call_id,
       turnId: block.turn_id,
-      tool: isToolBlock(block),
+      tool,
       instructionFile: isInstructionFileActivity(block.tool_name, block.input, block.summary, toolBlockDetailText(block)),
-      command: isToolBlock(block) && (isCommandText(block.tool_name) || isCommandText(block.kind)),
+      command: tool && (isCommandText(block.tool_name) || isCommandText(block.kind)),
       title: commandTitle(block.tool_name, block.kind),
+      preview: activityPreview(block.input),
       phase: result ? "result" : "call",
       status: block.status,
       sections: [{ label: result ? "结果" : "命令详情", text: toolBlockDetailText(block) }]
     };
-  }));
+  }), "Codex");
 }
 
 export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRenderItem<GrokHistoryEvent>[] {
@@ -147,30 +178,32 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
     const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
     return {
       item: event,
-      key: `grok:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}`}`,
+      key: `grok:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
       callId: event.callId,
       tool: event.kind.startsWith("tool_"),
       instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),
       command,
       title: command ? commandTitle(event.method, event.text) : event.text?.trim() || "工具活动",
+      preview: activityPreview(event.kind === "tool_call" ? event.detail : undefined),
       phase: event.kind === "tool_call" ? "call" : event.kind === "tool_result" ? "result" : "update",
       status: event.status,
       sections: event.detail ? [{ label: command ? "命令详情" : "工具详情", text: event.detail }] : []
     };
-  }), true);
+  }), "Grok");
 }
 
 export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {
   return groupActivities(events.map(event => ({
     item: event,
-    key: `pi:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}`}`,
+    key: `pi:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
     callId: event.callId,
     tool: event.kind === "tool_call" || event.kind === "tool_result",
     instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),
     command: (event.kind === "tool_call" || event.kind === "tool_result") && (isCommandText(event.role) || isCommandText(event.text)),
-    title: commandTitle(event.role, event.text),
+    title: isCommandText(event.role) || isCommandText(event.text) ? commandTitle(event.role, event.text) : event.text?.trim() || event.role || "工具活动",
+    preview: activityPreview(event.kind === "tool_call" ? event.detail : undefined),
     phase: event.kind === "tool_call" ? "call" : "result",
     status: event.status,
     sections: event.detail ? [{ label: event.kind === "tool_call" ? "调用参数" : "结果", text: event.detail }] : []
-  })));
+  })), "Pi");
 }

@@ -1130,12 +1130,12 @@ fn thread_detail_blocks_do_not_emit_empty_function_call_shells() {
     ]);
 
     assert_eq!(detail.blocks.len(), 2);
-    assert_eq!(detail.blocks[0].role, "assistant");
-    assert_eq!(detail.blocks[0].text.as_deref(), Some("done"));
-    assert_eq!(detail.blocks[1].role, "tool");
-    assert_eq!(detail.blocks[1].status.as_deref(), Some("running"));
-    assert_eq!(detail.blocks[1].tool_name.as_deref(), Some("exec_command"));
-    assert!(detail.blocks[1]
+    assert_eq!(detail.blocks[1].role, "assistant");
+    assert_eq!(detail.blocks[1].text.as_deref(), Some("done"));
+    assert_eq!(detail.blocks[0].role, "tool");
+    assert_eq!(detail.blocks[0].status.as_deref(), Some("running"));
+    assert_eq!(detail.blocks[0].tool_name.as_deref(), Some("exec_command"));
+    assert!(detail.blocks[0]
         .text
         .as_deref()
         .unwrap_or_default()
@@ -2438,7 +2438,7 @@ fn exec_readonly_verification_threads_are_hidden_from_main_list() {
 }
 
 #[test]
-fn thread_detail_collapses_old_completed_tool_history() {
+fn thread_detail_keeps_completed_tool_history_in_order() {
     let mut events = Vec::new();
     events.push(json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"starting"}]}}));
     for index in 0..90 {
@@ -2448,15 +2448,63 @@ fn thread_detail_collapses_old_completed_tool_history() {
 
     let detail = detail_fixture(&events);
 
-    assert!(detail.blocks.len() < 90);
+    let tools = detail
+        .blocks
+        .iter()
+        .filter(|block| block.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tools.len(), 90);
     assert!(detail
         .blocks
         .iter()
-        .any(|block| block.id == "completed-tool-history-collapsed"));
+        .all(|block| block.id != "completed-tool-history-collapsed"));
+    assert_eq!(
+        tools.first().and_then(|block| block.call_id.as_deref()),
+        Some("call-0")
+    );
+    assert_eq!(
+        tools.last().and_then(|block| block.call_id.as_deref()),
+        Some("call-89")
+    );
     assert!(detail
         .blocks
         .iter()
         .any(|block| block.text.as_deref() == Some("out-89")));
+}
+
+#[test]
+fn thread_detail_preserves_call_position_with_parallel_and_pending_tools() {
+    let events = vec![
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"before"}]}}),
+        json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"first","arguments":{"cmd":"pwd"}}}),
+        json!({"type":"response_item","payload":{"type":"function_call","name":"read_file","call_id":"second","arguments":{"path":"README.md"}}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"between"}]}}),
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"second","output":"second output"}}),
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"first","output":"first output"}}),
+        json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"pending","arguments":{"cmd":"tail example.log"}}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"after"}]}}),
+    ];
+    let detail = detail_fixture(&events);
+    let order = detail
+        .blocks
+        .iter()
+        .map(|block| {
+            block
+                .call_id
+                .as_deref()
+                .or(block.text.as_deref())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["before", "first", "second", "between", "pending", "after"]
+    );
+    let latest = window_thread_detail(detail.clone(), Some(3), None);
+    assert_eq!(latest.blocks.len(), 3);
+    let earlier = window_thread_detail(detail, Some(3), latest.before_cursor.as_deref());
+    assert_eq!(earlier.blocks[1].call_id.as_deref(), Some("first"));
+    assert!(!earlier.has_more_blocks);
 }
 
 #[test]

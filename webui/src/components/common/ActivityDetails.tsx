@@ -6,20 +6,23 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 const choices = new Map<string, boolean>();
 export const DisclosureScope = createContext<string | null>(null);
 
-export function ActivityDetails({ className, stateKey, initiallyOpen, summary, children }: {
-  className: string; stateKey: string; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode);
+export function ActivityDetails({ className, stateKey, stateAliases = [], initiallyOpen, summary, children }: {
+  className: string; stateKey: string; stateAliases?: string[]; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode);
 }) {
   const scope = useContext(DisclosureScope);
   const id = scope ? `${scope}:${stateKey}` : null;
   const [choice, setChoice] = useState<boolean>();
-  const open = (id ? choices.get(id) : choice) ?? initiallyOpen;
+  const aliases = scope ? stateAliases.map(key => `${scope}:${key}`) : [];
+  const open = (id ? choices.get(id) ?? aliases.map(key => choices.get(key)).find(value => value !== undefined) : choice) ?? initiallyOpen;
   return <details className={className} open={open} onToggle={event => {
     if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
     const next = event.currentTarget.open;
     if (id) {
-      choices.delete(id);
-      choices.set(id, next);
-      if (choices.size > 2000) choices.delete(choices.keys().next().value!);
+      for (const key of [id, ...aliases]) {
+        choices.delete(key);
+        choices.set(key, next);
+        if (choices.size > 2000) choices.delete(choices.keys().next().value!);
+      }
     }
     setChoice(next);
   }}>

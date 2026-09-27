@@ -1262,12 +1262,12 @@ const MESSAGE_TEXT_LIMIT: usize = 12_000;
 const TOOL_TEXT_LIMIT: usize = 8_000;
 const TOOL_INPUT_LIMIT: usize = 4_000;
 const TOOL_SUMMARY_LIMIT: usize = 220;
-const COMPLETED_TOOL_HISTORY_LIMIT: usize = 40;
 const CHAT_HISTORY_LIMIT: usize = 80;
 
 #[derive(Default)]
 struct MessageBlockBuilder {
     blocks: Vec<MessageBlock>,
+    block_positions: HashMap<String, usize>,
     pending_tools: HashMap<String, PendingToolCall>,
     suppressed_call_ids: HashSet<String>,
     current_plan_marker: Option<(Option<String>, Option<String>)>,
@@ -1292,6 +1292,16 @@ struct PendingToolCall {
 
 impl MessageBlockBuilder {
     fn push_event(&mut self, value: &Value, raw_index: usize) {
+        let previous_len = self.blocks.len();
+        self.push_event_inner(value, raw_index);
+        for block in &self.blocks[previous_len..] {
+            self.block_positions
+                .entry(block.id.clone())
+                .or_insert(raw_index);
+        }
+    }
+
+    fn push_event_inner(&mut self, value: &Value, raw_index: usize) {
         if is_internal_agent_message(value) {
             return;
         }
@@ -1353,6 +1363,9 @@ impl MessageBlockBuilder {
             let pending = call_id
                 .as_ref()
                 .and_then(|id| self.pending_tools.remove(id));
+            if let Some(call) = &pending {
+                self.block_positions.insert(call.id.clone(), call.raw_index);
+            }
             self.blocks.push(tool_output_block(
                 value,
                 payload,
@@ -1508,82 +1521,18 @@ impl MessageBlockBuilder {
     fn finish(mut self) -> Vec<MessageBlock> {
         let mut pending = self.pending_tools.into_values().collect::<Vec<_>>();
         pending.sort_by_key(|call| call.raw_index);
-        self.blocks
-            .extend(pending.into_iter().map(PendingToolCall::into_running_block));
-        let blocks = compact_completed_tool_history(self.blocks, COMPLETED_TOOL_HISTORY_LIMIT);
-        compact_chat_history(blocks, CHAT_HISTORY_LIMIT)
-    }
-}
-
-fn compact_completed_tool_history(
-    blocks: Vec<MessageBlock>,
-    max_completed_tools: usize,
-) -> Vec<MessageBlock> {
-    let completed_tool_indexes = blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, block)| {
-            (block.role == "tool"
-                && !is_history_collapsed_block(block)
-                && !block.status.as_deref().is_some_and(is_running_status))
-            .then_some(index)
-        })
-        .collect::<Vec<_>>();
-    if completed_tool_indexes.len() <= max_completed_tools {
-        return blocks;
-    }
-
-    let hidden = completed_tool_indexes
-        .len()
-        .saturating_sub(max_completed_tools);
-    let keep_start = completed_tool_indexes
-        .len()
-        .saturating_sub(max_completed_tools);
-    let keep_completed = completed_tool_indexes[keep_start..]
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>();
-    let hide_completed = completed_tool_indexes[..keep_start]
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>();
-    let collapsed = MessageBlock {
-        user_message: None,
-        id: "completed-tool-history-collapsed".to_string(),
-        role: "tool".to_string(),
-        kind: "tool_history_collapsed".to_string(),
-        display_kind: Some("tool_group".to_string()),
-        status: Some("completed".to_string()),
-        text: Some(format!("{hidden} 个历史工具调用已折叠")),
-        summary: Some(format!("{hidden} 个历史工具调用已折叠")),
-        input: None,
-        truncated: Some(false),
-        resolved: Some(true),
-        answers: Vec::new(),
-        plan_status: None,
-        group_id: Some("tool_history".to_string()),
-        tool_name: Some("tool_history".to_string()),
-        call_id: None,
-        turn_id: None,
-        item_id: None,
-        created_at: None,
-        questions: Vec::new(),
-        payload: None,
-    };
-
-    let mut compacted = Vec::with_capacity(blocks.len().saturating_sub(hidden).saturating_add(1));
-    let mut inserted = false;
-    for (index, block) in blocks.into_iter().enumerate() {
-        if hide_completed.contains(&index) && !keep_completed.contains(&index) {
-            if !inserted {
-                compacted.push(collapsed.clone());
-                inserted = true;
-            }
-            continue;
+        for call in pending {
+            self.block_positions.insert(call.id.clone(), call.raw_index);
+            self.blocks.push(call.into_running_block());
         }
-        compacted.push(block);
+        self.blocks.sort_by_key(|block| {
+            self.block_positions
+                .get(&block.id)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        compact_chat_history(self.blocks, CHAT_HISTORY_LIMIT)
     }
-    compacted
 }
 
 fn compact_chat_history(blocks: Vec<MessageBlock>, max_chat_messages: usize) -> Vec<MessageBlock> {
@@ -1632,14 +1581,27 @@ fn compact_chat_history(blocks: Vec<MessageBlock>, max_chat_messages: usize) -> 
 
     let mut compacted = Vec::with_capacity(blocks.len().saturating_sub(hidden).saturating_add(1));
     let mut inserted = false;
+    let mut segment: Option<usize> = None;
+    let mut segment_count = 0;
     for (index, block) in blocks.into_iter().enumerate() {
         if hide_chat.contains(&index) && !keep_chat.contains(&index) {
-            if !inserted {
-                compacted.push(collapsed.clone());
+            let position = *segment.get_or_insert_with(|| {
+                let mut marker = collapsed.clone();
+                if inserted {
+                    marker.id = format!("chat-history-collapsed:{}", block.id);
+                }
+                compacted.push(marker);
                 inserted = true;
-            }
+                segment_count = 0;
+                compacted.len() - 1
+            });
+            segment_count += 1;
+            let summary = Some(format!("{segment_count} 条历史对话已折叠"));
+            compacted[position].text = summary.clone();
+            compacted[position].summary = summary;
             continue;
         }
+        segment = None;
         compacted.push(block);
     }
     compacted
@@ -1668,13 +1630,6 @@ fn is_chat_history_block(block: &MessageBlock) -> bool {
         && !kind.contains("tool")
         && !kind.contains("function_call")
         && !kind.contains("command")
-}
-
-fn is_history_collapsed_block(block: &MessageBlock) -> bool {
-    matches!(
-        block.kind.trim().to_ascii_lowercase().as_str(),
-        "chat_history_collapsed" | "tool_history_collapsed"
-    )
 }
 
 impl PendingToolCall {
