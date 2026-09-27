@@ -64,7 +64,7 @@ test("long mixed Grok tool runs fold together without creating an outer page scr
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const group = page.locator(".provider-events details.execution-group");
   await expect(group).toHaveCount(1);
-  await expect(group).toContainText("工具活动组");
+  await expect(group).toContainText("已使用 Grok 运行工具");
   await expect(group).toContainText("24 项工具");
   await expect(group).not.toHaveAttribute("open", "");
   await group.locator("summary").first().click();
@@ -128,6 +128,7 @@ test("selected running Pi session refreshes within three seconds", async ({ page
   await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
   await expect(page.locator(".provider-session .thread-running-indicator").first()).toBeVisible();
   await expect(page.locator("details.execution-group")).toContainText("1 条命令");
+  await page.locator("details.execution-group > summary").click();
   await expect(page.locator("details.execution-command")).toHaveCount(1);
   await expect(page.getByText(text, { exact: true })).toBeVisible();
   const appendedAt = Date.now();

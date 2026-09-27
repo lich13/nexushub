@@ -24,7 +24,7 @@ A host filesystem mounted rw can still be ro inside the service namespace. Check
 
 ## Release and install
 
-`v1.1.6` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
+`v1.1.7` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
 
 ```bash
 sudo deploy/nexushub-webd/install.sh --archive /absolute/staging/nexushub-webd-linux-x86_64.tar.gz --domain panel.example --path-prefix /nexushub/
@@ -43,7 +43,7 @@ sudo systemctl is-active nexushub-webd
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
-The 1.1.6 upgrade adds Codex ordinary-feedback Bark classification, source-path Markdown actions and the merged `更新与维护` settings surface. It adds no database table or native-session migration. Confirm structured memory metadata stays out of replies and exports, AGENTS.md sections start closed and manual expansion survives refresh, file clicks do not navigate to a server URL, and the retired `system.status` action is unavailable.
+The 1.1.7 upgrade preserves historical tool activity at its native position between replies. Confirm completed activity summaries remain visible, expanding reveals each call and result, earlier-page loading retains the viewport, and polling preserves disclosure choices. This release adds no RPC, database table or native-session migration.
 
 Use the authenticated public entry with disposable sessions to verify Grok batch deletion, Pi empty state, running spinner, mixed Grok tool folding, plan copy/download, provider Bark delivery and copy-ID feedback. A host without Pi is not evidence of Pi mutation support.
 
@@ -51,4 +51,4 @@ On failure restore the previous service binary/unit and verify health before ret
 
 ## User attachment acceptance
 
-After a 1.1.6 update, verify user bubbles and attachments through the authenticated HTTPS entrypoint. Test an embedded native image and an expired file reference: the former previews while the latter shows an unavailable card. A read request uses only session/message/attachment identities; unauthenticated reads and caller-supplied paths must fail. Preserve the existing systemd sandbox. Server previews only use server-side session data and files; a client-only temporary path can remain unavailable.
+After a 1.1.7 update, verify user bubbles and attachments through the authenticated HTTPS entrypoint. Test an embedded native image and an expired file reference: the former previews while the latter shows an unavailable card. A read request uses only session/message/attachment identities; unauthenticated reads and caller-supplied paths must fail. Preserve the existing systemd sandbox. Server previews only use server-side session data and files; a client-only temporary path can remain unavailable.

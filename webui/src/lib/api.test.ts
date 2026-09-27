@@ -1816,54 +1816,17 @@ describe("archive delete API compatibility", () => {
     expect(prepended.map((block: MessageBlock) => block.id)).toEqual(["b0", "b1", "b2", "b3", "b4"]);
   });
 
-  test("conversation block compaction collapses old completed tools but keeps running tools", async () => {
+  test("history compaction keeps every tool between the corresponding messages", async () => {
     const app = await import("../test/domain");
-    const completed = Array.from({ length: 5 }, (_, index) => ({
-      id: `tool-${index}`,
-      role: "tool",
-      kind: "function_call_output",
-      status: "completed",
-      text: `done-${index}`,
-      questions: []
-    })) satisfies MessageBlock[];
-    const running = {
-      id: "tool-live",
-      role: "tool",
-      kind: "function_call",
-      status: "running",
-      text: "running",
-      questions: []
-    } satisfies MessageBlock;
-
-    const compacted = app.compactConversationBlocks([...completed, running], 2);
-
-    expect(compacted.map((block) => block.id)).toEqual([
-      "completed-tool-history-collapsed",
-      "tool-3",
-      "tool-4",
-      "tool-live"
-    ]);
-    expect(compacted[0].summary).toBe("3 个历史工具调用已折叠");
-    expect(compacted[compacted.length - 1]).toBe(running);
-  });
-
-  test("conversation block compaction defaults to compact completed tool history", async () => {
-    const app = await import("../test/domain");
-    const completed = Array.from({ length: 18 }, (_, index) => ({
-      id: `tool-${index}`,
-      role: "tool",
-      kind: "function_call_output",
-      status: "completed",
-      text: `done-${index}`,
-      questions: []
-    })) satisfies MessageBlock[];
-
-    const compacted = app.compactConversationBlocks(completed);
-
-    expect(compacted).toHaveLength(5);
-    expect(compacted[0].id).toBe("completed-tool-history-collapsed");
-    expect(compacted[0].summary).toBe("14 个历史工具调用已折叠");
-    expect(compacted[compacted.length - 1]?.id).toBe("tool-17");
+    const blocks: MessageBlock[] = Array.from({ length: 90 }, (_, index) => [
+      { id: `text-${index}`, role: "assistant", kind: "message", text: `Step ${index}`, questions: [] },
+      { id: `tool-${index}`, role: "tool", kind: "function_call_output", status: "completed", text: `done-${index}`, questions: [] }
+    ]).flat();
+    const compacted = app.visibleConversationBlocksForHistory(blocks, false);
+    expect(compacted.filter(block => block.role === "tool" && block.kind !== "chat_history_collapsed")).toEqual(blocks.filter(block => block.role === "tool"));
+    expect(compacted.some(block => block.kind === "tool_history_collapsed")).toBe(false);
+    expect(compacted.slice(-4).map(block => block.id)).toEqual(["text-88", "tool-88", "text-89", "tool-89"]);
+    expect(app.visibleConversationBlocksForHistory(blocks, true)).toEqual(blocks);
   });
 
   test("conversation message presentation uses light chat rows", async () => {
@@ -2026,7 +1989,7 @@ describe("archive delete API compatibility", () => {
       questions: []
     } satisfies MessageBlock;
 
-    const compacted = app.compactConversationBlocks([...chat, running], 80, 2);
+    const compacted = app.compactConversationBlocks([...chat, running], 2);
 
     expect(compacted.map((block) => block.id)).toEqual([
       "chat-history-collapsed",
@@ -2123,7 +2086,7 @@ describe("archive delete API compatibility", () => {
       questions: []
     })) satisfies MessageBlock[];
 
-    const compacted = app.compactConversationBlocks([serverCollapsed, ...chat], 80, 2);
+    const compacted = app.compactConversationBlocks([serverCollapsed, ...chat], 2);
 
     expect(compacted.map((block) => block.id)).toEqual([
       "chat-history-collapsed",

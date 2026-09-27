@@ -270,7 +270,7 @@ export function visibleConversationBlocksForHistory(
 ): MessageBlock[] {
   const renderable = blocks.filter(shouldRenderConversationBlock);
   if (showAllHistory) return renderable;
-  return compactConversationBlocks(renderable, 4, 60, 3, currentPlan, currentQuestion);
+  return compactConversationBlocks(renderable, 60, 3, currentPlan, currentQuestion);
 }
 
 export function prioritizeCurrentActionBlocks(
@@ -292,36 +292,16 @@ export function prioritizeCurrentActionBlocks(
 
 export function compactConversationBlocks(
   blocks: MessageBlock[],
-  maxCompletedTools = 4,
   maxChatMessages = 60,
   maxActionBlocks = 3,
   currentPlan?: MessageBlock | null,
   currentQuestion?: PendingElicitation | MessageBlock | null
 ): MessageBlock[] {
-  const hasToolHistoryCollapse = blocks.some((block) => historyCollapseKind(block) === "tool");
-  const completedToolIndexes = hasToolHistoryCollapse
-    ? []
-    : blocks
-      .map((block, index) => ({ block, index }))
-      .filter(({ block }) => isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isRunningToolBlock(block))
-      .map(({ index }) => index);
-  const toolCompacted = hasToolHistoryCollapse
-    ? blocks
-    : compactIndexedBlocks(
-      blocks,
-      completedToolIndexes,
-      maxCompletedTools,
-      "completed-tool-history-collapsed",
-      "tool_history_collapsed",
-      "tool_history",
-      "个历史工具调用已折叠"
-    );
-
-  if (toolCompacted.some((block) => historyCollapseKind(block) === "action")) {
-    return toolCompacted;
+  if (blocks.some((block) => historyCollapseKind(block) === "action")) {
+    return blocks;
   }
 
-  const actionIndexes = toolCompacted
+  const actionIndexes = blocks
     .map((block, index) => ({ block, index }))
     .filter(({ block }) => {
       if (isHistoryCollapsedBlock(block)) return false;
@@ -331,7 +311,7 @@ export function compactConversationBlocks(
     })
     .map(({ index }) => index);
   const actionCompacted = compactIndexedBlocks(
-    toolCompacted,
+    blocks,
     actionIndexes,
     maxActionBlocks,
     "action-history-collapsed",
@@ -384,15 +364,22 @@ function compactIndexedBlocks(
     questions: []
   };
   const compacted: MessageBlock[] = [];
+  let segment: MessageBlock | null = null;
+  let segmentCount = 0;
   let inserted = false;
   for (const [index, block] of blocks.entries()) {
     if (hide.has(index) && !keep.has(index)) {
-      if (!inserted) {
-        compacted.push(collapsed);
+      if (!segment) {
+        segment = { ...collapsed, id: inserted ? `${id}:${block.id}` : id };
+        compacted.push(segment);
         inserted = true;
+        segmentCount = 0;
       }
+      segmentCount += 1;
+      segment.text = segment.summary = `${segmentCount} ${label}`;
       continue;
     }
+    segment = null;
     compacted.push(block);
   }
   return compacted;

@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.1.6 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.1.7 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -8,7 +8,7 @@ NexusHub 1.1.6 follows a quiet, compact reading workspace aligned with Codex Des
 - Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
 - Running Codex, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Grok pairs same-call native tool updates and groups every adjacent tool row, including Read/List/search and commands. Pure command groups are labelled “命令执行组”; mixed groups are labelled “工具活动组”. Codex and Pi retain command-only groups. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
+- Codex, Grok and Pi pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
 - Visible assistant replies in all three providers expose a compact copy button that copies Markdown after structured memory metadata is removed. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.

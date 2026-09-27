@@ -1,4 +1,4 @@
-# Architecture — 1.1.6
+# Architecture — 1.1.7
 
 ## Boundaries
 
@@ -23,6 +23,10 @@ NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_
 4. Run contract, privacy, Rust, WebUI and install gates.
 
 Batch actions use explicit provider keys and return per-item preview/execute results. Files are isolated before deletion and indexes are replaced atomically. Failures retain a recovery path and are not cascaded to unselected records.
+
+## Activity timeline
+
+Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. No RPC, native file format or database migration is added.
 
 ## Visible Markdown
 

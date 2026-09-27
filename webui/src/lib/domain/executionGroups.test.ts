@@ -2,19 +2,19 @@ import { describe, expect, test } from "vitest";
 import { groupCodexCommandBlocks, groupGrokCommandEvents, groupPiCommandEvents } from "./executionGroups";
 
 describe("execution groups", () => {
-  test("groups adjacent Codex command blocks and leaves other tools alone", () => {
+  test("groups adjacent Codex tools without hiding their rows", () => {
     const result = groupCodexCommandBlocks([
       { id: "a", role: "tool", kind: "function_call", tool_name: "exec_command", status: "completed", questions: [] },
       { id: "b", role: "tool", kind: "function_call_output", tool_name: "exec_command", status: "failed", questions: [] },
       { id: "c", role: "tool", kind: "function_call", tool_name: "read_file", status: "completed", questions: [] }
     ]);
-    expect(result).toHaveLength(2);
+    expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("group");
     if (result[0].kind === "group") {
-      expect(result[0].group.commands).toHaveLength(2);
+      expect(result[0].group.commands).toHaveLength(3);
       expect(result[0].group.failedCount).toBe(1);
     }
-    expect(result[1].kind).toBe("item");
+    if (result[0].kind === "group") expect(result[0].group.kind).toBe("tool");
   });
 
   test("keeps active Grok call and result in one open group", () => {
@@ -113,4 +113,39 @@ describe("execution groups", () => {
       expect(result[0].group.commands[0].sections.map(section => section.text)).toEqual(["pwd", "/workspace"]);
     }
   });
+});
+
+
+test("Codex keeps text and legacy summary boundaries, and pairs late results", () => {
+  const result = groupCodexCommandBlocks([
+    { id: "before", role: "assistant", kind: "message", text: "Before", questions: [] },
+    { id: "call", role: "tool", kind: "function_call", tool_name: "exec_command", call_id: "shell", input: '{"cmd":"printf example"}', status: "running", questions: [] },
+    { id: "during", role: "assistant", kind: "message", text: "During", questions: [] },
+    { id: "result", role: "tool", kind: "function_call_output", call_id: "shell", text: "example", questions: [] },
+    { id: "legacy", role: "tool", kind: "tool_history_collapsed", summary: "Earlier tools", questions: [] },
+    { id: "after", role: "tool", kind: "function_call_output", tool_name: "read_file", questions: [] }
+  ]);
+  expect(result.map(item => item.kind)).toEqual(["item", "group", "item", "item", "group"]);
+  if (result[1].kind !== "group") throw new Error("group missing");
+  expect(result[1].group.commands).toHaveLength(1);
+  expect(result[1].group.commands[0].status).toBe("completed");
+  expect(result[1].group.commands[0].preview).toBe("printf example");
+});
+
+test("a new turn with a reused call id starts a distinct group", () => {
+  const result = groupCodexCommandBlocks(["old", "new"].map(turn => ({ id: turn, turn_id: turn, call_id: "same", role: "tool", kind: "function_call_output", tool_name: "exec_command", status: "completed", questions: [] })));
+  expect(result).toHaveLength(2);
+  if (result[0].kind !== "group" || result[1].kind !== "group") throw new Error("groups missing");
+  expect(result[0].group.id).not.toBe(result[1].group.id);
+});
+
+test("Pi groups non-command tools and keeps no-id command identities on prepend", () => {
+  const event = { kind: "tool_result", role: "bashExecution", timestamp: "2026-01-01T00:00:01Z", detail: "printf retained" };
+  const before = groupPiCommandEvents([event]);
+  const after = groupPiCommandEvents([{ ...event, timestamp: "2026-01-01T00:00:00Z", detail: "printf earlier" }, event]);
+  if (before[0].kind !== "group" || after[0].kind !== "group") throw new Error("group missing");
+  expect(after[0].group.commands[1].id).toBe(before[0].group.commands[0].id);
+  const read = groupPiCommandEvents([{kind: "tool_call", text: "read", callId: "read"}, {kind: "tool_result", text: "read", callId: "read", detail: "ok"}]);
+  if (read[0].kind !== "group") throw new Error("group missing");
+  expect(read[0].group.commands).toHaveLength(1);
 });
