@@ -84,3 +84,19 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
   expect(await page.locator(".message-stream").evaluate(element => element.scrollTop >= 0 && element.scrollTop <= element.scrollHeight - element.clientHeight + 1)).toBe(true);
 });
+
+test("Pi standalone bash exposes the original command and its output", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/pi.detail", route => route.fulfill({ json: { summary: {}, events: [
+    { kind: "assistant_message", text: "Before command" },
+    { kind: "tool_result", role: "bashExecution", text: "printf standalone", detail: "standalone result", status: "completed" },
+    { kind: "assistant_message", text: "After command" }
+  ] } }));
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
+  await page.locator(".execution-group > summary").click();
+  const command = page.locator(".execution-command");
+  await expect(command.locator("summary")).toContainText("printf standalone");
+  await command.locator("summary").click();
+  await expect(command.locator(".execution-section")).toHaveText(["命令printf standalone", "结果standalone result"]);
+});

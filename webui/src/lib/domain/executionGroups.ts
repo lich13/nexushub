@@ -184,10 +184,13 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
       instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),
       command,
       title: command ? commandTitle(event.method, event.text) : event.text?.trim() || "工具活动",
-      preview: activityPreview(event.kind === "tool_call" ? event.detail : undefined),
+      preview: activityPreview(event.kind === "tool_call" ? event.detail : undefined, command && event.text !== commandTitle(event.method, event.text) ? event.text : undefined),
       phase: event.kind === "tool_call" ? "call" : event.kind === "tool_result" ? "result" : "update",
       status: event.status,
-      sections: event.detail ? [{ label: command ? "命令详情" : "工具详情", text: event.detail }] : []
+      sections: [
+        ...(command && event.text && event.text !== commandTitle(event.method, event.text) ? [{ label: "命令", text: event.text }] : []),
+        ...(event.detail ? [{ label: command ? "命令详情" : "工具详情", text: event.detail }] : [])
+      ]
     };
   }), "Grok");
 }
@@ -201,9 +204,12 @@ export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderI
     instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),
     command: (event.kind === "tool_call" || event.kind === "tool_result") && (isCommandText(event.role) || isCommandText(event.text)),
     title: isCommandText(event.role) || isCommandText(event.text) ? commandTitle(event.role, event.text) : event.text?.trim() || event.role || "工具活动",
-    preview: activityPreview(event.kind === "tool_call" ? event.detail : undefined),
+    preview: activityPreview(event.role === "bashExecution" ? event.text : event.kind === "tool_call" ? event.detail : undefined),
     phase: event.kind === "tool_call" ? "call" : "result",
     status: event.status,
-    sections: event.detail ? [{ label: event.kind === "tool_call" ? "调用参数" : "结果", text: event.detail }] : []
+    sections: [
+      ...(event.role === "bashExecution" && event.text ? [{ label: "命令", text: event.text }] : []),
+      ...(event.detail ? [{ label: event.kind === "tool_call" ? "调用参数" : "结果", text: event.detail }] : [])
+    ]
   })), "Pi");
 }
