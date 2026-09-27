@@ -25,7 +25,17 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
   if (USE_DEMO) {
     return demoThreadBlockPage(id);
   }
-  return callCommand<ThreadBlockPage>("threads.blocks", { id, options });
+  const page = await callCommand<ThreadBlockPage | {
+    threadId: string; blocks: MessageBlock[]; totalBlocks: number; hasMoreBlocks: boolean; beforeCursor?: string | null;
+  }>("threads.blocks", { id, options });
+  if ("thread_id" in page) return page;
+  return {
+    thread_id: page.threadId,
+    blocks: page.blocks,
+    total_blocks: page.totalBlocks,
+    has_more_blocks: page.hasMoreBlocks,
+    before_cursor: page.beforeCursor
+  };
 }
 
 export async function archiveThread(threadId: string, csrfToken?: string | null) {

@@ -9,10 +9,12 @@
 
 Codex no longer discards completed tools before pagination. Paired outputs retain the call's chronological position, including parallel results and pending calls. Chat and action compaction remains, with markers preserving boundaries around activity.
 
-All providers group adjacent tools between replies. Summaries remain visible when complete groups are closed; running/failed groups start open, except instruction-only groups. Rows show tool/input previews and independently disclose output. Stable session/call identities preserve explicit choices across polling, appends, themes and mobile navigation.
+All providers group adjacent tools between replies. Summaries remain visible when complete groups are closed; running/failed groups start open, except instruction-only groups. Rows show tool/input previews and independently disclose output, including Grok native titles and Pi standalone Bash command text. Stable session/call identities preserve explicit choices across polling, appends, themes and mobile navigation.
+
+The WebUI maps the existing camelCase block-page response into its domain model on both runtimes. Earlier-page loading now inserts the returned blocks instead of discarding them, and tail refreshes do not restore a pagination cursor after all history is loaded.
 
 ## Validation and delivery
 
-Local Rust workspace and standalone Tauri formatting, tests and Clippy passed. WebUI frozen install, typecheck, 245 unit tests, server/Tauri builds and 138 Chromium/WebKit checks passed. The browser checks cover all three providers, 90 historical tools, earlier-page prepend, disclosure persistence, mobile layout, theme changes and bounded scrolling. Contract, installation, privacy and diff checks passed.
+Local Rust workspace and standalone Tauri formatting, tests and Clippy passed. WebUI frozen install, typecheck, 246 unit tests, server/Tauri builds and the full browser suite plus targeted acceptance fixes passed. The browser checks cover all three providers, 90 historical tools, native camelCase pagination with viewport anchoring, standalone Bash input/output, disclosure persistence, mobile layout, theme changes and bounded scrolling. Contract, installation, privacy and diff checks passed.
 
 Matching CI, seven-asset Release, installed macOS acceptance, authenticated cloud acceptance and scoped cleanup remain pending. Prior release evidence is in Git. Existing attachments, Plan export, memory filtering, AGENTS.md folding, file paths, rename, batch management and Probe remain regression boundaries.

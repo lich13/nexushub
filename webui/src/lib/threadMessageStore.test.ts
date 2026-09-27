@@ -115,6 +115,17 @@ describe("thread message store", () => {
     expect(store.slots.get("thread-b")?.blocks.map((item) => item.id)).toEqual(["b-new"]);
   });
 
+  test("a refreshed tail does not restore pagination after all blocks are loaded", () => {
+    const store = createThreadMessageStoreState();
+    const tail = { ...detail("thread-a", [block("new")], "b:1"), total_blocks: 2 };
+    applyThreadDetailToSlot(store, "thread-a", tail);
+    applyThreadBlockPageToSlot(store, "thread-a", { thread_id: "thread-a", blocks: [block("old")], total_blocks: 2, has_more_blocks: false, before_cursor: null }, "b:1");
+    const slot = applyThreadDetailToSlot(store, "thread-a", tail);
+    expect(slot.blocks.map(item => item.id)).toEqual(["old", "new"]);
+    expect(slot.hasMoreBlocks).toBe(false);
+    expect(slot.beforeCursor).toBeNull();
+  });
+
   test("rejects load-more pages whose thread id does not match the target slot", () => {
     const store = createThreadMessageStoreState();
     applyThreadDetailToSlot(store, "thread-b", detail("thread-b", [block("b-new")], "b:50"));

@@ -228,7 +228,10 @@ export function applyThreadDetailToSlot(
   slot.blocks = mergedBlocks;
   slot.totalBlocks = detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length);
   slot.hasMoreBlocks = Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
-  if (detail.before_cursor) {
+  if (slot.blocks.length >= slot.totalBlocks) {
+    slot.beforeCursor = null;
+    slot.hasMoreBlocks = false;
+  } else if (detail.before_cursor) {
     if (!previousBefore || cursorIndex(detail.before_cursor) < cursorIndex(previousBefore)) {
       slot.beforeCursor = detail.before_cursor;
     }
