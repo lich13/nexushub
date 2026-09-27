@@ -68,7 +68,7 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   detail.before_cursor = "b:45";
   detail.total_blocks = 91;
   await page.route("**/threads.detail", route => route.fulfill({ json: detail }));
-  await page.route("**/threads.blocks", route => route.fulfill({ json: { thread_id: detail.summary.id, blocks: tools.slice(0, 45), total_blocks: 91, has_more_blocks: false, before_cursor: null } }));
+  await page.route("**/threads.blocks", route => route.fulfill({ json: { threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null } }));
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
   const group = page.locator("details.execution-group");
@@ -99,4 +99,27 @@ test("Pi standalone bash exposes the original command and its output", async ({ 
   await expect(command.locator("summary")).toContainText("printf standalone");
   await command.locator("summary").click();
   await expect(command.locator(".execution-section")).toHaveText(["命令printf standalone", "结果standalone result"]);
+});
+
+test("native pagination inserts older activity while preserving the visible anchor", async ({ page }) => {
+  await mockApi(page);
+  const blocks: MessageBlock[] = Array.from({ length: 40 }, (_, index) => [
+    { id: `reply-${index}`, role: "assistant", kind: "message", text: `Timeline reply ${index}`, questions: [] },
+    { id: `call-${index}`, role: "tool", kind: "function_call_output", tool_name: "exec_command", status: "completed", input: `printf example-${index}`, text: "OK", questions: [] }
+  ]).flat();
+  const detail = { ...demo.demoThreadDetail("019e95a0-demo"), blocks: blocks.slice(40), total_blocks: 80, has_more_blocks: true, before_cursor: "b:40" };
+  await page.route("**/threads.detail", route => route.fulfill({ json: detail }));
+  await page.route("**/threads.blocks", route => route.fulfill({ json: { threadId: detail.summary.id, blocks: blocks.slice(0, 40), totalBlocks: 80, hasMoreBlocks: false, beforeCursor: null } }));
+  await page.goto("/");
+  await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+  const stream = page.locator(".message-stream");
+  await stream.evaluate(node => { node.scrollTop = 0; });
+  const anchor = page.getByText("Timeline reply 20", { exact: true });
+  const before = await anchor.evaluate(node => node.getBoundingClientRect().top);
+  await page.getByRole("button", { name: "较早消息", exact: true }).click();
+  await expect(stream.locator(".execution-group")).toHaveCount(40);
+  expect(Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - before)).toBeLessThanOrEqual(2);
+  await page.getByTitle("刷新任务").click();
+  await expect(stream.locator(".execution-group")).toHaveCount(40);
+  await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
 });

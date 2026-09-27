@@ -326,11 +326,11 @@ describe("archive delete API compatibility", () => {
   test("thread block page request uses lightweight blocks endpoint", async () => {
     const { getThreadBlocks } = await loadRealApi();
     const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      thread_id: "thread-a",
+      threadId: "thread-a",
       blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
-      total_blocks: 240,
-      has_more_blocks: true,
-      before_cursor: "b:120"
+      totalBlocks: 240,
+      hasMoreBlocks: true,
+      beforeCursor: "b:120"
     }), {
       status: 200,
       headers: { "content-type": "application/json" }
@@ -347,6 +347,8 @@ describe("archive delete API compatibility", () => {
     expect(page.thread_id).toBe("thread-a");
     expect(page.blocks[0].id).toBe("b1");
     expect(page.before_cursor).toBe("b:120");
+    expect(page.total_blocks).toBe(240);
+    expect(page.has_more_blocks).toBe(true);
   });
 
   test("desktop thread block page request keeps limit and cursor in the typed native command", async () => {
@@ -360,17 +362,18 @@ describe("archive delete API compatibility", () => {
         options: { limit: 80, before: "b:200" }
       });
       return {
-        thread_id: "thread-a",
+        threadId: "thread-a",
         blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
-        total_blocks: 240,
-        has_more_blocks: true,
-        before_cursor: "b:120"
+        totalBlocks: 240,
+        hasMoreBlocks: true,
+        beforeCursor: "b:120"
       };
     });
 
     const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
 
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(page.thread_id).toBe("thread-a");
     expect(page.before_cursor).toBe("b:120");
   });
 
