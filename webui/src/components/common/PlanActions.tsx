@@ -7,6 +7,7 @@ export function PlanActions({ markdown, fallbackTitle }: { markdown: string; fal
   const [state, setState] = useState<"idle" | "copied" | "copy-failed" | "downloaded" | "download-failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const attempt = useRef(0);
+  const [saving, setSaving] = useState(false);
   useEffect(() => () => { clearTimeout(timer.current); attempt.current++; }, []);
   markdown = visibleMarkdown(markdown);
   if (!markdown.trim()) return null;
@@ -25,12 +26,15 @@ export function PlanActions({ markdown, fallbackTitle }: { markdown: string; fal
         if (current === attempt.current) feedback("copy-failed");
       }
     }}>{state === "copied" ? <Check size={17} /> : <Copy size={17} />}</button>
-    <button className="icon-button plan-action" type="button" aria-label="下载计划 Markdown" title="下载计划 Markdown" onClick={() => {
+    <button className="icon-button plan-action" type="button" aria-label="下载计划 Markdown" title="下载计划 Markdown" disabled={saving} onClick={async () => {
+      if (saving) return;
+      setSaving(true);
       try {
-        downloadPlanMarkdown(markdown, planFilename(markdown, fallbackTitle));
+        await downloadPlanMarkdown(markdown, planFilename(markdown, fallbackTitle));
         feedback("downloaded");
       } catch { feedback("download-failed"); }
+      finally { setSaving(false); }
     }}><Download size={17} /></button>
-    <span role="status" aria-live="polite" className={state.endsWith("failed") ? "plan-action-error" : "visually-hidden"}>{state === "copied" ? "已复制" : state === "copy-failed" ? "复制失败，请重试或手动选择文本复制。" : state === "downloaded" ? "已开始下载" : state === "download-failed" ? "下载失败，请重试。" : ""}</span>
+    <span role="status" aria-live="polite" className={state.endsWith("failed") ? "plan-action-error" : "visually-hidden"}>{state === "copied" ? "已复制" : state === "copy-failed" ? "复制失败，请重试或手动选择文本复制。" : state === "downloaded" ? "已保存到下载文件夹" : state === "download-failed" ? "保存失败，请重试。" : ""}</span>
   </div>;
 }

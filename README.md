@@ -1,4 +1,4 @@
-# NexusHub 1.2.0
+# NexusHub 1.2.1
 
 NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The React UI runs in the macOS ARM64 Tauri app. A headless Linux `webd` API manages the remote machine. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -56,7 +56,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Grok a
 
 ## Release and deployment
 
-Release `v1.2.0` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
+Release `v1.2.1` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
 
 ```bash
 bash scripts/package-darwin-arm64.sh
@@ -80,3 +80,5 @@ See [docs/cloud-deploy-runbook.md](docs/cloud-deploy-runbook.md) for systemd iso
 - [docs/progress/MASTER.md](docs/progress/MASTER.md): current status and evidence.
 
 Keep exactly these six Markdown documents. Future work uses normal Git commits.
+
+Plan Markdown is saved to the local Downloads folder. Existing files are kept; duplicate names receive a numbered suffix.

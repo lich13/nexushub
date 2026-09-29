@@ -1,4 +1,4 @@
-# Architecture — 1.2.0
+# Architecture — 1.2.1
 
 ## Boundaries
 
@@ -69,3 +69,5 @@ A revision-scoped QueryClient and workspace lifetime isolate mutations, previews
 Server authentication accepts one `x-api-key`, stores only its SHA-256 digest and uses constant-time comparison. Failed authorization is bounded and audited without credentials; valid credentials are not locked out by failed attempts. CLI rotation invalidates the previous Key and revocation denies all business RPCs. Old authentication/security actions and threadEvents are unavailable tombstones.
 
 Opening only the NexusHub database drops administrators, web sessions and Turnstile state, removes retired settings, erases freed pages and checkpoints/truncates WAL. Business audit, jobs, Bark encryption and notification state survive. Config migration removes retired web keys without replacing unrelated settings. Neither native Codex storage nor provider session formats change. Linux packages contain no React assets; the reverse proxy serves RPC and health only.
+
+`plans.save` is a desktop-only native export to Downloads. It validates a bounded Markdown filename/content and uses exclusive file creation; it never traverses the remote HTTP transport.
