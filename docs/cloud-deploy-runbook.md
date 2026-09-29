@@ -11,6 +11,8 @@ Supply the SSH host, HTTPS domain and archive path explicitly. Private values st
 
 Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Grok/Pi session roots use exact optional `ReadWritePaths`; missing provider directories do not prevent startup. Creating a directory or changing a custom root requires regenerating the unit/drop-in, `daemon-reload` and restart. A host rw mount can remain ro inside systemd; chmod cannot override it.
 
+Grok's native leader socket and lock use `/var/lib/nexushub-webd/grok-leader.sock` through `GROK_LEADER_SOCKET`. This keeps native rename available with a read-only provider home; credentials and configuration remain protected. Native mutation working directories must be visible in the service namespace, so host `/tmp` fixtures are unsuitable with `PrivateTmp=true`.
+
 ## Installation and administrator Key
 
 The seven release assets remain macOS DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and Linux webd tarball/checksum. The Linux archive contains the API binary and deployment tools only. Verify the exact approved tag and hashes.

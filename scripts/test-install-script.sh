@@ -46,6 +46,12 @@ for name in ["webui/package.json", "src-tauri/tauri.conf.json"]:
 if f'version = "{version}"' not in (root / "Cargo.toml").read_text():
     raise SystemExit("Cargo workspace version mismatch")
 config = json.loads((root / "src-tauri/tauri.conf.json").read_text())
+unit = (root / "deploy/nexushub-webd/systemd.service").read_text()
+for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/nexushub-webd/grok-leader.sock", "ProtectHome=read-only", "ProtectSystem=full", "PrivateTmp=true"]:
+    if boundary not in unit:
+        raise SystemExit("native Grok runtime isolation boundary missing")
+if "/root/.grok " in next(line for line in unit.splitlines() if line.startswith("ReadWritePaths=")):
+    raise SystemExit("provider credentials must not become writable")
 if config["bundle"]["targets"] != ["dmg", "app"]:
     raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 
