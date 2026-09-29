@@ -106,6 +106,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "grok.rename": () => { grok = grok.map((item) => ({ ...item, title: args.title })); return grok[0]; },
         "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
         "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "fixture-fingerprint") throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
+        "claude.list": () => [],
         "pi.list": () => pi.filter((item) => [item.title, item.id, item.cwd].some((value) => value.toLowerCase().includes((args.q ?? "").toLowerCase()))),
         "pi.detail": () => ({ summary: pi.find((item) => item.sessionKey === args.sessionKey) ?? pi[0], events: [
           { kind: "user_message", role: "user", text: "Inspect the current branch." },

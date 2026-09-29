@@ -131,6 +131,18 @@ fn image_data(part: &Value) -> Option<String> {
             .get("image_url")
             .and_then(|v| v.as_str().or_else(|| v.get("url")?.as_str()))
             .map(str::to_owned),
+        "image" if part.get("source").is_some() => {
+            let source = part.get("source")?;
+            match source.get("type")?.as_str()? {
+                "base64" => Some(format!(
+                    "data:{};base64,{}",
+                    source.get("media_type")?.as_str()?,
+                    source.get("data")?.as_str()?
+                )),
+                "url" => source.get("url").and_then(Value::as_str).map(str::to_owned),
+                _ => None,
+            }
+        }
         "image" => {
             let mime = part
                 .get("mimeType")
@@ -221,6 +233,19 @@ pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
                 m.path
             });
             result.add_image(name, path, data);
+        } else if part.get("type").and_then(Value::as_str) == Some("document") {
+            let name = part
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("文件附件");
+            result.attachments.push(UserAttachment {
+                id: format!("file-{}", hash(part.to_string())),
+                name: basename(name),
+                kind: "file".into(),
+                path: None,
+                reason: Some("此附件格式暂不支持预览".into()),
+            });
+            result.sources.push(AttachmentSource::Unavailable);
         } else if matches!(
             part.get("type").and_then(Value::as_str),
             Some("local_image" | "localImage" | "resource_link")

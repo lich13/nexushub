@@ -14,6 +14,8 @@ pub const MAX_BATCH_SIZE: usize = 100;
 #[serde(rename_all = "lowercase")]
 pub enum SessionProvider {
     Codex,
+    #[serde(rename = "claude_code")]
+    Claude,
     Grok,
     Pi,
 }
@@ -91,6 +93,7 @@ pub struct SessionUseCases {
     pub codex: CodexPaths,
     pub grok: GrokPaths,
     pub pi: PiPaths,
+    pub claude: crate::claude::ClaudePaths,
 }
 
 fn validate(provider: SessionProvider, operation: SessionOperation, keys: &[String]) -> Result<()> {
@@ -129,6 +132,9 @@ impl SessionUseCases {
             );
         }
         let message = match request.provider {
+            SessionProvider::Claude => {
+                return crate::claude::read_attachment(&self.claude, &request)
+            }
             SessionProvider::Codex => codex::thread_detail(&self.codex, &request.session_key)?
                 .into_iter()
                 .flat_map(|detail| detail.blocks)
@@ -191,6 +197,9 @@ impl SessionUseCases {
             fingerprint: None,
         };
         let summary = match provider {
+            SessionProvider::Claude => crate::claude::claude_session_summary(&self.claude, key)
+                .ok()
+                .map(|s| (s.id, s.title, vec![s.path])),
             SessionProvider::Codex => codex::local_thread_summary(&self.codex, key)
                 .ok()
                 .flatten()
@@ -238,6 +247,10 @@ impl SessionUseCases {
         key: &str,
     ) -> Result<SessionBatchItem> {
         let (id, title, paths, bytes, fingerprint) = match provider {
+            SessionProvider::Claude => {
+                let p = crate::claude::preview_claude_delete(&self.claude, key)?;
+                (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
+            }
             SessionProvider::Codex => {
                 ensure!(
                     codex::codex_task_identity(&self.codex, key)? == codex::CodexTaskIdentity::Main,
@@ -318,6 +331,15 @@ impl SessionUseCases {
                 continue;
             }
             let result = match (request.provider, request.operation) {
+                (SessionProvider::Claude, _) => crate::claude::execute_claude_delete(
+                    &self.claude,
+                    crate::claude::ClaudeDeleteRequest {
+                        session_key: item.session_key.clone(),
+                        confirmed: true,
+                        fingerprint: item.fingerprint.clone(),
+                    },
+                )
+                .map(|_| ()),
                 (SessionProvider::Codex, SessionOperation::Delete) => {
                     selected_codex::execute(&self.codex, &item.session_key, &item.fingerprint)
                         .map(|_| ())

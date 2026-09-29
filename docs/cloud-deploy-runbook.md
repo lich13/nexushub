@@ -1,6 +1,6 @@
-# Linux management API — 1.2.2
+# Linux management API — 1.2.3
 
-Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Pi or a Linux desktop app.
+Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Claude Code, Pi or a Linux desktop app.
 
 ## Runtime and isolation
 
@@ -9,7 +9,7 @@ Supply the SSH host, HTTPS domain and archive path explicitly. Private values st
 - Database/logs: `/var/lib/nexushub-webd/`, `/var/log/nexushub-webd/`.
 - Listener: loopback only; public Nginx exposes the chosen prefix's `api/rpc/` and `healthz`. Other paths return 404.
 
-Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Grok/Pi session roots use exact optional `ReadWritePaths`; missing provider directories do not prevent startup. Creating a directory or changing a custom root requires regenerating the unit/drop-in, `daemon-reload` and restart. A host rw mount can remain ro inside systemd; chmod cannot override it.
+Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Claude/Grok/Pi session roots use exact optional `ReadWritePaths`; missing provider directories do not prevent startup. Creating a directory or changing a custom root requires regenerating the unit/drop-in, `daemon-reload` and restart. A host rw mount can remain ro inside systemd; chmod cannot override it.
 
 Grok's native leader socket and lock use `/var/lib/nexushub-webd/grok-leader.sock` through `GROK_LEADER_SOCKET`. This keeps native rename available with a read-only provider home; credentials and configuration remain protected. Native mutation working directories must be visible in the service namespace, so host `/tmp` fixtures are unsuitable with `PrivateTmp=true`.
 
@@ -51,3 +51,5 @@ curl -fsS http://127.0.0.1:15742/healthz
 Verify public health succeeds, old pages/assets/login return 404 and unauthenticated RPC returns 401. In the official App, connect to the API, read disposable sessions/attachments, perform an allowed management action and switch back to local data. Verify wrong, rotated and revoked keys, target isolation, failed connections, pending writes, server-path copying and local Plan saving.
 
 Keep the native asynchronous-question tracker, final-reply notification classification, provider terminal evidence and dedupe as regressions. App closure must not stop either machine's monitor. A cloud host without Pi is covered by empty state and isolated readers, not a claim of native Pi mutation acceptance. Remove only task-created staging, test data and recovery files after acceptance.
+
+Claude Code reads existing `CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`; deployment does not create either directory or install a CLI. The default projects root is an optional systemd write path. A custom config root adds only its `projects` child through the managed drop-in. Restart after introducing a previously absent root. Verify the Claude navigation empty state and rejected unknown session keys when no native data exists; label remote fixture tests separately from native session acceptance.

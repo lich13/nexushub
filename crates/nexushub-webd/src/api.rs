@@ -11,6 +11,7 @@ use nexushub_core::services::updates::{self as update_service, UpdateAction};
 use serde::Serialize;
 use serde_json::json;
 
+mod claude;
 mod cleanup;
 mod grok;
 mod jobs;
@@ -32,6 +33,10 @@ mod legacy_routes_tests;
 #[cfg(test)]
 mod test_support;
 
+pub(crate) use claude::{
+    claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,
+    ClaudeListQuery,
+};
 pub(crate) use cleanup::{
     archive_delete_dry_run, archive_delete_execute, hidden_threads_delete_dry_run,
     hidden_threads_delete_execute,

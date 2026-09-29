@@ -1,4 +1,4 @@
-# Architecture — 1.2.2
+# Architecture — 1.2.3
 
 ## Boundaries
 
@@ -40,7 +40,7 @@ Codex retains completed tool blocks and positions paired results at the native c
 
 Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Pi groups text and images within the active native entry. Native files are never rewritten.
 
-The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All three renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
+The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All four renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
 
 `sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and isolated by machine and cleared when the active connection changes. Remote-only references are not fetched. Polling contains descriptors, not image data.
 
@@ -75,3 +75,11 @@ Server authentication accepts one `x-api-key`, stores only its SHA-256 digest an
 Opening only the NexusHub database drops administrators, web sessions and Turnstile state, removes retired settings, erases freed pages and checkpoints/truncates WAL. Business audit, jobs, Bark encryption and notification state survive. Config migration removes retired web keys without replacing unrelated settings. Neither native Codex storage nor provider session formats change. Linux packages contain no React assets; the reverse proxy serves RPC and health only.
 
 `plans.save` is a desktop-only native export to Downloads. It validates a bounded Markdown filename/content and uses exclusive file creation; it never traverses the remote HTTP transport.
+
+## Claude Code
+
+`claude` owns recursive native JSONL discovery, bounded incremental file caching, branch-aware timeline parsing and process ownership checks. `claude.*` actions and the `claude_code` provider use the existing core facade, API Key bridge and Tauri adapters. The opaque session key binds relative transcript location and native ID, so duplicate IDs remain independent. Subagent files are not separate primary sessions. Details page by stable event identity; attachments remain lazy and bounded to 20 MiB.
+
+Known 2.x records include user/assistant blocks, title records, tools, queue/history/usage metadata and compaction. Unknown records remain readable; malformed records, incomplete tails or unverified formats disable mutation. Claude running state needs a live identified process, matching start time/session/project and an unfinished turn. Management separately refuses any potentially owning process. Rename appends `custom-title` and verifies persistence; deletion isolates and rechecks one JSONL without changing native indexes, configuration or the workspace.
+
+Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable skips history. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.

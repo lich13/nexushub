@@ -55,6 +55,7 @@
     "interaction": "read-only history; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
     "navigation": [
       "Codex",
+      "Claude Code",
       "Grok Build",
       "Pi",
       "Probe",
@@ -657,6 +658,66 @@
       "requestDto": "PlanSaveRequest",
       "responseDto": "PlanSaveResult",
       "hostOnlyReason": "Save a sanitized Markdown filename in the local Downloads directory, including while viewing a remote machine; never a server operation"
+    },
+    {
+      "id": "claude.list",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "claude.list",
+      "linuxRpc": "claude.list",
+      "tauriCommand": "commands::claude::listClaudeSessions",
+      "webuiWrapper": "listClaudeSessions",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeListRequest",
+      "responseDto": "ClaudeListResponse"
+    },
+    {
+      "id": "claude.detail",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "claude.detail",
+      "linuxRpc": "claude.detail",
+      "tauriCommand": "commands::claude::getClaudeSession",
+      "webuiWrapper": "getClaudeSession",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeDetailRequest",
+      "responseDto": "ClaudeDetailResponse"
+    },
+    {
+      "id": "claude.rename",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "claude.rename",
+      "linuxRpc": "claude.rename",
+      "tauriCommand": "commands::claude::renameClaudeSession",
+      "webuiWrapper": "renameClaudeSession",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeRenameRequest",
+      "responseDto": "ClaudeMutationResponse"
+    },
+    {
+      "id": "claude.deletePreview",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "claude.delete_preview",
+      "linuxRpc": "claude.deletePreview",
+      "tauriCommand": "commands::claude::previewClaudeSessionDelete",
+      "webuiWrapper": "previewClaudeSessionDelete",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeSessionRequest",
+      "responseDto": "ClaudeDeletePreview"
+    },
+    {
+      "id": "claude.deleteExecute",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "claude.delete_execute",
+      "linuxRpc": "claude.deleteExecute",
+      "tauriCommand": "commands::claude::deleteClaudeSession",
+      "webuiWrapper": "deleteClaudeSession",
+      "dtoOwner": "claude",
+      "requestDto": "ClaudeDeleteRequest",
+      "responseDto": "ClaudeMutationResponse"
     }
   ],
   "dtoCatalog": {
@@ -887,6 +948,42 @@
     "PlanSaveResult": {
       "core": "PlanSaveResult",
       "webui": "PlanSaveResult"
+    },
+    "ClaudeDeletePreview": {
+      "core": "ClaudeDeletePreview",
+      "webui": "ClaudeDeletePreview"
+    },
+    "ClaudeDeleteRequest": {
+      "core": "ClaudeDeleteRequest",
+      "webui": "ClaudeDeleteRequest"
+    },
+    "ClaudeDetailResponse": {
+      "core": "ClaudeDetailResponse",
+      "webui": "ClaudeDetailResponse"
+    },
+    "ClaudeListRequest": {
+      "core": "ClaudeListRequest",
+      "webui": "ClaudeListRequest"
+    },
+    "ClaudeListResponse": {
+      "core": "ClaudeListResponse",
+      "webui": "ClaudeListResponse"
+    },
+    "ClaudeMutationResponse": {
+      "core": "ClaudeMutationResponse",
+      "webui": "ClaudeMutationResponse"
+    },
+    "ClaudeRenameRequest": {
+      "core": "ClaudeRenameRequest",
+      "webui": "ClaudeRenameRequest"
+    },
+    "ClaudeSessionRequest": {
+      "core": "ClaudeSessionRequest",
+      "webui": "ClaudeSessionRequest"
+    },
+    "ClaudeDetailRequest": {
+      "core": "ClaudeDetailRequest",
+      "webui": "ClaudeDetailRequest"
     }
   },
   "retiredActions": [

@@ -105,6 +105,10 @@ pub struct ProbeNotificationsSettingsView {
     pub notify_pi: bool,
     pub notify_pi_completion: bool,
     pub notify_pi_failure: bool,
+    pub notify_claude_reply_needed: bool,
+    pub notify_claude_failure: bool,
+    pub notify_claude_completion: bool,
+    pub notify_claude: bool,
 }
 
 pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -> SettingsView {
@@ -162,6 +166,10 @@ pub fn probe_notifications_settings_view(
         notify_pi: notifications.notify_pi,
         notify_pi_completion: notifications.notify_pi_completion,
         notify_pi_failure: notifications.notify_pi_failure,
+        notify_claude_reply_needed: notifications.notify_claude_reply_needed,
+        notify_claude_failure: notifications.notify_claude_failure,
+        notify_claude_completion: notifications.notify_claude_completion,
+        notify_claude: notifications.notify_claude,
     }
 }
 
@@ -215,6 +223,18 @@ pub fn merge_probe_notification_patch(
     if source.notify_pi_completion.is_some() {
         target.notify_pi_completion = source.notify_pi_completion;
     }
+    if source.notify_claude.is_some() {
+        target.notify_claude = source.notify_claude;
+    }
+    if source.notify_claude_completion.is_some() {
+        target.notify_claude_completion = source.notify_claude_completion;
+    }
+    if source.notify_claude_failure.is_some() {
+        target.notify_claude_failure = source.notify_claude_failure;
+    }
+    if source.notify_claude_reply_needed.is_some() {
+        target.notify_claude_reply_needed = source.notify_claude_reply_needed;
+    }
     if source.notify_pi_failure.is_some() {
         target.notify_pi_failure = source.notify_pi_failure;
     }
@@ -264,6 +284,10 @@ pub struct ProbeNotificationsSavePatch {
     pub notify_pi: Option<bool>,
     pub notify_pi_completion: Option<bool>,
     pub notify_pi_failure: Option<bool>,
+    pub notify_claude_reply_needed: Option<bool>,
+    pub notify_claude_failure: Option<bool>,
+    pub notify_claude_completion: Option<bool>,
+    pub notify_claude: Option<bool>,
 
     pub device_key: Option<String>,
 }
@@ -415,6 +439,10 @@ impl ProbeNotificationsSavePatch {
                 notify_pi: self.notify_pi,
                 notify_pi_completion: self.notify_pi_completion,
                 notify_pi_failure: self.notify_pi_failure,
+                notify_claude_reply_needed: self.notify_claude_reply_needed,
+                notify_claude_failure: self.notify_claude_failure,
+                notify_claude_completion: self.notify_claude_completion,
+                notify_claude: self.notify_claude,
             },
             normalize_bark_device_key(self.device_key),
         )
@@ -470,6 +498,10 @@ fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> 
         && patch.notify_grok_failure.is_none()
         && patch.notify_pi.is_none()
         && patch.notify_pi_completion.is_none()
+        && patch.notify_claude.is_none()
+        && patch.notify_claude_completion.is_none()
+        && patch.notify_claude_failure.is_none()
+        && patch.notify_claude_reply_needed.is_none()
         && patch.notify_pi_failure.is_none()
 }
 

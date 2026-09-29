@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { groupCodexCommandBlocks, groupGrokCommandEvents, groupPiCommandEvents } from "./executionGroups";
+import { groupClaudeEvents, groupCodexCommandBlocks, groupGrokCommandEvents, groupPiCommandEvents } from "./executionGroups";
 
 describe("execution groups", () => {
   test("groups adjacent Codex tools without hiding their rows", () => {
@@ -156,4 +156,24 @@ test("Pi groups non-command tools and keeps no-id command identities on prepend"
   const read = groupPiCommandEvents([{kind: "tool_call", text: "read", callId: "read"}, {kind: "tool_result", text: "read", callId: "read", detail: "ok"}]);
   if (read[0].kind !== "group") throw new Error("group missing");
   expect(read[0].group.commands).toHaveLength(1);
+});
+
+test("Claude preserves paired results and text boundaries with stable native keys", () => {
+  const events = [
+    { id: "text", kind: "assistant_message", text: "Before" },
+    { id: "read", kind: "tool_call", role: "Read", callId: "call-read", status: "completed", detail: '{"file_path":"/workspace/AGENTS.md"}', result: "instructions" },
+    { id: "bash", kind: "tool_call", role: "Bash", callId: "call-bash", status: "failed", detail: '{"command":"false"}', result: "exit 1" },
+    { id: "plan", kind: "plan", text: "# Plan" },
+    { id: "tail", kind: "tool_call", role: "Read", status: "in_progress" }
+  ];
+  const groups = groupClaudeEvents(events);
+  expect(groups.map(e => e.kind)).toEqual(["item", "group", "item", "group"]);
+  if (groups[1].kind !== "group" || groups[3].kind !== "group") throw new Error("missing tool groups");
+  expect(groups[1].group.provider).toBe("Claude Code");
+  expect(groups[1].group.failedCount).toBe(1);
+  expect(groups[1].group.commands[0].instructionFile).toBe(true);
+  expect(groups[1].group.commands[0].sections).toHaveLength(2);
+  expect(groups[3].group.running).toBe(true);
+  const appended = groupClaudeEvents([...events, { id: "result", kind: "tool_result", callId: "later", result: "ok" }]);
+  expect(appended[1]).toEqual(groups[1]);
 });

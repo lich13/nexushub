@@ -27,6 +27,10 @@ notify_codex = true
 notify_grok = true
 notify_grok_completion = true
 notify_grok_failure = true
+notify_claude = true
+notify_claude_completion = true
+notify_claude_failure = true
+notify_claude_reply_needed = true
 notify_pi = true
 notify_pi_completion = true
 # Reserved preference: Pi final failure detection is unavailable without an extension.

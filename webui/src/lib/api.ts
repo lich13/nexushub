@@ -46,3 +46,5 @@ export {
   listJobs,
   getJob
 } from "./api/jobs";
+
+export { listClaudeSessions, getClaudeSession, renameClaudeSession, previewClaudeSessionDelete, deleteClaudeSession } from "./api/claude";

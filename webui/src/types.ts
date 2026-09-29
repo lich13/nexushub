@@ -55,6 +55,14 @@ export type PiDeleteResult = { sessionKey: string; deleted: boolean; bytes: numb
 
 
 
+export type ClaudeSessionSummary = Omit<PiSessionSummary, "formatVersion"> & { formatVersion: string };
+export type ClaudeHistoryEvent = PiHistoryEvent & { id: string; turnId?: string | null; result?: string | null };
+export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
+export type ClaudeSessionDetail = { summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
+export type ClaudeDeletePreview = PiDeletePreview;
+export type ClaudeDeleteRequest = PiDeleteRequest;
+export type ClaudeDeleteResult = PiDeleteResult;
+
 export type ThreadSummary = {
   id: string;
   title: string;
@@ -319,7 +327,7 @@ export type PluginInfo = {
 };
 
 export type ProbeStatus = {
-  provider_notifications?: { provider: "grok" | "pi"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
+  provider_notifications?: { provider: "grok" | "pi" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
   label?: string | null;
   enabled: boolean;
   available?: boolean | null;
@@ -418,6 +426,11 @@ export type ProbeSettings = {
       notify_pi?: boolean;
       notify_pi_completion?: boolean;
       notify_pi_failure?: boolean;
+    notify_claude?: boolean;
+    notify_claude_completion?: boolean;
+    notify_claude_failure?: boolean;
+    notify_claude_reply_needed?: boolean;
+
 
     };
     observability?: Record<string, unknown> & {
@@ -446,6 +459,11 @@ export type ProbeSettings = {
       notify_pi?: boolean;
       notify_pi_completion?: boolean;
       notify_pi_failure?: boolean;
+    notify_claude?: boolean;
+    notify_claude_completion?: boolean;
+    notify_claude_failure?: boolean;
+    notify_claude_reply_needed?: boolean;
+
 
   };
 };

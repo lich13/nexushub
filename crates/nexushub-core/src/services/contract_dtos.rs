@@ -26,13 +26,22 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "GrokRenameRequest",
     "GrokSessionRequest",
     "PiDeletePreview",
+    "ClaudeDeletePreview",
     "PiDeleteRequest",
+    "ClaudeDeleteRequest",
     "PiDetailResponse",
+    "ClaudeDetailResponse",
     "PiListRequest",
+    "ClaudeListRequest",
     "PiListResponse",
+    "ClaudeListResponse",
     "PiMutationResponse",
+    "ClaudeMutationResponse",
     "PiRenameRequest",
+    "ClaudeRenameRequest",
     "PiSessionRequest",
+    "ClaudeSessionRequest",
+    "ClaudeDetailRequest",
     "JobsDetailResponse",
     "JobsListResponse",
     "NoRequest",
@@ -59,6 +68,6 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
 ];
 
 pub const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
-    "remote", "cleanup", "grok", "jobs", "pi", "plans", "probe", "sessions", "system", "threads",
-    "updates",
+    "remote", "cleanup", "grok", "jobs", "claude", "pi", "plans", "probe", "sessions", "system",
+    "threads", "updates",
 ];

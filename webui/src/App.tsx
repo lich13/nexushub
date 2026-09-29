@@ -16,6 +16,7 @@ import { OpsWorkspace } from "./components/ops/OpsWorkspace";
 import { ProbeWorkspace } from "./components/probe/ProbeWorkspace";
 import { PROBE_NAV_LABEL } from "./lib/probeUi";
 import { GrokWorkspace } from "./components/grok/GrokWorkspace";
+import { ClaudeWorkspace } from "./components/claude/ClaudeWorkspace";
 import { PiWorkspace } from "./components/pi/PiWorkspace";
 import { useBackgroundJobs } from "./lib/query/jobs";
 import {
@@ -37,6 +38,7 @@ import {
 
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "codex", label: "Codex", icon: <MessageSquare /> },
+  { id: "claude", label: "Claude Code", icon: <Bot /> },
   { id: "grok", label: "Grok Build", icon: <Bot /> },
   { id: "pi", label: "Pi", icon: <PiIcon /> },
   { id: "probe", label: PROBE_NAV_LABEL, icon: <TriangleAlert /> },
@@ -93,6 +95,7 @@ export default function App() {
             )}
             {view === "grok" && <GrokWorkspace />}
             {view === "pi" && <PiWorkspace />}
+            {view === "claude" && <ClaudeWorkspace />}
             {view === "probe" && <ProbeWorkspace capabilities={capabilities} />}
             {view === "ops" && <div className="settings-workspace">
               <header className="settings-header"><h1>设置</h1><div className="settings-tabs" role="tablist">

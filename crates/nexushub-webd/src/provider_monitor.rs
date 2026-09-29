@@ -12,7 +12,11 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     db.recover_interrupted_native_deliveries()?;
     let mut snapshots = Vec::new();
-    for provider in [NativeProvider::Grok, NativeProvider::Pi] {
+    for provider in [
+        NativeProvider::Grok,
+        NativeProvider::Pi,
+        NativeProvider::Claude,
+    ] {
         let scan = if provider.enabled(config) {
             match tokio::task::spawn_blocking(move || native_probe::scan(provider)).await? {
                 Ok(scan) => scan,
@@ -39,7 +43,19 @@ async fn deliver_pending(
     for delivery in db.pending_native_deliveries(100)? {
         // Identity and branch are resolved by each native parser. Codex's
         // main-task identity filter must never be applied to these providers.
-        let still_current = snapshots.iter().any(|stream| {
+        let fresh = if delivery.provider == NativeProvider::Claude {
+            tokio::task::spawn_blocking(|| native_probe::scan(NativeProvider::Claude))
+                .await?
+                .ok()
+        } else {
+            None
+        };
+        let candidates = if delivery.provider == NativeProvider::Claude {
+            fresh.as_ref().map(|s| s.streams.as_slice()).unwrap_or(&[])
+        } else {
+            snapshots
+        };
+        let still_current = candidates.iter().any(|stream| {
             stream.provider == delivery.provider
                 && stream.session_key == delivery.session_key
                 && stream.id == delivery.thread_id
@@ -77,7 +93,9 @@ async fn deliver_pending(
                 false,
             )
         } else {
-            let label = if delivery.event.kind == "completion" {
+            let label = if delivery.event.kind == "reply_needed" {
+                "需要回复"
+            } else if delivery.event.kind == "completion" {
                 "完成"
             } else {
                 "失败"

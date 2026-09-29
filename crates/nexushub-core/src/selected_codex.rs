@@ -568,6 +568,7 @@ mod tests {
         use crate::services::sessions::*;
         let f = Fixture::new();
         let api = SessionUseCases {
+            claude: crate::claude::ClaudePaths::default_for_user(),
             platform: crate::platform::PlatformPaths::for_kind(
                 crate::platform::PlatformKind::Macos,
             ),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the managed systemd drop-in for custom Grok and Pi session roots."""
+"""Render the managed systemd drop-in for custom native provider session roots."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import sys
 DEFAULT_ROOTS = {
     Path("/root/.grok/sessions"),
     Path("/root/.pi/agent/sessions"),
+    Path("/root/.claude/projects"),
 }
 FORBIDDEN_ROOTS = {
     Path("/"),
@@ -23,6 +24,7 @@ FORBIDDEN_ROOTS = {
 }
 SUPPORTED_KEYS = {
     "GROK_HOME",
+    "CLAUDE_CONFIG_DIR",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
 }
@@ -81,6 +83,8 @@ def custom_session_roots(values: dict[str, str]) -> list[Path]:
                 "PI_CODING_AGENT_DIR",
             )
         )
+    if claude_config := values.get("CLAUDE_CONFIG_DIR"):
+        roots.append(normalize_session_root(str(Path(claude_config) / "projects"), "CLAUDE_CONFIG_DIR"))
     return sorted(set(roots) - DEFAULT_ROOTS, key=str)
 
 

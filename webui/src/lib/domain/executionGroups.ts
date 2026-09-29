@@ -1,5 +1,5 @@
 import { isInstructionFileActivity, visibleMarkdown } from "./visibleMarkdown";
-import type { MessageBlock, GrokHistoryEvent, PiHistoryEvent } from "../../types";
+import type { MessageBlock, GrokHistoryEvent, PiHistoryEvent, ClaudeHistoryEvent } from "../../types";
 import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQuestionResultBlock, toolBlockDetailText } from "./conversationViewModel";
 
 export type ExecutionStatus = "running" | "failed" | "completed";
@@ -15,7 +15,7 @@ export type ExecutionGroup = {
   id: string;
   commands: ExecutionCommand[];
   kind: "command" | "tool";
-  provider: "Codex" | "Grok" | "Pi";
+  provider: "Codex" | "Grok" | "Pi" | "Claude Code";
   running: boolean;
   failedCount: number;
 };
@@ -212,4 +212,24 @@ export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderI
       ...(event.detail ? [{ label: event.kind === "tool_call" ? "调用参数" : "结果", text: event.detail }] : [])
     ]
   })), "Pi");
+}
+
+export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRenderItem<ClaudeHistoryEvent>[] {
+  return groupActivities(events.map(event => ({
+    item: event,
+    key: `claude:${event.id}`,
+    callId: event.callId,
+    turnId: event.turnId,
+    tool: event.kind === "tool_call" || event.kind === "tool_result",
+    instructionFile: isInstructionFileActivity(event.role, event.text, event.detail, event.result),
+    command: isCommandText(event.role) || isCommandText(event.text),
+    title: event.role || event.text?.trim() || "工具活动",
+    preview: activityPreview(event.detail),
+    phase: event.kind === "tool_result" ? "result" : "call",
+    status: event.status,
+    sections: [
+      ...(event.detail ? [{ label: "调用参数", text: event.detail }] : []),
+      ...(event.result ? [{ label: "结果", text: event.result }] : [])
+    ]
+  })), "Claude Code");
 }

@@ -114,6 +114,14 @@ pub struct ProbeNotificationsConfig {
     pub notify_pi_completion: bool,
     #[serde(default = "default_true")]
     pub notify_pi_failure: bool,
+    #[serde(default = "default_true")]
+    pub notify_claude: bool,
+    #[serde(default = "default_true")]
+    pub notify_claude_completion: bool,
+    #[serde(default = "default_true")]
+    pub notify_claude_failure: bool,
+    #[serde(default = "default_true")]
+    pub notify_claude_reply_needed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +189,10 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_pi: Option<bool>,
     pub notify_pi_completion: Option<bool>,
     pub notify_pi_failure: Option<bool>,
+    pub notify_claude: Option<bool>,
+    pub notify_claude_completion: Option<bool>,
+    pub notify_claude_failure: Option<bool>,
+    pub notify_claude_reply_needed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -272,6 +284,10 @@ impl Default for ProbeNotificationsConfig {
             notify_pi: true,
             notify_pi_completion: true,
             notify_pi_failure: true,
+            notify_claude: true,
+            notify_claude_completion: true,
+            notify_claude_failure: true,
+            notify_claude_reply_needed: true,
         }
     }
 }
@@ -782,6 +798,26 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 notifications.notify_pi_failure,
             );
 
+            editor.set_bool(
+                "probe.notifications",
+                "notify_claude",
+                notifications.notify_claude,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_claude_completion",
+                notifications.notify_claude_completion,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_claude_failure",
+                notifications.notify_claude_failure,
+            );
+            editor.set_bool(
+                "probe.notifications",
+                "notify_claude_reply_needed",
+                notifications.notify_claude_reply_needed,
+            );
             editor.set_bool("probe.notifications", "enabled", notifications.enabled);
             editor.set_string(
                 "probe.notifications",
