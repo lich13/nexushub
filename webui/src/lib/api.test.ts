@@ -6,6 +6,7 @@ import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
 import apiGrokSource from "./api/grok.ts?raw";
 import apiSessionsSource from "./api/sessions.ts?raw";
+import apiClaudeSource from "./api/claude.ts?raw";
 import apiPiSource from "./api/pi.ts?raw";
 import apiJobsSource from "./api/jobs.ts?raw";
 import apiProbeSource from "./api/probe.ts?raw";
@@ -25,6 +26,7 @@ import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetai
 const domainApiSource = [
   apiGrokSource,
   apiPiSource,
+  apiClaudeSource,
   apiSessionsSource,
   apiJobsSource,
   apiProbeSource,
@@ -918,6 +920,11 @@ describe("archive delete API compatibility", () => {
       "cleanup.archiveExecute",
       "cleanup.hiddenDryRun",
       "cleanup.hiddenExecute",
+      "claude.deleteExecute",
+      "claude.deletePreview",
+      "claude.detail",
+      "claude.list",
+      "claude.rename",
       "grok.deleteExecute",
       "grok.deletePreview",
       "grok.detail",
@@ -1183,8 +1190,8 @@ describe("archive delete API compatibility", () => {
   test("NexusHub navigation exposes the slim provider workspaces", async () => {
     const app = await import("../test/domain");
 
-    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "grok", "pi", "probe", "ops"]);
-    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Grok Build", "Pi", "Probe", "设置"]);
+    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "claude", "grok", "pi", "probe", "ops"]);
+    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Claude Code", "Grok Build", "Pi", "Probe", "设置"]);
   });
 
   test("thread list item text only exposes the title", async () => {

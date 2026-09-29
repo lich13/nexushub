@@ -52,6 +52,18 @@ for boundary in ["Environment=GROK_LEADER_SOCKET=/var/lib/nexushub-webd/grok-lea
         raise SystemExit("native Grok runtime isolation boundary missing")
 if "/root/.grok " in next(line for line in unit.splitlines() if line.startswith("ReadWritePaths=")):
     raise SystemExit("provider credentials must not become writable")
+if "-/root/.claude/projects" not in unit or "/root/.claude " in unit:
+    raise SystemExit("Claude write scope must include only optional projects")
+import importlib.util
+import sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("provider_paths", root / "deploy/nexushub-webd/provider-session-write-paths.py")
+provider_paths = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(provider_paths)
+if provider_paths.custom_session_roots({"CLAUDE_CONFIG_DIR": "/srv/example-claude"}) != [Path("/srv/example-claude/projects")]:
+    raise SystemExit("custom Claude projects whitelist missing")
+if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
+    raise SystemExit("default Claude root must use optional unit entry")
 if config["bundle"]["targets"] != ["dmg", "app"]:
     raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 

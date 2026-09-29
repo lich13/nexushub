@@ -104,6 +104,12 @@ impl<'a> NexusHubUseCases<'a> {
         }
     }
 
+    pub fn claude(self) -> ClaudeUseCases {
+        ClaudeUseCases {
+            paths: crate::claude::ClaudePaths::default_for_user(),
+        }
+    }
+
     pub fn pi(self) -> PiUseCases {
         PiUseCases {
             paths: crate::pi::PiPaths::default_for_user(),
@@ -125,6 +131,7 @@ impl<'a> NexusHubUseCases<'a> {
             codex,
             grok: crate::grok::GrokPaths::default_for_user(),
             pi: crate::pi::PiPaths::default_for_user(),
+            claude: crate::claude::ClaudePaths::default_for_user(),
         }
     }
 
@@ -470,5 +477,36 @@ impl<'a> SystemUseCases<'a> {
 
     pub fn capability_gate(self, capability: Capability) -> CapabilityGatePlan {
         system::capability_gate_plan_for_surface(self.platform, self.host_surface, capability)
+    }
+}
+
+pub struct ClaudeUseCases {
+    paths: crate::claude::ClaudePaths,
+}
+impl ClaudeUseCases {
+    pub fn list(
+        &self,
+        limit: usize,
+        query: Option<&str>,
+    ) -> Result<Vec<crate::claude::ClaudeSessionSummary>> {
+        crate::claude::list_claude_sessions(&self.paths, limit, query)
+    }
+    pub fn detail(
+        &self,
+        request: crate::claude::ClaudeDetailRequest,
+    ) -> Result<crate::claude::ClaudeSessionDetail> {
+        crate::claude::claude_session_detail(&self.paths, &request)
+    }
+    pub fn rename(&self, key: &str, title: &str) -> Result<crate::claude::ClaudeSessionSummary> {
+        crate::claude::rename_claude_session(&self.paths, key, title)
+    }
+    pub fn delete_preview(&self, key: &str) -> Result<crate::claude::ClaudeDeletePreview> {
+        crate::claude::preview_claude_delete(&self.paths, key)
+    }
+    pub fn delete_execute(
+        &self,
+        request: crate::claude::ClaudeDeleteRequest,
+    ) -> Result<crate::claude::ClaudeDeleteResult> {
+        crate::claude::execute_claude_delete(&self.paths, request)
     }
 }

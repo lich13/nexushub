@@ -2830,3 +2830,95 @@ async fn rpc_auth_audit_never_contains_api_key_or_legacy_credentials() {
     drop(connection);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[tokio::test]
+async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
+    struct ClaudeEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+    impl Drop for ClaudeEnv {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value),
+                None => env::remove_var("CLAUDE_CONFIG_DIR"),
+            }
+        }
+    }
+    let root = temp_test_dir("nexushub-claude-rpc");
+    let _env = ClaudeEnv {
+        _lock: CONFIG_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+        previous: env::var_os("CLAUDE_CONFIG_DIR"),
+    };
+    env::set_var("CLAUDE_CONFIG_DIR", &root);
+    let (state, api_key) = authenticated_test_state();
+    let app = router(state);
+    assert_eq!(
+        request_rpc_json(app.clone(), "claude.list", "{}", &api_key).await,
+        json!([])
+    );
+    for command in [
+        "claude.list",
+        "claude.detail",
+        "claude.rename",
+        "claude.deletePreview",
+        "claude.deleteExecute",
+    ] {
+        for key in [None, Some("nhk_invalid_fixture")] {
+            let status = request_rpc_status(app.clone(), command, "{}", key).await;
+            assert!(matches!(
+                status,
+                StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS
+            ));
+        }
+    }
+    let file = root.join("projects/example/native.jsonl");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let user = json!({"type":"user","uuid":"u1","sessionId":"claude-rpc-id","cwd":root.join("workspace"),"version":"2.1.284","timestamp":"2026-09-29T00:00:00Z","message":{"content":"Claude RPC fixture"}});
+    let assistant = json!({"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"claude-rpc-id","timestamp":"2026-09-29T00:00:01Z","message":{"content":[{"type":"text","text":"Done"}],"stop_reason":"end_turn"}});
+    fs::write(&file, format!("{user}\n{assistant}\n")).unwrap();
+    let rows = request_rpc_json(app.clone(), "claude.list", "{}", &api_key).await;
+    let key = rows[0]["sessionKey"].as_str().unwrap();
+    let detail = request_rpc_json(
+        app.clone(),
+        "claude.detail",
+        &json!({"sessionKey":key,"limit":1}).to_string(),
+        &api_key,
+    )
+    .await;
+    assert_eq!(detail["events"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["hasMore"], true);
+    let renamed = request_rpc_json(
+        app.clone(),
+        "claude.rename",
+        &json!({"sessionKey":key,"title":"Renamed RPC fixture"}).to_string(),
+        &api_key,
+    )
+    .await;
+    assert_eq!(renamed["title"], "Renamed RPC fixture");
+    assert_eq!(
+        request_rpc_status(
+            app.clone(),
+            "claude.detail",
+            r#"{"sessionKey":"/etc/passwd"}"#,
+            Some(&api_key)
+        )
+        .await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(request_rpc_status(app.clone(),"sessions.attachmentRead",&json!({"provider":"claude_code","sessionKey":key,"messageId":"u1","attachmentId":"../../private"}).to_string(),Some(&api_key)).await,StatusCode::INTERNAL_SERVER_ERROR);
+    let preview = request_rpc_json(
+        app.clone(),
+        "claude.deletePreview",
+        &json!({"sessionKey":key}).to_string(),
+        &api_key,
+    )
+    .await;
+    let deleted = request_rpc_json(app,"claude.deleteExecute",&json!({"request":{"sessionKey":key,"confirmed":true,"fingerprint":preview["fingerprint"]}}).to_string(),&api_key).await;
+    assert_eq!(deleted["deleted"], true);
+    assert!(!file.exists());
+    fs::remove_dir_all(root).unwrap();
+}

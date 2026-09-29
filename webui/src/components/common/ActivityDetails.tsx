@@ -15,9 +15,7 @@ export function ActivityDetails({ className, stateKey, stateAliases = [], initia
   const [choice, setChoice] = useState<boolean>();
   const aliases = scope ? stateAliases.map(key => `${machineScope()}:${scope}:${key}`) : [];
   const open = (id ? choices.get(id) ?? aliases.map(key => choices.get(key)).find(value => value !== undefined) : choice) ?? initiallyOpen;
-  return <details className={className} open={open} onToggle={event => {
-    if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
-    const next = event.currentTarget.open;
+  const remember = (next: boolean) => {
     if (id) {
       for (const key of [id, ...aliases]) {
         choices.delete(key);
@@ -26,8 +24,18 @@ export function ActivityDetails({ className, stateKey, stateAliases = [], initia
       }
     }
     setChoice(next);
+  };
+  return <details className={className} open={open} onToggle={event => {
+    if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
+    remember(event.currentTarget.open);
   }}>
-    <summary>{summary}<ChevronRight className="execution-chevron" size={16} /></summary>
+    <summary onClick={event => {
+      if ((event.target as Element).closest("button, a, input")) return;
+      // Save before a machine/view switch can unmount the element and cancel
+      // the browser's asynchronously dispatched toggle event.
+      event.preventDefault();
+      remember(!open);
+    }}>{summary}<ChevronRight className="execution-chevron" size={16} /></summary>
     {typeof children === "function" ? (open ? children() : null) : children}
   </details>;
 }

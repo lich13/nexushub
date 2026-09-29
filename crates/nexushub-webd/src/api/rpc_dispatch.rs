@@ -8,6 +8,10 @@ use super::{
     system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
     PiListQuery, ProbeEventsQuery, ProbeStatusQuery,
 };
+use super::{
+    claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,
+    ClaudeListQuery,
+};
 use crate::{
     api::payload::{
         rpc_nested_payload_or_empty, rpc_payload, rpc_query_strings, rpc_required_string,
@@ -154,6 +158,41 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::PI_DELETE_EXECUTE => {
             pi_delete_execute(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
+        rpc_commands::CLAUDE_LIST => {
+            claude_list(
+                State(state),
+                headers,
+                axum::extract::Query(ClaudeListQuery {
+                    q: args
+                        .get("q")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    limit: args
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                }),
+            )
+            .await
+        }
+        rpc_commands::CLAUDE_DETAIL => {
+            claude_detail(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        rpc_commands::CLAUDE_RENAME => {
+            claude_rename(State(state), headers, Json(rpc_payload(&args)?)).await
+        }
+        rpc_commands::CLAUDE_DELETE_PREVIEW => {
+            let session_key = rpc_required_string(&args, "sessionKey")?;
+            claude_delete_preview(State(state), headers, axum::extract::Path(session_key)).await
+        }
+        rpc_commands::CLAUDE_DELETE_EXECUTE => {
+            claude_delete_execute(
                 State(state),
                 headers,
                 Json(rpc_wrapped_payload(&args, &["request"])?),

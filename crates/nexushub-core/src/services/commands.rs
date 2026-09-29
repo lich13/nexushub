@@ -7,10 +7,15 @@ pub const GROK_RENAME: &str = "grok.rename";
 pub const GROK_DELETE_PREVIEW: &str = "grok.deletePreview";
 pub const GROK_DELETE_EXECUTE: &str = "grok.deleteExecute";
 pub const PI_LIST: &str = "pi.list";
+pub const CLAUDE_LIST: &str = "claude.list";
 pub const PI_DETAIL: &str = "pi.detail";
+pub const CLAUDE_DETAIL: &str = "claude.detail";
 pub const PI_RENAME: &str = "pi.rename";
+pub const CLAUDE_RENAME: &str = "claude.rename";
 pub const PI_DELETE_PREVIEW: &str = "pi.deletePreview";
+pub const CLAUDE_DELETE_PREVIEW: &str = "claude.deletePreview";
 pub const PI_DELETE_EXECUTE: &str = "pi.deleteExecute";
+pub const CLAUDE_DELETE_EXECUTE: &str = "claude.deleteExecute";
 pub const AUTH_PUBLIC_SETTINGS: &str = "auth.publicSettings";
 pub const AUTH_LOGIN: &str = "auth.login";
 pub const AUTH_LOGOUT: &str = "auth.logout";
@@ -102,10 +107,15 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     GROK_DELETE_PREVIEW,
     GROK_DELETE_EXECUTE,
     PI_LIST,
+    CLAUDE_LIST,
     PI_DETAIL,
+    CLAUDE_DETAIL,
     PI_RENAME,
+    CLAUDE_RENAME,
     PI_DELETE_PREVIEW,
+    CLAUDE_DELETE_PREVIEW,
     PI_DELETE_EXECUTE,
+    CLAUDE_DELETE_EXECUTE,
     SESSIONS_ATTACHMENT_READ,
     SESSIONS_BULK_PREVIEW,
     SESSIONS_BULK_EXECUTE,
@@ -131,8 +141,11 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | GROK_LIST
             | GROK_DETAIL
             | GROK_DELETE_PREVIEW
+            | CLAUDE_LIST
             | PI_LIST
+            | CLAUDE_DETAIL
             | PI_DETAIL
+            | CLAUDE_DELETE_PREVIEW
             | PI_DELETE_PREVIEW
             | SESSIONS_ATTACHMENT_READ
             | SESSIONS_BULK_PREVIEW
@@ -153,10 +166,15 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     GROK_DELETE_PREVIEW,
     GROK_DELETE_EXECUTE,
     PI_LIST,
+    CLAUDE_LIST,
     PI_DETAIL,
+    CLAUDE_DETAIL,
     PI_RENAME,
+    CLAUDE_RENAME,
     PI_DELETE_PREVIEW,
+    CLAUDE_DELETE_PREVIEW,
     PI_DELETE_EXECUTE,
+    CLAUDE_DELETE_EXECUTE,
     AUTH_PUBLIC_SETTINGS,
     AUTH_LOGIN,
     AUTH_LOGOUT,

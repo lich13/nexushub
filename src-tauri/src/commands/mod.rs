@@ -1,3 +1,4 @@
+pub mod claude;
 pub mod grok;
 pub mod jobs;
 pub mod pi;

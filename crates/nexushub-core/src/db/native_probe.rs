@@ -145,12 +145,16 @@ impl PanelDb {
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
         let mut statuses = Vec::new();
-        for provider in [NativeProvider::Grok, NativeProvider::Pi] {
+        for provider in [
+            NativeProvider::Grok,
+            NativeProvider::Pi,
+            NativeProvider::Claude,
+        ] {
             let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
             let failed:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status='failed'",[provider.as_str()],|r|r.get(0))?;
             let pending:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status IN ('pending','delivering')",[provider.as_str()],|r|r.get(0))?;
-            statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":provider==NativeProvider::Grok}));
+            statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":provider!=NativeProvider::Pi}));
         }
         Ok(Value::Array(statuses))
     }

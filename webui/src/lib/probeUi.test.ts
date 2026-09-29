@@ -300,6 +300,11 @@ describe("Probe UI helpers", () => {
           notify_pi: true,
           notify_pi_completion: true,
           notify_pi_failure: true,
+          notify_claude: true,
+          notify_claude_completion: true,
+          notify_claude_failure: true,
+          notify_claude_reply_needed: true,
+
           notify_recoverable: true
         },
         observability: {

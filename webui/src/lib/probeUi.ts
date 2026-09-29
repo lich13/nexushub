@@ -44,6 +44,11 @@ export type ProbeSettingsDraft = {
     notify_pi: boolean;
     notify_pi_completion: boolean;
     notify_pi_failure: boolean;
+    notify_claude: boolean;
+    notify_claude_completion: boolean;
+    notify_claude_failure: boolean;
+    notify_claude_reply_needed: boolean;
+
 
   };
   observability: {
@@ -103,7 +108,11 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_grok_failure: notifications.notify_grok_failure !== false,
       notify_pi: notifications.notify_pi !== false,
       notify_pi_completion: notifications.notify_pi_completion !== false,
-      notify_pi_failure: notifications.notify_pi_failure !== false
+      notify_pi_failure: notifications.notify_pi_failure !== false,
+      notify_claude: notifications.notify_claude !== false,
+      notify_claude_completion: notifications.notify_claude_completion !== false,
+      notify_claude_failure: notifications.notify_claude_failure !== false,
+      notify_claude_reply_needed: notifications.notify_claude_reply_needed !== false
     },
     observability: {
       event_retention_days: toBoundedInteger(probe.observability?.event_retention_days, 2) ?? 2,
@@ -145,7 +154,11 @@ export function buildProbeSettingsPayload(
     notify_grok_failure: draft.notifications.notify_grok_failure,
     notify_pi: draft.notifications.notify_pi,
     notify_pi_completion: draft.notifications.notify_pi_completion,
-    notify_pi_failure: draft.notifications.notify_pi_failure
+    notify_pi_failure: draft.notifications.notify_pi_failure,
+    notify_claude: draft.notifications.notify_claude,
+    notify_claude_completion: draft.notifications.notify_claude_completion,
+    notify_claude_failure: draft.notifications.notify_claude_failure,
+    notify_claude_reply_needed: draft.notifications.notify_claude_reply_needed
   };
   if (deviceKey) {
     notifications.device_key = deviceKey;

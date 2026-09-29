@@ -1,14 +1,14 @@
 # NexusHub Design System
 
-NexusHub 1.2.2 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.3 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
 - Navigation contains Codex, Grok Build, Pi, Probe and settings.
 - Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
-- Running Codex, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Codex, Grok and Pi pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
+- Running Codex, Claude Code, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
+- Codex, Claude Code, Grok and Pi pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
 - Visible assistant replies in all three providers expose a compact copy button that copies Markdown after structured memory metadata is removed. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
@@ -44,3 +44,5 @@ Place a compact 本机/腾讯云 selector below the navigation brand, with an ic
 Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验证并保存 and 移除连接. Do not display a saved key. Connection errors and save results stay near the controls. Machine changes clear unexecuted confirmations and selection; stable disclosure identities include the machine. All previous conversation layout, themes, keyboard and reduced-motion rules remain.
 
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
+
+Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Unknown format or uncertain activity disables management with the native blocker.

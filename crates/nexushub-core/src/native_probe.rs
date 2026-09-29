@@ -1,4 +1,4 @@
-//! Read-only Grok/Pi terminal-turn detection. No CLI, hooks or extensions are started.
+//! Read-only native provider terminal-turn detection. No CLI, hooks or extensions are started.
 use crate::{config::Config, security::redact_output};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -16,12 +16,15 @@ use std::{
 pub enum NativeProvider {
     Grok,
     Pi,
+    #[serde(rename = "claude_code")]
+    Claude,
 }
 impl NativeProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Grok => "grok",
             Self::Pi => "pi",
+            Self::Claude => "claude_code",
         }
     }
     pub fn enabled(self, config: &Config) -> bool {
@@ -30,10 +33,14 @@ impl NativeProvider {
             && match self {
                 Self::Grok => config.probe.notifications.notify_grok,
                 Self::Pi => config.probe.notifications.notify_pi,
+                Self::Claude => config.probe.notifications.notify_claude,
             }
     }
     pub fn event_enabled(self, config: &Config, kind: &str) -> bool {
         match (self, kind) {
+            (Self::Claude, "completion") => config.probe.notifications.notify_claude_completion,
+            (Self::Claude, "failure") => config.probe.notifications.notify_claude_failure,
+            (Self::Claude, "reply_needed") => config.probe.notifications.notify_claude_reply_needed,
             (Self::Grok, "completion") => config.probe.notifications.notify_grok_completion,
             (Self::Grok, "failure") => config.probe.notifications.notify_grok_failure,
             (Self::Pi, "completion") => config.probe.notifications.notify_pi_completion,
@@ -109,6 +116,9 @@ pub fn file_identity(path: &Path) -> Result<String> {
 
 pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     match provider {
+        NativeProvider::Claude => {
+            crate::claude::notification_snapshots(&crate::claude::ClaudePaths::default_for_user())
+        }
         NativeProvider::Grok => {
             crate::grok::notification_snapshots(&crate::grok::GrokPaths::default_for_user())
         }

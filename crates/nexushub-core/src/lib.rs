@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod claude;
 pub mod codex;
 pub mod config;
 pub mod crypto;

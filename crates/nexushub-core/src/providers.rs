@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum AgentProviderId {
     Codex,
+    ClaudeCode,
     GrokBuild,
     Pi,
     Cursor,
@@ -29,6 +30,13 @@ impl Default for ProviderRegistry {
     fn default() -> Self {
         Self {
             providers: vec![
+                AgentProviderInfo {
+                    id: AgentProviderId::ClaudeCode, label: "Claude Code".into(),
+                    status: if crate::claude::ClaudePaths::default_for_user().available() { "ready" } else { "unavailable" }.into(),
+                    description: "Native Claude transcript history and guarded session management".into(),
+                    capabilities: vec!["readonly".into(),"sessions".into(),"tools".into(),"attachments".into(),"rename".into(),"delete_local_session".into()],
+                    safety: "Only inactive verified transcripts can be renamed or deleted".into(),
+                },
                 AgentProviderInfo {
                     id: AgentProviderId::Codex,
                     label: "Codex".to_string(),
