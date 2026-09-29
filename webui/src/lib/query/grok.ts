@@ -14,12 +14,12 @@ export function useGrokDetail(id?: string) {
     refetchInterval: query => query.state.data?.summary?.status === "running" ? 1000 : 2000
   });
 }
-export function useGrokActions(csrfToken?: string | null) {
+export function useGrokActions() {
   const client = useQueryClient();
   const refresh = () => { void client.invalidateQueries({ queryKey: ["grok"] }); };
   return {
-    rename: useMutation({ mutationFn: ({ id, title }: { id: string; title: string }) => renameGrokSession(id, title, csrfToken), onSuccess: refresh }),
-    preview: useMutation({ mutationFn: (id: string) => previewGrokSessionDelete(id, csrfToken) }),
-    remove: useMutation({ mutationFn: (request: GrokDeleteRequest) => deleteGrokSession(request, csrfToken), onSuccess: refresh })
+    rename: useMutation({ mutationFn: ({ id, title }: { id: string; title: string }) => renameGrokSession(id, title), onSuccess: refresh }),
+    preview: useMutation({ mutationFn: (id: string) => previewGrokSessionDelete(id) }),
+    remove: useMutation({ mutationFn: (request: GrokDeleteRequest) => deleteGrokSession(request), onSuccess: refresh })
   };
 }

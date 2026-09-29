@@ -1,4 +1,11 @@
 export const contractDtoNames = [
+  "RemoteConnectionView",
+  "RemoteConnectionCredentials",
+  "RemoteRevisionRequest",
+  "RemoteSelectionRequest",
+  "RemoteInvokeRequest",
+  "RemoteInvokeResponse",
+
   "SessionAttachmentRequest",
   "SessionAttachmentResponse",
   "SessionBatchRequest",
@@ -39,7 +46,6 @@ export const contractDtoNames = [
   "SystemProvidersResponse",
   "SystemCapabilitiesResponse",
   "SystemVersionResponse",
-  "ThreadEventsResponse",
   "ThreadsArchiveResponse",
   "ThreadsBlocksResponse",
   "ThreadsDetailResponse",

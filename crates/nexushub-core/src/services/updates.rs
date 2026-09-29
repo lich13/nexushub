@@ -350,7 +350,7 @@ pub fn update_job_plan_for_surface(
         method: execution_method_for_surface(platform.kind, host_surface),
         platform: platform.kind,
         exclusive: platform.kind == PlatformKind::Linux
-            && host_surface == HostSurface::LinuxServerWebui,
+            && host_surface == HostSurface::LinuxServerApi,
     }
 }
 
@@ -556,7 +556,7 @@ fn execution_method_for_surface(
     host_surface: HostSurface,
 ) -> UpdateExecutionMethod {
     match (platform, host_surface) {
-        (PlatformKind::Linux, HostSurface::LinuxServerWebui) => {
+        (PlatformKind::Linux, HostSurface::LinuxServerApi) => {
             UpdateExecutionMethod::LinuxSystemdJob
         }
         (PlatformKind::Linux | PlatformKind::Macos, HostSurface::DesktopEmbeddedTauri) => {
@@ -568,7 +568,7 @@ fn execution_method_for_surface(
 
 fn capabilities_for_surface(platform: PlatformKind, host_surface: HostSurface) -> Vec<String> {
     match (platform, host_surface) {
-        (PlatformKind::Linux, HostSurface::LinuxServerWebui) => [
+        (PlatformKind::Linux, HostSurface::LinuxServerApi) => [
             "check",
             "confirm_install",
             "job_history",

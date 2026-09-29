@@ -1,6 +1,6 @@
 [package]
 name = "nexushub-desktop"
-version = "1.1.9"
+version = "1.2.0"
 description = "NexusHub macOS desktop console"
 authors = ["NexusHub contributors"]
 license = "MIT"
@@ -36,6 +36,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tokio = { version = "1.37", features = ["rt-multi-thread"] }
 toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = { version = "3", features = ["apple-native"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -20,7 +20,7 @@ mod tests {
             .expect("generate_handler block must close");
         body.lines()
             .map(str::trim)
-            .filter(|line| line.starts_with("commands::"))
+            .filter(|line| line.starts_with("commands::") || line.starts_with("remote::"))
             .map(|line| line.trim_end_matches(',').to_string())
             .collect()
     }

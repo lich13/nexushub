@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { assertContrast, assertNoOverflow, mockApi } from "./fixtures";
+import { assertContrast, assertNoOverflow, mockApi, mockCommand, observeCommands } from "./fixtures";
 
 test("Probe saves Bark and restricted recovery independently and retains drafts on failure", async ({ page }) => {
   await mockApi(page);
   const saved: Record<string, any>[] = [];
-  page.on("request", request => { if (request.url().endsWith("/probe.settings.save")) saved.push(request.postDataJSON().settings); });
+  observeCommands(page, (command, args) => { if (command === "probe.settings.save") saved.push(args.settings); });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
   await page.getByRole("button", { name: "通知配置", exact: true }).click();
@@ -20,7 +20,7 @@ test("Probe saves Bark and restricted recovery independently and retains drafts 
   await expect.poll(() => saved.length).toBe(2);
   expect(saved[1].probe.notifications.enabled).toBe(true);
   await expect(page.getByRole("button", { name: "保存设置", exact: true })).toBeEnabled();
-  await page.route("**/probe.settings.save", route => route.fulfill({ status: 500, json: { error: "Fixture save failed" } }));
+  await mockCommand(page, "probe.settings.save", args => Promise.reject(new Error("Fixture save failed")));
   await page.getByLabel("主机标签", { exact: true }).fill("retained-draft");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(page.locator(".form-error").first()).toContainText("Fixture save failed");
@@ -35,10 +35,10 @@ test("Probe rejects duplicate save events before pending state renders", async (
   let saves = 0;
   let releaseSave!: () => void;
   const responseGate = new Promise<void>(resolve => { releaseSave = resolve; });
-  await page.route("**/probe.settings.save", async route => {
+  await mockCommand(page, "probe.settings.save", async (args, next) => {
     saves++;
     await responseGate;
-    await route.fallback();
+    return next();
   });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
@@ -59,9 +59,9 @@ test("Probe rejects duplicate save events before pending state renders", async (
 test("archive and hidden cleanup require previews, explicit confirmation, and visible failure", async ({ page }) => {
   const calls = await mockApi(page);
   const executed: Record<string, number>[] = [];
-  await page.route("**/cleanup.archiveExecute", route => {
-    executed.push(route.request().postDataJSON());
-    return route.fulfill({ status: 409, json: { error: "Fixture count changed; run a new preview" } });
+  await mockCommand(page, "cleanup.archiveExecute", args => {
+    executed.push(args.request);
+    return Promise.reject(new Error("Fixture count changed; run a new preview"));
   });
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "设置", exact: true }).click();
@@ -131,7 +131,7 @@ test("copy commands use the selected task and long load errors stay readable", a
   await page.locator(".provider-events .assistant_message .copy-reply").click();
   await expect(page.locator("html")).toHaveAttribute("data-copied", "Pi fixture result");
   await page.setViewportSize({ width: 320, height: 844 });
-  await page.route("**/grok.list", route => route.fulfill({ status: 500, json: { error: "Fixture load failure: " + "long-path/".repeat(40) } }));
+  await mockCommand(page, "grok.list", args => Promise.reject(new Error("Fixture load failure: " + "long-path/".repeat(40))));
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.locator(".form-error").first()).toContainText("Fixture load failure");
   await assertContrast(page, ".form-error");

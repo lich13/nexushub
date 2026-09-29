@@ -33,7 +33,7 @@ jobs:
       - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
       - run: corepack pnpm@11.0.8 --dir webui typecheck
       - run: corepack pnpm@11.0.8 --dir webui test
-      - run: corepack pnpm@11.0.8 --dir webui build
+      - run: corepack pnpm@11.0.8 --dir webui build:tauri
       - run: corepack pnpm@11.0.8 --dir webui exec playwright install --with-deps chromium webkit
       - run: corepack pnpm@11.0.8 --dir webui test:browser
         env:

@@ -8,7 +8,6 @@ use nexushub_core::{
     platform::PlatformPaths,
     services::system::HostSurface,
 };
-use reqwest::Client;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -25,15 +24,14 @@ pub struct AppState {
     pub db: PanelDb,
     pub jobs: JobRunner,
     pub app_server_client: CodexAppServerClient,
-    pub http: Client,
-    pub login_limiter: Arc<Mutex<LoginLimiter>>,
+    pub auth_limiter: Arc<Mutex<AuthLimiter>>,
     pub rollout_detail_cache: Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
     pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
 }
 
 impl AppState {
     pub fn new(config: Config, db: PanelDb) -> Self {
-        Self::new_for_surface(config, db, HostSurface::LinuxServerWebui)
+        Self::new_for_surface(config, db, HostSurface::LinuxServerApi)
     }
 
     pub fn new_for_surface(config: Config, db: PanelDb, host_surface: HostSurface) -> Self {
@@ -52,9 +50,9 @@ impl AppState {
         app_server_client: CodexAppServerClient,
     ) -> Self {
         let jobs = JobRunner::new(db.clone());
-        let login_rate_limit = config.security.login_rate_limit_per_minute;
+        let auth_rate_limit = config.security.auth_rate_limit_per_minute;
         let platform = match host_surface {
-            HostSurface::LinuxServerWebui => {
+            HostSurface::LinuxServerApi => {
                 PlatformPaths::for_kind(nexushub_core::platform::PlatformKind::Linux)
             }
             HostSurface::DesktopEmbeddedTauri => PlatformPaths::current(),
@@ -66,8 +64,7 @@ impl AppState {
             db,
             jobs,
             app_server_client,
-            http: Client::new(),
-            login_limiter: Arc::new(Mutex::new(LoginLimiter::new(login_rate_limit))),
+            auth_limiter: Arc::new(Mutex::new(AuthLimiter::new(auth_rate_limit))),
             rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
         }
@@ -131,12 +128,12 @@ pub struct FileSignature {
     pub modified_ms: Option<u128>,
 }
 
-pub struct LoginLimiter {
+pub struct AuthLimiter {
     max_per_minute: u32,
     attempts: HashMap<String, Vec<Instant>>,
 }
 
-impl LoginLimiter {
+impl AuthLimiter {
     pub fn new(max_per_minute: u32) -> Self {
         Self {
             max_per_minute,
@@ -147,6 +144,13 @@ impl LoginLimiter {
     pub fn check(&mut self, key: &str) -> bool {
         let now = Instant::now();
         let window = Duration::from_secs(60);
+        self.attempts.retain(|_, times| {
+            times.retain(|instant| now.duration_since(*instant) < window);
+            !times.is_empty()
+        });
+        if self.attempts.len() >= 4096 && !self.attempts.contains_key(key) {
+            return false;
+        }
         let attempts = self.attempts.entry(key.to_string()).or_default();
         attempts.retain(|instant| now.duration_since(*instant) < window);
         if attempts.len() >= self.max_per_minute as usize {

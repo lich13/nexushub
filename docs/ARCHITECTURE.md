@@ -1,8 +1,8 @@
-# Architecture — 1.1.9
+# Architecture — 1.2.0
 
 ## Boundaries
 
-`desktop_embedded_tauri` and `linux_server_webui` share the WebUI and core. Components call query/domain helpers, typed transport and `NexusHubUseCases`; provider readers and controlled effects remain behind the facade. HTTP handlers and Tauri commands are thin adapters.
+`desktop_embedded_tauri` owns the React UI; `linux_server_api` exposes only the shared core business API. Components call query/domain helpers, typed transport and `NexusHubUseCases`; provider readers and controlled effects remain behind the facade. HTTP handlers and Tauri commands are thin adapters.
 
 | Area | Responsibility |
 | --- | --- |
@@ -38,13 +38,13 @@ Provider readers retain a presentation-only user message with a stable native id
 
 The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All three renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
 
-`sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and cleared at logout. Remote-only references are not fetched. Polling contains descriptors, not image data.
+`sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and isolated by machine and cleared when the active connection changes. Remote-only references are not fetched. Polling contains descriptors, not image data.
 
 ## Files, settings and notifications
 
-File links are parsed from the original Markdown target before browser URL resolution. The shared path component strips line/column suffixes, resolves relative paths against the selected thread workspace, copies the server path on web, and delegates Finder reveal to the existing Tauri opener on macOS.
+File links are parsed from the original Markdown target before browser URL resolution. The shared path component strips line/column suffixes, resolves relative paths against the selected thread workspace, copies paths for remote threads, and delegates Finder reveal to the existing Tauri opener on macOS.
 
-The settings surface is a single `更新与维护` page plus platform-appropriate account/security controls. `system.status` is a retired tombstone; `system.capabilities` returns only host surface and the capability matrix. Updates and cleanup retain their own dry-run records.
+Settings contain `更新与维护` and `远程连接`. `system.status` is a retired tombstone; `system.capabilities` returns API protocol version, host surface and the capability matrix. Updates and cleanup retain their own dry-run records.
 
 Codex final replies are classified locally for explicit user feedback requests after a verified terminal turn. The monitor, Stop Hook and completion path share the `assistant_question` source and persistent delivery claims. Existing provider completion/error rules remain unchanged.
 
@@ -59,3 +59,13 @@ CI runs frontend, backend and macOS Tauri checks. Release guard checks the tag/v
 Future edits update these six documents and use normal Git commits.
 
 Native Codex question parsing lives in `codex/user_input.rs`. It normalizes synchronous `question` and asynchronous `title` fields and string/object options. The async tracker pairs original turn/call/question identities with complete native reply envelopes and handles explicit cancellation or replacement. The webd asynchronous monitor scans independently of list status and shares the sender recheck with Hook, passive and Stop events. Existing settings hold an enablement baseline and atomic per-call delivery records, so first startup skips history, partial answers do not create new identities, and restarts or TTL expiry do not resend confirmed calls. No RPC or database table is added.
+
+## Remote transport and retirement
+
+Desktop `remote.*` commands own connection preferences and Keychain access. They never enter the Linux dispatcher. React sends a command, arguments and connection revision through native IPC; Rust uses a fixed registry allowlist, HTTPS, disabled redirects and a 32 MiB response bound, enough for the existing 20 MiB image limit. On first remote use the protocol is verified; stale responses cannot cross a revised connection. No credential is returned to React.
+
+A revision-scoped QueryClient and workspace lifetime isolate mutations, previews, paging and scroll; attachment keys, title overrides and disclosures include machine identity. Local updater and Plan saving stay local. Remote path links never reach Finder.
+
+Server authentication accepts one `x-api-key`, stores only its SHA-256 digest and uses constant-time comparison. Failed authorization is bounded and audited without credentials; valid credentials are not locked out by failed attempts. CLI rotation invalidates the previous Key and revocation denies all business RPCs. Old authentication/security actions and threadEvents are unavailable tombstones.
+
+Opening only the NexusHub database drops administrators, web sessions and Turnstile state, removes retired settings, erases freed pages and checkpoints/truncates WAL. Business audit, jobs, Bark encryption and notification state survive. Config migration removes retired web keys without replacing unrelated settings. Neither native Codex storage nor provider session formats change. Linux packages contain no React assets; the reverse proxy serves RPC and health only.

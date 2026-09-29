@@ -19,7 +19,6 @@ fn default_config_uses_nexushub_runtime_names() {
         config.paths.db_path,
         platform.data_dir.join("nexushub.sqlite")
     );
-    assert_eq!(config.paths.webui_dir, platform.webui_dir);
     assert_eq!(config.paths.log_dir, platform.log_dir);
     assert_eq!(
         config.update.panel_update_command,
@@ -38,10 +37,6 @@ fn linux_default_config_values_stay_cloud_compatible() {
     assert_eq!(
         config.paths.db_path,
         PathBuf::from("/var/lib/nexushub-webd/nexushub.sqlite")
-    );
-    assert_eq!(
-        config.paths.webui_dir,
-        PathBuf::from("/usr/share/nexushub-webd/webui")
     );
     assert_eq!(
         config.paths.log_dir,
@@ -74,10 +69,6 @@ fn macos_default_config_uses_application_support_and_tauri_app_paths() {
     assert_eq!(
         config.paths.db_path,
         home.join("Library/Application Support/NexusHub/nexushub.sqlite")
-    );
-    assert_eq!(
-        config.paths.webui_dir,
-        home.join("Library/Application Support/NexusHub/desktop-assets")
     );
     assert_eq!(config.paths.log_dir, home.join("Library/Logs/NexusHub"));
     assert_eq!(config.codex.home.to_string_lossy(), "auto");
@@ -119,10 +110,6 @@ fn platform_paths_cover_linux_macos_and_windows() {
         linux.config_file,
         PathBuf::from("/etc/nexushub-webd/config.toml")
     );
-    assert_eq!(
-        linux.webui_dir,
-        PathBuf::from("/usr/share/nexushub-webd/webui")
-    );
     assert_eq!(linux.log_dir, PathBuf::from("/var/log/nexushub-webd"));
     assert_eq!(linux.service_name, "nexushub-webd");
     assert_eq!(linux.service_kind, "systemd");
@@ -142,10 +129,6 @@ fn platform_paths_cover_linux_macos_and_windows() {
     assert_eq!(
         macos.config_file,
         mac_home.join("Library/Application Support/NexusHub/config.toml")
-    );
-    assert_eq!(
-        macos.webui_dir,
-        mac_home.join("Library/Application Support/NexusHub/desktop-assets")
     );
     assert_eq!(macos.log_dir, mac_home.join("Library/Logs/NexusHub"));
     assert_eq!(macos.service_file, None);
@@ -442,7 +425,8 @@ fn capabilities_response_has_no_status_collection_or_private_paths() {
     let json = serde_json::to_value(response).unwrap();
     assert_eq!(json["host_surface"], "desktop_embedded_tauri");
     assert_eq!(json["capabilities"]["thread_cleanup"], true);
-    assert_eq!(json.as_object().unwrap().len(), 2);
+    assert_eq!(json["api_version"], 1);
+    assert_eq!(json.as_object().unwrap().len(), 3);
     assert!(json["capabilities"].get("status").is_none());
 }
 

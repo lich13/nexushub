@@ -1,18 +1,18 @@
 import { expect, test } from "@playwright/test";
-import { mockApi } from "./fixtures";
+import { mockApi, mockCommand } from "./fixtures";
 
 test("selected Grok session shows a new message within three seconds", async ({ page }) => {
   await mockApi(page);
   let text = "Initial native message";
-  await page.route("**/grok.list", route => route.fulfill({ json: [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "running" }] }));
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.list", args => [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "running" }]);
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "running" },
     events: [
       { kind: "tool_call", method: "session/update", text: "Execute `pwd`", callId: "command-1", status: "in_progress" },
       { kind: "tool_call", method: "session/update", text: "Execute `ls`", callId: "command-2", status: "completed" },
       { kind: "agent_message_chunk", text }
     ]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.locator(".provider-session .thread-running-indicator").first()).toBeVisible();
@@ -31,9 +31,9 @@ test("selected Grok session shows a new message within three seconds", async ({ 
 test("Grok follows new messages at the bottom and preserves history reading position", async ({ page }) => {
   await mockApi(page);
   const events = Array.from({ length: 30 }, (_, index) => ({ kind: "agent_message_chunk", text: `Historical message ${index}\n\n${"Readable history. ".repeat(15)}` }));
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "running" }, events
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const stream = page.locator(".provider-events");
@@ -56,10 +56,10 @@ test("long mixed Grok tool runs fold together without creating an outer page scr
     text: `${["Read", "List", "Search", "Execute"][index % 4]} fixture-${index}`,
     detail: `Result ${index}`
   }));
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "running" },
     events: [{ kind: "user_message_chunk", text: "Inspect fixtures" }, ...events, { kind: "agent_message_chunk", text: "Summary" }]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const group = page.locator(".provider-events details.execution-group");
@@ -83,10 +83,10 @@ test("mobile dark Grok history keeps one scroll container with reduced motion", 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await mockApi(page);
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "recent" },
     events: [...Array.from({ length: 20 }, (_, index) => ({ kind: "tool_call", callId: `read-${index}`, text: `Read fixture-${index}`, status: "completed" })), { kind: "agent_message_chunk", text: "Result" }]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
   await page.locator(".provider-session").click();
@@ -115,15 +115,15 @@ test("narrow Grok list stops hidden detail reads and reopening reads fresh messa
 test("selected running Pi session refreshes within three seconds", async ({ page }) => {
   await mockApi(page);
   let text = "Initial Pi message";
-  await page.route("**/pi.list", route => route.fulfill({ json: [{ id: "pi-native-fixture", sessionKey: "project/session-fixture.jsonl", title: "Pi fixture", cwd: "/isolated/pi-workspace", path: "/isolated/pi-sessions/project/session-fixture.jsonl", updatedAt: "2026-09-22T08:00:00Z", messageCount: 3, lastMessage: "Current Pi branch", status: "running", formatVersion: 3, canRename: true, renameBlockReason: null, canDelete: true, deleteBlockReason: null, readError: null }] }));
-  await page.route("**/pi.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "pi.list", args => [{ id: "pi-native-fixture", sessionKey: "project/session-fixture.jsonl", title: "Pi fixture", cwd: "/isolated/pi-workspace", path: "/isolated/pi-sessions/project/session-fixture.jsonl", updatedAt: "2026-09-22T08:00:00Z", messageCount: 3, lastMessage: "Current Pi branch", status: "running", formatVersion: 3, canRename: true, renameBlockReason: null, canDelete: true, deleteBlockReason: null, readError: null }]);
+  await mockCommand(page, "pi.detail", args => ({
     summary: { id: "pi-native-fixture", sessionKey: "project/session-fixture.jsonl", title: "Pi fixture", cwd: "/isolated/pi-workspace", status: "running" },
     events: [
       { kind: "tool_call", role: "bashExecution", text: "pwd", callId: "command-1", status: "in_progress" },
       { kind: "tool_result", role: "bashExecution", detail: "/isolated/pi-workspace", callId: "command-1", status: "completed" },
       { kind: "assistant_message", role: "assistant", text }
     ]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
   await expect(page.locator(".provider-session .thread-running-indicator").first()).toBeVisible();

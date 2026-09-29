@@ -1,102 +1,21 @@
-import type { HostSurface, SystemCapabilities, SystemCapabilitiesResponse } from "../../types";
-
-export type RuntimeContext = {
-  kind: "web" | "desktop";
-};
-
+import type { HostSurface, SystemCapabilitiesResponse } from "../../types";
+export type RuntimeContext = { kind: "desktop" };
 export type RuntimeCapabilityMatrix = {
-  runtimeKind: "web" | "desktop";
-  hostSurface: HostSurface;
-  webAuth: boolean;
-  logout: boolean;
-  securitySettings: boolean;
-  codexStatePaths: boolean;
-  updatePrune: boolean;
-  threadCleanup: boolean;
-  threadArchiveActions: boolean;
-  updateServiceLabels: boolean;
+  runtimeKind: "desktop"; hostSurface: HostSurface; codexStatePaths: boolean;
+  updatePrune: boolean; threadCleanup: boolean; threadArchiveActions: boolean; updateServiceLabels: boolean;
 };
-
-export const webBootstrapCapabilities: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  hostSurface: "linux_server_webui",
-  webAuth: true,
-  logout: true,
-  securitySettings: false,
-  codexStatePaths: false,
-  updatePrune: false,
-  threadCleanup: false,
-  threadArchiveActions: false,
-  updateServiceLabels: false,
-};
-
 export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
-  runtimeKind: "desktop",
-  hostSurface: "desktop_embedded_tauri",
-  webAuth: false,
-  logout: false,
-  securitySettings: false,
-  codexStatePaths: false,
-  updatePrune: false,
-  threadCleanup: false,
-  threadArchiveActions: false,
-  updateServiceLabels: false,
+  runtimeKind: "desktop", hostSurface: "desktop_embedded_tauri", codexStatePaths: false,
+  updatePrune: false, threadCleanup: false, threadArchiveActions: false, updateServiceLabels: false,
 };
-
-function runtimeKindForHostSurface(hostSurface: HostSurface): RuntimeCapabilityMatrix["runtimeKind"] {
-  return hostSurface === "desktop_embedded_tauri" ? "desktop" : "web";
-}
-
-function runtimeCapabilitiesFromCore(
-  core: SystemCapabilities,
-  hostSurface: HostSurface,
-): RuntimeCapabilityMatrix {
-  const runtimeKind = runtimeKindForHostSurface(hostSurface);
-  if (runtimeKind === "desktop") {
-    return {
-      ...desktopBootstrapCapabilities,
-      hostSurface,
-      threadCleanup: core.thread_cleanup === true,
-      threadArchiveActions: core.thread_archive_actions === true,
-      updateServiceLabels: false,
-      updatePrune: false,
-    };
-  }
-
-  return {
-    runtimeKind,
-    hostSurface,
-    webAuth: core.web_auth,
-    logout: core.web_auth,
-    securitySettings: core.security_settings || core.turnstile || core.admin_password,
-    codexStatePaths: core.systemd,
-    updatePrune: core.prune_backups,
-    threadCleanup: core.thread_cleanup === true,
-    threadArchiveActions: core.thread_archive_actions === true,
-    updateServiceLabels: core.linux_update_job,
-  };
-}
-
-export function runtimeCapabilities(context: RuntimeContext = { kind: "web" }): RuntimeCapabilityMatrix {
-  return runtimeCapabilitiesForRuntime(context.kind);
-}
-
-export function runtimeCapabilitiesForRuntime(
-  desktop: boolean | RuntimeCapabilityMatrix["runtimeKind"] = false,
-): RuntimeCapabilityMatrix {
-  return desktop === true || desktop === "desktop"
-    ? desktopBootstrapCapabilities
-    : webBootstrapCapabilities;
-}
-
-export function runtimeCapabilitiesFromResponse(
-  status?: Partial<SystemCapabilitiesResponse> | null,
-  fallback: RuntimeCapabilityMatrix = runtimeCapabilities(),
-): RuntimeCapabilityMatrix {
+export function runtimeCapabilities(_context?: RuntimeContext): RuntimeCapabilityMatrix { return desktopBootstrapCapabilities; }
+export function runtimeCapabilitiesForRuntime(_desktop: boolean | "desktop" = true): RuntimeCapabilityMatrix { return desktopBootstrapCapabilities; }
+export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilitiesResponse> | null, fallback = desktopBootstrapCapabilities): RuntimeCapabilityMatrix {
   const core = status?.capabilities;
   if (!core) return fallback;
-  return runtimeCapabilitiesFromCore(
-    core,
-    status?.host_surface ?? fallback.hostSurface,
-  );
+  const remote = status.host_surface === "linux_server_api";
+  return { runtimeKind: "desktop", hostSurface: status.host_surface ?? fallback.hostSurface,
+    codexStatePaths: remote && core.systemd, updatePrune: remote && core.prune_backups,
+    threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,
+    updateServiceLabels: remote && core.linux_update_job };
 }

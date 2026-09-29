@@ -28,7 +28,7 @@ export type ContractVisual = {
   corePanelTitles: string[];
   actionLabels: Record<string, string>;
   disabledStates: Record<string, string>;
-  linuxWebOnly: string[];
+  remoteApiOnly: string[];
   desktopTauriOnly: string[];
   forbidden: {
     desktopEmbeddedTauri: string[];
@@ -83,7 +83,7 @@ function assertContractRegistry(value: unknown): asserts value is NexusHubContra
   if (!isObject(value.visual) || !isObject(value.visual.forbidden)) {
     throw new Error("contract registry visual rules must be objects");
   }
-  for (const key of ["navigation", "corePanelTitles", "linuxWebOnly", "desktopTauriOnly"]) {
+  for (const key of ["navigation", "corePanelTitles", "remoteApiOnly", "desktopTauriOnly"]) {
     if (!isStringArray(value.visual[key])) {
       throw new Error(`contract registry visual.${key} must be a string array`);
     }

@@ -74,7 +74,11 @@ expect_404_or_not_nexushub() {
   fi
 }
 
-expect_http_status "${PUBLIC_BASE}" "200"
+expect_http_status "${PUBLIC_BASE}" "404"
+expect_http_status "${PUBLIC_BASE}healthz" "200"
+expect_http_status "${PUBLIC_BASE}index.html" "404"
+API_STATUS="$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{}' "${PUBLIC_BASE}api/rpc/system.capabilities")"
+[[ "${API_STATUS}" == "401" ]] || { echo "unauthenticated API must reject requests" >&2; exit 1; }
 expect_http_status "https://${DOMAIN%/}/codex-cloud-panel/" "404"
 expect_404_or_not_nexushub "https://${DOMAIN%/}/api/sentinel/status"
 expect_404_or_not_nexushub "https://${DOMAIN%/}/api/probe/status"

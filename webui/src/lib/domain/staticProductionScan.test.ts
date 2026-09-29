@@ -96,13 +96,14 @@ describe("production business source scan", () => {
     }
   });
 
-  test("App is only the shell/composition layer for auth and readonly task browsing", () => {
+  test("App is only the shell/composition layer for machine selection and readonly task browsing", () => {
     const source = productionComponentSources["../../App.tsx"];
     const chatWorkspace = productionComponentSources["../../components/chat/ChatWorkspace.tsx"];
     const conversation = productionComponentSources["../../components/chat/Conversation.tsx"];
     const composerAttachments = productionComponentSources["../../components/composer/useComposerAttachments.ts"];
 
-    expect(source).toContain("WebAuthGate");
+    expect(source).toContain("MachineButton");
+    expect(source).not.toContain("WebAuthGate");
     expect(source).toContain("ChatWorkspace");
     expect(source).not.toContain("useConversationController");
     expect(source).not.toContain("SlashCommandTextarea");

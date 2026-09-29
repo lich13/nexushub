@@ -1,54 +1,49 @@
-# Headless Linux deployment
+# Linux management API — 1.2.0
 
-Supply the SSH host, public domain and archive path explicitly. Keep private values and acceptance evidence outside Git. This runbook covers the Linux `webd` service; it does not install Pi or a Linux desktop app.
+Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Pi or a Linux desktop app.
 
 ## Runtime and isolation
 
-- Binary: `/usr/local/bin/nexushub-webd`
-- Unit: `/etc/systemd/system/nexushub-webd.service`
-- UI: `/usr/share/nexushub-webd/webui/`
-- Config/env: `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`
-- Database/logs: `/var/lib/nexushub-webd/`, `/var/log/nexushub-webd/`
-- Listener: loopback only; place the public reverse proxy path in the explicit deployment command.
+- Binary/unit: `/usr/local/bin/nexushub-webd`, `/etc/systemd/system/nexushub-webd.service`.
+- Config/env: `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`.
+- Database/logs: `/var/lib/nexushub-webd/`, `/var/log/nexushub-webd/`.
+- Listener: loopback only; public Nginx exposes the chosen prefix's `api/rpc/` and `healthz`. Other paths return 404.
 
-Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Default Grok and Pi session roots use an optional, exact `ReadWritePaths` allowlist. A missing default directory is prefixed with `-` so service startup does not fail. Creating a directory or changing a custom root requires the packaged unit/drop-in, `daemon-reload` and a restart.
+Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Grok/Pi session roots use exact optional `ReadWritePaths`; missing provider directories do not prevent startup. Creating a directory or changing a custom root requires regenerating the unit/drop-in, `daemon-reload` and restart. A host rw mount can remain ro inside systemd; chmod cannot override it.
 
-Inspect service policy without changing data:
+## Installation and administrator Key
 
-```bash
-sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths
-sudo systemctl status nexushub-webd --no-pager
-```
-
-A host filesystem mounted rw can still be ro inside the service namespace. Check both mount views and fix the exact allowlist; chmod cannot override a namespace mount policy.
-
-## Release and install
-
-`v1.1.9` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
+The seven release assets remain macOS DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and Linux webd tarball/checksum. The Linux archive contains the API binary and deployment tools only. Verify the exact approved tag and hashes.
 
 ```bash
-sudo deploy/nexushub-webd/install.sh --archive /absolute/staging/nexushub-webd-linux-x86_64.tar.gz --domain panel.example --path-prefix /nexushub/
-NEXUSHUB_DOMAIN=panel.example bash scripts/deploy-cloud.sh SSH_HOST /absolute/staging/nexushub-webd-linux-x86_64.tar.gz
+NEXUSHUB_DOMAIN=api.example.com bash scripts/deploy-cloud.sh SSH_HOST /absolute/staging/nexushub-webd-linux-x86_64.tar.gz
+sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/api-key
 ```
 
-Use an exact approved tag for acceptance. Existing database, authentication, Turnstile and encrypted Bark settings remain in place. Do not put a real hostname, IP, credential or session in the repository.
+The Key output file must not already exist and is created with mode 0600. Enter the value in the macOS App's 远程连接 settings, using the HTTPS base prefix. Delete the temporary Key file after it is saved in Keychain. The server stores only the digest.
 
-## Migration and acceptance
+```bash
+sudo /usr/local/bin/nexushub-webd admin key-rotate --output /absolute/private/new-api-key
+sudo /usr/local/bin/nexushub-webd admin key-revoke
+```
 
-Opening the database drops NexusHub's retired `codex_thread_goals` table, rebuilds `probe_error_incidents` without recovery columns and preserves incident rows. Codex logs remain read-only. Old Goal commands are unavailable; no recovery attempt or notification is scheduled.
+Rotation immediately invalidates the old Key; update the App connection. Revocation or a missing Key denies all business requests. Never pass a Key in a URL, shell argument, log or repository file. Browser cookies cannot authenticate.
+
+## Migration and recovery
+
+The upgrade removes NexusHub web administrators/sessions, Turnstile data and retired settings, then erases SQLite freed pages and WAL. Bark encryption material, events, delivery dedupe, jobs and business audit survive. Config migration removes old website settings. Provider sessions and native Codex databases stay untouched.
+
+Only retained runtime files/data may have one task-level recovery copy. Do not archive the retired website or login database. Remove the static directory and obsolete web updater; preserve shared Nginx, TLS and unrelated paths. Future rollback targets must be API-era releases. A failed update restores retained service state, then checks health before retrying.
+
+## Acceptance
 
 ```bash
 sudo /usr/local/bin/nexushub-webd --version
 sudo systemctl is-active nexushub-webd
+sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p ReadWritePaths
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
-The 1.1.9 upgrade expands only NexusHub-owned PreToolUse hooks to native synchronous/asynchronous questions and preserves unrelated hooks. Verify that the monitor establishes the async baseline before a dedicated new question. An accepted acknowledgement, further commands and normal completion must leave it pending; native matched answers, cancellation and replacement stop it. Verify the device receives the push while the desktop App is closed, and record latency separately from HTTP delivery. Use an isolated cloud session for the same chain and label that evidence as a fixture. Keep native question bubbles, AGENTS.md folding and historical timelines as regressions. This release adds no RPC, database table or native-session migration.
+Verify public health succeeds, old pages/assets/login return 404 and unauthenticated RPC returns 401. In the official App, connect to the API, read disposable sessions/attachments, perform an allowed management action and switch back to local data. Verify wrong, rotated and revoked keys, target isolation, failed connections, pending writes, server-path copying and local Plan saving.
 
-Use the authenticated public entry with disposable sessions to verify Grok batch deletion, Pi empty state, running spinner, mixed Grok tool folding, plan copy/download, provider Bark delivery and copy-ID feedback. A host without Pi is not evidence of Pi mutation support.
-
-On failure restore the previous service binary/unit and verify health before retrying. Remove only task-created staging and test paths after acceptance; retain user data, configuration and secrets.
-
-## User attachment acceptance
-
-After a 1.1.9 update, verify user bubbles and attachments through the authenticated HTTPS entrypoint. Test an embedded native image and an expired file reference: the former previews while the latter shows an unavailable card. A read request uses only session/message/attachment identities; unauthenticated reads and caller-supplied paths must fail. Preserve the existing systemd sandbox. Server previews only use server-side session data and files; a client-only temporary path can remain unavailable.
+Keep the native asynchronous-question tracker, final-reply notification classification, provider terminal evidence and dedupe as regressions. App closure must not stop either machine's monitor. A cloud host without Pi is covered by empty state and isolated readers, not a claim of native Pi mutation acceptance. Remove only task-created staging, test data and recovery files after acceptance.

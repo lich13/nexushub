@@ -6,7 +6,6 @@ BIN_NAME="nexushub-webd"
 SERVICE_NAME="nexushub-webd"
 INSTALL_BIN="/usr/local/bin/${BIN_NAME}"
 SHARE_DIR="/usr/share/${APP_NAME}"
-WEBUI_DIR="${SHARE_DIR}/webui"
 CONFIG_DIR="/etc/${APP_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 ENV_FILE="${CONFIG_DIR}/env"
@@ -36,7 +35,7 @@ CHECK_ONLY=0
 
 usage() {
   cat <<'USAGE'
-Install NexusHub WebUI daemon.
+Install NexusHub management API.
 
 Usage:
   sudo install.sh --archive ./nexushub-webd-linux-x86_64.tar.gz --domain panel.example.com --path-prefix /nexushub/
@@ -45,7 +44,7 @@ Usage:
 
 Options:
   --archive PATH       Install release tarball.
-  --binary PATH        Install local binary without WebUI.
+  --binary PATH        Install local binary without packaged deployment tools.
   --domain DOMAIN      Add nginx snippet include to the matching vhost when possible.
   --path-prefix PATH   Public path prefix. Default: /nexushub/
   --force-config       Replace existing config.toml.
@@ -70,7 +69,6 @@ check_layout() {
   local root
   root="$(archive_root_from_deploy)"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing executable bin/${BIN_NAME}"
-  [[ -f "${root}/webui/index.html" ]] || die "archive missing webui/index.html"
   [[ -f "${root}/deploy/install.sh" ]] || die "archive missing deploy/install.sh"
   [[ -f "${root}/deploy/update.sh" ]] || die "archive missing deploy/update.sh"
   [[ -f "${root}/deploy/systemd.service" ]] || die "archive missing deploy/systemd.service"
@@ -114,7 +112,7 @@ require_command() {
 }
 
 install_dirs() {
-  install -d -m 0755 -o root -g root /usr/local/bin "${SHARE_DIR}" "${WEBUI_DIR}" "${CONFIG_DIR}"
+  install -d -m 0755 -o root -g root /usr/local/bin "${SHARE_DIR}" "${CONFIG_DIR}"
   install -d -m 0750 -o root -g root "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}" "${NGINX_BACKUP_DIR}"
 }
 
@@ -135,34 +133,54 @@ copy_legacy_runtime_once() {
   done
 }
 
+assert_api_version() {
+  python3 - "$("$1" --version)" <<'PYVERSION'
+import re, sys
+match = re.fullmatch(r"nexushub-webd (\d+)\.(\d+)\.(\d+)", sys.argv[1])
+if not match or tuple(map(int, match.groups())) < (1, 2, 0):
+    raise SystemExit("refusing release with retired web authentication")
+PYVERSION
+}
+
 install_payload() {
   if [[ -n "${BINARY_PATH}" ]]; then
     [[ -f "${BINARY_PATH}" ]] || die "binary not found: ${BINARY_PATH}"
+    assert_api_version "${BINARY_PATH}"
     install -m 0755 -o root -g root "${BINARY_PATH}" "${INSTALL_BIN}"
     return
   fi
   [[ -f "${ARCHIVE_PATH}" ]] || die "archive not found: ${ARCHIVE_PATH}"
   local tmp root
   tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp}"' RETURN
+  trap '[[ -n "${tmp}" && -d "${tmp}" ]] && rm -r -- "${tmp}"' RETURN
   tar -xzf "${ARCHIVE_PATH}" -C "${tmp}"
   root="$(find "${tmp}" -maxdepth 1 -type d -name 'nexushub-webd-linux-*' | head -n 1)"
   [[ -n "${root}" ]] || die "archive root nexushub-webd-linux-* not found"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing bin/${BIN_NAME}"
-  [[ -f "${root}/webui/index.html" ]] || die "archive missing webui/index.html"
 
+  assert_api_version "${root}/bin/${BIN_NAME}"
   install -m 0755 -o root -g root "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}"
-  find "${WEBUI_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  cp -a "${root}/webui/." "${WEBUI_DIR}/"
-  chown -R root:root "${WEBUI_DIR}"
-
   if [[ -d "${root}/deploy" ]]; then
     [[ -f "${root}/deploy/update.sh" ]] && install -m 0755 -o root -g root "${root}/deploy/update.sh" "${UPDATE_BIN}"
     [[ -f "${root}/deploy/nexushub-codex-precheck" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
     [[ -f "${root}/deploy/nexushub-codex-update" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
     [[ -f "${root}/deploy/nexushub-codex-prune" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
   fi
+  rm -r -- "${tmp}"
   trap - RETURN
+}
+
+retire_web_payload() {
+  python3 - <<'PYWEB'
+from pathlib import Path
+import shutil
+path = Path("/usr/share/nexushub-webd/webui")
+if path.is_symlink():
+    raise SystemExit("refusing symlink at retired web asset directory")
+if path.is_dir(): shutil.rmtree(path)
+for path in [Path("/usr/local/bin/nexushub-webd-web-update")]:
+    if path.is_file() or path.is_symlink(): path.unlink()
+PYWEB
 }
 
 install_codex_wrappers() {
@@ -194,20 +212,21 @@ install_config() {
   copy_legacy_runtime_once
   if [[ ! -f "${CONFIG_FILE}" || "${FORCE_CONFIG}" -eq 1 ]]; then
     install -m 0640 -o root -g root "${source_dir}/config.example.toml" "${CONFIG_FILE}"
-    if [[ -n "${DOMAIN}" ]]; then
-      python3 - "${CONFIG_FILE}" "${DOMAIN}" "${PATH_PREFIX}" <<'PYCONFIG'
-import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-text = path.read_text().replace('"https://panel.example.com/nexushub/"', json.dumps('https://' + sys.argv[2] + sys.argv[3]))
-text = text.replace('"panel.example.com"', json.dumps(sys.argv[2]))
-path.write_text(text)
-PYCONFIG
-    fi
+
   fi
   if [[ ! -f "${ENV_FILE}" ]]; then
     install -m 0640 -o root -g root "${source_dir}/env.example" "${ENV_FILE}"
   fi
   ensure_secret_key
+  python3 - "${ENV_FILE}" <<'PYENV'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+retired = {"NEXUSHUB_ADMIN_PASSWORD", "NEXUSHUB_TURNSTILE_SITE_KEY", "NEXUSHUB_TURNSTILE_SECRET_KEY", "NEXUSHUB_SESSION_TTL_SECONDS", "NEXUSHUB_COOKIE_SECURE"}
+text = path.read_text()
+updated = "".join(line for line in text.splitlines(keepends=True) if line.strip().removeprefix("export ").split("=", 1)[0].strip() not in retired)
+if updated != text: path.write_text(updated)
+PYENV
   ensure_config_defaults
 }
 
@@ -350,21 +369,16 @@ remove_section_keys(
         "bridge_timeout_seconds",
     },
 )
+remove_section_keys("server", {"public_base_url", "trust_forwarded_headers"})
 ensure_section("server", {"listen": '"127.0.0.1:15742"'}, {"listen": {'"127.0.0.1:15732"'}})
-ensure_section(
-    "security",
-    {
-        "session_ttl_seconds": "31536000",
-        "turnstile_expected_action": '"login"',
-    },
-    {"session_ttl_seconds": {"604800"}},
-)
+remove_section_keys("security", {"cookie_secure", "session_ttl_seconds", "login_rate_limit_per_minute", "turnstile_expected_hostname", "turnstile_expected_action"})
+ensure_section("security", {"auth_rate_limit_per_minute": "8"})
+remove_section_keys("paths", {"webui_dir"})
 ensure_section(
     "paths",
     {
         "data_dir": '"/var/lib/nexushub-webd"',
         "db_path": '"/var/lib/nexushub-webd/nexushub.sqlite"',
-        "webui_dir": '"/usr/share/nexushub-webd/webui"',
         "log_dir": '"/var/log/nexushub-webd"',
     },
     {
@@ -375,7 +389,6 @@ ensure_section(
             '"/opt/codex-cloud-panel/codex-cloud-panel.sqlite"',
             '"/opt/nexushub/nexushub.sqlite"',
         },
-        "webui_dir": {'"/usr/share/codex-cloud-panel/webui"', '"/opt/codex-cloud-panel/webui"', '"/opt/nexushub/webui"'},
         "log_dir": {'"/var/log/codex-cloud-panel"', '"/opt/codex-cloud-panel/logs"', '"/opt/nexushub/logs"'},
     },
 )
@@ -476,8 +489,9 @@ install_nginx() {
   local source_dir snippet target
   source_dir="$(script_dir)"
   snippet="$(mktemp)"
-  sed "s#/nexushub/#${PATH_PREFIX}#g" "${source_dir}/nginx.conf" > "${snippet}"
+  sed -e "s#/nexushub/#${PATH_PREFIX}#g" -e "s#= /nexushub #= ${PATH_PREFIX%/} #g" "${source_dir}/nginx.conf" > "${snippet}"
   install -m 0644 -o root -g root "${snippet}" "${NGINX_SNIPPET}"
+  rm -- "${snippet}"
   target="$(grep -Rsl "server_name .*${DOMAIN}" /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | head -n 1 || true)"
   if [[ -n "${target}" ]] && ! grep -Fq "${NGINX_SNIPPET}" "${target}"; then
     cp "${target}" "${NGINX_BACKUP_DIR}/$(basename "${target}").bak-$(date +%Y%m%d%H%M%S)"
@@ -509,6 +523,7 @@ main() {
   require_command tar
   install_dirs
   install_payload
+  retire_web_payload
   install_codex_wrappers
   install_config
   install_codex_home_write_paths

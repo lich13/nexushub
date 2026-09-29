@@ -11,10 +11,6 @@ use std::{
 };
 
 pub const DEFAULT_HOST_LABEL: &str = "NexusHub";
-pub const DEFAULT_SESSION_TTL_SECONDS: u64 = 31_536_000;
-pub const LEGACY_SESSION_TTL_SECONDS: u64 = 604_800;
-pub const DEFAULT_TURNSTILE_SITE_KEY: &str = "";
-pub const DEFAULT_TURNSTILE_EXPECTED_ACTION: &str = "login";
 const DEFAULT_LOOPBACK_PORT: u16 = 15742;
 const LEGACY_LOOPBACK_PORT: u16 = 15732;
 const LEGACY_PRECHECK_COMMAND_SIMPLE: &str = "codex --version && sudo -n codex --version && /usr/local/bin/codex-raw --version && sqlite3 /root/.codex/state_5.sqlite 'pragma integrity_check;' && /home/ubuntu/codex-admin/bin/codex-cloud-doctor";
@@ -34,8 +30,6 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
-    pub public_base_url: Option<String>,
-    pub trust_forwarded_headers: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,20 +297,15 @@ impl Default for ProbeErrorMonitorConfig {
 pub struct SecurityConfig {
     #[serde(default)]
     pub secret_key: String,
-    pub cookie_secure: bool,
-    pub session_ttl_seconds: u64,
-    pub login_rate_limit_per_minute: u32,
-    #[serde(default = "default_turnstile_expected_hostname")]
-    pub turnstile_expected_hostname: Option<String>,
-    #[serde(default = "default_turnstile_expected_action")]
-    pub turnstile_expected_action: Option<String>,
+    #[serde(default = "default_auth_rate_limit")]
+    pub auth_rate_limit_per_minute: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathConfig {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
-    pub webui_dir: PathBuf,
+
     pub log_dir: PathBuf,
 }
 
@@ -332,12 +321,8 @@ pub struct UpdateConfig {
     pub panel_precheck_command: String,
 }
 
-fn default_turnstile_expected_hostname() -> Option<String> {
-    None
-}
-
-fn default_turnstile_expected_action() -> Option<String> {
-    Some(DEFAULT_TURNSTILE_EXPECTED_ACTION.to_string())
+fn default_auth_rate_limit() -> u32 {
+    8
 }
 
 fn default_update_command() -> String {
@@ -462,11 +447,7 @@ impl Config {
     fn for_platform_paths_with_home(platform: PlatformPaths, home: &Path, desktop: bool) -> Self {
         let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_LOOPBACK_PORT);
         Self {
-            server: ServerConfig {
-                listen,
-                public_base_url: None,
-                trust_forwarded_headers: true,
-            },
+            server: ServerConfig { listen },
             codex: CodexConfig {
                 home: default_codex_home(),
                 workspace: if desktop {
@@ -484,16 +465,12 @@ impl Config {
             probe: ProbeConfig::default(),
             security: SecurityConfig {
                 secret_key: String::new(),
-                cookie_secure: true,
-                session_ttl_seconds: DEFAULT_SESSION_TTL_SECONDS,
-                login_rate_limit_per_minute: 8,
-                turnstile_expected_hostname: default_turnstile_expected_hostname(),
-                turnstile_expected_action: default_turnstile_expected_action(),
+                auth_rate_limit_per_minute: default_auth_rate_limit(),
             },
             paths: PathConfig {
                 data_dir: platform.data_dir.clone(),
                 db_path: platform.data_dir.join("nexushub.sqlite"),
-                webui_dir: platform.webui_dir.clone(),
+
                 log_dir: platform.log_dir.clone(),
             },
             update: UpdateConfig {
@@ -541,7 +518,9 @@ impl Config {
         let logs_migrated = migrate_retired_logs_db_section(&text)?;
         let migration_input = logs_migrated.as_deref().unwrap_or(&text);
         let goal_migrated = migrate_retired_probe_goal_config(migration_input)?;
-        let migrated = goal_migrated.or(logs_migrated);
+        let previous = goal_migrated.or(logs_migrated);
+        let web_migrated = migrate_retired_web_config(previous.as_deref().unwrap_or(&text))?;
+        let migrated = web_migrated.or(previous);
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
         config.load_sibling_env(path)?;
@@ -572,21 +551,12 @@ impl Config {
         if let Ok(value) = env::var("NEXUSHUB_SECRET_KEY") {
             self.security.secret_key = value;
         }
-        if self.security.session_ttl_seconds == LEGACY_SESSION_TTL_SECONDS {
-            self.security.session_ttl_seconds = DEFAULT_SESSION_TTL_SECONDS;
-        } else if self.security.session_ttl_seconds < 300 {
-            self.security.session_ttl_seconds = 300;
-        }
-        if self.security.login_rate_limit_per_minute == 0 {
-            self.security.login_rate_limit_per_minute = 8;
-        }
+        self.security.auth_rate_limit_per_minute =
+            self.security.auth_rate_limit_per_minute.clamp(1, 120);
         if self.codex.host_label.trim().is_empty() {
             self.codex.host_label = DEFAULT_HOST_LABEL.to_string();
         }
         self.probe.normalize();
-        if self.security.turnstile_expected_action.is_none() {
-            self.security.turnstile_expected_action = default_turnstile_expected_action();
-        }
         if is_legacy_precheck_command(&self.update.precheck_command) {
             self.update.precheck_command = default_precheck_command();
         }
@@ -874,6 +844,40 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 /// Retain the notification retention preference while removing the retired
 /// native log maintenance configuration. TOML editing preserves other values
 /// and comments, including credentials and inline/quoted table definitions.
+fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    let mut changed = false;
+    if let Some(security) = doc
+        .get_mut("security")
+        .and_then(|item| item.as_table_like_mut())
+    {
+        for key in [
+            "cookie_secure",
+            "session_ttl_seconds",
+            "login_rate_limit_per_minute",
+            "turnstile_expected_hostname",
+            "turnstile_expected_action",
+        ] {
+            changed |= security.remove(key).is_some();
+        }
+    }
+    if let Some(server) = doc
+        .get_mut("server")
+        .and_then(|item| item.as_table_like_mut())
+    {
+        for key in ["public_base_url", "trust_forwarded_headers"] {
+            changed |= server.remove(key).is_some();
+        }
+    }
+    if let Some(paths) = doc
+        .get_mut("paths")
+        .and_then(|item| item.as_table_like_mut())
+    {
+        changed |= paths.remove("webui_dir").is_some();
+    }
+    Ok(changed.then(|| doc.to_string()))
+}
+
 fn migrate_retired_logs_db_section(text: &str) -> Result<Option<String>> {
     let mut document = text.parse::<toml_edit::DocumentMut>()?;
     let Some(probe) = document
@@ -1126,10 +1130,6 @@ mod tests {
         assert_eq!(
             config.paths.data_dir.to_string_lossy(),
             "/home/alice/.local/share/NexusHub"
-        );
-        assert_eq!(
-            config.paths.webui_dir.to_string_lossy(),
-            "/home/alice/.local/share/NexusHub/desktop-assets"
         );
         assert_eq!(
             Config::current_default_config_path(),
@@ -1500,32 +1500,98 @@ host_label = "old"
     }
 
     #[test]
-    fn default_config_uses_365_day_sessions_and_neutral_host() {
+    fn default_config_uses_api_auth_and_neutral_host() {
         let config = Config::default();
 
-        assert_eq!(config.security.session_ttl_seconds, 31_536_000);
         assert_eq!(config.codex.host_label, "NexusHub");
-        assert_eq!(config.security.turnstile_expected_hostname.as_deref(), None);
-        assert_eq!(
-            config.security.turnstile_expected_action.as_deref(),
-            Some("login")
-        );
-        assert!(super::DEFAULT_TURNSTILE_SITE_KEY.is_empty());
+        assert!(config.security.auth_rate_limit_per_minute > 0);
+        let serialized = toml::to_string(&config).unwrap();
+        for retired in [
+            "cookie_secure",
+            "session_ttl_seconds",
+            "turnstile",
+            "webui_dir",
+            "public_base_url",
+            "trust_forwarded_headers",
+        ] {
+            assert!(!serialized.contains(retired), "retired field {retired}");
+        }
     }
 
     #[test]
-    fn normalize_migrates_legacy_session_ttl_and_preserves_host_label() {
+    fn web_config_upgrade_removes_retired_fields_and_preserves_secret_and_business_values() {
+        for input in [
+            r#"# preserved configuration
+[server]
+listen = "127.0.0.1:15742"
+public_base_url = "https://panel.example.com/nexushub/"
+trust_forwarded_headers = true
+[security]
+secret_key = "fixture-secret-key"
+cookie_secure = true
+session_ttl_seconds = 31536000
+login_rate_limit_per_minute = 10
+turnstile_expected_hostname = "panel.example.com"
+turnstile_expected_action = "login"
+[paths]
+data_dir = "/tmp/nexushub-fixture"
+db_path = "/tmp/nexushub-fixture/nexushub.sqlite"
+webui_dir = "/tmp/nexushub-fixture/webui"
+[probe.notifications]
+enabled = true
+group = "fixture-group"
+[custom]
+token = "fixture-custom-value"
+"#,
+            r#"# preserved configuration
+server = { listen = "127.0.0.1:15742", public_base_url = "https://panel.example.com/nexushub/", trust_forwarded_headers = true }
+security = { secret_key = "fixture-secret-key", cookie_secure = true, session_ttl_seconds = 31536000, login_rate_limit_per_minute = 10, turnstile_expected_hostname = "panel.example.com", turnstile_expected_action = "login" }
+paths = { data_dir = "/tmp/nexushub-fixture", db_path = "/tmp/nexushub-fixture/nexushub.sqlite", webui_dir = "/tmp/nexushub-fixture/webui" }
+probe = { notifications = { enabled = true, group = "fixture-group" } }
+custom = { token = "fixture-custom-value" }
+"#,
+        ] {
+            let upgraded = super::migrate_retired_web_config(input).unwrap().unwrap();
+            let previous: toml::Value = toml::from_str(input).unwrap();
+            let current: toml::Value = toml::from_str(&upgraded).unwrap();
+            assert_eq!(current["server"]["listen"], previous["server"]["listen"]);
+            assert_eq!(
+                current["security"]["secret_key"],
+                previous["security"]["secret_key"]
+            );
+            assert_eq!(current["paths"]["db_path"], previous["paths"]["db_path"]);
+            assert_eq!(current["paths"]["data_dir"], previous["paths"]["data_dir"]);
+            assert_eq!(current["probe"], previous["probe"]);
+            assert_eq!(current["custom"], previous["custom"]);
+            for retired in [
+                "public_base_url",
+                "trust_forwarded_headers",
+                "cookie_secure",
+                "session_ttl_seconds",
+                "login_rate_limit_per_minute",
+                "turnstile_expected_hostname",
+                "turnstile_expected_action",
+                "webui_dir",
+            ] {
+                assert!(!upgraded.contains(retired), "retired field {retired}");
+            }
+            assert!(upgraded.contains("# preserved configuration"));
+            assert!(super::migrate_retired_web_config(&upgraded)
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn normalize_migrates_legacy_runtime_values_and_preserves_host_label() {
         let mut config = Config::default();
-        config.security.session_ttl_seconds = 604_800;
         config.codex.host_label = "configured-host".into();
-        config.security.turnstile_expected_action = None;
         config.server.listen = "127.0.0.1:15732".parse().unwrap();
         config.update.panel_precheck_command =
             "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz".to_string();
 
         config.normalize();
 
-        assert_eq!(config.security.session_ttl_seconds, 31_536_000);
         assert_eq!(config.codex.host_label, "configured-host");
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
         match super::current_platform_kind() {
@@ -1540,10 +1606,6 @@ host_label = "old"
                     .contains("http://127.0.0.1:15742/healthz"));
             }
         }
-        assert_eq!(
-            config.security.turnstile_expected_action.as_deref(),
-            Some("login")
-        );
     }
 
     #[test]

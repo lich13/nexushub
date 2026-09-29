@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockApi } from "./fixtures";
+import { mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
 const metadata = "<oai-mem-citation><citation_entries>internal-entry</citation_entries><rollout_ids>internal-id</rollout_ids></oai-mem-citation>";
@@ -11,13 +11,13 @@ for (const provider of ["codex", "grok", "pi"]) {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copied = value; } } });
     });
-    await page.route(`**/${provider === "codex" ? "threads" : provider}.detail`, route => {
+    await mockCommand(page, `${provider === "codex" ? "threads" : provider}.detail`, args => {
       if (provider === "codex") {
         const detail = demo.demoThreadDetail("019e95a0-demo");
         detail.blocks = [{ id: "reply", role: "assistant", kind: "message", text: `${markdown}\n${metadata}`, questions: [] }];
-        return route.fulfill({ json: detail });
+        return detail;
       }
-      return route.fulfill({ json: { summary: {}, events: [{ kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: `${markdown}\n${metadata}` }] } });
+      return { summary: {}, events: [{ kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: `${markdown}\n${metadata}` }] };
     });
     await page.goto("/");
     if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
@@ -40,7 +40,7 @@ test("instruction choices survive streaming, theme and mobile list transitions",
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await mockApi(page);
   let text = `Visible.\n\n## /workspace/AGENTS.md\n${"Instruction line.\n".repeat(120)}\n## Result\nDone.${metadata}`;
-  await page.route("**/grok.detail", route => route.fulfill({ json: { summary: {}, events: [{ kind: "agent_message_chunk", text }] } }));
+  await mockCommand(page, "grok.detail", args => ({ summary: {}, events: [{ kind: "agent_message_chunk", text }] }));
   await page.goto("/");
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
   await page.locator(".provider-session").click();
@@ -73,7 +73,7 @@ test("running and failed AGENTS tools stay folded inside mixed Grok activity", a
     { kind: "tool_call", callId: "agents", text: "Read /workspace/AGENTS.md", status: "in_progress", detail: "File contents" },
     { kind: "tool_call", callId: "ordinary", text: "Execute pwd", status: "failed", detail: "Command failure" }
   ];
-  await page.route("**/grok.detail", route => route.fulfill({ json: { summary: {}, events } }));
+  await mockCommand(page, "grok.detail", args => ({ summary: {}, events }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const group = page.locator("details.execution-group");
@@ -91,24 +91,24 @@ test("running and failed AGENTS tools stay folded inside mixed Grok activity", a
 });
 
 for (const provider of ["codex", "grok", "pi"]) {
-  test(`${provider} file Markdown copies the source path without navigation`, async ({ page }) => {
-    await mockApi(page);
+  test(`${provider} remote file Markdown copies the source path without navigation`, async ({ page }) => {
+    await mockApi(page, { connection: { target: "remote", revision: 1, baseUrl: "https://api.example.com/nexushub/", configured: true } });
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copiedPath = value; } } });
     });
     const markdown = "[文件](file:///isolated/workspace/%E6%96%87%E4%BB%B6%20A.md#L12-C4) and [relative](docs/notes.md)";
     if (provider === "codex") {
-      await page.route("**/threads.detail", route => {
+      await mockCommand(page, "threads.detail", args => {
         const detail = demo.demoThreadDetail("019e95a0-demo");
         detail.summary.cwd = "/isolated/workspace";
         detail.blocks = [{ id: "path-reply", role: "assistant", kind: "message", text: markdown, questions: [] }];
-        return route.fulfill({ json: detail });
+        return detail;
       });
     } else {
-      await page.route(`**/${provider}.detail`, route => route.fulfill({ json: {
+      await mockCommand(page, `${provider}.detail`, args => ({
         summary: provider === "grok" ? { cwd: "/isolated/workspace" } : { cwd: "/isolated/workspace" },
         events: [{ kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: markdown }]
-      } }));
+      }));
     }
     await page.goto("/");
     if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();

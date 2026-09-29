@@ -53,12 +53,11 @@ function normalizeProbeSettingsSavePayload(settings: Partial<ProbeSettings>): Pa
   };
 }
 
-export async function saveProbeSettings(settings: Partial<ProbeSettings>, csrfToken?: string | null): Promise<ProbeSettings> {
+export async function saveProbeSettings(settings: Partial<ProbeSettings>): Promise<ProbeSettings> {
   if (USE_DEMO) return demoSavedProbeSettings(settings, currentDemoFixtureKey());
   const normalizedSettings = normalizeProbeSettingsSavePayload(settings);
   const payload = await callCommand<ProbeSettings>("probe.settings.save", {
-    settings: normalizedSettings,
-    csrfToken
+    settings: normalizedSettings
   });
   return normalizeProbeRuntimePayload(payload) as ProbeSettings;
 }
@@ -71,12 +70,12 @@ export async function getProbeEvents(limit = 10): Promise<OptionalResult<ProbeEv
   return normalizeOptionalResult<ProbeEventsResponse>(await callCommand<ProbeEventsResponse | OptionalResult<ProbeEventsResponse>>("probe.events", { limit }));
 }
 
-export async function runProbeBarkTest(csrfToken?: string | null): Promise<{ job_id: string }> {
-  return startProbeCommand("probe.barkTest", "probe-bark-test", csrfToken);
+export async function runProbeBarkTest(): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.barkTest", "probe-bark-test");
 }
 
-export async function runProbeHooksInstall(csrfToken?: string | null): Promise<{ job_id: string }> {
-  return startProbeCommand("probe.installHooks", "probe-hooks-install", csrfToken);
+export async function runProbeHooksInstall(): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.installHooks", "probe-hooks-install");
 }
 
 
@@ -84,9 +83,8 @@ export async function runProbeHooksInstall(csrfToken?: string | null): Promise<{
 async function startProbeCommand(
   command: "probe.barkTest" | "probe.installHooks",
   fallback: string,
-  csrfToken?: string | null,
-): Promise<{ job_id: string }> {
+  ): Promise<{ job_id: string }> {
   if (USE_DEMO) return demoJobId(fallback);
-  const result = await callCommand<{ job_id?: string | null; jobId?: string | null }>(command, { csrfToken });
+  const result = await callCommand<{ job_id?: string | null; jobId?: string | null }>(command, {});
   return jobIdFromRuntimeResult(result, fallback);
 }

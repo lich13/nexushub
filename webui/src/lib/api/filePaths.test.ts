@@ -16,9 +16,21 @@ describe("file path runtime adapter", () => {
     expect(invoke).toHaveBeenCalledWith("plugin:opener|reveal_item_in_dir", { paths: ["/workspace/中文 文件.md"] });
   });
 
-  test("web refuses Finder reveal and keeps the path action copy-only", async () => {
+  test("a browser without the native bridge keeps the path action copy-only", async () => {
     const { canRevealLocalPath, revealLocalPath } = await import("./filePaths");
     expect(canRevealLocalPath()).toBe(false);
     await expect(revealLocalPath("/workspace/file.md")).rejects.toThrow("无法在 Finder 中显示");
   });
+
+  test("remote paths never invoke the local opener even when a native bridge exists", async () => {
+    const invoke = vi.fn(async () => ({ target: "remote", revision: 1, baseUrl: "https://api.example.com/", configured: true }));
+    globalThis.__NEXUSHUB_TEST_INVOKE__ = invoke;
+    const { remoteSelect } = await import("../runtime");
+    await remoteSelect("remote");
+    const { canRevealLocalPath, revealLocalPath } = await import("./filePaths");
+    expect(canRevealLocalPath()).toBe(false);
+    await expect(revealLocalPath("/srv/project/file.md")).rejects.toThrow("无法在 Finder 中显示");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
 });

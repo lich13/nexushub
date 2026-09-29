@@ -27,9 +27,8 @@ export type UpdateActionResult = {
 async function runTypedUpdateCommand(
   command: "updates.check" | "updates.install" | "updates.prune",
   fallback: string,
-  csrfToken?: string | null,
-): Promise<UpdateActionResult> {
-  const result = await callCommand<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>(command, { csrfToken });
+  ): Promise<UpdateActionResult> {
+  const result = await callCommand<{ job_id?: string | null; jobId?: string | null; status?: UpdateStatus }>(command, {});
   return {
     ...jobIdFromRuntimeResult(result, fallback),
     ...(result.status ? { status: result.status } : {})
@@ -37,22 +36,31 @@ async function runTypedUpdateCommand(
 }
 
 export const updates = {
-  async check(csrfToken?: string | null): Promise<UpdateActionResult> {
+  async check(): Promise<UpdateActionResult> {
     if (USE_DEMO) return demoUpdateJobId("check");
-    return runTypedUpdateCommand("updates.check", "update-check", csrfToken);
+    return runTypedUpdateCommand("updates.check", "update-check");
   },
-  async install(csrfToken?: string | null): Promise<UpdateActionResult> {
+  async install(): Promise<UpdateActionResult> {
     if (USE_DEMO) return demoUpdateJobId("install");
-    return runTypedUpdateCommand("updates.install", "update-install", csrfToken);
+    return runTypedUpdateCommand("updates.install", "update-install");
   },
   async prune(
-    csrfToken?: string | null,
     capabilities: RuntimeCapabilityMatrix = runtimeCapabilities(),
   ): Promise<UpdateActionResult> {
     if (USE_DEMO) return demoUpdateJobId("prune");
     if (!capabilities.updatePrune) {
       throw new RuntimeUnavailableError("当前运行时不支持备份清理动作", "Desktop backup prune command is not implemented");
     }
-    return runTypedUpdateCommand("updates.prune", "update-prune", csrfToken);
+    return runTypedUpdateCommand("updates.prune", "update-prune");
   }
 };
+
+// App updates always use the local native updater, including while viewing a remote machine.
+export async function getLocalAppUpdateStatus(): Promise<UpdateStatus> {
+  const { runtimeRpc } = await import("../runtime");
+  return runtimeRpc<UpdateStatus>("updates.status", undefined, true);
+}
+export async function runLocalAppUpdate(action: "check" | "install"): Promise<UpdateActionResult> {
+  const { runtimeRpc } = await import("../runtime");
+  return runtimeRpc<UpdateActionResult>(`updates.${action}`, undefined, true);
+}

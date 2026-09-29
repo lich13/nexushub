@@ -1,10 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { machineScope } from "../runtime";
 import { readSessionAttachment } from "../api/sessions";
 import { clearAttachmentCache, readAttachment } from "./attachments";
 
+vi.mock("../runtime", () => ({ machineScope: vi.fn(() => "local:") }));
 vi.mock("../api/sessions", () => ({ readSessionAttachment: vi.fn() }));
 const request = { provider: "codex" as const, sessionKey: "thread", messageId: "message", attachmentId: "attachment" };
-afterEach(() => { clearAttachmentCache(); vi.resetAllMocks(); });
+afterEach(() => { clearAttachmentCache(); vi.resetAllMocks(); vi.mocked(machineScope).mockReturnValue("local:"); });
 
 test("concurrent reads and repeated polling reuse a single response", async () => {
   vi.mocked(readSessionAttachment).mockResolvedValue({ mimeType: "image/png", base64: "aGVsbG8=" });
@@ -13,11 +15,11 @@ test("concurrent reads and repeated polling reuse a single response", async () =
   expect(readSessionAttachment).toHaveBeenCalledTimes(1);
 });
 
-test("a response arriving after logout cannot repopulate the cache", async () => {
+test("a response arriving after a connection change cannot repopulate the cache", async () => {
   let resolve!: (value: { mimeType: string; base64: string }) => void;
   vi.mocked(readSessionAttachment).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
   const pending = readAttachment(request); clearAttachmentCache();
-  resolve({ mimeType: "image/png", base64: "aGVsbG8=" }); await pending;
+  resolve({ mimeType: "image/png", base64: "aGVsbG8=" }); await expect(pending).rejects.toThrow("已丢弃旧附件");
   vi.mocked(readSessionAttachment).mockResolvedValue({ mimeType: "image/png", base64: "bmV3" });
   expect(await readAttachment(request)).toContain("bmV3"); expect(readSessionAttachment).toHaveBeenCalledTimes(2);
 });
@@ -29,4 +31,13 @@ test("large previews evict older entries and failed reads remain retryable", asy
   for (let index = 0; index < 3; index++) await readAttachment({ ...request, attachmentId: String(index) });
   await readAttachment({ ...request, attachmentId: "0" });
   expect(readSessionAttachment).toHaveBeenCalledTimes(5);
+});
+
+
+test("identical attachment identities on local and remote machines never share cached bytes", async () => {
+  vi.mocked(readSessionAttachment).mockResolvedValueOnce({ mimeType: "image/png", base64: "bG9jYWw=" }).mockResolvedValueOnce({ mimeType: "image/png", base64: "cmVtb3Rl" });
+  expect(await readAttachment(request)).toContain("bG9jYWw=");
+  vi.mocked(machineScope).mockReturnValue("remote:https://api.example.com/");
+  expect(await readAttachment(request)).toContain("cmVtb3Rl");
+  expect(readSessionAttachment).toHaveBeenCalledTimes(2);
 });

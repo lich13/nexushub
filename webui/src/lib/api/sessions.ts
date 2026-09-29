@@ -6,8 +6,8 @@ export type SessionBatchItem = { sessionKey: string; id: string; title: string; 
 export type SessionBatchPreview = { provider: SessionProvider; operation: SessionOperation; items: SessionBatchItem[] };
 export type SessionBatchExecuteRequest = { provider: SessionProvider; operation: SessionOperation; items: Array<{ sessionKey: string; fingerprint: string }>; confirmed: boolean };
 export type SessionBatchResult = { items: Array<{ sessionKey: string; status: "succeeded" | "blocked" | "failed"; message: string | null }> };
-export function previewSessionBatch(request: SessionBatchRequest, csrfToken?: string | null): Promise<SessionBatchPreview> { return callCommand("sessions.bulkPreview", { request, csrfToken }); }
-export function executeSessionBatch(request: SessionBatchExecuteRequest, csrfToken?: string | null): Promise<SessionBatchResult> { return callCommand("sessions.bulkExecute", { request, csrfToken }); }
+export function previewSessionBatch(request: SessionBatchRequest): Promise<SessionBatchPreview> { return callCommand("sessions.bulkPreview", { request }); }
+export function executeSessionBatch(request: SessionBatchExecuteRequest): Promise<SessionBatchResult> { return callCommand("sessions.bulkExecute", { request }); }
 
 export type SessionAttachmentRequest = { provider: SessionProvider; sessionKey: string; messageId: string; attachmentId: string };
 export type SessionAttachmentResponse = { mimeType: string; base64: string };

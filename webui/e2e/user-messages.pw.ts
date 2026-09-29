@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockApi } from "./fixtures";
+import { mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=";
@@ -12,19 +12,19 @@ for (const provider of ["codex", "grok", "pi"] as const) {
       await page.emulateMedia({ colorScheme: mobile ? "dark" : "light", reducedMotion: "reduce" });
       await mockApi(page);
       let reads = 0;
-      await page.route("**/sessions.attachmentRead", route => {
-        const request = route.request().postDataJSON().request;
+      await mockCommand(page, "sessions.attachmentRead", args => {
+        const request = args.request;
         expect(request.provider).toBe(provider);
         expect(request.messageId).toBe("user-1");
         expect(request.attachmentId).toBe("attachment-1");
         expect(request).not.toHaveProperty("path");
         reads++;
-        return route.fulfill({ json: { mimeType: "image/png", base64: png } });
+        return { mimeType: "image/png", base64: png };
       });
       const user = { id: "user-1", text, attachments: [{ id: "attachment-1", kind: "image", name: "sample.png" }] };
-      await page.route(`**/${provider === "codex" ? "threads" : provider}.detail`, route => provider === "codex"
-        ? route.fulfill({ json: { ...demo.demoThreadDetail("019e95a0-demo"), blocks: [{ id: "user-1", role: "user", kind: "message", questions: [], text: "attachment envelope", user_message: user }] } })
-        : route.fulfill({ json: { summary: {}, events: [{ kind: provider === "grok" ? "user_message_chunk" : "user_message", userMessage: user, text: "attachment envelope" }] } }));
+      await mockCommand(page, `${provider === "codex" ? "threads" : provider}.detail`, args => provider === "codex"
+        ? { ...demo.demoThreadDetail("019e95a0-demo"), blocks: [{ id: "user-1", role: "user", kind: "message", questions: [], text: "attachment envelope", user_message: user }] }
+        : { summary: {}, events: [{ kind: provider === "grok" ? "user_message_chunk" : "user_message", userMessage: user, text: "attachment envelope" }] });
       await page.goto("/");
       if (provider !== "codex") await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
       if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
@@ -54,7 +54,7 @@ for (const provider of ["codex", "grok", "pi"] as const) {
 test("missing image and long user messages keep the document within the viewport", async ({ page }) => {
   await mockApi(page);
   const user = { id: "missing", text: "Long request\n".repeat(400), attachments: [{ id: "missing-file", kind: "image", name: "expired.png", reason: "原附件已不存在或无法读取" }] };
-  await page.route("**/grok.detail", route => route.fulfill({ json: { summary: {}, events: [{ kind: "user_message_chunk", userMessage: user }] } }));
+  await mockCommand(page, "grok.detail", args => ({ summary: {}, events: [{ kind: "user_message_chunk", userMessage: user }] }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const stream = page.locator(".provider-events");
@@ -68,10 +68,10 @@ test("missing image and long user messages keep the document within the viewport
 test("a failed attachment read reports a local error and can be retried", async ({ page }) => {
   await mockApi(page);
   let reads = 0;
-  await page.route("**/sessions.attachmentRead", route => ++reads === 1
-    ? route.fulfill({ status: 409, json: { error: "附件文件已变化" } })
-    : route.fulfill({ json: { mimeType: "image/png", base64: png } }));
-  await page.route("**/grok.detail", route => route.fulfill({ json: { summary: {}, events: [{ kind: "user_message_chunk", userMessage: { id: "retry", text: "Request", attachments: [{ id: "image", kind: "image", name: "retry.png" }] } }] } }));
+  await mockCommand(page, "sessions.attachmentRead", args => ++reads === 1
+    ? Promise.reject(new Error("附件文件已变化"))
+    : { mimeType: "image/png", base64: png });
+  await mockCommand(page, "grok.detail", args => ({ summary: {}, events: [{ kind: "user_message_chunk", userMessage: { id: "retry", text: "Request", attachments: [{ id: "image", kind: "image", name: "retry.png" }] } }] }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.getByText("附件文件已变化", { exact: true })).toBeVisible();

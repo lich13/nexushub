@@ -1,14 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 import appSource from "./App.tsx?raw";
-import authGateSource from "./components/auth/WebAuthGate.tsx?raw";
 import chatWorkspaceSource from "./components/chat/ChatWorkspace.tsx?raw";
 import conversationSource from "./components/chat/Conversation.tsx?raw";
 import jobListSource from "./components/jobs/JobList.tsx?raw";
 import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
-import securityWorkspaceSource from "./components/security/SecurityWorkspace.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -26,28 +24,6 @@ type ThreadQueryExports = typeof import("./lib/query/threads") & {
   rollbackOptimisticThreadArchive?: (qc: QueryClient, snapshot: unknown) => void;
   applyOptimisticThreadRestore?: (qc: QueryClient, threadId: string) => unknown;
   rollbackOptimisticThreadRestore?: (qc: QueryClient, snapshot: unknown) => void;
-  connectThreadRealtimeSubscription?: (input: {
-    threadId: string;
-    messageStore: {
-      isActive: (threadId: string) => boolean;
-      applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
-      applySummary: (threadId: string, summary: ThreadSummary) => void;
-      setFeedback: (threadId: string, message: string | null) => void;
-    };
-    threadCache: {
-      updateThreadListCaches: (summary: ThreadSummary) => void;
-      invalidateThreads: (refetchType?: "active" | "all" | "inactive" | "none") => void;
-      invalidateThread: (threadId: string, refetchType?: "active" | "all" | "inactive" | "none") => void;
-    };
-    applyThreadTitleOverride?: (summary: ThreadSummary) => ThreadSummary;
-    onBeforeActiveBlocks?: () => void;
-    subscribe?: (threadId: string, handlers: {
-      onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
-      onSummary?: (summary: ThreadSummary, threadId: string) => void;
-      onError?: (message: string, threadId: string) => void;
-    }) => () => void;
-  }) => () => void;
-  useThreadRealtimeSubscription?: unknown;
 };
 
 async function loadApp(): Promise<AppExports> {
@@ -65,7 +41,6 @@ function extractThreadListSource(): string {
   expect(start).toBeGreaterThanOrEqual(0);
   return source.slice(start);
 }
-
 
 function extractProbeWorkspaceSource(): string {
   const source = probeWorkspaceSource;
@@ -92,11 +67,7 @@ function extractFunctionSource(name: string): string {
                         "StatusChip"
                       ].includes(name)
                         ? conversationSource
-                        : name === "SecurityWorkspace"
-                          ? securityWorkspaceSource
-                          : name === "WebAuthGate" || name === "LoginScreen"
-                            ? authGateSource
-                            : appSource;
+                        : appSource;
   const start = source.indexOf(`function ${name}`);
 
   expect(start).toBeGreaterThanOrEqual(0);
@@ -131,36 +102,28 @@ function expectSourceToAvoidTokens(source: string, label: string, tokens: string
   expect(source, `${label} must not call invoke directly`).not.toMatch(/\binvoke\s*\(/);
 }
 
-const linuxWebCapabilities: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  hostSurface: "linux_server_webui",
-  webAuth: true,
-  logout: true,
-  securitySettings: true,
+const remoteCapabilities: RuntimeCapabilityMatrix = {
+  runtimeKind: "desktop",
+  hostSurface: "linux_server_api",
+
   codexStatePaths: true,
   updatePrune: true,
   threadCleanup: true,
   threadArchiveActions: true,
   updateServiceLabels: true,
-  desktopWebuiControl: false,
-  forkAction: true,
-  approvalActions: true
+
 };
 
 const macosDesktopCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
   hostSurface: "desktop_embedded_tauri",
-  webAuth: false,
-  logout: false,
-  securitySettings: false,
+
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: true,
   threadArchiveActions: true,
   updateServiceLabels: false,
-  desktopWebuiControl: true,
-  forkAction: false,
-  approvalActions: false
+
 };
 
 describe("conversation helpers", () => {
@@ -168,7 +131,7 @@ describe("conversation helpers", () => {
   test("desktop runtime maps Linux-only job failure categories to generic copy", async () => {
     const app = await loadApp();
 
-    const webCapabilities = linuxWebCapabilities;
+    const webCapabilities = remoteCapabilities;
     const desktopCapabilities = macosDesktopCapabilities;
 
     expect(app.failureCategoryLabel?.("systemd_failure", webCapabilities)).toBe("systemd 失败");
@@ -179,34 +142,21 @@ describe("conversation helpers", () => {
 
     const view = app.jobFailureAnalysisView?.({
       category: "nginx_failure",
-      explanation: "Nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune，Turnstile 公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
-      suggestions: ["检查 Nginx", "systemd restart", "输入管理员密码", "Linux prune", "Turnstile panel.example.com"]
+      explanation: "Nginx reload failed after systemd restart; 执行 Linux prune，公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
+      suggestions: ["检查 Nginx", "systemd restart", "使用 sudo", "Linux prune", "panel.example.com"]
     }, desktopCapabilities);
     const rendered = [view?.label, view?.explanation, ...(view?.suggestions ?? [])].join("\n");
 
-    expect(rendered).not.toMatch(/systemd|Nginx|管理员密码|Linux prune|Turnstile|公网入口|panel\.example\.com|192\.0\.2\.10/i);
+    expect(rendered).not.toMatch(/systemd|Nginx|Linux prune|公网入口|panel\.example\.com|192\.0\.2\.10/i);
     expect(rendered).toContain("更新失败");
     expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo; Turnstile 公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
+      "nginx reload failed after systemd restart; 执行 Linux prune with sudo; 公网入口 https://panel.example.com/nexushub/ 192.0.2.10",
       desktopCapabilities
-    )).not.toMatch(/systemd|nginx|管理员密码|Linux prune|sudo|Turnstile|公网入口|panel\.example\.com|192\.0\.2\.10/i);
+    )).not.toMatch(/systemd|nginx|Linux prune|sudo|公网入口|panel\.example\.com|192\.0\.2\.10/i);
     expect(app.jobOutputView?.(
-      "nginx reload failed after systemd restart; 输入管理员密码后执行 Linux prune with sudo",
+      "nginx reload failed after systemd restart; 执行 Linux prune with sudo",
       webCapabilities
-    )).toMatch(/systemd|nginx|管理员密码|Linux prune|sudo/i);
-  });
-
-  test("App delegates realtime lifecycle, query placeholders, failure copy, and action gating to lib helpers", async () => {
-    const threadQuery = await loadThreadQuery();
-
-    expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
-    expect(typeof threadQuery.useThreadRealtimeSubscription).toBe("function");
-    expect(appSource).not.toContain("useConversationController");
-    expect(chatWorkspaceSource).toContain("useConversationController");
-    expect(conversationControllerSource).toContain("useThreadRealtimeSubscription");
-    expect(appSource).not.toContain("subscribeThreadEvents");
-    expect(appSource).not.toMatch(/export function (opsWorkspacePanelTitles|opsWorkspaceVisibleCopy|desktopRuntimeVisibleCopy|canShowForkAction|approvalActionMode|preservePreviousQueryData|slashCommandsForRuntime|failureCategoryLabel|jobFailureAnalysisView|jobOutputView)\b/);
-    expect(appSource).not.toMatch(/const (linuxFailureLabels|genericFailureLabels|desktopUnsupportedSlashCommands|controlledSlashActions|unavailableSlashCommands)\b/);
+    )).toMatch(/systemd|nginx|Linux prune|sudo/i);
   });
 
   test("App delegates Codex view-model helpers to domain modules", () => {
@@ -216,7 +166,7 @@ describe("conversation helpers", () => {
     expect(appSource).toContain('from "./lib/domain/codexViewModel"');
     expect(codexViewModelSource).not.toContain("../query/");
     expect(codexViewModelSource).not.toContain("../session");
-    expect(codexViewModelSource).not.toContain("../runtime");
+    expect(codexViewModelSource).not.toMatch(/runtimeRpc|invokeNative|remoteInvoke/);
   });
 
   test("App delegates Probe and Ops display derivations to domain modules", () => {
@@ -243,59 +193,6 @@ describe("conversation helpers", () => {
     expect(opsSource).toContain("executeDelete.error");
     expect(opsSource).toContain("executeHiddenDelete.error");
     expect(opsSource).toContain("cleanup-error");
-  });
-
-  test("thread query realtime helper owns subscription side effects", async () => {
-    const threadQuery = await loadThreadQuery();
-    expect(typeof threadQuery.connectThreadRealtimeSubscription).toBe("function");
-    if (!threadQuery.connectThreadRealtimeSubscription) return;
-
-    let handlers: {
-      onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
-      onSummary?: (summary: ThreadSummary, threadId: string) => void;
-      onError?: (message: string, threadId: string) => void;
-    } = {};
-    const unsubscribe = vi.fn();
-    const messageStore = {
-      isActive: vi.fn((threadId: string) => threadId === "thread-a"),
-      applyRealtimeBlocks: vi.fn(),
-      applySummary: vi.fn(),
-      setFeedback: vi.fn()
-    };
-    const threadCache = {
-      updateThreadListCaches: vi.fn(),
-      invalidateThreads: vi.fn(),
-      invalidateThread: vi.fn()
-    };
-
-    const cleanup = threadQuery.connectThreadRealtimeSubscription({
-      threadId: "thread-a",
-      messageStore,
-      threadCache,
-      applyThreadTitleOverride: (summary) => ({ ...summary, title: `${summary.title} local` }),
-      onBeforeActiveBlocks: vi.fn(),
-      subscribe: (_threadId, nextHandlers) => {
-        handlers = nextHandlers as typeof handlers;
-        return unsubscribe;
-      }
-    });
-
-    const block: MessageBlock = { id: "block-a", role: "assistant", kind: "message", text: "hello", questions: [] };
-    const summary: ThreadSummary = { id: "thread-a", title: "Remote", status: "Recent", message_count: 2 };
-
-    handlers.onBlocks?.([block], "thread-a");
-    handlers.onSummary?.(summary, "thread-a");
-    handlers.onError?.("stream disconnected", "thread-a");
-    cleanup();
-
-    expect(messageStore.applyRealtimeBlocks).toHaveBeenCalledWith("thread-a", [block]);
-    expect(messageStore.applySummary).toHaveBeenCalledWith("thread-a", expect.objectContaining({ title: "Remote local" }));
-    expect(threadCache.updateThreadListCaches).toHaveBeenCalledWith(expect.objectContaining({ title: "Remote local" }));
-    expect(threadCache.invalidateThreads).toHaveBeenCalledWith();
-    expect(messageStore.setFeedback).toHaveBeenCalledWith("thread-a", "stream disconnected");
-    expect(threadCache.invalidateThread).toHaveBeenCalledWith("thread-a", "all");
-    expect(threadCache.invalidateThreads).toHaveBeenCalledWith("all");
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   test("App.tsx keeps domain-only pure helpers out of the component file", () => {
@@ -760,13 +657,13 @@ describe("conversation helpers", () => {
       "NexusHub 更新",
       "Job History"
     ]);
-    expect(app.opsWorkspacePanelTitles?.(linuxWebCapabilities)).toEqual([
+    expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
       "NexusHub 更新",
       "归档线程清理",
       "隐藏线程清理",
       "Job History"
     ]);
-    expect(app.opsWorkspacePanelTitles?.(linuxWebCapabilities)).toEqual(expect.arrayContaining([
+    expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual(expect.arrayContaining([
       "归档线程清理",
       "隐藏线程清理"
     ]));
@@ -775,7 +672,7 @@ describe("conversation helpers", () => {
       retiredClaudePanel,
       "归档清理"
     ]));
-    const visibleCopy = app.opsWorkspaceVisibleCopy?.(linuxWebCapabilities).join("\n") ?? "";
+    const visibleCopy = app.opsWorkspaceVisibleCopy?.(remoteCapabilities).join("\n") ?? "";
     expect(visibleCopy).toContain("归档线程清理");
     expect(visibleCopy).toContain("隐藏线程清理");
     expect(visibleCopy).not.toContain(retiredCodexPanel);
@@ -788,8 +685,8 @@ describe("conversation helpers", () => {
     const { runtimeCapabilitiesFromResponse } = await import("./lib/domain/capabilities");
     const { demoSystemCapabilities } = await import("./lib/api/demo");
     const capabilities = runtimeCapabilitiesFromResponse(demoSystemCapabilities("macos-tauri"));
-    expect(capabilities.webAuth).toBe(false);
-    expect(capabilities.securitySettings).toBe(false);
+    expect(capabilities).not.toHaveProperty("webAuth");
+    expect(capabilities).not.toHaveProperty("securitySettings");
     expect(capabilities.threadArchiveActions).toBe(true);
     expect(conversationSource).toContain("复制 ID");
     expect(conversationSource).toContain("取消归档");

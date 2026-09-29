@@ -29,8 +29,7 @@ export const statusTabs = [
 
 
 
-export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOpen, setView, capabilities }: {
-  csrfToken?: string | null;
+export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView, capabilities }: {
   mobileThreadsOpen: boolean;
   setMobileThreadsOpen: (open: boolean) => void;
   setView: (view: View) => void;
@@ -67,7 +66,6 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
       onRefresh={() => threadCache.invalidateThreads()}
       loading={threads.isLoading}
       error={threads.error?.message}
-      csrfToken={csrfToken}
       onBatchSucceeded={(keys) => { for (const key of keys) threadCache.clearArchivedThreadClientState(messageStore, key); if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null); }}
     />
   );
@@ -86,7 +84,6 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
             archivedView={status === "archived"}
             slot={messageStore.getSlot(resolvedSelected)}
             messageStore={messageStore}
-            csrfToken={csrfToken}
             onSelect={(id) => selectThread(id)}
             onPanelSelect={setView}
             nextThreadAfterArchive={nextThreadAfterRemoval}
@@ -101,7 +98,7 @@ export function ChatWorkspace({ csrfToken, mobileThreadsOpen, setMobileThreadsOp
   );
 }
 
-function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading, error, csrfToken, onBatchSucceeded }: {
+function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading, error, onBatchSucceeded }: {
   status: string;
   q: string;
   setQ: (value: string) => void;
@@ -112,11 +109,10 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
   onRefresh: () => void;
   loading: boolean;
   error?: string;
-  csrfToken?: string | null;
   onBatchSucceeded: (keys: string[]) => void;
 }) {
-  const batch = useSessionSelection("codex", `${status}\0${q}`, threads.map(t => t.id), csrfToken, onBatchSucceeded);
-  const rename = useReadOnlyThreadActions({ csrfToken });
+  const batch = useSessionSelection("codex", `${status}\0${q}`, threads.map(t => t.id), onBatchSucceeded);
+  const rename = useReadOnlyThreadActions({});
   return (
     <div className="thread-list">
       <div className="section-title thread-title-row">

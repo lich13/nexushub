@@ -2,6 +2,7 @@ mod commands;
 mod desktop_boot;
 // Domain commands live in commands/*; overview owns desktop state and startup paths.
 mod overview;
+mod remote;
 mod resources;
 mod services;
 
@@ -17,6 +18,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            remote::remoteGet,
+            remote::remoteVerify,
+            remote::remoteSave,
+            remote::remoteRemove,
+            remote::remoteSelect,
+            remote::remoteInvoke,
             commands::sessions::readSessionAttachment,
             commands::sessions::previewSessionBatch,
             commands::sessions::executeSessionBatch,
@@ -72,6 +79,9 @@ pub fn run() {
             ) {
                 eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
             }
+            app.manage(remote::RemoteConnections::load(
+                &state.config().paths.data_dir,
+            )?);
             app.manage(state);
             let main_window_config = app
                 .config()

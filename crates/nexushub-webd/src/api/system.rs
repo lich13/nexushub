@@ -1,9 +1,5 @@
 use super::{api_error, ok, ApiResponse};
-use crate::{
-    auth::{require_auth, require_csrf},
-    linux_adapter,
-    state::AppState,
-};
+use crate::{auth::require_auth, linux_adapter, state::AppState};
 use anyhow::Result as AnyhowResult;
 use axum::{extract::State, http::HeaderMap};
 use nexushub_core::{
@@ -115,7 +111,6 @@ pub(crate) async fn start_update_action(
     audit_action: Option<&str>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = state.platform().clone();
     require_capability_for_surface(
         &platform,

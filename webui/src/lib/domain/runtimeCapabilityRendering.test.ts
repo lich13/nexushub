@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
 import appSource from "../../App.tsx?raw";
-import authGateSource from "../../components/auth/WebAuthGate.tsx?raw";
 import opsWorkspaceSource from "../../components/ops/OpsWorkspace.tsx?raw";
-import securityWorkspaceSource from "../../components/security/SecurityWorkspace.tsx?raw";
 import {
   opsWorkspacePanelTitles,
   opsWorkspaceVisibleCopy
@@ -17,12 +15,10 @@ import {
 } from "./visualContract";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
 
-const linuxWebCapabilities: RuntimeCapabilityMatrix = {
-  runtimeKind: "web",
-  hostSurface: "linux_server_webui",
-  webAuth: true,
-  logout: true,
-  securitySettings: true,
+const remoteCapabilities: RuntimeCapabilityMatrix = {
+  runtimeKind: "desktop",
+  hostSurface: "linux_server_api",
+
   codexStatePaths: true,
   updatePrune: true,
   threadCleanup: true,
@@ -33,9 +29,7 @@ const linuxWebCapabilities: RuntimeCapabilityMatrix = {
 const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "desktop",
   hostSurface: "desktop_embedded_tauri",
-  webAuth: false,
-  logout: false,
-  securitySettings: false,
+
   codexStatePaths: false,
   updatePrune: false,
   threadCleanup: true,
@@ -43,18 +37,9 @@ const macosTauriCapabilities: RuntimeCapabilityMatrix = {
   updateServiceLabels: false,
 };
 
-function extractFunctionSource(name: string): string {
-  const source = name === "LoginScreen" ? authGateSource : name === "SecurityWorkspace" ? securityWorkspaceSource : appSource;
-  const start = source.indexOf(`function ${name}`);
-  expect(start).toBeGreaterThanOrEqual(0);
-
-  const next = source.indexOf("\nfunction ", start + 1);
-  return source.slice(start, next === -1 ? source.length : next);
-}
-
 describe("runtime capability rendering", () => {
-  test("shared visual contract keeps Linux WebUI and macOS Tauri on one layout vocabulary", () => {
-    const linuxContract = visualContractForRuntime(linuxWebCapabilities);
+  test("shared visual contract keeps remote and local machines on one layout vocabulary", () => {
+    const linuxContract = visualContractForRuntime(remoteCapabilities);
     const macContract = visualContractForRuntime(macosTauriCapabilities);
 
     expect(linuxContract.sharedNavigation).toEqual([...sharedNavigationLabels]);
@@ -95,7 +80,7 @@ describe("runtime capability rendering", () => {
       ...opsWorkspaceVisibleCopy(macosTauriCapabilities)
     ].join("\n");
 
-    expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", webAuth: false, securitySettings: false });
+    expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", hostSurface: "desktop_embedded_tauri" });
     expect(visibleCopy).toMatch(/NexusHub 更新|Check|Install/);
     expect(visibleCopy).not.toContain("系统状态");
     expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
@@ -107,32 +92,14 @@ describe("runtime capability rendering", () => {
     expect(visibleCopy).not.toMatch(/登录|CSRF|Turnstile|security settings|管理员密码|systemd|Nginx|公网入口|Public endpoint|Linux update|Linux prune|Prune/i);
   });
 
-  test("Linux WebUI renders auth, security, public endpoint, service, and Linux update operations", () => {
-    const contract = visualContractForRuntime(linuxWebCapabilities);
-    const securityWorkspaceSource = extractFunctionSource("SecurityWorkspace");
-    const loginScreenSource = extractFunctionSource("LoginScreen");
-    const appShellSource = appSource.slice(
-      appSource.indexOf("function App()"),
-      appSource.indexOf("class WorkspaceErrorBoundary")
-    );
-    const visibleCopy = [
-      ...opsWorkspacePanelTitles(linuxWebCapabilities),
-      ...opsWorkspaceVisibleCopy(linuxWebCapabilities),
-      securityWorkspaceSource,
-      loginScreenSource
-    ].join("\n");
-
-    expect(linuxWebCapabilities).toMatchObject({ runtimeKind: "web", webAuth: true, securitySettings: true });
-    expect(contract.linuxWebOnly).toEqual(expect.arrayContaining(["Turnstile", "Public endpoint", "systemd", "Nginx", "Prune", "安全"]));
-    expect(contract.desktopTauriOnly).toEqual([]);
+  test("remote API capabilities expose server maintenance in the shared desktop UI", () => {
+    const contract = visualContractForRuntime(remoteCapabilities);
+    const visibleCopy = opsWorkspaceVisibleCopy(remoteCapabilities).join("\n");
+    expect(contract.remoteApiOnly).toEqual(expect.arrayContaining(["服务更新", "Prune"]));
     expect(contract.updateActions).toEqual(["Precheck", "Update", "Prune"]);
-    expect(appShellSource).toContain('settingsSection === "security" && capabilities.securitySettings');
-    expect(appShellSource).toContain("<WebAuthGate");
-    expect(appShellSource).toContain("webAuth={capabilities.webAuth}");
-    expect(authGateSource).toContain("!session && webAuth");
-    expect(visibleCopy).toMatch(/登录|Turnstile|登录设置|修改密码|systemd|Nginx|Public endpoint|Precheck|Update|Prune/);
-    expect(securityWorkspaceSource).toMatch(/Turnstile|登录设置|修改密码|Secret Key|Session TTL/);
-    expect(loginScreenSource).toMatch(/Turnstile|登录|password|turnstileToken/);
+    expect(visibleCopy).toMatch(/Precheck|Update|Prune/);
+    expect(appSource).not.toMatch(/WebAuthGate|SecurityWorkspace/);
+    expect(contract.remoteApiOnly.join(" ")).not.toMatch(/Turnstile|Public endpoint|Nginx|安全/);
   });
 
   test("task controls and desktop LAN service are absent from the visual contract", () => {

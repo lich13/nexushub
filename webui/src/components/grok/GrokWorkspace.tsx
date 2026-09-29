@@ -19,7 +19,7 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupGrokCommandEvents } from "../../lib/domain/executionGroups";
 
-export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+export function GrokWorkspace({}: { }) {
   const menuTrigger = useRef<HTMLElement>(null);
   const stream = useRef<HTMLDivElement>(null);
   const scrollState = useRef({ id: "", follow: true });
@@ -31,11 +31,11 @@ export function GrokWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const [preview, setPreview] = useState<GrokDeletePreview | null>(null);
   const [feedback, setFeedback] = useState("");
   const sessions = useGrokSessions(query);
-  const batch = useSessionSelection("grok", query, (sessions.data ?? []).map(s => s.id), csrfToken, (keys) => { if (selectedId && keys.includes(selectedId)) setSelectedId(null); setPreview(null); setRenaming(false); });
+  const batch = useSessionSelection("grok", query, (sessions.data ?? []).map(s => s.id), (keys) => { if (selectedId && keys.includes(selectedId)) setSelectedId(null); setPreview(null); setRenaming(false); });
   const selected = sessions.data?.find((item) => item.id === selectedId) ?? sessions.data?.[0];
   const detailVisible = !narrow || Boolean(selectedId);
   const detail = useGrokDetail(detailVisible ? selected?.id : undefined);
-  const actions = useGrokActions(csrfToken);
+  const actions = useGrokActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
   const copyId = async () => {
     if (!selected) return;

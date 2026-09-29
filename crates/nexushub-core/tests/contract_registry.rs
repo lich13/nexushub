@@ -145,7 +145,7 @@ fn contract_registry_capability_matrix_matches_core_policy() {
     let contract = contract();
     for (surface, platform) in [
         (
-            HostSurface::LinuxServerWebui,
+            HostSurface::LinuxServerApi,
             PlatformPaths::for_kind(PlatformKind::Linux),
         ),
         (

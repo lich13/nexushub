@@ -23,14 +23,13 @@ export function Conversation(props: {
   archivedView?: boolean;
   slot: ThreadMessageSlot;
   messageStore: ThreadMessageStoreController;
-  csrfToken?: string | null;
   onSelect: (id: SelectedThread) => void;
   onPanelSelect: (view: View) => void;
   nextThreadAfterArchive: string | null;
   capabilities: RuntimeCapabilityMatrix;
   onBack?: () => void;
 }) {
-  const { detail, slot, csrfToken } = props;
+  const { detail, slot } = props;
   const summary = props.selectedSummary?.id === detail.summary.id
     ? { ...detail.summary, ...props.selectedSummary }
     : detail.summary;
@@ -43,7 +42,7 @@ export function Conversation(props: {
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
-  const actions = useReadOnlyThreadActions({ csrfToken, onSuccess: () => setRenaming(false) });
+  const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const older = useThreadBlockPageMutation({
     onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
     onSuccess: ({ threadId, cursor, page, beforeHeight }) => {

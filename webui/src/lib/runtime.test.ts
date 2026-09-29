@@ -1,187 +1,126 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import runtimeSource from "./runtime.ts?raw";
+import type { RemoteConnectionView } from "./runtime";
 
-async function loadRuntime(desktop = false) {
+const local: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false };
+const remote: RemoteConnectionView = { target: "remote", revision: 1, baseUrl: "https://api.example.com/nexushub/", configured: true };
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+};
+
+async function loadRuntime(handler: (command: string, args?: Record<string, unknown>) => unknown = () => local) {
   vi.resetModules();
-  if (desktop) {
-    globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
-  } else {
-    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
-  }
-  return import("./runtime");
+  const invoke = vi.fn(handler);
+  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  const runtime = await import("./runtime");
+  return { ...runtime, invoke };
 }
 
-describe("NexusHub runtime transport", () => {
-  afterEach(() => {
-    delete globalThis.__NEXUSHUB_DESKTOP_RUNTIME__;
-    delete globalThis.__NEXUSHUB_TEST_INVOKE__;
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.resetModules();
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetModules(); });
+
+describe("native machine connection", () => {
+  test("initializes once from the native view without exposing credentials", async () => {
+    const runtime = await loadRuntime(() => remote);
+    await Promise.all([runtime.initializeConnection(), runtime.initializeConnection()]);
+    expect(runtime.invoke).toHaveBeenCalledExactlyOnceWith("remote.get", undefined);
+    expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, ready: true, writes: 0 });
+    expect(runtime.connectionSnapshot()).not.toHaveProperty("apiKey");
+    expect(runtime.machineScope()).toBe("remote:https://api.example.com/nexushub/");
   });
 
-  test("web rpc posts one command envelope to the Linux RPC endpoint", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    const { runtimeRpc } = await loadRuntime();
-
-    await runtimeRpc("auth.publicSettings", { csrfToken: "csrf-token", q: "needle" });
-
-    const [path, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { headers: Headers; body: string }];
-    expect(path).toBe("/api/rpc/auth.publicSettings");
-    expect(options.method).toBe("POST");
-    expect(options.credentials).toBe("include");
-    expect(options.headers.get("content-type")).toBe("application/json");
-    expect(options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(JSON.parse(options.body)).toEqual({ q: "needle" });
-  });
-
-  test("runtime only exposes transport primitives plus runtime context", async () => {
-    const runtime = await loadRuntime();
-
-    expect(Object.keys(runtime).sort()).toEqual([
-      "RuntimeUnavailableError",
-      "buildRuntimeApiPath",
-      "createRuntimeThreadEventSource",
-      "runtimeContext",
-      "runtimeRpc"
-    ]);
-    expect(runtimeSource).not.toContain("selectRuntimeFallback");
-    expect(runtimeSource).not.toContain("runtimeValue");
-  });
-
-  test("runtime source exports only the public transport boundary", () => {
-    const exportedNames = Array.from(
-      runtimeSource.matchAll(/^export\s+(?:async\s+)?(?:class|function|type|interface|const|let|var)\s+(\w+)/gm),
-      (match) => match[1],
-    ).sort();
-
-    expect(exportedNames).toEqual([
-      "RuntimeContext",
-      "RuntimeUnavailableError",
-      "buildRuntimeApiPath",
-      "createRuntimeThreadEventSource",
-      "runtimeContext",
-      "runtimeRpc",
-    ]);
-  });
-
-  test("keeps API requests at root by default when no API base is configured", async () => {
-    vi.stubEnv("BASE_URL", "/nexushub/");
-    const { buildRuntimeApiPath } = await loadRuntime();
-
-    expect(buildRuntimeApiPath("/api/rpc/login")).toBe("/api/rpc/login");
-  });
-
-  test("uses an explicit API base override when the WebUI is served from a subpath", async () => {
-    vi.stubEnv("BASE_URL", "/nexushub/");
-    vi.stubEnv("VITE_API_BASE", "/backend/");
-    const { buildRuntimeApiPath } = await loadRuntime();
-
-    expect(buildRuntimeApiPath("/api/rpc/login")).toBe("/backend/api/rpc/login");
-  });
-
-  test("desktop dispatch invokes typed Tauri commands and never calls fetch", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({
-      command,
-      args
-    }));
-    const { runtimeRpc } = await loadRuntime(true);
-
-    const result = await runtimeRpc("threads.list", { status: "all", q: "plan", limit: 20 });
-
-    expect(result).toEqual({
-      command: "threads.list",
-      args: { status: "all", q: "plan", limit: 20 }
+  test("local business calls retain the typed native command and never use browser fetch", async () => {
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    const runtime = await loadRuntime((command, args) => ({ command, args }));
+    await expect(runtime.runtimeRpc("threads.list", { status: "all", q: "plan", limit: 20 })).resolves.toEqual({
+      command: "threads.list", args: { status: "all", q: "plan", limit: 20 }
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  test("desktop dispatch strips CSRF-only transport args before native invoke", async () => {
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async (command, args) => ({ command, args }));
-    const { runtimeRpc } = await loadRuntime(true);
-
-    await expect(runtimeRpc("updates.check", { csrfToken: "csrf-token" })).resolves.toEqual({
-      command: "updates.check",
-      args: undefined
+  test("remote selection routes the same business identity through its revision", async () => {
+    const runtime = await loadRuntime((command, args) => command === "remote.select" ? remote : { command, args });
+    await runtime.remoteSelect("remote");
+    await expect(runtime.runtimeRpc("threads.detail", { id: "same-thread" })).resolves.toEqual({
+      command: "remote.invoke", args: { request: { revision: 1, command: "threads.detail", args: { id: "same-thread" } } }
     });
+    expect(runtime.invoke).toHaveBeenCalledWith("remote.select", { request: { target: "remote", revision: 0 } });
   });
 
-  test("desktop turns native string rejections into visible errors", async () => {
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => Promise.reject("Grok session not found"));
-    const { runtimeRpc } = await loadRuntime(true);
-
-    await expect(runtimeRpc("grok.rename")).rejects.toThrow("Grok session not found");
+  test("a read finishing after a connection switch is discarded", async () => {
+    const oldRead = deferred<unknown>();
+    const runtime = await loadRuntime(command => command === "remote.select" ? remote : oldRead.promise);
+    const pending = runtime.runtimeRpc("threads.detail", { id: "same-thread" });
+    const rejected = expect(pending).rejects.toThrow("已丢弃旧响应");
+    await runtime.remoteSelect("remote");
+    oldRead.resolve({ title: "local stale title" });
+    await rejected;
+    expect(runtime.connectionSnapshot()).toMatchObject(remote);
   });
 
-  test("web thread event transport opens EventSource through the runtime RPC stream", async () => {
-    const close = vi.fn();
-    class MockEventSource {
-      static instances: MockEventSource[] = [];
-      constructor(readonly url: string, readonly init?: EventSourceInit) {
-        MockEventSource.instances.push(this);
-      }
-      addEventListener = vi.fn();
-      close = close;
-    }
-    vi.stubGlobal("EventSource", MockEventSource);
-    const { createRuntimeThreadEventSource } = await loadRuntime();
-
-    const source = createRuntimeThreadEventSource("thread-a");
-    source.close();
-
-    expect(MockEventSource.instances).toHaveLength(1);
-    expect(MockEventSource.instances[0].url).toBe("/api/rpc/threadEvents/thread-a");
-    expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
-    expect(close).toHaveBeenCalledOnce();
+  test("writes block select, save, verify and remove until the native mutation settles", async () => {
+    const mutation = deferred<unknown>();
+    const runtime = await loadRuntime(command => command === "threads.rename" ? mutation.promise : remote);
+    const pending = runtime.runtimeRpc("threads.rename", { threadId: "same-thread", name: "New title" });
+    expect(runtime.connectionSnapshot().writes).toBe(1);
+    for (const operation of [
+      () => runtime.remoteSelect("remote"),
+      () => runtime.remoteSave({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-key" }),
+      () => runtime.remoteVerify({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-key" }),
+      () => runtime.remoteRemove()
+    ]) await expect(operation()).rejects.toThrow("操作进行中，请稍后切换");
+    expect(runtime.invoke).toHaveBeenCalledTimes(1);
+    mutation.resolve({ ok: true }); await pending;
+    await runtime.remoteSelect("remote");
+    expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, writes: 0 });
   });
 
-  test("desktop thread event transport is unavailable without touching EventSource", async () => {
-    const EventSourceMock = vi.fn();
-    vi.stubGlobal("EventSource", EventSourceMock);
-    const { createRuntimeThreadEventSource } = await loadRuntime(true);
-
-    const source = createRuntimeThreadEventSource("thread-a");
-    source.addEventListener("block", vi.fn());
-    source.close();
-
-    expect(source.unavailable).toBe(true);
-    expect(EventSourceMock).not.toHaveBeenCalled();
+  test("a rejected mutation releases the write lock", async () => {
+    const runtime = await loadRuntime(command => {
+      if (command === "threads.rename") throw "Native rename failed";
+      return remote;
+    });
+    await expect(runtime.runtimeRpc("threads.rename")).rejects.toThrow("Native rename failed");
+    expect(runtime.connectionSnapshot().writes).toBe(0);
+    await runtime.remoteSelect("remote");
   });
 
-  test("production runtime stays a thin transport layer", async () => {
-    const runtimeDispatchOptionsBody = runtimeSource.match(/export type RuntimeDispatchOptions[\s\S]*?};/)?.[0] ?? "";
-
-    expect(runtimeSource).not.toContain("const ROUTES");
-    expect(runtimeSource).not.toContain("WebRoute");
-    expect(runtimeSource).not.toContain("DesktopRoute");
-    expect(runtimeSource).not.toContain("fromHome");
-    expect(runtimeSource).not.toMatch(/export async function webJsonRpc\b/);
-    expect(runtimeSource).not.toMatch(/export async function webFormRpc\b/);
-    expect(runtimeSource).not.toMatch(/export async function invokeDesktop\b/);
-    expect(runtimeSource).not.toMatch(/export async function invokeDesktopUpload\b/);
-    expect(runtimeSource).not.toMatch(/export function getRuntimeKind\b/);
-    expect(runtimeSource).not.toContain("desktop_api_command");
-    expect(runtimeSource).not.toContain("desktopApiRoute");
-    expect(runtimeSource).not.toContain("invokeDesktopApi");
-    expect(runtimeDispatchOptionsBody).not.toContain("desktopCommand");
-    expect(runtimeDispatchOptionsBody).not.toContain("desktopArgs");
-    expect(runtimeDispatchOptionsBody).not.toContain("webCommand");
-    expect(runtimeDispatchOptionsBody).not.toContain("webArgs");
-    expect(runtimeSource).not.toContain("systemd");
-    expect(runtimeSource).not.toContain("Nginx");
+  test("an offline remote read stays remote and never falls back to local data", async () => {
+    const runtime = await loadRuntime(command => {
+      if (command === "remote.select") return remote;
+      throw new Error("远程连接失败");
+    });
+    await runtime.remoteSelect("remote");
+    await expect(runtime.runtimeRpc("threads.list")).rejects.toThrow("远程连接失败");
+    expect(runtime.connectionSnapshot()).toMatchObject(remote);
+    expect(runtime.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select", "remote.invoke"]);
   });
 
-  test("runtime kind checks and dispatch are not production-facing exports", () => {
-    expect(runtimeSource).not.toMatch(/export function isDesktopRuntime\b/);
-    expect(runtimeSource).not.toMatch(/export function isWebRuntime\b/);
-    expect(runtimeSource).not.toMatch(/export async function runtimeDispatch\b/);
-    expect(runtimeSource).not.toContain("__testRuntimeDispatch");
+  test("credentials are sent only to save and are absent from subsequent views and business calls", async () => {
+    const runtime = await loadRuntime(command => command === "remote.save" ? remote : []);
+    const credentials = { revision: 0, baseUrl: remote.baseUrl!, apiKey: "fixture-secret-key" };
+    await runtime.remoteSave(credentials);
+    expect(runtime.invoke).toHaveBeenCalledWith("remote.save", { request: credentials });
+    expect(JSON.stringify(runtime.connectionSnapshot())).not.toContain(credentials.apiKey);
+    await runtime.runtimeRpc("threads.list");
+    expect(runtime.invoke.mock.calls[1]).toEqual(["remote.invoke", { request: { revision: 1, command: "threads.list", args: {} } }]);
+  });
+
+  test("local App updates stay on the native machine while business reads use the selected remote", async () => {
+    const runtime = await loadRuntime((command, args) => command === "remote.select" ? remote : { command, args });
+    await runtime.remoteSelect("remote");
+    await expect(runtime.runtimeRpc("updates.status", undefined, true)).resolves.toEqual({ command: "updates.status", args: undefined });
+    await expect(runtime.runtimeRpc("updates.check", {}, true)).resolves.toEqual({ command: "updates.check", args: {} });
+    await runtime.runtimeRpc("threads.list");
+    expect(runtime.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select", "updates.status", "updates.check", "remote.invoke"]);
+    expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, writes: 0 });
+  });
+
+  test("an uninitialized browser refuses business calls without a native bridge", async () => {
+    vi.resetModules(); vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", undefined);
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    const { runtimeRpc } = await import("./runtime");
+    await expect(runtimeRpc("threads.list")).rejects.toThrow("请使用 NexusHub App");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

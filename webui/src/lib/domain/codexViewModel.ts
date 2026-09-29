@@ -1,9 +1,10 @@
+import { machineScope } from "../runtime";
 import { visibleMarkdown } from "./visibleMarkdown";
 import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
-export type View = "codex" | "grok" | "pi" | "probe" | "ops" | "security";
+export type View = "codex" | "grok" | "pi" | "probe" | "ops";
 export type SelectedThread = string | null;
 export type ThreadTitleLike = {
   title?: string | null;
@@ -15,30 +16,9 @@ export type ThreadListItemLike = ThreadTitleLike & {
   latest_message?: string | null;
 };
 
-export const codexLocalCopy = {
-  loginSubtitle: "Codex 本地状态控制台",
-  threadListEyebrow: "Codex 本地线程"
-};
-
-export const defaultSessionTtlDays = 365;
-export const secondsPerDay = 86400;
-
-export function visibleNavigationItems<T extends { id: View }>(items: T[], input?: RuntimeCapabilityInput): T[] {
-  return capabilitiesForInput(input).securitySettings
-    ? items
-    : items.filter((item) => item.id !== "security");
-}
-
+export function visibleNavigationItems<T extends { id: View }>(items: T[], _input?: RuntimeCapabilityInput): T[] { return items; }
 export function navigationLabelsForRuntime<T extends { id: View; label: string }>(items: T[], input?: RuntimeCapabilityInput): string[] {
-  return visibleNavigationItems(items, input).map((item) => item.label);
-}
-
-export function shouldShowLogoutForRuntime(input?: RuntimeCapabilityInput): boolean {
-  return capabilitiesForInput(input).logout;
-}
-
-export function shouldUseSavedSessionForRuntime(input?: RuntimeCapabilityInput): boolean {
-  return capabilitiesForInput(input).webAuth;
+  return visibleNavigationItems(items, input).map(item => item.label);
 }
 
 export function threadListItemText(thread: ThreadTitleLike): string {
@@ -91,23 +71,23 @@ export function setLocalThreadTitleOverride(threadId: string, title: string, now
   const cleanThreadId = threadId.trim();
   const cleanTitle = title.trim();
   if (!cleanThreadId || !cleanTitle) return;
-  threadTitleOverrides.set(cleanThreadId, {
+  threadTitleOverrides.set(`${machineScope()}:${cleanThreadId}`, {
     title: cleanTitle,
     expiresAt: now + threadTitleOverrideTtlMs
   });
 }
 
 export function clearLocalThreadTitleOverride(threadId: string): void {
-  threadTitleOverrides.delete(threadId);
+  threadTitleOverrides.delete(`${machineScope()}:${threadId}`);
 }
 
 export function applyThreadTitleOverride<T extends Partial<ThreadSummary>>(summary: T, now = Date.now()): T {
   const threadId = summary.id?.trim();
   if (!threadId) return summary;
-  const override = threadTitleOverrides.get(threadId);
+  const override = threadTitleOverrides.get(`${machineScope()}:${threadId}`);
   if (!override) return summary;
   if (override.expiresAt <= now) {
-    threadTitleOverrides.delete(threadId);
+    threadTitleOverrides.delete(`${machineScope()}:${threadId}`);
     return summary;
   }
   return {

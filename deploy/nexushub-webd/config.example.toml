@@ -1,7 +1,5 @@
 [server]
 listen = "127.0.0.1:15742"
-public_base_url = "https://panel.example.com/nexushub/"
-trust_forwarded_headers = true
 
 [codex]
 workspace = "/home/ubuntu/codex-workspace"
@@ -41,16 +39,11 @@ hook_cooldown_max_lines = 1000
 log_max_bytes = 5242880
 
 [security]
-cookie_secure = true
-session_ttl_seconds = 31536000
-login_rate_limit_per_minute = 8
-turnstile_expected_hostname = "panel.example.com"
-turnstile_expected_action = "login"
+auth_rate_limit_per_minute = 8
 
 [paths]
 data_dir = "/var/lib/nexushub-webd"
 db_path = "/var/lib/nexushub-webd/nexushub.sqlite"
-webui_dir = "/usr/share/nexushub-webd/webui"
 log_dir = "/var/log/nexushub-webd"
 
 [update]

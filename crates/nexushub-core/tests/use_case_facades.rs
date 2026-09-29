@@ -1,12 +1,11 @@
 use nexushub_core::{
     config::Config,
-    db::{JobRecord, SecuritySettings},
+    db::JobRecord,
     platform::{PlatformKind, PlatformPaths},
     services::{
         cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
         commands,
         probe::{ProbeAction, ProbeExecutionKind},
-        security::{PasswordChangeRequest, SecurityPatch},
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
             ProbeSettingsSaveRequest,
@@ -229,7 +228,7 @@ fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
 }
 
 #[test]
-fn operational_use_cases_expose_probe_settings_updates_system_and_security_plans() {
+fn operational_use_cases_expose_probe_settings_updates_and_system_plans() {
     let linux_config = Config::for_platform_kind(PlatformKind::Linux);
     let linux_platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let linux = NexusHubUseCases::with_config(&linux_config, &linux_platform);
@@ -293,50 +292,6 @@ fn operational_use_cases_expose_probe_settings_updates_system_and_security_plans
         .capability_gate(Capability::PruneBackups);
     assert!(gate.supported);
     assert_eq!(gate.capability, Capability::PruneBackups);
-
-    let security_settings = SecuritySettings {
-        turnstile_enabled: true,
-        turnstile_required: true,
-        turnstile_site_key: None,
-        turnstile_secret_configured: false,
-        session_ttl_seconds: 900,
-    };
-    let public_security = linux
-        .security()
-        .unwrap()
-        .public_view(security_settings.clone(), None, true, None)
-        .unwrap();
-    assert_eq!(public_security.required_capability, Capability::WebAuth);
-    assert_eq!(public_security.public.turnstile_action, "login");
-    let security_patch = linux
-        .security()
-        .unwrap()
-        .patch(SecurityPatch {
-            turnstile_secret_key: Some(" secret-key ".to_string()),
-            session_ttl_seconds: Some(900),
-            ..Default::default()
-        })
-        .unwrap();
-    assert_eq!(
-        security_patch.required_capability,
-        Capability::SecuritySettings
-    );
-    assert_eq!(
-        security_patch.patch.turnstile_secret_key.as_deref(),
-        Some("secret-key")
-    );
-    let password = linux
-        .security()
-        .unwrap()
-        .change_password(
-            PasswordChangeRequest {
-                current_password: "old-password".to_string(),
-                new_password: "new-password-123".to_string(),
-            },
-            true,
-        )
-        .unwrap();
-    assert_eq!(password.required_capability, Capability::AdminPassword);
 }
 
 #[test]
@@ -390,7 +345,6 @@ fn config_backed_use_cases_report_missing_config_in_core() {
         use_cases.probe().map(|_| ()),
         use_cases.updates().map(|_| ()),
         use_cases.system().map(|_| ()),
-        use_cases.security().map(|_| ()),
     ] {
         assert!(result
             .unwrap_err()
@@ -409,7 +363,6 @@ fn new_core_facade_sources_do_not_import_host_runtime_surfaces() {
         ("probe", include_str!("../src/services/probe.rs")),
         ("updates", include_str!("../src/services/updates.rs")),
         ("system", include_str!("../src/services/system.rs")),
-        ("security", include_str!("../src/services/security.rs")),
     ] {
         for forbidden in [
             "axum",

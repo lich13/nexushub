@@ -1,3 +1,4 @@
+import { machineScope } from "../runtime";
 import { readSessionAttachment, type SessionAttachmentRequest } from "../api/sessions";
 
 const cache = new Map<string, string>();
@@ -7,7 +8,7 @@ let chars = 0;
 let generation = 0;
 
 export function readAttachment(request: SessionAttachmentRequest): Promise<string> {
-  const key = JSON.stringify(request);
+  const key = `${machineScope()}:${JSON.stringify(request)}`;
   const cached = cache.get(key);
   if (cached) { cache.delete(key); cache.set(key, cached); return Promise.resolve(cached); }
   const active = pending.get(key);
@@ -16,7 +17,7 @@ export function readAttachment(request: SessionAttachmentRequest): Promise<strin
   const promise = readSessionAttachment(request).then(result => {
     if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(result.mimeType) || result.base64.length > 20 * 1024 * 1024 * 4 / 3 + 4) throw new Error("图片格式或大小不支持预览");
     const url = `data:${result.mimeType};base64,${result.base64}`;
-    if (startedGeneration !== generation) return url;
+    if (startedGeneration !== generation) throw new Error("连接已变化，已丢弃旧附件");
     while (cache.size && (chars + url.length > MAX_CACHE_CHARS || cache.size >= 32)) {
       const first = cache.keys().next().value!;
       chars -= cache.get(first)!.length; cache.delete(first);

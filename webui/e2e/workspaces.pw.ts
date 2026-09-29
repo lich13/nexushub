@@ -225,7 +225,7 @@ test("hidden histories stop polling while started jobs continue to terminal", as
   const nav = page.locator(".side-nav");
   await nav.getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByText("系统状态", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("NexusHub 更新", { exact: true })).toBeVisible();
+  await expect(page.getByText("本机 App 更新", { exact: true })).toBeVisible();
   expect(calls).not.toContain("jobs.list");
   await page.locator(".execution-history > summary").click();
   await expect(page.locator(".job-item").first()).toBeVisible();

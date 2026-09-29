@@ -271,7 +271,7 @@ small { font-size: 12px; }
 .settings-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--hairline); margin: 12px 0 24px; }
 .settings-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 12px 0; font-size: 13px; }
 .settings-tabs button[aria-selected=true] { color: var(--text); border-color: var(--text); }
-.ops-grid, .security-layout { display: block; }
+.ops-grid { display: block; }
 .panel { min-width: 0; padding: 0 0 24px; margin-bottom: 24px; border-bottom: 1px solid var(--hairline); }
 .panel header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--text); }
 .panel header svg { flex: none; }
@@ -328,15 +328,6 @@ small { font-size: 12px; }
 .status-dot.succeeded { background: var(--success); }
 .status-dot.running { background: var(--primary); }
 .status-dot.failed { background: var(--danger); }
-.login-shell { min-height: 100dvh; display: grid; place-items: center; padding: 20px; }
-.login-panel { width: min(420px, 100%); border: 1px solid var(--hairline); background: var(--canvas); border-radius: 8px; padding: 24px; display: grid; gap: 14px; }
-.login-panel h1 { margin: 6px 0 0; font-size: 26px; }
-.login-panel p { color: var(--muted); margin: 0 0 8px; }
-.login-panel label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
-.login-panel input { min-width: 0; width: 100%; min-height: 44px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 0 12px; }
-.turnstile-box { display: grid; gap: 8px; min-height: 78px; align-items: center; }
-.turnstile-box > div { max-width: 100%; overflow: hidden; }
-.turnstile-box span { color: var(--muted); font-size: 12px; }
 .empty-state { height: 100%; min-height: 120px; display: grid; align-content: center; justify-items: center; padding: 24px; color: var(--muted); gap: 12px; }
 .markdown-file-link { display: inline; position: relative; overflow-wrap: anywhere; }
 .file-path-label { display: inline; padding: 0; border: 0; background: none; color: var(--primary); font: inherit; text-align: inherit; text-decoration: underline; text-underline-offset: 3px; white-space: inherit; overflow-wrap: anywhere; cursor: pointer; }
@@ -423,3 +414,14 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .attachment-preview header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; overflow-wrap: anywhere; }
 .attachment-preview > img { display: block; max-width: 100%; max-height: calc(90dvh - 90px); object-fit: contain; margin: auto; }
 @media (max-width: 767px) { .user-message-bubble { max-width: 94%; padding: 12px 16px; } .user-attachments { max-width: 94%; } }
+
+.machine-control { padding: 4px 10px 12px; }
+.machine-button { position: relative; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 8px; border: 1px solid var(--control-border); border-radius: 8px; cursor: pointer; }
+.machine-button select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.machine-button:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.machine-button:has(select:disabled) { opacity: .5; cursor: wait; }
+.machine-button.compact { justify-content: center; padding: 5px; }
+.nav-collapsed .machine-control { padding: 4px 6px 12px; }
+.remote-connection-form { display: flex; flex-direction: column; gap: 18px; max-width: 580px; padding: 22px; margin: 18px; }
+.remote-connection-form label { display: flex; flex-direction: column; gap: 7px; }
+.remote-connection-form input { width: 100%; min-width: 0; }

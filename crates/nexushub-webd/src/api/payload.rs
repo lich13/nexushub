@@ -1,6 +1,5 @@
 use super::{api_error, ApiError};
 use crate::rpc_payload::{
-    rpc_nested_payload as parse_rpc_nested_payload,
     rpc_nested_payload_or_empty as parse_rpc_nested_payload_or_empty,
     rpc_payload as parse_rpc_payload, rpc_query_strings as parse_rpc_query_strings,
     rpc_required_string as parse_rpc_required_string,
@@ -13,13 +12,6 @@ use std::collections::HashMap;
 
 pub(super) fn rpc_payload<T: DeserializeOwned>(value: &Value) -> Result<T, ApiError> {
     api_rpc_payload(parse_rpc_payload(value))
-}
-
-pub(super) fn rpc_nested_payload<T: DeserializeOwned>(
-    value: &Value,
-    key: &str,
-) -> Result<T, ApiError> {
-    api_rpc_payload(parse_rpc_nested_payload(value, key))
 }
 
 pub(super) fn rpc_wrapped_payload<T: DeserializeOwned>(
@@ -61,7 +53,7 @@ fn api_rpc_payload<T>(result: Result<T, RpcPayloadError>) -> Result<T, ApiError>
 #[cfg(test)]
 mod tests {
     use super::{rpc_required_string, rpc_wrapped_payload, rpc_wrapped_payload_or_empty};
-    use crate::api::{ApiError, LoginRequest};
+    use crate::api::ApiError;
     use nexushub_core::services::jobs::ThreadRenameRequest;
     use nexushub_core::services::settings as settings_service;
     use serde_json::json;
@@ -71,21 +63,6 @@ mod tests {
             Ok(value) => value,
             Err(_) => panic!("expected rpc compatibility conversion to succeed"),
         }
-    }
-
-    #[test]
-    fn rpc_payload_compat_accepts_camel_case_login_token() {
-        let payload: LoginRequest = must(rpc_wrapped_payload(
-            &json!({
-                "username": "admin",
-                "password": "secret",
-                "turnstileToken": "token-a"
-            }),
-            &[],
-        ));
-
-        assert_eq!(payload.username, "admin");
-        assert_eq!(payload.turnstile_token.as_deref(), Some("token-a"));
     }
 
     #[test]

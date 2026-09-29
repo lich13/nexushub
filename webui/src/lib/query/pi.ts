@@ -14,12 +14,12 @@ export function usePiDetail(sessionKey?: string) {
     refetchInterval: query => query.state.data?.summary?.status === "running" ? 1000 : 2000
   });
 }
-export function usePiActions(csrfToken?: string | null) {
+export function usePiActions() {
   const client = useQueryClient();
   const refresh = () => { void client.invalidateQueries({ queryKey: ["pi"] }); };
   return {
-    rename: useMutation({ mutationFn: ({ sessionKey, title }: { sessionKey: string; title: string }) => renamePiSession(sessionKey, title, csrfToken), onSuccess: refresh }),
-    preview: useMutation({ mutationFn: (sessionKey: string) => previewPiSessionDelete(sessionKey, csrfToken) }),
-    remove: useMutation({ mutationFn: (request: PiDeleteRequest) => deletePiSession(request, csrfToken), onSuccess: refresh })
+    rename: useMutation({ mutationFn: ({ sessionKey, title }: { sessionKey: string; title: string }) => renamePiSession(sessionKey, title), onSuccess: refresh }),
+    preview: useMutation({ mutationFn: (sessionKey: string) => previewPiSessionDelete(sessionKey) }),
+    remove: useMutation({ mutationFn: (request: PiDeleteRequest) => deletePiSession(request), onSuccess: refresh })
   };
 }

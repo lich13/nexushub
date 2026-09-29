@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import React, { Component, ErrorInfo, ReactNode } from "react";
+import React, { Component, ErrorInfo, ReactNode, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import { initializeConnection, useConnection } from "./lib/runtime";
+import { clearAttachmentCache } from "./lib/query/attachments";
 
 declare global {
   interface Window {
@@ -13,14 +15,16 @@ declare global {
   }
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchInterval: 15000,
-      retry: 1
-    }
-  }
-});
+function MachineWorkspace() {
+  const connection = useConnection();
+  const queryClient = useMemo(() => new QueryClient({ defaultOptions: {
+    queries: { refetchInterval: 15000, retry: 1 }, mutations: { retry: false }
+  } }), [connection.revision]);
+  useEffect(() => { void initializeConnection(); }, []);
+  useEffect(() => () => { void queryClient.cancelQueries(); queryClient.clear(); clearAttachmentCache(); }, [queryClient]);
+  if (!connection.ready) return null;
+  return <QueryClientProvider client={queryClient}><App key={connection.revision} /></QueryClientProvider>;
+}
 
 class RootErrorBoundary extends Component<
   { children: ReactNode },
@@ -58,11 +62,7 @@ class RootErrorBoundary extends Component<
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RootErrorBoundary>
-        <App />
-      </RootErrorBoundary>
-    </QueryClientProvider>
+    <RootErrorBoundary><MachineWorkspace /></RootErrorBoundary>
   </React.StrictMode>
 );
 if (window.__NEXUSHUB_BOOT__) {

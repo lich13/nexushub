@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockApi } from "./fixtures";
+import { mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 import type { MessageBlock } from "../src/types";
 
@@ -20,7 +20,7 @@ for (const provider of ["codex", "grok", "pi"] as const) {
       const detail = demo.demoThreadDetail("019e95a0-demo");
       detail.blocks = blocks;
       detail.total_blocks = blocks.length;
-      await page.route(`**/${provider === "codex" ? "threads" : provider}.detail`, route => route.fulfill({ json: provider === "codex" ? detail : { summary: {}, events } }));
+      await mockCommand(page, `${provider === "codex" ? "threads" : provider}.detail`, args => provider === "codex" ? detail : { summary: {}, events });
       await page.goto("/");
       if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
       else {
@@ -67,8 +67,8 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   detail.has_more_blocks = true;
   detail.before_cursor = "b:45";
   detail.total_blocks = 91;
-  await page.route("**/threads.detail", route => route.fulfill({ json: detail }));
-  await page.route("**/threads.blocks", route => route.fulfill({ json: { threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null } }));
+  await mockCommand(page, "threads.detail", args => detail);
+  await mockCommand(page, "threads.blocks", args => ({ threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null }));
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
   const group = page.locator("details.execution-group");
@@ -87,11 +87,11 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
 
 test("Pi standalone bash exposes the original command and its output", async ({ page }) => {
   await mockApi(page);
-  await page.route("**/pi.detail", route => route.fulfill({ json: { summary: {}, events: [
+  await mockCommand(page, "pi.detail", args => ({ summary: {}, events: [
     { kind: "assistant_message", text: "Before command" },
     { kind: "tool_result", role: "bashExecution", text: "printf standalone", detail: "standalone result", status: "completed" },
     { kind: "assistant_message", text: "After command" }
-  ] } }));
+  ] }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
   await page.locator(".execution-group > summary").click();
@@ -108,8 +108,8 @@ test("native pagination inserts older activity while preserving the visible anch
     { id: `call-${index}`, role: "tool", kind: "function_call_output", tool_name: "exec_command", status: "completed", input: `printf example-${index}`, text: "OK", questions: [] }
   ]).flat();
   const detail = { ...demo.demoThreadDetail("019e95a0-demo"), blocks: blocks.slice(40), total_blocks: 80, has_more_blocks: true, before_cursor: "b:40" };
-  await page.route("**/threads.detail", route => route.fulfill({ json: detail }));
-  await page.route("**/threads.blocks", route => route.fulfill({ json: { threadId: detail.summary.id, blocks: blocks.slice(0, 40), totalBlocks: 80, hasMoreBlocks: false, beforeCursor: null } }));
+  await mockCommand(page, "threads.detail", args => detail);
+  await mockCommand(page, "threads.blocks", args => ({ threadId: detail.summary.id, blocks: blocks.slice(0, 40), totalBlocks: 80, hasMoreBlocks: false, beforeCursor: null }));
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
   const stream = page.locator(".message-stream");

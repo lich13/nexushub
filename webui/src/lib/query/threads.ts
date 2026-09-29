@@ -7,7 +7,6 @@ import {
   listThreads,
   renameThread,
   restoreThread,
-  subscribeThreadEvents,
   type ThreadDetailOptions
 } from "../api";
 import type {
@@ -53,37 +52,6 @@ type ArchivedThreadCleanupCacheActions = {
 };
 
 type ThreadRefetchType = "active" | "all" | "inactive" | "none";
-
-type ThreadRealtimeMessageStore = {
-  isActive: (threadId: string) => boolean;
-  applyRealtimeBlocks: (threadId: string, blocks: MessageBlock[]) => void;
-  applySummary: (threadId: string, summary: ThreadSummary) => void;
-  setFeedback: (threadId: string, message: string | null) => void;
-};
-
-type ThreadRealtimeCacheActions = {
-  updateThreadListCaches: (summary: ThreadSummary) => void;
-  invalidateThreads: (refetchType?: ThreadRefetchType) => void;
-  invalidateThread: (threadId: string, refetchType?: ThreadRefetchType) => void;
-};
-
-type ThreadRealtimeSubscribe = (
-  threadId: string,
-  handlers: {
-    onBlocks?: (blocks: MessageBlock[], threadId: string) => void;
-    onSummary?: (summary: ThreadSummary, threadId: string) => void;
-    onError?: (message: string, threadId: string) => void;
-  }
-) => () => void;
-
-export type ThreadRealtimeSubscriptionInput = {
-  threadId: string;
-  messageStore: ThreadRealtimeMessageStore;
-  threadCache: ThreadRealtimeCacheActions;
-  applyThreadTitleOverride?: (summary: ThreadSummary) => ThreadSummary;
-  onBeforeActiveBlocks?: () => void;
-  subscribe?: ThreadRealtimeSubscribe;
-};
 
 type QueryCacheSnapshotEntry = {
   queryKey: QueryKey;
@@ -283,54 +251,6 @@ export function updateThreadListCaches(qc: QueryClient, incoming: ThreadSummary)
       mergeThreadSummaryIntoListCache(rows, incoming, status, q)
     );
   }
-}
-
-function identityThreadSummary(summary: ThreadSummary): ThreadSummary {
-  return summary;
-}
-
-export function connectThreadRealtimeSubscription(input: ThreadRealtimeSubscriptionInput): () => void {
-  const transformSummary = input.applyThreadTitleOverride ?? identityThreadSummary;
-  const subscribe = input.subscribe ?? subscribeThreadEvents;
-  return subscribe(input.threadId, {
-    onBlocks: (incomingBlocks, eventThreadId) => {
-      if (input.messageStore.isActive(eventThreadId)) {
-        input.onBeforeActiveBlocks?.();
-      }
-      input.messageStore.applyRealtimeBlocks(eventThreadId, incomingBlocks);
-    },
-    onSummary: (next, eventThreadId) => {
-      const stableSummary = transformSummary(next);
-      input.messageStore.applySummary(eventThreadId, stableSummary);
-      input.threadCache.updateThreadListCaches(stableSummary);
-      input.threadCache.invalidateThreads();
-    },
-    onError: (message, eventThreadId) => {
-      input.messageStore.setFeedback(eventThreadId, message);
-      input.threadCache.invalidateThread(eventThreadId, "all");
-      input.threadCache.invalidateThreads("all");
-    }
-  });
-}
-
-export function useThreadRealtimeSubscription(input: ThreadRealtimeSubscriptionInput): void {
-  const {
-    threadId,
-    messageStore,
-    threadCache,
-    applyThreadTitleOverride,
-    onBeforeActiveBlocks,
-    subscribe
-  } = input;
-
-  useEffect(() => connectThreadRealtimeSubscription({
-    threadId,
-    messageStore,
-    threadCache,
-    applyThreadTitleOverride,
-    onBeforeActiveBlocks,
-    subscribe
-  }), [threadId, messageStore, threadCache, applyThreadTitleOverride, onBeforeActiveBlocks, subscribe]);
 }
 
 export function applyOptimisticThreadRestore(qc: QueryClient, threadId: string): ThreadCacheSnapshot {
@@ -574,13 +494,13 @@ export function useThreadBlockPageMutation(input: {
   });
 }
 
-export function useReadOnlyThreadActions(input: { csrfToken?: string | null; onSuccess?: () => void }) {
+export function useReadOnlyThreadActions(input: { onSuccess?: () => void }) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async (action: { kind: "rename" | "archive" | "restore"; id: string; title?: string }) => {
-      if (action.kind === "rename") return renameThread(action.id, action.title ?? "", input.csrfToken);
-      if (action.kind === "archive") return archiveThread(action.id, input.csrfToken);
-      return restoreThread(action.id, input.csrfToken);
+      if (action.kind === "rename") return renameThread(action.id, action.title ?? "");
+      if (action.kind === "archive") return archiveThread(action.id);
+      return restoreThread(action.id);
     },
     onSuccess: (_result, action) => {
       void client.invalidateQueries({ queryKey: threadQueryKeys.threads() });

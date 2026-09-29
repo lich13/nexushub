@@ -3,52 +3,30 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use nexushub_core::{
-    config::Config,
-    db::{NewSession, PanelDb},
-};
+use nexushub_core::{config::Config, db::PanelDb};
 use serde_json::Value;
 use tower::ServiceExt;
 
-fn authenticated_test_state() -> (crate::state::AppState, String, String) {
-    let mut config = Config::default();
-    config.security.cookie_secure = false;
-
+fn authenticated_test_state() -> (crate::state::AppState, String) {
     let db = PanelDb::open(":memory:").unwrap();
-    db.upsert_admin("admin-id", "admin", "hash").unwrap();
-    db.create_session(NewSession {
-        id: "session-id",
-        admin_id: "admin-id",
-        token: "session-token",
-        csrf_token: "csrf-token",
-        user_agent: None,
-        ip: None,
-        expires_at: PanelDb::now() + 3_600,
-    })
-    .unwrap();
-
-    (
-        crate::state::AppState::new(config, db),
-        "session-token".to_string(),
-        "csrf-token".to_string(),
-    )
+    let api_key = db.rotate_admin_api_key().unwrap();
+    (crate::state::AppState::new(Config::default(), db), api_key)
 }
 
 async fn request_path_status(
     app: axum::Router,
     method: &str,
     uri: &str,
-    session_token: Option<&str>,
-    csrf_token: Option<&str>,
+    api_key: Option<&str>,
 ) -> StatusCode {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(session_token) = session_token {
-        builder = builder.header("cookie", format!("nexushub_session={session_token}"));
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(api_key) = api_key {
+        builder = builder.header("x-api-key", api_key);
     }
-    if let Some(csrf_token) = csrf_token {
-        builder = builder.header("x-csrf-token", csrf_token);
-    }
-    app.oneshot(builder.body(Body::empty()).unwrap())
+    app.oneshot(builder.body(Body::from("{}")).unwrap())
         .await
         .unwrap()
         .status()
@@ -56,10 +34,26 @@ async fn request_path_status(
 
 #[tokio::test]
 async fn legacy_rest_routes_all_return_404() {
-    let (state, session_token, csrf_token) = authenticated_test_state();
+    let (state, api_key) = authenticated_test_state();
     let app = router(state);
 
     for (method, uri) in [
+        ("GET", "/"),
+        ("GET", "/index.html"),
+        ("GET", "/assets/index.js"),
+        ("GET", "/login"),
+        ("GET", "/nexushub/"),
+        ("GET", "/nexushub/login"),
+        ("GET", "/nexushub/assets/index.js"),
+        ("POST", "/api/rpc/auth.login"),
+        ("POST", "/api/rpc/auth.logout"),
+        ("POST", "/api/rpc/auth.me"),
+        ("POST", "/api/rpc/auth.publicSettings"),
+        ("POST", "/api/rpc/security.get"),
+        ("POST", "/api/rpc/security.save"),
+        ("POST", "/api/rpc/security.changePassword"),
+        ("POST", "/api/rpc/threadEvents"),
+        ("GET", "/api/rpc/threadEvents/thread-a"),
         ("GET", "/api/threads"),
         ("GET", "/api/threads/thread-a"),
         ("POST", "/api/threads/thread-a/messages"),
@@ -122,44 +116,25 @@ async fn legacy_rest_routes_all_return_404() {
         ("POST", "/api/cleanup/hidden/execute"),
         ("GET", "/api/no-such-route"),
     ] {
-        let status = request_path_status(
-            app.clone(),
-            method,
-            uri,
-            Some(&session_token),
-            Some(&csrf_token),
-        )
-        .await;
+        let status = request_path_status(app.clone(), method, uri, Some(&api_key)).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
     }
 }
 
 #[tokio::test]
-async fn only_rpc_transport_endpoints_are_reserved_under_api() {
-    let (state, session_token, csrf_token) = authenticated_test_state();
+async fn only_current_rpc_commands_and_health_are_available() {
+    let (state, api_key) = authenticated_test_state();
     let app = router(state);
 
-    let health = request_path_status(app.clone(), "GET", "/healthz", None, None).await;
+    let health = request_path_status(app.clone(), "GET", "/healthz", None).await;
     assert_eq!(health, StatusCode::OK);
 
-    let upload = request_path_status(
-        app.clone(),
-        "POST",
-        "/api/rpc/uploadFiles",
-        Some(&session_token),
-        Some(&csrf_token),
-    )
-    .await;
-    assert_ne!(upload, StatusCode::NOT_FOUND);
+    let upload =
+        request_path_status(app.clone(), "POST", "/api/rpc/uploadFiles", Some(&api_key)).await;
+    assert_eq!(upload, StatusCode::NOT_FOUND);
 
-    let probe = request_path_status(
-        app.clone(),
-        "POST",
-        "/api/rpc/probe.status",
-        Some(&session_token),
-        Some(&csrf_token),
-    )
-    .await;
+    let probe =
+        request_path_status(app.clone(), "POST", "/api/rpc/probe.status", Some(&api_key)).await;
     assert_ne!(
         probe,
         StatusCode::NOT_FOUND,
@@ -172,22 +147,15 @@ async fn only_rpc_transport_endpoints_are_reserved_under_api() {
             Request::builder()
                 .method("GET")
                 .uri("/api/rpc/threadEvents/thread-a")
-                .header("cookie", format!("nexushub_session={session_token}"))
+                .header("x-api-key", &api_key)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_ne!(event_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(event_response.status(), StatusCode::NOT_FOUND);
 
-    let unknown = request_path_status(
-        app,
-        "GET",
-        "/api/not-rpc",
-        Some(&session_token),
-        Some(&csrf_token),
-    )
-    .await;
+    let unknown = request_path_status(app, "GET", "/api/not-rpc", Some(&api_key)).await;
     assert_eq!(unknown, StatusCode::NOT_FOUND);
 }
 

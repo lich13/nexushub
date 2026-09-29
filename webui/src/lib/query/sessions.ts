@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { executeSessionBatch, previewSessionBatch, type SessionBatchPreview, type SessionBatchResult, type SessionOperation, type SessionProvider } from "../api/sessions";
 
-export function useSessionSelection(provider: SessionProvider, filterKey: string, keys: string[], csrfToken?: string | null, onSucceeded?: (keys: string[], operation: SessionOperation) => void) {
+export function useSessionSelection(provider: SessionProvider, filterKey: string, keys: string[], onSucceeded?: (keys: string[], operation: SessionOperation) => void) {
   const client = useQueryClient();
   const [selecting, setSelecting] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
@@ -14,7 +14,7 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
   const prepare = useMutation({
     mutationFn: async (operation: SessionOperation) => {
       const generation = epoch.current.value;
-      return { generation, response: await previewSessionBatch({ provider, operation, sessionKeys: selection }, csrfToken) };
+      return { generation, response: await previewSessionBatch({ provider, operation, sessionKeys: selection }) };
     },
     onSuccess: ({ generation, response }) => { if (generation === epoch.current.value) setPreview(response); }
   });
@@ -25,7 +25,7 @@ export function useSessionSelection(provider: SessionProvider, filterKey: string
       const request = preview;
       // Every attempt consumes its preview, including an uncertain transport failure.
       setPreview(null);
-      const response = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: request.items.filter(i => i.allowed && i.fingerprint).map(i => ({ sessionKey: i.sessionKey, fingerprint: i.fingerprint! })), confirmed: true }, csrfToken);
+      const response = await executeSessionBatch({ provider: request.provider, operation: request.operation, items: request.items.filter(i => i.allowed && i.fingerprint).map(i => ({ sessionKey: i.sessionKey, fingerprint: i.fingerprint! })), confirmed: true });
       return { response, generation, operation: request.operation };
     },
     onSuccess: ({ response, generation, operation }) => {

@@ -1,19 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { assertNoOverflow, mockApi } from "./fixtures";
+import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 
 test("batch archive confirms explicit keys, retains failed selections, and requires another preview", async ({ page }) => {
   await mockApi(page);
   let previews = 0;
   const executed: any[] = [];
-  await page.route("**/sessions.bulkPreview", route => {
+  await mockCommand(page, "sessions.bulkPreview", args => {
     previews++;
-    const request = route.request().postDataJSON().request;
-    return route.fulfill({ json: { ...request, items: request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Selected fixture", paths: [], bytes: 0, allowed: true, reason: null, fingerprint: `${previews}:${key}` })) } });
+    const request = args.request;
+    return { ...request, items: request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Selected fixture", paths: [], bytes: 0, allowed: true, reason: null, fingerprint: `${previews}:${key}` })) };
   });
-  await page.route("**/sessions.bulkExecute", route => {
-    const request = route.request().postDataJSON().request;
+  await mockCommand(page, "sessions.bulkExecute", args => {
+    const request = args.request;
     executed.push(request);
-    return route.fulfill({ json: { items: request.items.map((item: any, index: number) => ({ sessionKey: item.sessionKey, status: index === 0 ? "succeeded" : "blocked", message: index === 0 ? null : "Fixture changed; preview again" })) } });
+    return { items: request.items.map((item: any, index: number) => ({ sessionKey: item.sessionKey, status: index === 0 ? "succeeded" : "blocked", message: index === 0 ? null : "Fixture changed; preview again" })) };
   });
   await page.goto("/");
   await page.getByRole("button", { name: "多选线程", exact: true }).click();
@@ -45,11 +45,11 @@ test("filter changes invalidate an in-flight batch preview and never select newl
   let release!: () => void;
   let started = false;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route("**/sessions.bulkPreview", async route => {
+  await mockCommand(page, "sessions.bulkPreview", async args => {
     started = true;
     await gate;
-    const request = route.request().postDataJSON().request;
-    await route.fulfill({ json: { ...request, items: request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Old preview", paths: [], bytes: 0, allowed: true, fingerprint: key })) } });
+    const request = args.request;
+    return { ...request, items: request.sessionKeys.map((key: string) => ({ sessionKey: key, id: key, title: "Old preview", paths: [], bytes: 0, allowed: true, fingerprint: key })) };
   });
   await page.goto("/");
   await page.getByRole("button", { name: "多选线程", exact: true }).click();
@@ -70,12 +70,12 @@ for (const provider of ["grok", "pi"] as const) {
     await mockApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
     const keys = provider === "pi" ? ["project/a.jsonl", "project/b.jsonl"] : ["grok-one", "grok-two"];
-    await page.route(`**/${provider}.list`, route => route.fulfill({ json: keys.map((key, index) => ({ id: provider === "pi" ? "duplicate-native-id" : key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })) }));
-    await page.route("**/sessions.bulkPreview", route => route.fulfill({ json: { provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: provider === "pi" ? "duplicate-native-id" : key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "活动状态不明", fingerprint: index === 0 ? "fixture" : null })) } }));
+    await mockCommand(page, `${provider}.list`, args => keys.map((key, index) => ({ id: provider === "pi" ? "duplicate-native-id" : key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
+    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: provider === "pi" ? "duplicate-native-id" : key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "活动状态不明", fingerprint: index === 0 ? "fixture" : null })) }));
     let executed: any;
-    await page.route("**/sessions.bulkExecute", route => {
-      executed = route.request().postDataJSON().request;
-      return route.fulfill({ json: { items: [{ sessionKey: keys[0], status: "succeeded" }] } });
+    await mockCommand(page, "sessions.bulkExecute", args => {
+      executed = args.request;
+      return { items: [{ sessionKey: keys[0], status: "succeeded" }] };
     });
     await page.goto("/");
     await page.locator(".mobile-tabs").getByRole("button", { name: provider === "pi" ? "Pi" : "Grok Build", exact: true }).click();
