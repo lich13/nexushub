@@ -1,8 +1,5 @@
 import { visibleMarkdown } from "./visibleMarkdown";
-import { invokeNative } from "../runtime";
-
-export type PlanSaveRequest = { filename: string; markdown: string };
-export type PlanSaveResult = { filename: string };
+import { savePlanMarkdown, type PlanSaveRequest, type PlanSaveResult } from "../api/plans";
 
 export function planFilename(markdown: string, fallbackTitle: string): string {
   markdown = visibleMarkdown(markdown);
@@ -28,5 +25,5 @@ export function planFilename(markdown: string, fallbackTitle: string): string {
 
 export function downloadPlanMarkdown(markdown: string, filename: string): Promise<PlanSaveResult> {
   const request: PlanSaveRequest = { filename, markdown: visibleMarkdown(markdown) };
-  return invokeNative<PlanSaveResult>("plans.save", { request });
+  return savePlanMarkdown(request);
 }
