@@ -1,4 +1,4 @@
-# Architecture — 1.2.1
+# Architecture — 1.2.2
 
 ## Boundaries
 
@@ -23,6 +23,10 @@ NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_
 4. Run contract, privacy, Rust, WebUI and install gates.
 
 Batch actions use explicit provider keys and return per-item preview/execute results. Files are isolated before deletion and indexes are replaced atomically. Failures retain a recovery path and are not cascaded to unselected records.
+
+## Grok activity
+
+The shared Grok activity snapshot validates array/object registry entries against one process table, native executable identity and process start time. Exited, zombie and reused PIDs cannot prove execution. A bounded cache incrementally consumes complete native primary-turn events, retaining file identity and a prefix anchor to detect replacement/truncation; unread or corrupt state stays unknown. Display requires both a live owner and an unfinished primary turn. Deletion separately rechecks native ownership and file fingerprints before and after quarantine, including idle open sessions.
 
 ## Activity timeline
 
@@ -64,7 +68,7 @@ Native Codex question parsing lives in `codex/user_input.rs`. It normalizes sync
 
 Desktop `remote.*` commands own connection preferences and Keychain access. They never enter the Linux dispatcher. React sends a command, arguments and connection revision through native IPC; Rust uses a fixed registry allowlist, HTTPS, disabled redirects and a 32 MiB response bound, enough for the existing 20 MiB image limit. On first remote use the protocol is verified; stale responses cannot cross a revised connection. No credential is returned to React.
 
-A revision-scoped QueryClient and workspace lifetime isolate mutations, previews, paging and scroll; attachment keys, title overrides and disclosures include machine identity. Local updater and Plan saving stay local. Remote path links never reach Finder.
+A revision-scoped QueryClient and workspace lifetime isolate mutations, previews, paging and scroll; attachment keys, title overrides and disclosures include machine identity. The selected machine owns the single update panel and its query/job lifetime. The local target uses Tauri updater; the remote target uses server RPC. Plan saving always stays local. Remote path links never reach Finder.
 
 Server authentication accepts one `x-api-key`, stores only its SHA-256 digest and uses constant-time comparison. Failed authorization is bounded and audited without credentials; valid credentials are not locked out by failed attempts. CLI rotation invalidates the previous Key and revocation denies all business RPCs. Old authentication/security actions and threadEvents are unavailable tombstones.
 

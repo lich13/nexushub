@@ -85,6 +85,26 @@ describe("native machine connection", () => {
     await runtime.remoteSelect("remote");
   });
 
+  test.each(["succeeded", "failed", "cancelled"])("background writes block switching until the job is %s", async status => {
+    let phase = "running";
+    const runtime = await loadRuntime(command => {
+      if (command === "updates.check") return { job_id: "update-1" };
+      if (command === "jobs.detail") return { id: "update-1", status: phase };
+      return remote;
+    });
+    await runtime.runtimeRpc("updates.check");
+    expect(runtime.connectionSnapshot().writes).toBe(1);
+    await expect(runtime.remoteSelect("remote")).rejects.toThrow("操作进行中");
+    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
+    expect(runtime.connectionSnapshot().writes).toBe(1);
+    phase = status;
+    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
+    await runtime.runtimeRpc("jobs.detail", { id: "update-1" });
+    expect(runtime.connectionSnapshot().writes).toBe(0);
+    await runtime.remoteSelect("remote");
+    expect(runtime.connectionSnapshot().target).toBe("remote");
+  });
+
   test("an offline remote read stays remote and never falls back to local data", async () => {
     const runtime = await loadRuntime(command => {
       if (command === "remote.select") return remote;
@@ -106,13 +126,12 @@ describe("native machine connection", () => {
     expect(runtime.invoke.mock.calls[1]).toEqual(["remote.invoke", { request: { revision: 1, command: "threads.list", args: {} } }]);
   });
 
-  test("local App updates stay on the native machine while business reads use the selected remote", async () => {
+  test("native Plan saving stays local while update reads use the selected machine", async () => {
     const runtime = await loadRuntime((command, args) => command === "remote.select" ? remote : { command, args });
     await runtime.remoteSelect("remote");
-    await expect(runtime.runtimeRpc("updates.status", undefined, true)).resolves.toEqual({ command: "updates.status", args: undefined });
-    await expect(runtime.runtimeRpc("updates.check", {}, true)).resolves.toEqual({ command: "updates.check", args: {} });
-    await runtime.runtimeRpc("threads.list");
-    expect(runtime.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select", "updates.status", "updates.check", "remote.invoke"]);
+    await expect(runtime.runtimeRpc("plans.save", {}, true)).resolves.toEqual({ command: "plans.save", args: {} });
+    await runtime.runtimeRpc("updates.status");
+    expect(runtime.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select", "plans.save", "remote.invoke"]);
     expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, writes: 0 });
   });
 

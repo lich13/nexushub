@@ -54,13 +54,3 @@ export const updates = {
     return runTypedUpdateCommand("updates.prune", "update-prune");
   }
 };
-
-// App updates always use the local native updater, including while viewing a remote machine.
-export async function getLocalAppUpdateStatus(): Promise<UpdateStatus> {
-  const { runtimeRpc } = await import("../runtime");
-  return runtimeRpc<UpdateStatus>("updates.status", undefined, true);
-}
-export async function runLocalAppUpdate(action: "check" | "install"): Promise<UpdateActionResult> {
-  const { runtimeRpc } = await import("../runtime");
-  return runtimeRpc<UpdateActionResult>(`updates.${action}`, undefined, true);
-}

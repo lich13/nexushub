@@ -1,4 +1,4 @@
-# NexusHub 1.2.1
+# NexusHub 1.2.2
 
 NexusHub is a read-first workspace for Codex, Grok Build and Pi sessions. The React UI runs in the macOS ARM64 Tauri app. A headless Linux `webd` API manages the remote machine. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -22,9 +22,11 @@ Native question replies display a muted, expandable question above the literal a
 
 Use the machine selector above navigation to choose 本机 or 腾讯云. Configure the remote HTTPS address and independent administrator API Key in 设置 → 远程连接. The App verifies the API protocol before saving; only the address and selection are stored in local preferences, and the Key lives in macOS Keychain. Removing the connection removes its Keychain item.
 
-Reads, session changes, cleanup, Probe and execution records follow the selected machine. A failed connection stays on its selected target. Switching discards unfinished previews and selection, isolates caches and drops old responses; writes block switching until they return. 本机 App 更新 always updates this Mac; 腾讯云服务更新 targets the API service. Each machine runs its own monitor and Bark sender independently of the App.
+Reads, session changes, cleanup, Probe and execution records follow the selected machine. A failed connection stays on its selected target. Switching discards unfinished previews and selection, isolates caches and drops old responses; writes block switching until they return. Settings show only the selected machine’s update panel: 本机 App 更新 or 腾讯云服务更新. Updates appear only when a newer version is confirmed; both targets use the same Chinese controls, and the server retains backup cleanup. Each machine runs its own monitor and Bark sender independently of the App.
 
 There is no hosted website, browser login, Cookie/CSRF or Turnstile. Cloud RPC requires `x-api-key`; health remains public, and old pages return 404. Native provider data is preserved.
+
+Grok running indicators require a live native process with verified registration identity and an unfinished primary turn. Completed or cancelled turns display their timestamp; uncertain activity is explicit. An open native session still blocks deletion even after its turn ends.
 
 ## Development
 
@@ -56,7 +58,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Grok a
 
 ## Release and deployment
 
-Release `v1.2.1` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
+Release `v1.2.2` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query.
 
 ```bash
 bash scripts/package-darwin-arm64.sh

@@ -81,11 +81,11 @@ describe("runtime capability rendering", () => {
     ].join("\n");
 
     expect(macosTauriCapabilities).toMatchObject({ runtimeKind: "desktop", hostSurface: "desktop_embedded_tauri" });
-    expect(visibleCopy).toMatch(/NexusHub 更新|Check|Install/);
+    expect(visibleCopy).toMatch(/本机 App 更新|检查更新/);
     expect(visibleCopy).not.toContain("系统状态");
     expect(visibleCopy).not.toMatch(/WebUI 服务|启动 WebUI|停止 WebUI|重置 WebUI 密码/);
     expect(visibleCopy).toMatch(/归档线程清理|隐藏线程清理|Job History/);
-    expect(contract.updateActions).toEqual(["Check", "Install"]);
+    expect(contract.updateActions).toEqual(["检查更新"]);
     expect(contract.desktopTauriOnly).toEqual([]);
     expect(contract.forbidden).toEqual([...macosForbiddenVisualSurfaces]);
     expect(opsWorkspaceSource).not.toContain("DesktopWebUiPanel");
@@ -95,9 +95,9 @@ describe("runtime capability rendering", () => {
   test("remote API capabilities expose server maintenance in the shared desktop UI", () => {
     const contract = visualContractForRuntime(remoteCapabilities);
     const visibleCopy = opsWorkspaceVisibleCopy(remoteCapabilities).join("\n");
-    expect(contract.remoteApiOnly).toEqual(expect.arrayContaining(["服务更新", "Prune"]));
-    expect(contract.updateActions).toEqual(["Precheck", "Update", "Prune"]);
-    expect(visibleCopy).toMatch(/Precheck|Update|Prune/);
+    expect(contract.remoteApiOnly).toEqual(expect.arrayContaining(["服务更新", "清理更新备份"]));
+    expect(contract.updateActions).toEqual(["检查更新", "清理更新备份"]);
+    expect(visibleCopy).toMatch(/腾讯云服务更新|检查更新|清理更新备份/);
     expect(appSource).not.toMatch(/WebAuthGate|SecurityWorkspace/);
     expect(contract.remoteApiOnly.join(" ")).not.toMatch(/Turnstile|Public endpoint|Nginx|安全/);
   });

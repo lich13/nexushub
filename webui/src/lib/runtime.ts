@@ -77,6 +77,7 @@ export async function remoteSelect(target: MachineTarget) {
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
 const reads = new Set(["system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "pi.list", "pi.detail", "pi.deletePreview", "sessions.attachmentRead", "sessions.bulkPreview"]);
+const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");
   const captured = connection;
@@ -87,6 +88,21 @@ export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, l
       ? await remoteInvoke<T>({ revision: captured.revision, command, args: args ?? {} })
       : await invokeNative<T>(command, args);
     if (captured.revision !== connection.revision) throw new Error("连接已变化，已丢弃旧响应");
+    if (value && typeof value === "object") {
+      const result = value as Record<string, unknown>;
+      const jobId = result.job_id ?? result.jobId;
+      if (write && typeof jobId === "string" && jobId && !pendingJobs.has(jobId)) {
+        // A server write continues after its RPC returns; the existing job poller
+        // releases this machine lock only after observing a terminal result.
+        pendingJobs.add(jobId);
+        publish({ writes: connection.writes + 1 });
+      }
+      if (command === "jobs.detail" && typeof result.id === "string"
+        && ["succeeded", "failed", "cancelled"].includes(String(result.status))
+        && pendingJobs.delete(result.id)) {
+        publish({ writes: connection.writes - 1 });
+      }
+    }
     return value;
   } finally { if (write) publish({ writes: connection.writes - 1 }); }
 }

@@ -279,9 +279,9 @@ small { font-size: 12px; }
 .metric { display: grid; grid-template-columns: minmax(72px, .46fr) minmax(0, 1fr); align-items: center; gap: 12px; min-width: 0; min-height: 38px; }
 .metric span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .metric strong { min-width: 0; text-align: right; font-size: 14px; overflow-wrap: anywhere; }
-.archive-plan, .version-grid, .probe-core-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
-.archive-plan .metric, .version-grid .metric, .probe-core-metrics .metric { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 6px; }
-.archive-plan .metric strong, .version-grid .metric strong, .probe-core-metrics .metric strong { text-align: left; }
+.archive-plan, .probe-core-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.archive-plan .metric, .probe-core-metrics .metric { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 6px; }
+.archive-plan .metric strong, .probe-core-metrics .metric strong { text-align: left; }
 .settings-meta-grid { display: grid; gap: 4px; margin-bottom: 12px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .cleanup-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
@@ -366,7 +366,7 @@ small { font-size: 12px; }
   .settings-workspace, .probe-layout { padding: 20px 16px; }
   .settings-header h1, .probe-header h1 { font-size: 22px; }
   .settings-tabs { gap: 16px; }
-  .archive-plan, .version-grid, .probe-core-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .archive-plan, .probe-core-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid.three, .form-grid.compact-three, .probe-toggle-grid { grid-template-columns: minmax(0, 1fr); }
   .probe-status-banner { align-items: stretch; flex-direction: column; }
   .history-collapse-cell { flex-wrap: wrap; }
@@ -425,3 +425,8 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .remote-connection-form { display: flex; flex-direction: column; gap: 18px; max-width: 580px; padding: 22px; margin: 18px; }
 .remote-connection-form label { display: flex; flex-direction: column; gap: 7px; }
 .remote-connection-form input { width: 100%; min-width: 0; }
+
+.update-panel-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 28px; }
+.update-panel-row .metric { min-width: 120px; gap: 8px; }
+.update-panel-row .button-row { margin: 0; flex-wrap: wrap; }
+.update-feedback { display: flex; align-items: center; gap: 8px; margin-top: 12px; overflow-wrap: anywhere; }

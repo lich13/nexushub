@@ -1,10 +1,7 @@
-import { LocalAppUpdate } from "./LocalAppUpdate";
+import { UpdatePanel } from "./UpdatePanel";
 import {
   Archive,
-  CheckCircle2,
   Database,
-  Play,
-  RefreshCw,
   TerminalSquare,
   Trash2
 } from "lucide-react";
@@ -24,8 +21,7 @@ import {
 import type {
   ArchiveDeletePlan,
   HiddenThreadDeletePlan,
-  HiddenThreadDeleteResult,
-  UpdateStatus
+  HiddenThreadDeleteResult
 } from "../../types";
 
 export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
@@ -89,25 +85,17 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
 
   return (
     <div className="ops-grid">
-      {capabilities.updateServiceLabels && <LocalAppUpdate />}
-      <Panel title={capabilities.updateServiceLabels ? "腾讯云服务更新" : "本机 App 更新"} icon={<RefreshCw size={18} />}>
-        {update.error && <div role="alert" className="form-error">{update.error.message}</div>}
-        {jobMutation.error && <div role="alert" className="form-error">{jobMutation.error.message}</div>}
-        {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}
-        {startedJob.data && <JobList jobs={[startedJob.data]} capabilities={capabilities} />}
-        <UpdateMetrics status={update.data} />
-        <div className="button-row ops-action-row">
-          {opsView.updateActions.map((action) => {
-            const className = action.tone === "primary" ? "primary-button" : action.tone === "danger" ? "danger-button soft" : "secondary-button";
-            const icon = action.action === "check" ? <CheckCircle2 size={17} /> : action.action === "install" ? <Play size={17} /> : <Trash2 size={17} />;
-            return (
-              <button key={action.action} className={className} disabled={jobBusy || action.disabled} onClick={() => jobMutation.mutate({ action: action.action })}>
-                {icon}{action.label}
-              </button>
-            );
-          })}
-        </div>
-      </Panel>
+      <UpdatePanel
+        capabilities={capabilities}
+        status={update.data}
+        loading={update.isPending}
+        action={jobMutation.variables?.action}
+        busy={jobBusy}
+        finished={jobMutation.isSuccess && startedJob.data?.status === "succeeded"}
+        job={startedJob.data}
+        error={update.error?.message ?? jobMutation.error?.message ?? startedJob.error?.message}
+        onAction={(action) => jobMutation.mutate({ action })}
+      />
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
           <span>删除 archived 线程与 rollout</span>
@@ -168,18 +156,4 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
 
 function cleanupErrorMessage(prefix: string, error: unknown): string {
   return `${prefix}: ${error instanceof Error ? error.message : String(error)}`;
-}
-
-function UpdateMetrics({ status }: { status?: UpdateStatus }) {
-  return (
-    <div className="version-grid">
-      <Metric label="Current" value={status?.current_version ?? "读取中"} />
-      <Metric
-        label="Latest"
-        value={status?.latest_version ?? "unknown"}
-        tone={status?.update_available ? "warning" : "success"}
-      />
-      <Metric label="Update" value={status?.update_available ? "available" : status?.state ?? "current"} tone={status?.update_available ? "warning" : "success"} />
-    </div>
-  );
 }

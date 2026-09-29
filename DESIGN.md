@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.2.1 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.2 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -39,7 +39,7 @@ Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced 
 
 ## Machine scope
 
-Place a compact 本机/腾讯云 selector below the navigation brand, with an icon in the collapsed rail and an accessible native selector. Keep the current target visible; errors never trigger a silent fallback. Disable switching during writes. Settings use 更新与维护 and 远程连接; no login, system-status or security panel remains. Label local App updates and remote service updates separately.
+Place a compact 本机/腾讯云 selector below the navigation brand, with an icon in the collapsed rail and an accessible native selector. Keep the current target visible; errors never trigger a silent fallback. Disable switching during writes. Settings use 更新与维护 and 远程连接; no login, system-status or security panel remains. Show only the selected machine’s update panel: 本机 App 更新 or 腾讯云服务更新. Use one compact row with 当前版本, 检查更新 and, only for a confirmed new version, 更新至 followed by its version. Normalize the version prefix; the server also offers 清理更新备份. Show 已是最新版本 only as feedback from a successful check, and keep progress/errors beside the controls.
 
 Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验证并保存 and 移除连接. Do not display a saved key. Connection errors and save results stay near the controls. Machine changes clear unexecuted confirmations and selection; stable disclosure identities include the machine. All previous conversation layout, themes, keyboard and reduced-motion rules remain.
 

@@ -24,7 +24,7 @@ export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCap
 }
 
 export const OPS_PANEL_TITLES = {
-  updates: "NexusHub 更新",
+  updates: "本机 App 更新",
   archivedCleanup: "归档线程清理",
   hiddenCleanup: "隐藏线程清理",
   jobs: "Job History"
@@ -33,7 +33,7 @@ export const OPS_PANEL_TITLES = {
 export function opsWorkspacePanelTitles(input?: RuntimeCapabilityInput): string[] {
   const capabilities = capabilitiesForInput(input);
   return [
-    OPS_PANEL_TITLES.updates,
+    updatePanelTitle(capabilities),
     ...(capabilities.threadCleanup ? [OPS_PANEL_TITLES.archivedCleanup, OPS_PANEL_TITLES.hiddenCleanup] : []),
     OPS_PANEL_TITLES.jobs
   ];
@@ -43,9 +43,7 @@ export function opsWorkspaceVisibleCopy(input?: RuntimeCapabilityInput): string[
   const capabilities = capabilitiesForInput(input);
   return [
     ...opsWorkspacePanelTitles(input),
-    "Current",
-    "Latest",
-    "Update",
+    "当前版本",
     ...opsUpdateActionView(null, capabilities).map((action) => action.label),
     ...(capabilities.threadCleanup ? [
       "Dry-run",
@@ -79,7 +77,18 @@ export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null |
 }
 
 export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {
-  return status?.update_available === true;
+  return status?.update_available === true
+    && /^v?\d+\.\d+\.\d+(?:[-+].*)?$/i.test(status.latest_version?.trim() ?? "")
+    && displayVersion(status.latest_version) !== displayVersion(status.current_version)
+    && status.state !== "failed" && status.state !== "unsupported";
+}
+
+export function displayVersion(version?: string | null): string {
+  return version?.trim().replace(/^v(?=\d)/i, "") || "未知";
+}
+
+export function updatePanelTitle(input?: RuntimeCapabilityInput): string {
+  return capabilitiesForInput(input).updateServiceLabels ? "腾讯云服务更新" : "本机 App 更新";
 }
 
 export function opsUpdateActionView(
@@ -90,19 +99,19 @@ export function opsUpdateActionView(
   return [
     {
       action: "check",
-      label: capabilities.updateServiceLabels ? "Precheck" : "Check",
+      label: "检查更新",
       tone: "secondary",
       disabled: false
     },
-    {
-      action: "install",
-      label: capabilities.updateServiceLabels ? "Update" : "Install",
-      tone: "primary",
-      disabled: !canStartUpdateInstall(status)
-    },
+    ...(canStartUpdateInstall(status) ? [{
+      action: "install" as const,
+      label: `更新至 ${displayVersion(status?.latest_version)}`,
+      tone: "primary" as const,
+      disabled: false
+    }] : []),
     ...(capabilities.updatePrune ? [{
       action: "prune" as const,
-      label: "Prune",
+      label: "清理更新备份",
       tone: "danger" as const,
       disabled: false
     }] : [])

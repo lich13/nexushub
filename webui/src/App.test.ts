@@ -654,11 +654,11 @@ describe("conversation helpers", () => {
     const retiredMissingCopy = ["CSRF", "未恢复"].join(" ");
 
     expect(app.opsWorkspacePanelTitles?.()).toEqual([
-      "NexusHub 更新",
+      "本机 App 更新",
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
-      "NexusHub 更新",
+      "腾讯云服务更新",
       "归档线程清理",
       "隐藏线程清理",
       "Job History"

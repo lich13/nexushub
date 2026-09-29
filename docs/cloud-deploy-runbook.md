@@ -1,4 +1,4 @@
-# Linux management API — 1.2.1
+# Linux management API — 1.2.2
 
 Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Pi or a Linux desktop app.
 
@@ -36,6 +36,8 @@ Rotation immediately invalidates the old Key; update the App connection. Revocat
 The upgrade removes NexusHub web administrators/sessions, Turnstile data and retired settings, then erases SQLite freed pages and WAL. Bark encryption material, events, delivery dedupe, jobs and business audit survive. Config migration removes old website settings. Provider sessions and native Codex databases stay untouched.
 
 Only retained runtime files/data may have one task-level recovery copy. Do not archive the retired website or login database. Remove the static directory and obsolete web updater; preserve shared Nginx, TLS and unrelated paths. Future rollback targets must be API-era releases. A failed update restores retained service state, then checks health before retrying.
+
+The installed App’s 腾讯云 target shows only 腾讯云服务更新. 检查更新, 更新至 and 清理更新备份 operate on that service. Switch to 本机 to update the App. An idle Grok thread may still be open in its native process and therefore protected from deletion; do not clear its registration to bypass that protection.
 
 ## Acceptance
 
