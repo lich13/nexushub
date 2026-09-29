@@ -652,7 +652,7 @@
       "scope": "host_only",
       "coreUseCase": "desktop.plans.save",
       "tauriCommand": "commands::plans::savePlanMarkdown",
-      "webuiWrapper": "downloadPlanMarkdown",
+      "webuiWrapper": "savePlanMarkdown",
       "dtoOwner": "plans",
       "requestDto": "PlanSaveRequest",
       "responseDto": "PlanSaveResult",
