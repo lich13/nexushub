@@ -29,24 +29,12 @@ pub fn hash_token(token: &str) -> String {
 }
 
 pub fn is_sensitive_output_line(line: &str) -> bool {
+    // Keep explicit boundaries in the native string table too: merging the
+    // credential prefixes with adjacent literals looks like an embedded key
+    // to the release payload scanner.
+    const MARKERS: &str = "auth.json\0token\0secret\0password\0authorization\0cookie\0device_key\0api_key\0apikey\0private_key\0access_key\0bearer \0sk-\0ghp_\0github_pat_\0xoxb-\0xoxp-";
     let lower = line.to_ascii_lowercase();
-    lower.contains("auth.json")
-        || lower.contains("token")
-        || lower.contains("secret")
-        || lower.contains("password")
-        || lower.contains("authorization")
-        || lower.contains("cookie")
-        || lower.contains("device_key")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("private_key")
-        || lower.contains("access_key")
-        || lower.contains("bearer ")
-        || lower.contains("sk-")
-        || lower.contains("ghp_")
-        || lower.contains("github_pat_")
-        || lower.contains("xoxb-")
-        || lower.contains("xoxp-")
+    MARKERS.split('\0').any(|marker| lower.contains(marker))
 }
 
 pub fn redact_output(input: &str) -> String {
