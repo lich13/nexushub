@@ -85,8 +85,15 @@ fn native(command: &str, args: &[String]) -> bool {
             }))
 }
 fn collect() -> Option<Vec<Process>> {
+    // macOS truncates `comm` paths to 16 characters even with -ww. `ucomm`
+    // comes from the native process name, so long CLI installation paths do
+    // not hide a live Claude process or rely on a caller-controlled argv[0].
+    #[cfg(target_os = "macos")]
+    let format = "pid=,stat=,lstart=,ucomm=,args=";
+    #[cfg(not(target_os = "macos"))]
+    let format = "pid=,stat=,lstart=,comm=,args=";
     let output = Command::new("ps")
-        .args(["-axo", "pid=,stat=,lstart=,comm=,args="])
+        .args(["-ww", "-axo", format])
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
         .output()
