@@ -550,7 +550,6 @@ fn test_config(name: &str) -> (PathBuf, PathBuf, Config) {
     config.codex.home = root.join(".codex");
     config.paths.data_dir = root.join("data");
     config.paths.db_path = root.join("data/nexushub.sqlite");
-    config.paths.webui_dir = root.join("webui");
     config.paths.log_dir = root.join("logs");
     config.security.secret_key = "7q9DCmCPyxnTrH3FhrV1sUJol1yqPgscQsBnR-mXA2E".to_string();
     config.probe.notifications.enabled = false;

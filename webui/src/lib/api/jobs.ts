@@ -6,7 +6,7 @@ import type {
   JobRecord,
   OptionalResult
 } from "../../types";
-import { callCommand, currentRuntimeContext } from "./transport";
+import { callCommand } from "./transport";
 import { normalizeOptionalResult, USE_DEMO } from "./shared";
 import {
   demoArchiveDeletePlan,
@@ -17,15 +17,14 @@ import {
   demoJobs
 } from "./demo";
 
-export async function dryRunArchiveDelete(csrfToken?: string | null): Promise<ArchiveDeletePlan> {
+export async function dryRunArchiveDelete(): Promise<ArchiveDeletePlan> {
   if (USE_DEMO) {
     return demoArchiveDeletePlan();
   }
-  return callCommand<ArchiveDeletePlan>("cleanup.archiveDryRun", { csrfToken });
+  return callCommand<ArchiveDeletePlan>("cleanup.archiveDryRun", {});
 }
 
 export async function startArchiveDelete(request: {
-  csrfToken?: string | null;
   expectedCount: number;
 }): Promise<ArchiveDeleteResult> {
   if (USE_DEMO) return demoArchiveDeleteResult();
@@ -35,21 +34,18 @@ export async function startArchiveDelete(request: {
   };
   return callCommand<ArchiveDeleteResult>(
     "cleanup.archiveExecute",
-    currentRuntimeContext().kind === "desktop"
-      ? { request: confirmation, csrfToken: request.csrfToken }
-      : { ...confirmation, csrfToken: request.csrfToken }
+    { request: confirmation }
   );
 }
 
-export async function dryRunHiddenThreadDelete(csrfToken?: string | null): Promise<HiddenThreadDeletePlan> {
+export async function dryRunHiddenThreadDelete(): Promise<HiddenThreadDeletePlan> {
   if (USE_DEMO) {
     return demoHiddenThreadDeletePlan();
   }
-  return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", { csrfToken });
+  return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", {});
 }
 
 export async function startHiddenThreadDelete(request: {
-  csrfToken?: string | null;
   expectedCount: number;
 }): Promise<HiddenThreadDeleteResult> {
   if (USE_DEMO) {
@@ -61,9 +57,7 @@ export async function startHiddenThreadDelete(request: {
   };
   return callCommand<HiddenThreadDeleteResult>(
     "cleanup.hiddenExecute",
-    currentRuntimeContext().kind === "desktop"
-      ? { request: confirmation, csrfToken: request.csrfToken }
-      : { ...confirmation, csrfToken: request.csrfToken }
+    { request: confirmation }
   );
 }
 

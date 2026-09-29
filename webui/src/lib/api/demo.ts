@@ -9,12 +9,9 @@ import type {
   MessageBlock,
   OptionalResult,
   PlatformOverview,
-  PublicSettings,
   ProbeEventsResponse,
   ProbeSettings,
   ProbeStatus,
-  SecuritySettings,
-  SessionUser,
   SystemCapabilitiesResponse,
   SystemVersion,
   ThreadBlockPage,
@@ -24,50 +21,20 @@ import type {
 } from "../../types";
 import {
   buildDemoPlatformOverview,
-  buildDemoSecurity,
   buildDemoSystemCapabilities,
   type DemoFixtureKey
 } from "../domain/demoCore";
 
-export function demoSessionUser(username = "admin", fixture: DemoFixtureKey = "linux-web"): SessionUser {
-  return fixture === "macos-tauri"
-    ? {
-      id: "desktop",
-      username: "desktop",
-      csrf_token: null,
-      session_id: "desktop"
-    }
-    : {
-      id: "dev",
-      username,
-      csrf_token: "dev-csrf"
-    };
-}
-
-export function demoPublicSettings(): PublicSettings {
-  return {
-    site_name: "NexusHub",
-    turnstile_enabled: false,
-    turnstile_required: false,
-    turnstile_site_key: "",
-    turnstile_action: "login",
-    admin_configured: true
-  };
-}
-
-export function demoPlatformOverview(fixture: DemoFixtureKey = "linux-web"): PlatformOverview {
+export function demoPlatformOverview(fixture: DemoFixtureKey = "linux-api"): PlatformOverview {
   return buildDemoPlatformOverview(fixture);
 }
 
-export function demoSystemCapabilities(fixture: DemoFixtureKey = "linux-web"): SystemCapabilitiesResponse {
+export function demoSystemCapabilities(fixture: DemoFixtureKey = "linux-api"): SystemCapabilitiesResponse {
   return buildDemoSystemCapabilities(fixture);
 }
 
-export function demoSecurity(fixture: DemoFixtureKey = "linux-web"): SecuritySettings {
-  return buildDemoSecurity(fixture);
-}
 
-export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-web"): UpdateStatus {
+export function demoUpdateStatus(fixture: DemoFixtureKey = "linux-api"): UpdateStatus {
   if (fixture === "macos-tauri") {
     return {
       current_version: "0.1.100",
@@ -108,7 +75,7 @@ export function demoSystemVersion(): SystemVersion {
   };
 }
 
-export function demoCodexConfig(fixture: DemoFixtureKey = "linux-web"): CodexConfig {
+export function demoCodexConfig(fixture: DemoFixtureKey = "linux-api"): CodexConfig {
   return {
     model: "gpt-5.5",
     service_tier: null,
@@ -156,7 +123,7 @@ export function demoProviders(): AgentProviderInfo[] {
 
 
 
-export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeStatus {
+export function demoProbeStatus(fixture: DemoFixtureKey = "linux-api"): ProbeStatus {
   const platform = demoPlatformOverview(fixture);
   const codexHome = fixture === "macos-tauri" ? "~/.codex" : "/root/.codex";
   return {
@@ -196,7 +163,7 @@ export function demoProbeStatus(fixture: DemoFixtureKey = "linux-web"): ProbeSta
   };
 }
 
-export function demoProbeSettings(fixture: DemoFixtureKey = "linux-web"): ProbeSettings {
+export function demoProbeSettings(fixture: DemoFixtureKey = "linux-api"): ProbeSettings {
   const codexHome = fixture === "macos-tauri" ? "~/.codex" : "/root/.codex";
   const runtimeProbeSettings = fixture === "macos-tauri"
     ? {
@@ -232,7 +199,7 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-web"): ProbeS
   };
 }
 
-export function demoSavedProbeSettings(settings: Partial<ProbeSettings>, fixture: DemoFixtureKey = "linux-web"): ProbeSettings {
+export function demoSavedProbeSettings(settings: Partial<ProbeSettings>, fixture: DemoFixtureKey = "linux-api"): ProbeSettings {
   return { ...demoProbeSettings(fixture), ...settings } as ProbeSettings;
 }
 

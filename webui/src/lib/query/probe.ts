@@ -56,7 +56,6 @@ export function useProbeQueries({ section, historyOpen }: { section: "events" | 
 }
 
 export function useProbeActions(input: {
-  csrfToken?: string | null;
   capabilities: RuntimeCapabilityMatrix;
   savePayload: (submittedDeviceKey?: string) => Partial<ProbeSettings>;
   onJobSuccess: (action: ProbeJobAction) => void;
@@ -71,8 +70,8 @@ export function useProbeActions(input: {
   };
 
   const runProbeCommand = (action: ProbeJobAction) => {
-    if (action === "bark-test") return runProbeBarkTest(input.csrfToken);
-    return runProbeHooksInstall(input.csrfToken);
+    if (action === "bark-test") return runProbeBarkTest();
+    return runProbeHooksInstall();
   };
 
   return {
@@ -94,7 +93,7 @@ export function useProbeActions(input: {
       onError: (error: Error, action) => input.onJobError(error, action)
     }),
     save: useMutation({
-      mutationFn: (submittedDeviceKey?: string) => saveProbeSettings(input.savePayload(submittedDeviceKey), input.csrfToken),
+      mutationFn: (submittedDeviceKey?: string) => saveProbeSettings(input.savePayload(submittedDeviceKey)),
       onSuccess: (settings, submittedDeviceKey) => {
         input.onSaveSuccess(settings, submittedDeviceKey);
         qc.invalidateQueries({ queryKey: probeQueryKeys.settings });

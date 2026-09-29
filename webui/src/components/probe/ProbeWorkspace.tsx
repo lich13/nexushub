@@ -51,7 +51,7 @@ import type {
 
 type ProbeSaveStatus = { tone: "success" | "error"; message: string } | null;
 
-export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
+export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
   const [activeSection, setActiveSection] = useState<ProbeSectionId>("events");
   const [historyOpen, setHistoryOpen] = useState(false);
   const { status, settings, events, jobs } = useProbeQueries({ section: activeSection, historyOpen });
@@ -77,7 +77,6 @@ export function ProbeWorkspace({ csrfToken, capabilities }: { csrfToken?: string
     draftDeviceKeyConfigured: draft?.notifications.device_key_configured
   });
   const probeActions = useProbeActions({
-    csrfToken,
     capabilities,
     savePayload: (submittedDeviceKey) => {
       if (!draft) throw new Error("探针设置尚未载入");

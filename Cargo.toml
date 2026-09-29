@@ -6,7 +6,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.1.9"
+version = "1.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/lich13/nexushub"
@@ -15,8 +15,7 @@ rust-version = "1.86"
 [workspace.dependencies]
 anyhow = "1.0"
 aes-gcm = "0.10"
-argon2 = "0.5"
-async-stream = "0.3"
+subtle = "2.6"
 axum = { version = "0.7", features = ["macros"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
@@ -32,7 +31,7 @@ sha2 = "0.10"
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "process", "sync", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "set-header", "trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 toml = "0.8"
 toml_edit = "0.22"
 tracing = "0.1"

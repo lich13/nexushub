@@ -1,4 +1,10 @@
 pub const CONTRACT_DTO_NAMES: &[&str] = &[
+    "RemoteConnectionView",
+    "RemoteConnectionCredentials",
+    "RemoteRevisionRequest",
+    "RemoteSelectionRequest",
+    "RemoteInvokeRequest",
+    "RemoteInvokeResponse",
     "SessionAttachmentRequest",
     "SessionAttachmentResponse",
     "SessionBatchRequest",
@@ -39,7 +45,6 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "SystemProvidersResponse",
     "SystemCapabilitiesResponse",
     "SystemVersionResponse",
-    "ThreadEventsResponse",
     "ThreadsArchiveResponse",
     "ThreadsBlocksResponse",
     "ThreadsDetailResponse",
@@ -52,5 +57,5 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
 ];
 
 pub const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
-    "cleanup", "grok", "jobs", "pi", "probe", "sessions", "system", "threads", "updates",
+    "remote", "cleanup", "grok", "jobs", "pi", "probe", "sessions", "system", "threads", "updates",
 ];

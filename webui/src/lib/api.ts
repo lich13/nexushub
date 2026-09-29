@@ -1,7 +1,7 @@
 import { configureDemoFixtureKey } from "./api/shared";
 import { runtimeContext } from "./runtime";
 
-configureDemoFixtureKey(runtimeContext().kind === "desktop" ? "macos-tauri" : "linux-web");
+configureDemoFixtureKey(runtimeContext().kind === "desktop" ? "macos-tauri" : "linux-api");
 
 export {
   runtimeCapabilities,
@@ -11,8 +11,6 @@ export {
 } from "./domain/capabilities";
 
 export { ApiError } from "./api/shared";
-export { desktopRuntimeSessionUser, getPublicSettings, login, logout, me } from "./api/auth";
-export { getSecurity, saveSecurity, changePassword } from "./api/settings";
 export {
   getSystemCapabilities,
   getSystemVersion,
@@ -38,7 +36,6 @@ export {
   archiveThread,
   restoreThread,
   renameThread,
-  subscribeThreadEvents
 } from "./api/threads";
 export type { ThreadDetailOptions } from "./api/threads";
 export {

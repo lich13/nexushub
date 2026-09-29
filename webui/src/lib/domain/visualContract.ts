@@ -34,7 +34,7 @@ export const sharedDisabledStates = contractVisual.disabledStates as {
   cleanupDuringMutation: string;
 };
 
-export const linuxWebOnlyVisualSurfaces = contractVisual.linuxWebOnly;
+export const remoteApiOnlyVisualSurfaces = contractVisual.remoteApiOnly;
 
 export const macosForbiddenVisualSurfaces = contractVisual.forbidden.desktopEmbeddedTauri;
 
@@ -46,7 +46,7 @@ export type VisualContract = {
   sharedPanels: string[];
   sharedActions: string[];
   disabledStates: string[];
-  linuxWebOnly: string[];
+  remoteApiOnly: string[];
   desktopTauriOnly: string[];
   forbidden: string[];
   cleanupRequiresDryRun: boolean;
@@ -78,7 +78,7 @@ export function visualContractForRuntime(input?: RuntimeCapabilityMatrix): Visua
         sharedDisabledStates.cleanupDuringMutation
       ] : [])
     ],
-    linuxWebOnly: capabilities.hostSurface === "linux_server_webui" ? [...linuxWebOnlyVisualSurfaces] : [],
+    remoteApiOnly: capabilities.hostSurface === "linux_server_api" ? [...remoteApiOnlyVisualSurfaces] : [],
     desktopTauriOnly: [],
     forbidden: capabilities.hostSurface === "desktop_embedded_tauri"
       ? [...macosForbiddenVisualSurfaces]

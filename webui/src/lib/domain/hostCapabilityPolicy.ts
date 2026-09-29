@@ -1,7 +1,7 @@
 import type { RuntimeCapabilityMatrix } from "./capabilities";
 
 export type HostCapabilityPolicy = {
-  showLinuxWebCapabilities: boolean;
+  showRemoteApiCapabilities: boolean;
   copyRedactionEnabled: boolean;
   failureLabels: Record<string, string>;
 };
@@ -19,14 +19,14 @@ const genericFailureLabels: Record<string, string> = {
 };
 
 export function hostCapabilityPolicy(capabilities: RuntimeCapabilityMatrix): HostCapabilityPolicy {
-  return capabilities.hostSurface === "linux_server_webui"
+  return capabilities.hostSurface === "linux_server_api"
     ? {
-      showLinuxWebCapabilities: true,
+      showRemoteApiCapabilities: true,
       copyRedactionEnabled: false,
       failureLabels: linuxFailureLabels
     }
     : {
-      showLinuxWebCapabilities: false,
+      showRemoteApiCapabilities: false,
       copyRedactionEnabled: true,
       failureLabels: genericFailureLabels
     };
@@ -40,17 +40,15 @@ export function redactHostCopy(value: string, fallback: string): string {
     .replace(/\/opt\/nexushub[^\s)"']*/gi, "本机路径")
     .replace(/\/root\/\.codex[^\s)"']*/gi, "本机 Codex 目录")
     .replace(/\/home\/[^/\s]+[^\s)"']*/gi, "本机工作区")
-    .replace(/\bturnstile\b/gi, "验证")
     .replace(/公网入口/g, "本机入口")
     .replace(/\bsystemd\b/gi, "服务")
     .replace(/\bnginx\b/gi, "服务")
-    .replace(/管理员密码/g, "权限")
     .replace(/Linux prune/gi, "清理")
     .replace(/Linux update/gi, "更新")
     .replace(/\bLinux\b/g, "当前宿主")
     .replace(/\bsudo\b/gi, "权限")
     .trim();
-  return /systemd|nginx|turnstile|管理员密码|Linux prune|Linux update|sudo|\/opt\/nexushub|\/root\/\.codex|\/home\/[^/\s]+/i.test(sanitized)
+  return /systemd|nginx|Linux prune|Linux update|sudo|\/opt\/nexushub|\/root\/\.codex|\/home\/[^/\s]+/i.test(sanitized)
     ? fallback
     : sanitized || fallback;
 }

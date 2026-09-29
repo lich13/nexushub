@@ -19,7 +19,7 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupPiCommandEvents } from "../../lib/domain/executionGroups";
 
-export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
+export function PiWorkspace({}: { }) {
   const menuTrigger = useRef<HTMLElement>(null);
   const stream = useRef<HTMLDivElement>(null);
   const scrollState = useRef({ key: "", follow: true });
@@ -31,7 +31,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const [preview, setPreview] = useState<PiDeletePreview | null>(null);
   const [feedback, setFeedback] = useState("");
   const sessions = usePiSessions(query);
-  const batch = useSessionSelection("pi", query, (sessions.data ?? []).map(s => s.sessionKey), csrfToken, keys => {
+  const batch = useSessionSelection("pi", query, (sessions.data ?? []).map(s => s.sessionKey), keys => {
     if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
     setRenaming(false);
     setPreview(null);
@@ -39,7 +39,7 @@ export function PiWorkspace({ csrfToken }: { csrfToken?: string | null }) {
   const selected = sessions.data?.find((item) => item.sessionKey === selectedKey) ?? sessions.data?.[0];
   const detailVisible = !narrow || Boolean(selectedKey);
   const detail = usePiDetail(detailVisible ? selected?.sessionKey : undefined);
-  const actions = usePiActions(csrfToken);
+  const actions = usePiActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
 
   useEffect(() => {

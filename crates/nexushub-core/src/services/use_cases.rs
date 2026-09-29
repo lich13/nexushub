@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     codex::ThreadDetail,
-    config::{Config, SecurityConfig},
+    config::Config,
     db::JobRecord,
     platform::PlatformPaths,
     services::{
@@ -13,10 +13,6 @@ use crate::{
         },
         jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
         probe::{ProbeUseCases, ProbeUseCases as CoreProbeUseCases},
-        security::{
-            self, PasswordChangeFacadePlan, PasswordChangeRequest, PublicSecurityViewFacadePlan,
-            SecurityPatch, SecurityPatchFacadePlan, SecurityView,
-        },
         settings::{SettingsUseCases, SettingsUseCases as CoreSettingsUseCases},
         system::{self, Capability, CapabilityGatePlan, HostSurface, SystemCapabilities},
         threads::{
@@ -163,14 +159,6 @@ impl<'a> NexusHubUseCases<'a> {
     pub fn system(self) -> Result<SystemUseCases<'a>> {
         Ok(SystemUseCases {
             config: self.config_required()?,
-            platform: self.platform,
-            host_surface: self.host_surface,
-        })
-    }
-
-    pub fn security(self) -> Result<SecurityUseCases<'a>> {
-        Ok(SecurityUseCases {
-            config: &self.config_required()?.security,
             platform: self.platform,
             host_surface: self.host_surface,
         })
@@ -470,6 +458,7 @@ pub struct SystemUseCases<'a> {
 impl<'a> SystemUseCases<'a> {
     pub fn runtime_capabilities(self) -> system::SystemCapabilitiesResponse {
         system::SystemCapabilitiesResponse {
+            api_version: system::API_VERSION,
             host_surface: self.host_surface,
             capabilities: self.capabilities(),
         }
@@ -481,65 +470,5 @@ impl<'a> SystemUseCases<'a> {
 
     pub fn capability_gate(self, capability: Capability) -> CapabilityGatePlan {
         system::capability_gate_plan_for_surface(self.platform, self.host_surface, capability)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SecurityUseCases<'a> {
-    config: &'a SecurityConfig,
-    platform: &'a PlatformPaths,
-    host_surface: HostSurface,
-}
-
-impl<'a> SecurityUseCases<'a> {
-    pub fn view(
-        self,
-        settings: crate::db::SecuritySettings,
-        stored_expected_hostname: Option<String>,
-        stored_expected_action: Option<String>,
-    ) -> Result<SecurityView> {
-        security::security_view_with_surface(
-            self.platform,
-            self.host_surface,
-            settings,
-            self.config,
-            stored_expected_hostname,
-            stored_expected_action,
-        )
-    }
-
-    pub fn public_view(
-        self,
-        settings: crate::db::SecuritySettings,
-        stored_turnstile_action: Option<String>,
-        admin_configured: bool,
-        base_url: Option<String>,
-    ) -> Result<PublicSecurityViewFacadePlan> {
-        security::public_security_view_with_surface(
-            self.platform,
-            self.host_surface,
-            settings,
-            self.config,
-            stored_turnstile_action,
-            admin_configured,
-            base_url,
-        )
-    }
-
-    pub fn patch(self, patch: SecurityPatch) -> Result<SecurityPatchFacadePlan> {
-        security::plan_security_patch_with_surface(self.platform, self.host_surface, patch)
-    }
-
-    pub fn change_password(
-        self,
-        request: PasswordChangeRequest,
-        current_password_matches: bool,
-    ) -> Result<PasswordChangeFacadePlan> {
-        security::plan_password_change_with_surface(
-            self.platform,
-            self.host_surface,
-            request,
-            current_password_matches,
-        )
     }
 }

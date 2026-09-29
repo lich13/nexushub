@@ -4,21 +4,17 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import appSource from "../App.tsx?raw";
 import apiSource from "./api.ts?raw";
-import apiAuthSource from "./api/auth.ts?raw";
 import apiGrokSource from "./api/grok.ts?raw";
 import apiSessionsSource from "./api/sessions.ts?raw";
 import apiPiSource from "./api/pi.ts?raw";
 import apiJobsSource from "./api/jobs.ts?raw";
 import apiProbeSource from "./api/probe.ts?raw";
-import apiSettingsSource from "./api/settings.ts?raw";
 import apiSharedSource from "./api/shared.ts?raw";
 import apiSystemSource from "./api/system.ts?raw";
 import apiThreadsSource from "./api/threads.ts?raw";
 import apiUpdatesSource from "./api/updates.ts?raw";
-import queryAuthSource from "./query/auth.ts?raw";
 import queryOpsSource from "./query/ops.ts?raw";
 import queryProbeSource from "./query/probe.ts?raw";
-import querySecuritySource from "./query/security.ts?raw";
 import querySystemSource from "./query/system.ts?raw";
 import queryThreadsSource from "./query/threads.ts?raw";
 import runtimeSource from "./runtime.ts?raw";
@@ -27,13 +23,11 @@ import demoCoreSource from "./domain/demoCore.ts?raw";
 import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetail, ThreadSummary } from "../types";
 
 const domainApiSource = [
-  apiAuthSource,
   apiGrokSource,
   apiPiSource,
   apiSessionsSource,
   apiJobsSource,
   apiProbeSource,
-  apiSettingsSource,
   apiSharedSource,
   apiSystemSource,
   apiThreadsSource,
@@ -41,10 +35,8 @@ const domainApiSource = [
 ].join("\n");
 
 const querySource = [
-  queryAuthSource,
   queryOpsSource,
   queryProbeSource,
-  querySecuritySource,
   querySystemSource,
   queryThreadsSource
 ].join("\n");
@@ -131,14 +123,9 @@ async function loadDesktopDemoApi() {
   return import("./api");
 }
 
-function rpcCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
-  const [path, options] = fetchMock.mock.calls[index] as [string, RequestInit & { headers: Headers; body?: string | FormData }];
-  return {
-    path,
-    command: path.replace(/^.*\/api\/rpc\//, ""),
-    options,
-    body: typeof options.body === "string" ? JSON.parse(options.body) : options.body
-  };
+function rpcCall(invokeMock: ReturnType<typeof vi.fn>, index = 0) {
+  const [command, args] = invokeMock.mock.calls[index];
+  return { command, path: command, body: args };
 }
 
 describe("archive delete API compatibility", () => {
@@ -154,25 +141,20 @@ describe("archive delete API compatibility", () => {
 
   test("uses a typed confirmation payload with expected archive count", async () => {
     const { startArchiveDelete } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response("{}", {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({}));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
-    await startArchiveDelete({ csrfToken: "csrf-token", expectedCount: 3 });
+    await startArchiveDelete({ expectedCount: 3 });
 
-    const call = rpcCall(fetchMock);
-    expect(call.path).toBe("/api/rpc/cleanup.archiveExecute");
-    expect(call.options.method).toBe("POST");
-    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(call.body).toEqual({ confirmed: true, expectedCount: 3 });
+    const call = rpcCall(invokeMock);
+    expect(call.path).toBe("cleanup.archiveExecute");
+
+    expect(call.body).toEqual({ request: { confirmed: true, expectedCount: 3 } });
   });
 
   test("uses hidden thread cleanup endpoints with dry-run and expected hidden count", async () => {
     const { dryRunHiddenThreadDelete, startHiddenThreadDelete } = await loadRealApi();
-    const fetchMock = vi.fn(async (path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
-      String(path).endsWith("/cleanup.hiddenDryRun")
+    const invokeMock = vi.fn(async (path: string, _args?: Record<string, unknown>) => (String(path).endsWith("cleanup.hiddenDryRun")
         ? {
           total_threads: 9,
           visible_threads: 7,
@@ -206,31 +188,26 @@ describe("archive delete API compatibility", () => {
           hidden_threads: 0,
           integrity: "ok",
           deleted_rollout_files: 2
-        }
-    ), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+        }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
-    const plan = await dryRunHiddenThreadDelete("csrf-token");
-    const result = await startHiddenThreadDelete({ csrfToken: "csrf-token", expectedCount: plan.hidden_threads });
+    const plan = await dryRunHiddenThreadDelete();
+    const result = await startHiddenThreadDelete({ expectedCount: plan.hidden_threads });
 
     expect(plan.hidden_threads).toBe(2);
     expect(result.deleted_threads).toBe(2);
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
-      "/api/rpc/cleanup.hiddenDryRun",
-      "/api/rpc/cleanup.hiddenExecute"
+    expect(invokeMock.mock.calls.map(([path]) => path)).toEqual([
+      "cleanup.hiddenDryRun",
+      "cleanup.hiddenExecute"
     ]);
-    const execute = rpcCall(fetchMock, 1);
-    expect(execute.options.method).toBe("POST");
-    expect(execute.options.headers.get("x-csrf-token")).toBe("csrf-token");
-    expect(execute.body).toEqual({ confirmed: true, expectedCount: 2 });
+    const execute = rpcCall(invokeMock, 1);
+
+    expect(execute.body).toEqual({ request: { confirmed: true, expectedCount: 2 } });
   });
 
   test("thread detail request supports pagination query parameters", async () => {
     const { getThread } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({
       summary: { id: "thread-a", title: "example-user", status: "Recent", message_count: 1 },
       messages: [],
       blocks: [],
@@ -238,16 +215,13 @@ describe("archive delete API compatibility", () => {
       total_blocks: 240,
       has_more_blocks: true,
       before_cursor: "b:120"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     const detail = await getThread("thread-a", { limit: 120, before: "b:240", full: true });
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.detail");
-    expect(rpcCall(fetchMock).body).toEqual({
+    expect(rpcCall(invokeMock).path).toBe("threads.detail");
+    expect(rpcCall(invokeMock).body).toEqual({
       id: "thread-a",
       options: { limit: 120, before: "b:240", full: true }
     });
@@ -257,19 +231,16 @@ describe("archive delete API compatibility", () => {
 
   test("probe events request uses the dedicated endpoint and limit parameter", async () => {
     const { getProbeEvents } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({
       events: [{ id: "event-1", kind: "hook-stop", source: "test", payload: {}, created_at: "2026-06-15T00:00:00Z" }],
       limit: 10
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     const result = await getProbeEvents(10);
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/probe.events");
-    expect(rpcCall(fetchMock).body).toEqual({ limit: 10 });
+    expect(rpcCall(invokeMock).path).toBe("probe.events");
+    expect(rpcCall(invokeMock).body).toEqual({ limit: 10 });
     expect(result.available).toBe(true);
     expect(result.data?.events[0].kind).toBe("hook-stop");
   });
@@ -325,22 +296,19 @@ describe("archive delete API compatibility", () => {
 
   test("thread block page request uses lightweight blocks endpoint", async () => {
     const { getThreadBlocks } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({
       threadId: "thread-a",
       blocks: [{ id: "b1", role: "assistant", kind: "message", text: "old", questions: [] }],
       totalBlocks: 240,
       hasMoreBlocks: true,
       beforeCursor: "b:120"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     const page = await getThreadBlocks("thread-a", { limit: 80, before: "b:200" });
 
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/threads.blocks");
-    expect(rpcCall(fetchMock).body).toEqual({
+    expect(rpcCall(invokeMock).path).toBe("threads.blocks");
+    expect(rpcCall(invokeMock).body).toEqual({
       id: "thread-a",
       options: { limit: 80, before: "b:200" }
     });
@@ -379,13 +347,10 @@ describe("archive delete API compatibility", () => {
 
   test("routes NexusHub updates to typed runtime command endpoints", async () => {
     const { getUpdateStatus, updates } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "panel-job" }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "panel-job" }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+    invokeMock.mockResolvedValueOnce(({
       current_version: "0.1.100",
       latest_version: "v0.1.103",
       update_available: true,
@@ -394,37 +359,30 @@ describe("archive delete API compatibility", () => {
       state: "idle",
       recommended_action: "/usr/local/bin/nexushub-webd-update",
       capabilities: ["job_history"]
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
     }));
     const status = await getUpdateStatus();
-    const result = await updates.install("csrf-token");
+    const result = await updates.install();
 
-    const statusCall = rpcCall(fetchMock, 0);
-    const actionCall = rpcCall(fetchMock, 1);
+    const statusCall = rpcCall(invokeMock, 0);
+    const actionCall = rpcCall(invokeMock, 1);
     expect(status.method).toBe("linux_systemd_job");
     expect(result).toEqual({ job_id: "panel-job" });
-    expect(statusCall.path).toBe("/api/rpc/updates.status");
-    expect(actionCall.path).toBe("/api/rpc/updates.install");
-    expect(actionCall.options.method).toBe("POST");
-    expect(actionCall.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(statusCall.path).toBe("updates.status");
+    expect(actionCall.path).toBe("updates.install");
+
     expect(actionCall.body).toEqual({});
   });
 
   test("does not export legacy update job helper or codex update targets", async () => {
     const api = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "unexpected" }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     expect("startUpdateJob" in api).toBe(false);
     expect(apiSource).not.toContain("codex/update");
     expect(apiSource).not.toContain("/api/system/panel/update");
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   test("Probe demo data labels the builtin NexusHub service consistently", async () => {
@@ -434,7 +392,7 @@ describe("archive delete API compatibility", () => {
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
-      data: { flavor: "builtin", service_kind: "systemd", service_name: "nexushub-webd" }
+      data: { flavor: "builtin", service_kind: "tauri", service_name: "NexusHub.app" }
     });
   });
 
@@ -463,14 +421,13 @@ describe("archive delete API compatibility", () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     globalThis.__NEXUSHUB_DESKTOP_RUNTIME__ = true;
-    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSecurity, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
+    const { getPlatformOverview, getProbeStatus, getProbeSettings, getSystemCapabilities, getUpdateStatus, listJobs } = await import("./api");
 
     const systemCapabilities = await getSystemCapabilities();
     const fixtures = [
       await getPlatformOverview(),
       (await getProbeStatus()).data,
       (await getProbeSettings()).data,
-      await getSecurity(),
       { ...systemCapabilities, capabilities: undefined },
       await getUpdateStatus(),
       await listJobs()
@@ -479,127 +436,23 @@ describe("archive delete API compatibility", () => {
 
     expect(demoCoreSource).toContain("function buildDemoPlatformOverview");
     expect(demoCoreSource).toContain("function buildDemoSystemCapabilities");
-    expect(demoCoreSource).toContain("function buildDemoSecurity");
     expect(systemCapabilities.capabilities).toMatchObject({
-      web_auth: false,
-      security_settings: false,
-      turnstile: false,
+
       systemd: false,
-      nginx: false,
-      public_endpoint: false,
-      admin_password: false,
+
       linux_update_job: false,
       prune_backups: false
     });
     expect(serialized).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i);
   });
 
-  test("demo fixture builder accepts explicit runtime fixtures with complete capabilities", async () => {
-    const {
-      buildDemoFixture,
-      buildDemoPlatformOverview,
-      buildDemoSecurity,
-      buildDemoSystemCapabilities
-    } = await import("./domain/demoCore");
-    const capabilityKeys = [
-      "admin_password",
-      "app_updater",
-      "csrf",
-      "job_history",
-      "jobs",
-      "linux_update_job",
-      "nginx",
-      "probe",
-      "prune_backups",
-      "public_endpoint",
-      "security_settings",
-      "settings",
-      "systemd",
-      "thread_archive_actions",
-      "thread_cleanup",
-      "threads",
-      "turnstile",
-      "web_auth"
-    ];
-    const macosVisibleCapabilityKeys = [
-      "app_updater",
-      "job_history",
-      "jobs",
-      "probe",
-      "settings",
-      "thread_archive_actions",
-      "thread_cleanup",
-      "threads"
-    ];
-
-    const linuxPlatform = buildDemoPlatformOverview("linux-web");
-    const linuxSystem = buildDemoSystemCapabilities("linux-web");
-    const linuxSecurity = buildDemoSecurity("linux-web");
-    const macPlatform = buildDemoPlatformOverview("macos-tauri");
-    const macSystem = buildDemoSystemCapabilities("macos-tauri");
-    const macSecurity = buildDemoSecurity("macos-tauri");
-
-    expect(Object.keys(linuxSystem.capabilities ?? {}).sort()).toEqual(capabilityKeys);
-    expect(Object.keys(macSystem.capabilities ?? {}).sort()).toEqual(macosVisibleCapabilityKeys);
-    expect(linuxSystem.capabilities).toMatchObject({
-      web_auth: true,
-      security_settings: true,
-      turnstile: true,
-      systemd: true,
-      nginx: true,
-      public_endpoint: true,
-      admin_password: true,
-      linux_update_job: true,
-      prune_backups: true,
-    });
-    expect(macSystem.capabilities).toMatchObject({
-      web_auth: false,
-      security_settings: false,
-      turnstile: false,
-      systemd: false,
-      nginx: false,
-      public_endpoint: false,
-      admin_password: false,
-      linux_update_job: false,
-      prune_backups: false,
-      thread_cleanup: true,
-      thread_archive_actions: true,
-    });
-    expect(linuxPlatform).toMatchObject({ kind: "linux", service_kind: "systemd" });
-    expect(linuxSecurity).toHaveProperty("turnstile_expected_hostname", "demo.nexushub.local");
-    expect(macPlatform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
-    expect(macSecurity).toEqual({});
-    expect(JSON.stringify([macPlatform, { ...macSystem, capabilities: undefined }, macSecurity])).not.toMatch(
-      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i
-    );
-
-    expect(typeof buildDemoFixture).toBe("function");
-    const macFixture = buildDemoFixture("macos-tauri");
-    const linuxFixture = buildDemoFixture("linux-web");
-    expect(macFixture).toMatchObject({
-      platform: { kind: "macos", service_kind: "tauri" },
-      system: { capabilities: { web_auth: false, linux_update_job: false, prune_backups: false } },
-      security: {}
-    });
-    expect(linuxFixture).toMatchObject({
-      platform: { kind: "linux", service_kind: "systemd" },
-      system: { capabilities: { web_auth: true, linux_update_job: true, prune_backups: true } },
-      security: { turnstile_expected_hostname: "demo.nexushub.local" }
-    });
-    expect(JSON.stringify({ ...macFixture, system: { ...macFixture.system, capabilities: undefined } })).not.toMatch(
-      /Web 登录|Turnstile|systemd|Nginx|管理员密码|公网入口|Linux update|Linux prune|\/opt\/nexushub|\/home\/ubuntu|192\.0\.2\.10|panel\.example\.com|linux_systemd_job|prune_backups/i
-    );
-  });
-
   test("Probe fixed jobs use typed runtime command endpoints and maintenance is retired", async () => {
     const api = await loadRealApi();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ job_id: "bark-job-1" }), {
-      status: 200, headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(api.runProbeBarkTest("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
-    await expect(api.runProbeHooksInstall("csrf-token")).resolves.toEqual({ job_id: "bark-job-1" });
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/api/rpc/probe.barkTest", "/api/rpc/probe.installHooks"]);
+    const invokeMock = vi.fn(async () => ({ job_id: "bark-job-1" }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
+    await expect(api.runProbeBarkTest()).resolves.toEqual({ job_id: "bark-job-1" });
+    await expect(api.runProbeHooksInstall()).resolves.toEqual({ job_id: "bark-job-1" });
+    expect(invokeMock.mock.calls.map(([path]) => path)).toEqual(["probe.barkTest", "probe.installHooks"]);
     for (const name of ["getProbeLogsDbStatus", "runProbeLogsDbDryRun", "runProbeLogsDbExecute"]) expect(api).not.toHaveProperty(name);
   });
 
@@ -631,12 +484,9 @@ describe("archive delete API compatibility", () => {
       discovery_warnings: ["configured Codex home missing"]
     };
     const responses: Record<string, unknown> = {
-      "/api/rpc/probe.status": probeStatus,
+      "probe.status": probeStatus,
     };
-    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
@@ -672,8 +522,8 @@ describe("archive delete API compatibility", () => {
       config_path: "/Users/example/Library/Application Support/NexusHub/config.toml"
     };
     const responses: Record<string, unknown> = {
-      "/api/rpc/probe.status": probeStatus,
-      "/api/rpc/probe.events": {
+      "probe.status": probeStatus,
+      "probe.events": {
         available: true,
         data: {
           limit: 10,
@@ -691,10 +541,7 @@ describe("archive delete API compatibility", () => {
         }
       }
     };
-    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL) => new Response(JSON.stringify(responses[String(path)]), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", vi.fn(async (path: string) => (responses[String(path)])));
 
     await expect(getProbeStatus()).resolves.toMatchObject({
       available: true,
@@ -715,19 +562,16 @@ describe("archive delete API compatibility", () => {
 
   test("listJobs unwraps OptionalResult responses into a stable array contract", async () => {
     const { listJobs } = await loadRealApi();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    const invokeMock = vi.fn(async () => ({
       available: true,
       data: [{ id: "job-a", kind: "probe", status: "succeeded", title: "Job A", started_at: 1, output: "" }]
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     await expect(listJobs()).resolves.toEqual([
       expect.objectContaining({ id: "job-a", kind: "probe" })
     ]);
-    expect(rpcCall(fetchMock).path).toBe("/api/rpc/jobs.list");
+    expect(rpcCall(invokeMock).path).toBe("jobs.list");
   });
 
   test("status path display helpers prefer resolved backend paths and source labels", async () => {
@@ -754,14 +598,9 @@ describe("archive delete API compatibility", () => {
       settings: true,
       job_history: true,
       app_updater: true,
-      web_auth: true,
-      csrf: true,
-      security_settings: true,
-      turnstile: true,
+
       systemd: true,
-      nginx: true,
-      public_endpoint: true,
-      admin_password: true,
+
       linux_update_job: true,
       prune_backups: true,
       thread_cleanup: true,
@@ -769,29 +608,22 @@ describe("archive delete API compatibility", () => {
     };
     const macCore: SystemCapabilitiesResponse["capabilities"] = {
       ...linuxCore,
-      web_auth: false,
-      csrf: false,
-      security_settings: false,
-      turnstile: false,
+
       systemd: false,
-      nginx: false,
-      public_endpoint: false,
-      admin_password: false,
+
       linux_update_job: false,
       prune_backups: false,
       thread_cleanup: true,
       thread_archive_actions: true,
     };
-    const webBootstrap = runtimeCapabilitiesForRuntime("web");
+    const webBootstrap = runtimeCapabilitiesForRuntime("desktop");
     const desktopBootstrap = runtimeCapabilitiesForRuntime("desktop");
 
     expect(runtimeCapabilities()).toEqual(webBootstrap);
     expect(webBootstrap).toMatchObject({
-      runtimeKind: "web",
-      hostSurface: "linux_server_webui",
-      webAuth: true,
-      logout: true,
-      securitySettings: false,
+      runtimeKind: "desktop",
+      hostSurface: "desktop_embedded_tauri",
+
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: false,
@@ -801,9 +633,7 @@ describe("archive delete API compatibility", () => {
     expect(desktopBootstrap).toMatchObject({
       runtimeKind: "desktop",
       hostSurface: "desktop_embedded_tauri",
-      webAuth: false,
-      logout: false,
-      securitySettings: false,
+
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: false,
@@ -811,11 +641,10 @@ describe("archive delete API compatibility", () => {
       updateServiceLabels: false,
     });
 
-    expect(runtimeCapabilitiesFromResponse({ capabilities: linuxCore, host_surface: "linux_server_webui" }, webBootstrap)).toMatchObject({
-      runtimeKind: "web",
-      hostSurface: "linux_server_webui",
-      webAuth: true,
-      securitySettings: true,
+    expect(runtimeCapabilitiesFromResponse({ capabilities: linuxCore, host_surface: "linux_server_api" }, webBootstrap)).toMatchObject({
+      runtimeKind: "desktop",
+      hostSurface: "linux_server_api",
+
       updatePrune: true,
       threadCleanup: true,
       threadArchiveActions: true,
@@ -824,8 +653,7 @@ describe("archive delete API compatibility", () => {
     expect(runtimeCapabilitiesFromResponse({ capabilities: macCore, host_surface: "desktop_embedded_tauri" }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
       hostSurface: "desktop_embedded_tauri",
-      webAuth: false,
-      securitySettings: false,
+
       updatePrune: false,
       threadCleanup: true,
       threadArchiveActions: true,
@@ -833,9 +661,7 @@ describe("archive delete API compatibility", () => {
     });
     expect(runtimeCapabilitiesFromResponse({ capabilities: linuxCore }, desktopBootstrap)).toMatchObject({
       runtimeKind: "desktop",
-      webAuth: false,
-      logout: false,
-      securitySettings: false,
+
       codexStatePaths: false,
       updatePrune: false,
       threadCleanup: true,
@@ -849,21 +675,18 @@ describe("archive delete API compatibility", () => {
   });
 
   test("desktop demo/default data does not expose Linux-only operations or web auth copy", async () => {
-    const { getPublicSettings, getSystemCapabilities, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
+    const { getSystemCapabilities, getUpdateStatus, getPlatformOverview } = await loadDesktopDemoApi();
 
-    const publicSettings = await getPublicSettings();
     const systemCapabilities = await getSystemCapabilities();
     const updateStatus = await getUpdateStatus();
     const platformOverview = await getPlatformOverview();
     const visibleValues = [
-      publicSettings.site_name,
       updateStatus.method,
       updateStatus.recommended_action,
       ...(updateStatus.capabilities ?? []),
       platformOverview.kind,
       platformOverview.data_dir,
       platformOverview.config_file,
-      platformOverview.webui_dir,
       platformOverview.log_dir,
       platformOverview.service_name,
       platformOverview.service_kind
@@ -875,11 +698,8 @@ describe("archive delete API compatibility", () => {
 
   test("saveProbeSettings sends the canonical probe payload plus Bark compatibility key", async () => {
     const { saveProbeSettings } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ saved: true }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ saved: true }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     await saveProbeSettings({
       codex: { home: "/root/.codex", workspace: "/home/ubuntu/codex-workspace", host_label: "cloud" },
@@ -888,13 +708,12 @@ describe("archive delete API compatibility", () => {
         notifications: { enabled: true, device_key: "secret", server_url: "https://api.day.app" },
         observability: { event_retention_days: 2 }
       }
-    }, "csrf-token");
+    }, );
 
-    const call = rpcCall(fetchMock);
+    const call = rpcCall(invokeMock);
     const body = call.body as Record<string, any>;
-    expect(call.path).toBe("/api/rpc/probe.settings.save");
-    expect(call.options.method).toBe("POST");
-    expect(call.options.headers.get("x-csrf-token")).toBe("csrf-token");
+    expect(call.path).toBe("probe.settings.save");
+
     expect(Object.keys(body).sort()).toEqual(["settings"]);
     expect(Object.keys(body.settings).sort()).toEqual(["codex", "notifications", "probe"]);
     expect(body.settings.probe.notifications).toEqual({
@@ -908,15 +727,12 @@ describe("archive delete API compatibility", () => {
 
   test("retired provider job helper is no longer exported", async () => {
     const api = await loadRealApi() as Record<string, unknown>;
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({ job_id: "unexpected" }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    const invokeMock = vi.fn(async (_path: string, _args?: Record<string, unknown>) => ({ job_id: "unexpected" }));
+    vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invokeMock);
 
     expect(api[["startClaude", "CodeJob"].join("")]).toBeUndefined();
     expect(api[["claudeCode", "JobRoutes"].join("")]).toBeUndefined();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   test("Job History labels read-only filesystem failures in Chinese", async () => {
@@ -925,122 +741,6 @@ describe("archive delete API compatibility", () => {
     };
 
     expect(app.failureCategoryLabel?.("read_only_file_system")).toBe("文件系统只读/安装目录不可写");
-  });
-
-  test("includes an optional Turnstile token in login payload", async () => {
-    const { login } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      id: "admin",
-      username: "admin",
-      csrf_token: "csrf"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await login("admin", "password", "turnstile-token");
-
-    const call = rpcCall(fetchMock);
-    expect(call.path).toBe("/api/rpc/auth.login");
-    expect(call.body).toEqual({
-      username: "admin",
-      password: "password",
-      turnstile_token: "turnstile-token"
-    });
-  });
-
-  test("normalizes public Turnstile settings from the shared camelCase facade", async () => {
-    const { getPublicSettings } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      requiredCapability: "web_auth",
-      public: {
-        siteName: "NexusHub",
-        turnstileEnabled: true,
-        turnstileRequired: false,
-        turnstileSiteKey: "1x00000000000000000000AA",
-        turnstileAction: "login",
-        adminConfigured: true,
-        baseUrl: "https://panel.example.com/nexushub/"
-      }
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(getPublicSettings()).resolves.toMatchObject({
-      site_name: "NexusHub",
-      turnstile_enabled: true,
-      turnstile_required: false,
-      turnstile_site_key: "1x00000000000000000000AA",
-      turnstile_action: "login",
-      admin_configured: true
-    });
-  });
-
-  test("normalizes saved security settings from the shared camelCase view", async () => {
-    const { saveSecurity } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      turnstileEnabled: true,
-      turnstileRequired: false,
-      turnstileSiteKey: "site-key",
-      turnstileSecretConfigured: true,
-      sessionTtlSeconds: 31536000,
-      turnstileExpectedHostname: "panel.example.com",
-      turnstileExpectedAction: "login"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(saveSecurity({ turnstile_site_key: "site-key" }, "csrf-token")).resolves.toMatchObject({
-      turnstile_enabled: true,
-      turnstile_required: false,
-      turnstile_site_key: "site-key",
-      turnstile_secret_configured: true,
-      session_ttl_seconds: 31536000,
-      turnstile_expected_hostname: "panel.example.com",
-      turnstile_expected_action: "login"
-    });
-  });
-
-  test("login uses the scoped API base configured for the Linux /nexushub/ package", async () => {
-    vi.stubEnv("BASE_URL", "/nexushub/");
-    vi.stubEnv("VITE_API_BASE", "/nexushub");
-    const { login } = await loadRealApi();
-    const fetchMock = vi.fn(async (_path: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify({
-      id: "admin",
-      username: "admin",
-      csrf_token: "csrf"
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await login("admin", "password");
-
-    const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/nexushub/api/rpc/auth.login");
-  });
-
-  test("desktop auth query state never calls Web auth endpoints", async () => {
-    const { desktopRuntimeSessionUser } = await loadDesktopApi();
-    const { logoutRuntime } = await import("./query/auth");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    globalThis.__NEXUSHUB_TEST_INVOKE__ = vi.fn(async () => null);
-
-    expect(desktopRuntimeSessionUser()).toMatchObject({
-      username: "desktop",
-      csrf_token: null
-    });
-    await logoutRuntime("ignored-csrf");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).not.toHaveBeenCalled();
   });
 
   test("desktop update helpers use shared typed updater commands instead of Linux panel routes", async () => {
@@ -1081,19 +781,19 @@ describe("archive delete API compatibility", () => {
     });
 
     expect((await getUpdateStatus()).method).toBe("macos_tauri_updater");
-    await expect(updates.check("ignored-csrf")).resolves.toEqual({
+    await expect(updates.check()).resolves.toEqual({
       job_id: "desktop-check-job",
       status: expect.objectContaining({
         latest_version: "v0.1.103",
         state: "ready"
       })
     });
-    await expect(updates.install("ignored-csrf")).resolves.toEqual({ job_id: "desktop-native-job" });
+    await expect(updates.install()).resolves.toEqual({ job_id: "desktop-native-job" });
     const macCapabilities = runtimeCapabilitiesForRuntime("desktop");
     expect(macCapabilities.updatePrune).toBe(false);
-    await expect(updates.prune("ignored-csrf", macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
+    await expect(updates.prune(macCapabilities)).rejects.toThrow("当前运行时不支持备份清理动作");
     try {
-      await updates.prune("ignored-csrf", macCapabilities);
+      await updates.prune(macCapabilities);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).not.toMatch(/Linux|systemd|Nginx|sudo/i);
@@ -1101,8 +801,8 @@ describe("archive delete API compatibility", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledTimes(3);
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.check", undefined);
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.install", undefined);
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.check", {});
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.install", {});
   });
 
   test("update prune is gated by capability matrix instead of runtime kind", async () => {
@@ -1116,8 +816,8 @@ describe("archive delete API compatibility", () => {
       updatePrune: true
     };
 
-    await expect(updates.prune("ignored-csrf", desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
-    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.prune", undefined);
+    await expect(updates.prune(desktopWithPrune)).resolves.toEqual({ job_id: "desktop-prune-job" });
+    expect(globalThis.__NEXUSHUB_TEST_INVOKE__).toHaveBeenCalledWith("updates.prune", {});
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1137,7 +837,7 @@ describe("archive delete API compatibility", () => {
       };
     });
 
-    await expect(startArchiveDelete({ csrfToken: "ignored-csrf", expectedCount: 0 })).resolves.toMatchObject({ after_integrity: "ok" });
+    await expect(startArchiveDelete({ expectedCount: 0 })).resolves.toMatchObject({ after_integrity: "ok" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1178,7 +878,6 @@ describe("archive delete API compatibility", () => {
     expect(domainApiSource).not.toContain("currentRuntimeCapabilities().runtimeKind");
     expect(domainApiSource).not.toContain("systemCapabilitiesForRuntime");
     expect(domainApiSource).not.toContain("SystemCapabilities =");
-    expect(domainApiSource).not.toContain('from "../runtime"');
     expect(domainApiSource).not.toContain('from "./shared";\nexport { selectRuntimeFallback');
     expect(domainApiSource).not.toContain("runtimeRpc(");
     expect(domainApiSource).not.toContain("uploadRuntimeFiles");
@@ -1194,7 +893,6 @@ describe("archive delete API compatibility", () => {
       expect(domainCapabilitiesSource, `domain/capabilities.ts must not contain ${token}`).not.toContain(token);
       expect(demoCoreSource, `domain/demoCore.ts must not contain ${token}`).not.toContain(token);
     }
-    expect(runtimeSource).not.toContain("SystemCapabilities");
     expect(appSource).not.toContain("desktopApiRoute");
     expect(appSource).not.toContain('runtimeRpc("desktopApi"');
     expect(appSource).not.toContain("invoke(");
@@ -1209,17 +907,13 @@ describe("archive delete API compatibility", () => {
     expect(appSource).not.toContain("'/api/");
   });
 
-  test("production API commands are unified dot commands with upload and events as transport exceptions", () => {
+  test("production business API commands use the native dot command registry", () => {
     const commands = [
       ...domainApiSource.matchAll(/callCommand(?:<[^()]*>)?\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/startProbeCommand\(\s*"([^"]+)"/g),
       ...domainApiSource.matchAll(/runTypedUpdateCommand\(\s*"([^"]+)"/g)
     ].map((match) => match[1]);
     const allowedCommands = [
-      "auth.login",
-      "auth.logout",
-      "auth.me",
-      "auth.publicSettings",
       "cleanup.archiveDryRun",
       "cleanup.archiveExecute",
       "cleanup.hiddenDryRun",
@@ -1245,9 +939,6 @@ describe("archive delete API compatibility", () => {
       "probe.settings.get",
       "probe.settings.save",
       "probe.status",
-      "security.changePassword",
-      "security.get",
-      "security.save",
       "system.platform",
       "system.providers",
       "system.capabilities",
@@ -1269,8 +960,8 @@ describe("archive delete API compatibility", () => {
     expect([...new Set(commands)].sort()).toEqual(allowedCommands);
     expect(domainApiSource).not.toMatch(/callCommand(?:<[^>]+>)?\(\s*"(login|logout|me|publicSettings|desktopApi|uploadFiles|threadEvents)"/);
     expect(runtimeSource).not.toContain("uploadRuntimeFiles");
-    expect(runtimeSource).toContain("createRuntimeThreadEventSource");
-    expect(runtimeSource).toContain("/api/rpc/threadEvents/");
+    expect(runtimeSource).not.toContain("createRuntimeThreadEventSource");
+    expect(runtimeSource).not.toContain("threadEvents/");
   });
 
   test("transport and query cache APIs are scoped to their intended layers", () => {
@@ -1298,9 +989,9 @@ describe("archive delete API compatibility", () => {
       expect(appSource, `components must not own query cache token ${token}`).not.toContain(token);
     }
 
-    expect(runtimeSource).toContain('buildRuntimeApiPath(`/api/rpc/threadEvents/');
+    expect(runtimeSource).not.toContain("buildRuntimeApiPath");
     expect(runtimeSource).not.toContain("uploadRuntimeFiles");
-    expect(runtimeSource).toContain("EventSource");
+    expect(runtimeSource).not.toContain("EventSource");
     expect(querySource).toContain("useQueryClient");
     expect(querySource).toContain("invalidateQueries");
   });
@@ -1311,7 +1002,7 @@ describe("archive delete API compatibility", () => {
       "App.tsx",
       "components/chat/ChatWorkspace.tsx",
       "components/chat/Conversation.tsx",
-      "components/security/SecurityWorkspace.tsx",
+      "components/connection/RemoteConnection.tsx",
       "main.tsx"
     ]));
 
@@ -1367,7 +1058,6 @@ describe("archive delete API compatibility", () => {
     const {
       buildDemoFixture,
       buildDemoPlatformOverview,
-      buildDemoSecurity,
       buildDemoSystemCapabilities
     } = await import("./domain/demoCore");
     const {
@@ -1382,7 +1072,6 @@ describe("archive delete API compatibility", () => {
       buildDemoFixture("macos-tauri"),
       buildDemoPlatformOverview("macos-tauri"),
       buildDemoSystemCapabilities("macos-tauri"),
-      buildDemoSecurity("macos-tauri"),
       demoPlatformOverview("macos-tauri"),
       demoSystemCapabilities("macos-tauri"),
       demoUpdateStatus("macos-tauri"),
@@ -1403,7 +1092,7 @@ describe("archive delete API compatibility", () => {
       "App.tsx",
       "components/chat/ChatWorkspace.tsx",
       "components/chat/Conversation.tsx",
-      "components/security/SecurityWorkspace.tsx",
+      "components/connection/RemoteConnection.tsx",
       "main.tsx"
     ]));
 
@@ -1427,7 +1116,7 @@ describe("archive delete API compatibility", () => {
     for (const token of runtimePrimitiveTokens) {
       expectNoSourceMatches(nonTransportApiProductionSources, token, `runtime primitive ${token}`);
     }
-    expectNoSourceMatches(nonTransportApiProductionSources, /from\s+["']\.\.\/runtime["']/, "direct runtime import");
+    expectNoSourceMatches(productionComponentSources.filter(file => file.path !== "main.tsx"), /from\s+["'][^"']*runtime["']/, "direct component runtime import");
     expectNoSourceMatches(nonTransportAndQueryProductionSources, /from\s+["'][^"']*api\/transport["']/, "direct transport import outside API/query boundary");
 
     const queryCacheTokens = [
@@ -1440,7 +1129,7 @@ describe("archive delete API compatibility", () => {
       "cancelQueries"
     ];
     for (const token of queryCacheTokens) {
-      expectNoSourceMatches(nonQueryProductionSources, token, `query cache API ${token}`);
+      expectNoSourceMatches(nonQueryProductionSources.filter(file => file.path !== "main.tsx"), token, `query cache API ${token}`);
     }
 
     const retiredCompatibilityTokens = [
@@ -2100,83 +1789,6 @@ describe("archive delete API compatibility", () => {
       "chat-4",
       "chat-5"
     ]);
-  });
-
-  test("subscribe thread events uses credentials and dispatches block summary and errors", async () => {
-    const { subscribeThreadEvents } = await loadRealApi();
-    const listeners = new Map<string, (event: MessageEvent) => void>();
-    const close = vi.fn();
-    class MockEventSource {
-      static instances: MockEventSource[] = [];
-      constructor(readonly url: string, readonly init?: EventSourceInit) {
-        MockEventSource.instances.push(this);
-      }
-      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-        listeners.set(type, listener as (event: MessageEvent) => void);
-      }
-      close = close;
-    }
-    vi.stubGlobal("EventSource", MockEventSource);
-    const onBlock = vi.fn();
-    const onSummary = vi.fn();
-    const onError = vi.fn();
-
-    const unsubscribe = subscribeThreadEvents("thread-a", { onBlock, onSummary, onError });
-    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b1", role: "assistant", kind: "message", questions: [] }) }));
-    listeners.get("summary")?.(new MessageEvent("summary", { data: JSON.stringify({ id: "thread-a", title: "example-user", status: "Running", message_count: 1 }) }));
-    listeners.get("error")?.(new MessageEvent("error", { data: "stream failed" }));
-    listeners.get("error")?.(new Event("error") as MessageEvent);
-    unsubscribe();
-
-    expect(MockEventSource.instances[0].url).toBe("/api/rpc/threadEvents/thread-a");
-    expect(MockEventSource.instances[0].init).toEqual({ withCredentials: true });
-    expect(onBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "b1" }), "thread-a");
-    expect(onSummary).toHaveBeenCalledWith(expect.objectContaining({ status: "Running" }), "thread-a");
-    expect(onError).toHaveBeenCalledWith("stream failed", "thread-a");
-    expect(onError).toHaveBeenCalledWith("stream disconnected", "thread-a");
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  test("subscribe thread events batches block updates and flushes on unsubscribe", async () => {
-    vi.useFakeTimers();
-    const { subscribeThreadEvents } = await loadRealApi();
-    const listeners = new Map<string, (event: MessageEvent) => void>();
-    const close = vi.fn();
-    class MockEventSource {
-      static instances: MockEventSource[] = [];
-      constructor(readonly url: string, readonly init?: EventSourceInit) {
-        MockEventSource.instances.push(this);
-      }
-      addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-        listeners.set(type, listener as (event: MessageEvent) => void);
-      }
-      close = close;
-    }
-    vi.stubGlobal("EventSource", MockEventSource);
-    const onBlock = vi.fn();
-    const onBlocks = vi.fn();
-
-    const unsubscribe = subscribeThreadEvents("thread-a", { onBlock, onBlocks });
-    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b1", role: "assistant", kind: "message", text: "one", questions: [] }) }));
-    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b2", role: "assistant", kind: "message", text: "two", questions: [] }) }));
-
-    expect(onBlock).toHaveBeenCalledTimes(2);
-    expect(onBlocks).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(99);
-    expect(onBlocks).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(onBlocks).toHaveBeenCalledTimes(1);
-    expect(onBlocks).toHaveBeenLastCalledWith([
-      expect.objectContaining({ id: "b1" }),
-      expect.objectContaining({ id: "b2" })
-    ], "thread-a");
-
-    listeners.get("block")?.(new MessageEvent("block", { data: JSON.stringify({ id: "b3", role: "assistant", kind: "message", text: "three", questions: [] }) }));
-    unsubscribe();
-
-    expect(onBlocks).toHaveBeenCalledTimes(2);
-    expect(onBlocks).toHaveBeenLastCalledWith([expect.objectContaining({ id: "b3" })], "thread-a");
-    expect(close).toHaveBeenCalledOnce();
   });
 
   test("conversation message helper hides internal rollout roles", async () => {

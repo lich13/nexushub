@@ -1,18 +1,17 @@
 use super::{
-    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread, change_password,
-    get_probe_events, get_probe_settings, get_probe_status, get_security, grok_delete_execute,
-    grok_delete_preview, grok_detail, grok_list, grok_rename, hidden_threads_delete_dry_run,
-    hidden_threads_delete_execute, job_detail, list_jobs, list_providers, login, logout, me,
-    patch_probe_settings, patch_security, pi_delete_execute, pi_delete_preview, pi_detail, pi_list,
-    pi_rename, platform_overview, public_settings, rename_thread, restore_thread,
-    start_probe_action, start_update_action, system_capabilities, system_update_status,
-    system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery, PiListQuery,
-    ProbeEventsQuery, ProbeStatusQuery,
+    api_error, archive_delete_dry_run, archive_delete_execute, archive_thread, get_probe_events,
+    get_probe_settings, get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail,
+    grok_list, grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute,
+    job_detail, list_jobs, list_providers, patch_probe_settings, pi_delete_execute,
+    pi_delete_preview, pi_detail, pi_list, pi_rename, platform_overview, rename_thread,
+    restore_thread, start_probe_action, start_update_action, system_capabilities,
+    system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
+    PiListQuery, ProbeEventsQuery, ProbeStatusQuery,
 };
 use crate::{
     api::payload::{
-        rpc_nested_payload, rpc_nested_payload_or_empty, rpc_payload, rpc_query_strings,
-        rpc_required_string, rpc_wrapped_payload,
+        rpc_nested_payload_or_empty, rpc_payload, rpc_query_strings, rpc_required_string,
+        rpc_wrapped_payload,
     },
     rpc_surface::{is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command},
     state::AppState,
@@ -56,6 +55,9 @@ pub(super) async fn rpc_dispatch(
             &format!("unknown rpc command: {command}"),
         ));
     }
+
+    crate::auth::authorize_rpc(&headers, &state, connect.map(|c| c.0))
+        .map_err(|status| api_error(status, "API key authorization failed"))?;
 
     match command.as_str() {
         rpc_commands::SESSIONS_ATTACHMENT_READ => {
@@ -115,7 +117,12 @@ pub(super) async fn rpc_dispatch(
             .await
         }
         rpc_commands::GROK_DELETE_EXECUTE => {
-            grok_delete_execute(State(state), headers, Json(rpc_payload(&args)?)).await
+            grok_delete_execute(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
         }
         rpc_commands::PI_LIST => {
             pi_list(
@@ -146,31 +153,12 @@ pub(super) async fn rpc_dispatch(
             pi_delete_preview(State(state), headers, axum::extract::Path(session_key)).await
         }
         rpc_commands::PI_DELETE_EXECUTE => {
-            pi_delete_execute(State(state), headers, Json(rpc_payload(&args)?)).await
-        }
-        rpc_commands::AUTH_PUBLIC_SETTINGS => public_settings(State(state)).await,
-        rpc_commands::AUTH_LOGIN => {
-            login(
-                State(state),
-                connect,
-                headers,
-                Json(rpc_wrapped_payload(&args, &["payload", "request"])?),
-            )
-            .await
-        }
-        rpc_commands::AUTH_LOGOUT => logout(State(state), headers).await,
-        rpc_commands::AUTH_ME => me(State(state), headers).await,
-        rpc_commands::SECURITY_GET => get_security(State(state), headers).await,
-        rpc_commands::SECURITY_SAVE => {
-            patch_security(
+            pi_delete_execute(
                 State(state),
                 headers,
-                Json(rpc_nested_payload(&args, "settings")?),
+                Json(rpc_wrapped_payload(&args, &["request"])?),
             )
             .await
-        }
-        rpc_commands::SECURITY_CHANGE_PASSWORD => {
-            change_password(State(state), headers, Json(rpc_payload(&args)?)).await
         }
         rpc_commands::SYSTEM_PROVIDERS => list_providers(State(state), headers).await,
         rpc_commands::SYSTEM_PLATFORM => platform_overview(State(state), headers).await,
@@ -334,57 +322,32 @@ pub(super) async fn rpc_dispatch(
 mod tests {
     use crate::{api::routes::router, state::AppState};
     use axum::{
-        body::Body,
+        body::{to_bytes, Body},
         http::{Request, StatusCode},
     };
-    use nexushub_core::{
-        config::Config,
-        db::{NewSession, PanelDb},
-        services::commands as rpc_commands,
-    };
+    use nexushub_core::{config::Config, db::PanelDb, services::commands as rpc_commands};
     use std::collections::BTreeSet;
     use tower::ServiceExt;
 
-    fn authenticated_test_state() -> (AppState, String, String) {
-        let mut config = Config::default();
-        config.security.cookie_secure = false;
-
+    fn authenticated_test_state() -> (AppState, String) {
+        let config = Config::default();
         let db = PanelDb::open(":memory:").unwrap();
-        db.upsert_admin("admin-id", "admin", "hash").unwrap();
-        db.create_session(NewSession {
-            id: "session-id",
-            admin_id: "admin-id",
-            token: "session-token",
-            csrf_token: "csrf-token",
-            user_agent: None,
-            ip: None,
-            expires_at: PanelDb::now() + 3_600,
-        })
-        .unwrap();
-
-        (
-            AppState::new(config, db),
-            "session-token".to_string(),
-            "csrf-token".to_string(),
-        )
+        let api_key = db.rotate_admin_api_key().unwrap();
+        (AppState::new(config, db), api_key)
     }
 
     async fn request_rpc_status(
         app: axum::Router,
         command: &str,
         body: &str,
-        session_token: Option<&str>,
-        csrf_token: Option<&str>,
+        api_key: Option<&str>,
     ) -> StatusCode {
         let mut builder = Request::builder()
             .method("POST")
             .uri(format!("/api/rpc/{command}"))
             .header("content-type", "application/json");
-        if let Some(session_token) = session_token {
-            builder = builder.header("cookie", format!("nexushub_session={session_token}"));
-        }
-        if let Some(csrf_token) = csrf_token {
-            builder = builder.header("x-csrf-token", csrf_token);
+        if let Some(api_key) = api_key {
+            builder = builder.header("x-api-key", api_key);
         }
         app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
             .await
@@ -394,19 +357,73 @@ mod tests {
 
     #[tokio::test]
     async fn attachments_require_auth_and_reject_client_paths() {
-        let (state, token, _) = authenticated_test_state();
+        let (state, token) = authenticated_test_state();
         let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a"}}"#;
         let app = super::super::router(state.clone());
         assert_eq!(
-            request_rpc_status(app, "sessions.attachmentRead", body, None, None).await,
+            request_rpc_status(app, "sessions.attachmentRead", body, None).await,
             StatusCode::UNAUTHORIZED
         );
         let body = r#"{"request":{"provider":"codex","sessionKey":"example","messageId":"m","attachmentId":"a","path":"/etc/passwd"}}"#;
         let app = super::super::router(state);
         assert_eq!(
-            request_rpc_status(app, "sessions.attachmentRead", body, Some(&token), None).await,
+            request_rpc_status(app, "sessions.attachmentRead", body, Some(&token)).await,
             StatusCode::BAD_REQUEST
         );
+    }
+
+    async fn assert_unconfirmed_desktop_delete_request(
+        command: &str,
+        request: serde_json::Value,
+        expected_error: &str,
+    ) {
+        let (state, api_key) = authenticated_test_state();
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/rpc/{command}"))
+                    .header("content-type", "application/json")
+                    .header("x-api-key", api_key)
+                    .body(Body::from(
+                        serde_json::json!({"request": request}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], expected_error);
+    }
+
+    #[tokio::test]
+    async fn grok_desktop_delete_request_wrapper_reaches_confirmation_guard() {
+        assert_unconfirmed_desktop_delete_request(
+            "grok.deleteExecute",
+            serde_json::json!({
+                "id": "fixture-grok-session",
+                "confirmed": false,
+                "fingerprint": "fixture-fingerprint"
+            }),
+            "Grok deletion requires confirmation",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn pi_desktop_delete_request_wrapper_reaches_confirmation_guard() {
+        assert_unconfirmed_desktop_delete_request(
+            "pi.deleteExecute",
+            serde_json::json!({
+                "sessionKey": "fixture-project/session.jsonl",
+                "confirmed": false,
+                "fingerprint": "fixture-fingerprint"
+            }),
+            "Pi deletion requires confirmation",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -430,15 +447,8 @@ mod tests {
             "deleteHiddenThreadsDryRun",
             "deleteHiddenThreadsExecute",
         ] {
-            let (state, session_token, csrf_token) = authenticated_test_state();
-            let status = request_rpc_status(
-                router(state),
-                command,
-                "{}",
-                Some(&session_token),
-                Some(&csrf_token),
-            )
-            .await;
+            let (state, api_key) = authenticated_test_state();
+            let status = request_rpc_status(router(state), command, "{}", Some(&api_key)).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{command}");
         }
     }

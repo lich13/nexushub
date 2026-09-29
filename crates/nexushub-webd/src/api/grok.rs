@@ -1,8 +1,5 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{
-    auth::{require_auth, require_csrf},
-    state::AppState,
-};
+use crate::{auth::require_auth, state::AppState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -50,8 +47,7 @@ pub(crate) async fn grok_rename(
     headers: HeaderMap,
     Json(request): Json<GrokRenameRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .grok()
         .rename(&request.id, &request.title)
@@ -63,8 +59,7 @@ pub(crate) async fn grok_delete_preview(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .grok()
         .delete_preview(&id)?)
@@ -75,8 +70,7 @@ pub(crate) async fn grok_delete_execute(
     headers: HeaderMap,
     Json(request): Json<GrokDeleteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .grok()
         .delete_execute(request)?)

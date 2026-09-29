@@ -1,12 +1,11 @@
 {
   "name": "nexushub-webui",
   "private": true,
-  "version": "1.1.9",
+  "version": "1.2.0",
   "packageManager": "pnpm@11.0.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
     "build:tauri": "tsc -b && vite build --base=./",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",

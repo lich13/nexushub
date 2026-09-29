@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "hostSurfaces": [
-    "linux_server_webui",
+    "linux_server_api",
     "desktop_embedded_tauri"
   ],
   "capabilities": [
@@ -13,19 +13,12 @@
     "app_updater",
     "thread_cleanup",
     "thread_archive_actions",
-    "web_auth",
-    "csrf",
-    "security_settings",
-    "turnstile",
     "systemd",
-    "nginx",
-    "public_endpoint",
-    "admin_password",
     "linux_update_job",
     "prune_backups"
   ],
   "capabilitiesByHostSurface": {
-    "linux_server_webui": [
+    "linux_server_api": [
       "threads",
       "jobs",
       "probe",
@@ -34,14 +27,7 @@
       "app_updater",
       "thread_cleanup",
       "thread_archive_actions",
-      "web_auth",
-      "csrf",
-      "security_settings",
-      "turnstile",
       "systemd",
-      "nginx",
-      "public_endpoint",
-      "admin_password",
       "linux_update_job",
       "prune_backups"
     ],
@@ -97,99 +83,24 @@
       "cleanupDuringMutation": "cleanup controls disabled while dry-run or execute is pending",
       "piMutationActivityUnknown": "Pi 已打开或活动状态无法确认，关闭 Pi 后重试"
     },
-    "linuxWebOnly": [
-      "登录",
-      "Turnstile",
-      "登录设置",
-      "修改密码",
-      "Public endpoint",
-      "systemd",
-      "Nginx",
-      "Precheck",
-      "Update",
-      "Prune",
-      "安全"
+    "desktopTauriOnly": [
+      "远程连接",
+      "本机",
+      "腾讯云"
     ],
-    "desktopTauriOnly": [],
     "forbidden": {
       "desktopEmbeddedTauri": [
         "登录",
         "Turnstile",
-        "登录设置",
-        "修改密码",
-        "Public endpoint",
-        "systemd",
-        "Nginx",
-        "管理员密码",
-        "Linux prune",
-        "安全"
+        "修改密码"
       ]
-    }
+    },
+    "remoteApiOnly": [
+      "服务更新",
+      "Prune"
+    ]
   },
   "actions": [
-    {
-      "id": "auth.publicSettings",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.publicSettings",
-      "linuxRpc": "auth.publicSettings",
-      "webuiWrapper": "getPublicSettings",
-      "hostOnlyReason": "Web and LAN WebUI authentication surface; embedded Tauri uses native desktop session"
-    },
-    {
-      "id": "auth.login",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.login",
-      "linuxRpc": "auth.login",
-      "webuiWrapper": "login",
-      "hostOnlyReason": "Web and LAN WebUI authentication surface; embedded Tauri uses native desktop session"
-    },
-    {
-      "id": "auth.logout",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.logout",
-      "linuxRpc": "auth.logout",
-      "webuiWrapper": "logout",
-      "hostOnlyReason": "Web and LAN WebUI authentication surface; embedded Tauri uses native desktop session"
-    },
-    {
-      "id": "auth.me",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.session",
-      "linuxRpc": "auth.me",
-      "webuiWrapper": "me",
-      "hostOnlyReason": "Web and LAN WebUI authentication surface; embedded Tauri uses native desktop session"
-    },
-    {
-      "id": "security.get",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.view",
-      "linuxRpc": "security.get",
-      "webuiWrapper": "getSecurity",
-      "hostOnlyReason": "Linux server WebUI admin security settings only"
-    },
-    {
-      "id": "security.save",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.save",
-      "linuxRpc": "security.save",
-      "webuiWrapper": "saveSecurity",
-      "hostOnlyReason": "Linux server WebUI admin security settings only"
-    },
-    {
-      "id": "security.changePassword",
-      "kind": "rpc",
-      "scope": "host_only",
-      "coreUseCase": "security.changePassword",
-      "linuxRpc": "security.changePassword",
-      "webuiWrapper": "changePassword",
-      "hostOnlyReason": "Linux server WebUI admin password realm only"
-    },
     {
       "id": "system.capabilities",
       "kind": "rpc",
@@ -500,16 +411,6 @@
       "responseDto": "CleanupHiddenExecuteResponse"
     },
     {
-      "id": "threadEvents",
-      "kind": "transport",
-      "scope": "transport",
-      "coreUseCase": "threads.events",
-      "webuiWrapper": "subscribeThreadEvents",
-      "dtoOwner": "threads",
-      "requestDto": "NoRequest",
-      "responseDto": "ThreadEventsResponse"
-    },
-    {
       "id": "grok.list",
       "kind": "rpc",
       "scope": "shared",
@@ -672,6 +573,78 @@
       "dtoOwner": "sessions",
       "requestDto": "SessionAttachmentRequest",
       "responseDto": "SessionAttachmentResponse"
+    },
+    {
+      "id": "remote.get",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.get",
+      "tauriCommand": "remote::remoteGet",
+      "webuiWrapper": "remoteGet",
+      "dtoOwner": "remote",
+      "requestDto": "NoRequest",
+      "responseDto": "RemoteConnectionView",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.verify",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.verify",
+      "tauriCommand": "remote::remoteVerify",
+      "webuiWrapper": "remoteVerify",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteConnectionCredentials",
+      "responseDto": "SystemCapabilitiesResponse",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.save",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.save",
+      "tauriCommand": "remote::remoteSave",
+      "webuiWrapper": "remoteSave",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteConnectionCredentials",
+      "responseDto": "RemoteConnectionView",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.remove",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.remove",
+      "tauriCommand": "remote::remoteRemove",
+      "webuiWrapper": "remoteRemove",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteRevisionRequest",
+      "responseDto": "RemoteConnectionView",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.select",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.select",
+      "tauriCommand": "remote::remoteSelect",
+      "webuiWrapper": "remoteSelect",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteSelectionRequest",
+      "responseDto": "RemoteConnectionView",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "remote.invoke",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.remote.invoke",
+      "tauriCommand": "remote::remoteInvoke",
+      "webuiWrapper": "remoteInvoke",
+      "dtoOwner": "remote",
+      "requestDto": "RemoteInvokeRequest",
+      "responseDto": "RemoteInvokeResponse",
+      "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
     }
   ],
   "dtoCatalog": {
@@ -791,10 +764,6 @@
       "core": "SystemVersionResponse",
       "webui": "SystemVersionResponse"
     },
-    "ThreadEventsResponse": {
-      "core": "ThreadEventsResponse",
-      "webui": "ThreadEventsResponse"
-    },
     "ThreadsArchiveResponse": {
       "core": "ThreadsArchiveResponse",
       "webui": "ThreadsArchiveResponse"
@@ -874,6 +843,30 @@
     "SessionAttachmentResponse": {
       "core": "SessionAttachmentResponse",
       "webui": "SessionAttachmentResponse"
+    },
+    "RemoteConnectionView": {
+      "core": "RemoteConnectionView",
+      "webui": "RemoteConnectionView"
+    },
+    "RemoteConnectionCredentials": {
+      "core": "RemoteConnectionCredentials",
+      "webui": "RemoteConnectionCredentials"
+    },
+    "RemoteRevisionRequest": {
+      "core": "RemoteRevisionRequest",
+      "webui": "RemoteRevisionRequest"
+    },
+    "RemoteSelectionRequest": {
+      "core": "RemoteSelectionRequest",
+      "webui": "RemoteSelectionRequest"
+    },
+    "RemoteInvokeRequest": {
+      "core": "RemoteInvokeRequest",
+      "webui": "RemoteInvokeRequest"
+    },
+    "RemoteInvokeResponse": {
+      "core": "RemoteInvokeResponse",
+      "webui": "RemoteInvokeResponse"
     }
   },
   "retiredActions": [
@@ -913,6 +906,14 @@
     "probe.logsDb.status",
     "probe.logsDbDryRun",
     "probe.logsDbExecute",
-    "system.status"
+    "system.status",
+    "auth.login",
+    "auth.logout",
+    "auth.me",
+    "auth.publicSettings",
+    "security.changePassword",
+    "security.get",
+    "security.save",
+    "threadEvents"
   ]
 }

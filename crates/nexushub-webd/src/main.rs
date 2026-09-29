@@ -7,7 +7,6 @@ mod question_monitor;
 mod rpc_payload;
 mod rpc_surface;
 mod state;
-mod turnstile;
 
 #[cfg(test)]
 mod notification_accuracy_tests;
@@ -47,7 +46,7 @@ use std::{
     time::Duration,
 };
 use tokio::{net::TcpListener, time};
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PROBE_THREAD_SCAN_TICK_SECONDS: u64 = 120;
@@ -63,7 +62,7 @@ static PROBE_ERROR_MONITOR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::co
 #[command(
     name = "nexushub-webd",
     version,
-    about = "Headless Web panel for local Codex state and controlled jobs"
+    about = "NexusHub management API and background monitor"
 )]
 struct Cli {
     #[arg(long, env = "NEXUSHUB_CONFIG", default_value_os_t = Config::current_default_config_path())]
@@ -76,7 +75,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Serve {
-        #[arg(long, default_value_t = HostSurface::LinuxServerWebui)]
+        #[arg(long, default_value_t = HostSurface::LinuxServerApi)]
         surface: HostSurface,
     },
     Doctor,
@@ -93,18 +92,18 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum AdminCommand {
-    Init {
-        #[arg(long, default_value = "admin")]
-        username: String,
-        #[arg(long, env = "NEXUSHUB_ADMIN_PASSWORD")]
-        password: String,
+    #[command(name = "key-generate")]
+    Generate {
+        #[arg(long)]
+        output: PathBuf,
     },
-    ResetPassword {
-        #[arg(long, default_value = "admin")]
-        username: String,
-        #[arg(long, env = "NEXUSHUB_ADMIN_PASSWORD")]
-        password: String,
+    #[command(name = "key-rotate")]
+    Rotate {
+        #[arg(long)]
+        output: PathBuf,
     },
+    #[command(name = "key-revoke")]
+    Revoke,
 }
 
 #[derive(Debug, Subcommand)]
@@ -186,19 +185,27 @@ async fn main() -> Result<()> {
             );
             println!("codex_home_source={}", resolved.codex_home_source);
             println!("listen={}", config.server.listen);
-            println!("admin_count={}", db.admin_count()?);
+            println!(
+                "api_key_configured={}",
+                db.get_setting("admin_api_key_sha256")?
+                    .is_some_and(|v| !v.is_empty())
+            );
             println!("codex_read_model=local_state_rollout_logs");
         }
         Command::Admin { command } => {
             let config = Config::load(&cli.config)?;
             let db = open_panel_db(&config)?;
             match command {
-                AdminCommand::Init { username, password } => {
-                    init_admin(db, &username, &password, false)?
+                AdminCommand::Generate { output } => {
+                    anyhow::ensure!(
+                        db.get_setting("admin_api_key_sha256")?
+                            .is_none_or(|v| v.is_empty()),
+                        "API key already configured; use admin key-rotate"
+                    );
+                    write_admin_key(&db, &output)?;
                 }
-                AdminCommand::ResetPassword { username, password } => {
-                    init_admin(db, &username, &password, true)?
-                }
+                AdminCommand::Rotate { output } => write_admin_key(&db, &output)?,
+                AdminCommand::Revoke => db.revoke_admin_api_key()?,
             }
         }
         Command::Probe {
@@ -2206,23 +2213,26 @@ fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFil
     }
 }
 
-fn init_admin(db: PanelDb, username: &str, password: &str, allow_existing: bool) -> Result<()> {
-    if password.len() < 12 {
-        anyhow::bail!("password must be at least 12 characters");
+fn write_admin_key(db: &PanelDb, output: &Path) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    if !allow_existing && db.admin_count()? > 0 {
-        anyhow::bail!("admin already exists; use admin reset-password");
-    }
-    let hash = auth::hash_password(password)?;
-    db.upsert_admin(&uuid::Uuid::new_v4().to_string(), username, &hash)?;
-    println!("admin {} configured", username);
+    let mut file = options.open(output).context("create API key output file")?;
+    let key = db.rotate_admin_api_key()?;
+    file.write_all(key.as_bytes())?;
+    file.sync_all()?;
+    println!("API key saved");
     Ok(())
 }
 
 async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     anyhow::ensure!(
-        host_surface == HostSurface::LinuxServerWebui && cfg!(target_os = "linux"),
-        "Web server is available only on Linux; desktop LAN WebUI has been retired"
+        host_surface == HostSurface::LinuxServerApi && cfg!(target_os = "linux"),
+        "Management API is available only on Linux"
     );
     let config = Config::load(&config_path)?;
     upgrade_managed_question_hooks_on_start(&config);
@@ -2231,9 +2241,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     spawn_probe_thread_scan(state.clone());
     spawn_probe_error_monitor(state.clone());
     api::spawn_probe_status_refresh(state.clone());
-    let webui_dir = config.paths.webui_dir.clone();
-    let app =
-        with_webui_static_routes(api::router(state), webui_dir).layer(TraceLayer::new_for_http());
+    let app = api::router(state).layer(TraceLayer::new_for_http());
     let addr: SocketAddr = config.server.listen;
     let listener = TcpListener::bind(addr)
         .await
@@ -2510,14 +2518,6 @@ fn safe_probe_monitor_error(value: &str) -> String {
     }
 }
 
-fn with_webui_static_routes(app: axum::Router, webui_dir: PathBuf) -> axum::Router {
-    app.nest_service(
-        "/nexushub",
-        ServeDir::new(webui_dir.clone()).append_index_html_on_directories(true),
-    )
-    .fallback_service(ServeDir::new(webui_dir).append_index_html_on_directories(true))
-}
-
 fn open_panel_db(config: &Config) -> Result<PanelDb> {
     PanelDb::open_with_secret_box(&config.paths.db_path, config.secret_box()?)
 }
@@ -2604,68 +2604,9 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::{to_bytes, Body},
-        http::{Request, StatusCode},
-        routing::{any, get},
-    };
     use rusqlite::{params, Connection};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::SystemTime;
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn webui_static_routes_serve_root_subpath_assets_and_preserve_api_routes() {
-        let dir = temp_test_dir("nexushub-webui-static");
-        fs::create_dir_all(dir.join("assets")).unwrap();
-        fs::write(dir.join("index.html"), "<html>NexusHub index</html>").unwrap();
-        fs::write(dir.join("assets/app.js"), "console.log('nexushub asset');").unwrap();
-        let app = with_webui_static_routes(
-            axum::Router::new()
-                .route("/healthz", get(|| async { "health-ok" }))
-                .route(
-                    "/api/*path",
-                    any(|| async { (StatusCode::NOT_FOUND, "api-not-found") }),
-                ),
-            dir.clone(),
-        );
-
-        let (status, body) = static_route_response(app.clone(), "/").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "<html>NexusHub index</html>");
-
-        let (status, body) = static_route_response(app.clone(), "/nexushub/").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "<html>NexusHub index</html>");
-
-        let (status, body) = static_route_response(app.clone(), "/nexushub/assets/app.js").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "console.log('nexushub asset');");
-
-        let (status, body) = static_route_response(app.clone(), "/assets/app.js").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "console.log('nexushub asset');");
-
-        let (status, body) = static_route_response(app.clone(), "/healthz").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "health-ok");
-
-        let (status, body) = static_route_response(app, "/api/no-such-route").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body, "api-not-found");
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    async fn static_route_response(app: axum::Router, uri: &str) -> (StatusCode, String) {
-        let response = app
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, String::from_utf8(body.to_vec()).unwrap())
-    }
 
     #[tokio::test]
     async fn unsupported_probe_cli_actions_do_not_report_fake_success() {

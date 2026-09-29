@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-import { mockApi } from "./fixtures";
+import { mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
 test("Codex Plan copies Markdown and downloads an md named after its title", async ({ page }) => {
@@ -9,10 +9,10 @@ test("Codex Plan copies Markdown and downloads an md named after its title", asy
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copied = value; } } });
   });
-  await page.route("**/threads.detail", route => {
+  await mockCommand(page, "threads.detail", args => {
     const detail = demo.demoThreadDetail("019e95a0-demo");
     detail.blocks = [{ id: "plan", role: "assistant", kind: "plan", text: `<proposed_plan>\n<citation_entries># Internal title</citation_entries>\n${markdown}\n<rollout_ids>internal-id</rollout_ids>\n</proposed_plan>`, questions: [] }];
-    return route.fulfill({ json: detail });
+    return detail;
   });
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
@@ -34,10 +34,10 @@ test("Grok Plan exposes the same actions and reports clipboard failure nearby", 
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } });
   });
   const markdown = "# Grok Plan\n\nRun **one** check.";
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "recent" },
     events: [{ kind: "plan", text: `${markdown}\n<oai-mem-citation>internal-id</oai-mem-citation>` }, { kind: "agent_message_chunk", text: "Done" }]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const plan = page.locator(".provider-event.plan");
@@ -52,10 +52,10 @@ test("Grok Plan exposes the same actions and reports clipboard failure nearby", 
 
 test("an empty Grok Plan has no copy or download action", async ({ page }) => {
   await mockApi(page);
-  await page.route("**/grok.detail", route => route.fulfill({ json: {
+  await mockCommand(page, "grok.detail", args => ({
     summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", status: "recent" },
     events: [{ kind: "plan", text: "<citation_entries>internal-only</citation_entries>" }]
-  } }));
+  }));
   await page.goto("/");
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.locator(".provider-event.plan button")).toHaveCount(0);

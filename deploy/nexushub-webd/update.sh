@@ -6,15 +6,15 @@ VERSION="latest"
 ARCH="${NEXUSHUB_WEBD_ARCH:-x86_64}"
 ASSET="nexushub-webd-linux-${ARCH}.tar.gz"
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
+trap '[[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -r -- "${TMP_DIR}"' EXIT
 
 usage() {
   cat <<'USAGE'
-Update NexusHub WebUI daemon.
+Update NexusHub management API.
 
 Usage:
   nexushub-webd-update --repo lich13/nexushub --version latest
-  nexushub-webd-update v1.0.0
+  nexushub-webd-update v1.2.0
   nexushub-webd-update --precheck
 
 Options:
@@ -74,4 +74,11 @@ if [[ -z "${ROOT}" ]]; then
   exit 1
 fi
 
-exec "${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}"
+python3 - "$("${ROOT}/bin/nexushub-webd" --version)" <<'PYVERSION'
+import re, sys
+match = re.fullmatch(r"nexushub-webd (\d+)\.(\d+)\.(\d+)", sys.argv[1])
+if not match or tuple(map(int, match.groups())) < (1, 2, 0):
+    raise SystemExit("refusing release with retired web authentication")
+PYVERSION
+[[ ! -d "${ROOT}/webui" && ! -f "${ROOT}/deploy/web-update.sh" ]] || { echo "refusing retired web payload" >&2; exit 1; }
+"${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}"

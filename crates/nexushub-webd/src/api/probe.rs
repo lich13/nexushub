@@ -1,6 +1,6 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
 use crate::{
-    auth::{require_auth, require_csrf},
+    auth::require_auth,
     linux_adapter,
     state::{AppState, CachedProbeStatus},
 };
@@ -51,7 +51,6 @@ pub(crate) async fn patch_probe_settings(
     Json(request): Json<settings_service::ProbeSettingsSaveRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let config_path = probe_config_path();
     if !config_path.exists() {
         return Err(api_error(
@@ -103,7 +102,6 @@ pub(crate) async fn start_probe_action(
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let config_path = probe_config_path();
     let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;

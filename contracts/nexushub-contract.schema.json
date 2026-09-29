@@ -52,7 +52,7 @@
         "corePanelTitles",
         "actionLabels",
         "disabledStates",
-        "linuxWebOnly",
+        "remoteApiOnly",
         "desktopTauriOnly",
         "forbidden"
       ],
@@ -71,7 +71,7 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/nonEmptyString" }
         },
-        "linuxWebOnly": { "$ref": "#/$defs/stringList" },
+        "remoteApiOnly": { "$ref": "#/$defs/stringList" },
         "desktopTauriOnly": { "$ref": "#/$defs/stringList" },
         "forbidden": {
           "type": "object",

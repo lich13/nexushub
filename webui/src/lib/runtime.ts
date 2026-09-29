@@ -1,177 +1,92 @@
-type RuntimeKind = "web" | "desktop";
+import { useSyncExternalStore } from "react";
 
+export type MachineTarget = "local" | "remote";
+export type RemoteConnectionView = { target: MachineTarget; revision: number; baseUrl: string | null; configured: boolean };
+export type RemoteConnectionCredentials = { revision: number; baseUrl: string; apiKey: string };
+export type RemoteRevisionRequest = { revision: number };
+export type RemoteSelectionRequest = RemoteRevisionRequest & { target: MachineTarget };
+export type RemoteInvokeRequest = RemoteRevisionRequest & { command: string; args: Record<string, unknown> };
+export type RemoteInvokeResponse = unknown;
+export type RuntimeContext = { kind: "desktop" };
 type RpcArgs = Record<string, unknown> | undefined;
-
-type RuntimeThreadEventSource = {
-  unavailable?: boolean;
-  addEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject,
-    options?: boolean | AddEventListenerOptions,
-  ): void;
-  close(): void;
-};
-
-export class RuntimeUnavailableError extends Error {
-  constructor(message: string, readonly feature: string) {
-    super(message);
-    this.name = "RuntimeUnavailableError";
-  }
-}
-
-type TauriInternals = {
-  invoke?: (command: string, args?: RpcArgs) => Promise<unknown>;
-};
-
 type RuntimeGlobal = typeof globalThis & {
-  __TAURI_INTERNALS__?: TauriInternals;
+  __TAURI_INTERNALS__?: { invoke?: (command: string, args?: RpcArgs) => Promise<unknown> };
   __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
-  __NEXUSHUB_TEST_INVOKE__?: (
-    command: string,
-    args?: RpcArgs,
-  ) => Promise<unknown> | unknown;
+  __NEXUSHUB_TEST_INVOKE__?: (command: string, args?: RpcArgs) => Promise<unknown> | unknown;
 };
-
-export type RuntimeContext = {
-  kind: RuntimeKind;
-};
-
-export function runtimeContext(): RuntimeContext {
-  const target = globalThis as RuntimeGlobal;
-  if (target.__NEXUSHUB_DESKTOP_RUNTIME__) {
-    return { kind: "desktop" };
-  }
-  if (target.__TAURI_INTERNALS__) {
-    return { kind: "desktop" };
-  }
-  return { kind: "web" };
+export class RuntimeUnavailableError extends Error {
+  constructor(message: string, readonly feature: string) { super(message); this.name = "RuntimeUnavailableError"; }
+}
+export function runtimeContext(): RuntimeContext { return { kind: "desktop" }; }
+export function hasNativeRuntime() {
+  const runtime = globalThis as RuntimeGlobal;
+  return Boolean(runtime.__TAURI_INTERNALS__?.invoke || runtime.__NEXUSHUB_TEST_INVOKE__);
 }
 
-function getRuntimeKind(): RuntimeKind {
-  return runtimeContext().kind;
-}
-
-function apiBase(): string {
-  const raw = import.meta.env.VITE_API_BASE;
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (!value || value === "/") return "";
-  if (/^https?:\/\//i.test(value)) return value.replace(/\/+$/g, "");
-  return `/${value.replace(/^\/+|\/+$/g, "")}`;
-}
-
-export function buildRuntimeApiPath(path: string): string {
-  if (/^https?:\/\//i.test(path)) {
-    return path;
-  }
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const base = apiBase();
-  return base ? `${base}${normalizedPath}` : normalizedPath;
-}
-
-function unavailableThreadEventSource(): RuntimeThreadEventSource {
-  return {
-    unavailable: true,
-    addEventListener: () => undefined,
-    close: () => undefined
-  };
-}
-
-export function createRuntimeThreadEventSource(threadId: string): RuntimeThreadEventSource {
-  if (getRuntimeKind() === "desktop") {
-    return unavailableThreadEventSource();
-  }
-  return new EventSource(
-    buildRuntimeApiPath(`/api/rpc/threadEvents/${encodeURIComponent(threadId)}`),
-    { withCredentials: true },
-  );
-}
-
-async function parseResponse(response: Response): Promise<unknown> {
-  const contentType = response.headers.get("content-type") ?? "";
-  return contentType.includes("application/json")
-    ? response.json()
-    : response.text();
-}
-
-function csrfTokenFromArgs(args?: RpcArgs): string | null {
-  const value = args?.csrfToken ?? args?.csrf_token;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function rpcBodyArgs(args?: RpcArgs): RpcArgs {
-  if (!args) return {};
-  const { csrfToken: _csrfToken, csrf_token: _csrf_token, ...body } = args;
-  return body;
-}
-
-function desktopRpcArgs(args?: RpcArgs): RpcArgs {
-  const body = rpcBodyArgs(args) ?? {};
-  return Object.keys(body).length ? body : undefined;
-}
-
-async function checkedResponse(response: Response): Promise<unknown> {
-  const payload = await parseResponse(response);
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === "object" && "error" in payload
-        ? String((payload as { error: unknown }).error)
-        : `请求失败，HTTP ${response.status}`;
-    throw Object.assign(new Error(message), { status: response.status });
-  }
-  return payload;
-}
-
-async function webJsonRpc<T = unknown>(
-  command: string,
-  args?: RpcArgs,
-): Promise<T> {
-  const headers = new Headers();
-  headers.set("content-type", "application/json");
-  const csrfToken = csrfTokenFromArgs(args);
-  if (csrfToken) {
-    headers.set("x-csrf-token", csrfToken);
-  }
-  const response = await fetch(
-    buildRuntimeApiPath(`/api/rpc/${encodeURIComponent(command)}`),
-    {
-      method: "POST",
-      credentials: "include",
-      headers,
-      body: JSON.stringify(rpcBodyArgs(args))
-    },
-  );
-  return checkedResponse(response) as Promise<T>;
-}
-
-async function invokeDesktop<T = unknown>(
-  command: string,
-  args?: RpcArgs,
-): Promise<T> {
-  const target = globalThis as RuntimeGlobal;
+export async function invokeNative<T = unknown>(command: string, args?: RpcArgs): Promise<T> {
+  const runtime = globalThis as RuntimeGlobal;
   try {
-    if (target.__NEXUSHUB_TEST_INVOKE__) {
-      return await target.__NEXUSHUB_TEST_INVOKE__(command, args) as T;
-    }
-    if (target.__TAURI_INTERNALS__?.invoke) {
-      return await target.__TAURI_INTERNALS__.invoke(command, args) as T;
-    }
+    const invoke = runtime.__NEXUSHUB_TEST_INVOKE__ ?? runtime.__TAURI_INTERNALS__?.invoke;
+    if (invoke) return await invoke(command, args) as T;
   } catch (reason) {
-    throw reason instanceof Error
-      ? reason
-      : new Error(typeof reason === "string" && reason.trim() ? reason : "桌面操作失败");
+    throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "桌面操作失败");
   }
-  throw new RuntimeUnavailableError(
-    "Tauri invoke is not available in this runtime",
-    command,
-  );
+  throw new RuntimeUnavailableError("请使用 NexusHub App", command);
 }
 
-export async function runtimeRpc<T = unknown>(
-  command: string,
-  args?: RpcArgs,
-): Promise<T> {
-  if (getRuntimeKind() === "desktop") {
-    return invokeDesktop<T>(command, desktopRpcArgs(args));
+const listeners = new Set<() => void>();
+let connection = { target: "local" as MachineTarget, revision: 0, baseUrl: null as string | null, configured: false, ready: false, writes: 0, changing: false, error: "", notice: "" };
+function publish(patch: Partial<typeof connection>) { connection = { ...connection, ...patch }; listeners.forEach(listener => listener()); }
+export function connectionSnapshot() { return connection; }
+export function machineScope() { return `${connection.target}:${connection.target === "remote" ? connection.baseUrl : ""}`; }
+export function useConnection() { return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, connectionSnapshot); }
+let initialization: Promise<void> | undefined;
+export function initializeConnection() {
+  return initialization ??= (async () => {
+    try { publish({ ...await remoteGet(), ready: true, error: "" }); }
+    catch (error) { publish({ ready: true, error: (error as Error).message }); }
+  })();
+}
+export function remoteGet() { return invokeNative<RemoteConnectionView>("remote.get"); }
+async function changeConnection<T>(command: string, request: unknown): Promise<T> {
+  if (connection.writes || connection.changing) throw new Error("操作进行中，请稍后切换");
+  publish({ changing: true });
+  try {
+    const result = await invokeNative<T>(command, { request });
+    if (command !== "remote.verify") publish({ ...result as RemoteConnectionView, error: "", notice: command === "remote.save" ? "已保存" : "" });
+    return result;
   }
-  return webJsonRpc<T>(command, args);
+  finally { publish({ changing: false }); }
+}
+export async function remoteVerify(request: RemoteConnectionCredentials) {
+  return changeConnection<import("../types").SystemCapabilitiesResponse>("remote.verify", request);
+}
+export async function remoteSave(request: RemoteConnectionCredentials) {
+  const view = await changeConnection<RemoteConnectionView>("remote.save", request);
+  return view;
+}
+export async function remoteRemove() {
+  const view = await changeConnection<RemoteConnectionView>("remote.remove", { revision: connection.revision });
+  return view;
+}
+export async function remoteSelect(target: MachineTarget) {
+  if (target === connection.target) return connection;
+  const view = await changeConnection<RemoteConnectionView>("remote.select", { revision: connection.revision, target });
+  return view;
+}
+export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
+
+const reads = new Set(["system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "pi.list", "pi.detail", "pi.deletePreview", "sessions.attachmentRead", "sessions.bulkPreview"]);
+export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
+  if (connection.changing) throw new Error("连接切换中，请稍后重试");
+  const captured = connection;
+  const write = !reads.has(command);
+  if (write) publish({ writes: connection.writes + 1 });
+  try {
+    const value = captured.target === "remote" && !localOnly
+      ? await remoteInvoke<T>({ revision: captured.revision, command, args: args ?? {} })
+      : await invokeNative<T>(command, args);
+    if (captured.revision !== connection.revision) throw new Error("连接已变化，已丢弃旧响应");
+    return value;
+  } finally { if (write) publish({ writes: connection.writes - 1 }); }
 }

@@ -40,7 +40,6 @@ export function useOpsQueries({ historyOpen }: { historyOpen: boolean }) {
 }
 
 export function useOpsActions(input: {
-  csrfToken?: string | null;
   capabilities: RuntimeCapabilityMatrix;
   onArchiveDryRun: (plan: ArchiveDeletePlan) => void;
   onArchiveExecute: (result: ArchiveDeleteResult) => void;
@@ -48,7 +47,7 @@ export function useOpsActions(input: {
   onHiddenExecute: (result: HiddenThreadDeleteResult) => void;
 }) {
   const qc = useQueryClient();
-  const { csrfToken, capabilities } = input;
+  const { capabilities } = input;
   const invalidateJobs = () => qc.invalidateQueries({ queryKey: opsQueryKeys.jobs });
   const invalidateThreads = () => qc.invalidateQueries({ queryKey: opsQueryKeys.threads });
   const requireThreadCleanup = () => {
@@ -62,9 +61,9 @@ export function useOpsActions(input: {
       mutationKey: backgroundJobKey,
       gcTime: Infinity,
       mutationFn: ({ action }: { action: UnifiedUpdateAction }) => {
-        if (action === "check") return updates.check(csrfToken);
-        if (action === "install") return updates.install(csrfToken);
-        return updates.prune(csrfToken, capabilities);
+        if (action === "check") return updates.check();
+        if (action === "install") return updates.install();
+        return updates.prune(capabilities);
       },
       onSuccess: (result) => {
         if (result.status) {
@@ -77,14 +76,14 @@ export function useOpsActions(input: {
     archiveDryRun: useMutation({
       mutationFn: () => {
         requireThreadCleanup();
-        return dryRunArchiveDelete(csrfToken);
+        return dryRunArchiveDelete();
       },
       onSuccess: input.onArchiveDryRun
     }),
     archiveExecute: useMutation({
       mutationFn: ({ expectedCount }: { expectedCount: number }) => {
         requireThreadCleanup();
-        return startArchiveDelete({ csrfToken, expectedCount });
+        return startArchiveDelete({ expectedCount });
       },
       onSuccess: (result) => {
         input.onArchiveExecute(result);
@@ -95,14 +94,14 @@ export function useOpsActions(input: {
     hiddenDryRun: useMutation({
       mutationFn: () => {
         requireThreadCleanup();
-        return dryRunHiddenThreadDelete(csrfToken);
+        return dryRunHiddenThreadDelete();
       },
       onSuccess: input.onHiddenDryRun
     }),
     hiddenExecute: useMutation({
       mutationFn: ({ expectedCount }: { expectedCount: number }) => {
         requireThreadCleanup();
-        return startHiddenThreadDelete({ csrfToken, expectedCount });
+        return startHiddenThreadDelete({ expectedCount });
       },
       onSuccess: (result) => {
         input.onHiddenExecute(result);

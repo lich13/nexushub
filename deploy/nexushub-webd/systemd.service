@@ -1,5 +1,5 @@
 [Unit]
-Description=NexusHub WebUI daemon
+Description=NexusHub management API
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=root
 EnvironmentFile=-/etc/nexushub-webd/env
-ExecStart=/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml serve --surface linux-server-webui
+ExecStart=/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml serve --surface linux-server-api
 Restart=always
 RestartSec=5
 WorkingDirectory=/var/lib/nexushub-webd

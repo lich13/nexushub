@@ -26,22 +26,12 @@ fi
 
 mkdir -p "${DIST}"
 
-if [[ "${SKIP_WEBUI_BUILD:-0}" != "1" ]]; then
-  if [[ "${SKIP_WEBUI_INSTALL:-0}" != "1" ]]; then
-    corepack pnpm@11.0.8 --dir "${ROOT}/webui" install --frozen-lockfile
-  fi
-  VITE_BASE="${VITE_BASE:-/nexushub/}" \
-    VITE_API_BASE="${VITE_API_BASE:-/nexushub}" \
-    corepack pnpm@11.0.8 --dir "${ROOT}/webui" build
-fi
-
 cargo build --release --package nexushub-webd
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "${TMP}"' EXIT
-mkdir -p "${TMP}/${ARCHIVE_ROOT}/bin" "${TMP}/${ARCHIVE_ROOT}/webui" "${TMP}/${ARCHIVE_ROOT}/deploy"
-cp "${ROOT}/target/release/nexushub-webd" "${TMP}/${ARCHIVE_ROOT}/bin/"
-cp -a "${ROOT}/webui/dist/." "${TMP}/${ARCHIVE_ROOT}/webui/"
+trap '[[ -n "${TMP}" && -d "${TMP}" ]] && rm -r -- "${TMP}"' EXIT
+mkdir -p "${TMP}/${ARCHIVE_ROOT}/bin" "${TMP}/${ARCHIVE_ROOT}/deploy"
+cp "${CARGO_TARGET_DIR:-${ROOT}/target}/release/nexushub-webd" "${TMP}/${ARCHIVE_ROOT}/bin/"
 cp -a "${ROOT}/deploy/nexushub-webd/." "${TMP}/${ARCHIVE_ROOT}/deploy/"
 cp "${ROOT}/README.md" "${ROOT}/DESIGN.md" "${TMP}/${ARCHIVE_ROOT}/"
 chmod 0755 "${TMP}/${ARCHIVE_ROOT}/bin/nexushub-webd"
@@ -65,7 +55,7 @@ tar -C "${TMP}" -czf "${DIST}/${ASSET}" "${ARCHIVE_ROOT}"
 
 if [[ "${CHECK_ONLY}" -eq 1 ]]; then
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/bin/nexushub-webd"
-  tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/webui/index.html"
+  if tar -tzf "${DIST}/${ASSET}" | grep -Eq "(/webui/|\.html$)"; then die "server archive contains retired web assets"; fi
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/deploy/install.sh"
   tar -tzf "${DIST}/${ASSET}" | grep -qx "${ARCHIVE_ROOT}/deploy/provider-session-write-paths.py"
 fi

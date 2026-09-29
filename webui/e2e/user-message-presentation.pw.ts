@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { assertNoOverflow, mockApi } from "./fixtures";
+import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
 const providers = ["codex", "grok", "pi"] as const;
@@ -37,7 +37,7 @@ const longFormattedText = `${longInstructionBlock}\n\n${trailingRequest}`;
 
 async function installLegacyRoute(page: Parameters<typeof mockApi>[0], provider: Provider, getTexts: () => string[]) {
   const endpoint = provider === "codex" ? "threads" : provider;
-  await page.route(`**/${endpoint}.detail`, route => {
+  await mockCommand(page, `${endpoint}.detail`, args => {
     const texts = getTexts();
     if (provider === "codex") {
       const detail = demo.demoThreadDetail("019e95a0-demo");
@@ -48,17 +48,17 @@ async function installLegacyRoute(page: Parameters<typeof mockApi>[0], provider:
         questions: [],
         text
       }));
-      return route.fulfill({ json: detail });
+      return detail;
     }
     const events = texts.map(text => provider === "grok"
       ? { kind: "user_message_chunk", text }
       : { kind: "user_message", role: "user", text });
-    return route.fulfill({ json: {
+    return {
       summary: provider === "grok"
         ? { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace" }
         : { sessionKey: "project/session-fixture.jsonl", title: "Pi fixture", cwd: "/isolated/pi-workspace" },
       events
-    } });
+    };
   });
 }
 

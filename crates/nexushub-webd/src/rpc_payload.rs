@@ -35,16 +35,6 @@ pub(crate) fn rpc_payload_or_empty<T: DeserializeOwned>(
     .map_err(|err| RpcPayloadError::new(err.to_string()))
 }
 
-pub(crate) fn rpc_nested_payload<T: DeserializeOwned>(
-    value: &Value,
-    key: &str,
-) -> Result<T, RpcPayloadError> {
-    let Some(payload) = value.get(key) else {
-        return Err(RpcPayloadError::new(format!("{key} is required")));
-    };
-    serde_json::from_value(payload.clone()).map_err(|err| RpcPayloadError::new(err.to_string()))
-}
-
 pub(crate) fn rpc_wrapped_payload<T: DeserializeOwned>(
     value: &Value,
     keys: &[&str],
@@ -144,7 +134,6 @@ fn rpc_normalize_value(value: &mut Value) {
 }
 
 const RPC_COMPAT_FIELD_ALIASES: &[(&str, &str)] = &[
-    ("turnstileToken", "turnstile_token"),
     ("threadId", "thread_id"),
     ("followUpId", "followup_id"),
     ("tokenBudget", "token_budget"),
@@ -160,15 +149,6 @@ const RPC_COMPAT_FIELD_ALIASES: &[(&str, &str)] = &[
     ("itemId", "item_id"),
     ("jobId", "job_id"),
     ("requestId", "request_id"),
-    ("currentPassword", "current_password"),
-    ("newPassword", "new_password"),
-    ("sessionTtlSeconds", "session_ttl_seconds"),
-    ("turnstileEnabled", "turnstile_enabled"),
-    ("turnstileRequired", "turnstile_required"),
-    ("turnstileSiteKey", "turnstile_site_key"),
-    ("turnstileSecretKey", "turnstile_secret_key"),
-    ("turnstileExpectedHostname", "turnstile_expected_hostname"),
-    ("turnstileExpectedAction", "turnstile_expected_action"),
     ("pollSeconds", "poll_seconds"),
     ("recentLimit", "recent_limit"),
     ("serverUrl", "server_url"),

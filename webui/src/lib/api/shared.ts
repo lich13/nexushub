@@ -4,7 +4,7 @@ import type { DemoFixtureKey } from "../domain/demoCore";
 
 export const USE_DEMO = import.meta.env.DEV && import.meta.env.VITE_USE_REAL_API !== "1";
 
-let demoFixtureKey: DemoFixtureKey = "linux-web";
+let demoFixtureKey: DemoFixtureKey = "macos-tauri";
 
 export function configureDemoFixtureKey(fixture: DemoFixtureKey): void {
   demoFixtureKey = fixture;

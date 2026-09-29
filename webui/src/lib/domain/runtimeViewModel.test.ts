@@ -18,7 +18,7 @@ import {
 
 const linuxWebCapabilities: RuntimeCapabilityMatrix = {
   runtimeKind: "web",
-  hostSurface: "linux_server_webui",
+  hostSurface: "linux_server_api",
   webAuth: true,
   logout: true,
   securitySettings: true,

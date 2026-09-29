@@ -4,20 +4,6 @@ import { assertContrast, assertNoOverflow, mockApi } from "./fixtures";
 for (const colorScheme of ["light", "dark"] as const) {
   test.describe(colorScheme, () => {
     test.use({ colorScheme, viewport: { width: 1280, height: 820 } });
-    test("login text, borders and focus remain readable across desktop and mobile", async ({ page }, info) => {
-      await mockApi(page, false);
-      await page.goto("/");
-      await expect(page.locator(".login-panel")).toBeVisible();
-      for (const width of [1440, 1280, 390, 320]) {
-        await page.setViewportSize({ width, height: width > 767 ? 900 : 844 });
-        await assertContrast(page, ".login-panel h1, .login-panel p, .login-panel input, .login-panel label > span, .login-panel button");
-        await assertContrast(page, ".login-panel input", 3, "border-top-color");
-        await page.getByRole("textbox", { name: "管理员", exact: true }).focus();
-        await assertContrast(page, ".login-panel input:focus-visible", 3, "outline-color");
-        await assertNoOverflow(page);
-        await page.screenshot({ path: info.outputPath(`login-${width}.png`) });
-      }
-    });
     test("conversation colors resolve and jobs remain readable", async ({ page }) => {
       await mockApi(page);
       await page.goto("/");

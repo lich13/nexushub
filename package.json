@@ -1,9 +1,9 @@
 {
   "name": "nexushub",
   "private": true,
-  "version": "1.1.9",
+  "version": "1.2.0",
   "scripts": {
-    "build:ui": "corepack pnpm@11.0.8 --dir webui build",
+    "build:ui": "corepack pnpm@11.0.8 --dir webui build:tauri",
     "desktop:dev": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
     "desktop:typecheck": "corepack pnpm@11.0.8 --dir webui typecheck",
     "desktop:build": "corepack pnpm@11.0.8 --dir webui build:tauri",
@@ -11,6 +11,6 @@
     "tauri:build:macos": "bash scripts/package-darwin-arm64.sh",
     "tauri:build": "bash scripts/package-darwin-arm64.sh",
     "test:install": "bash scripts/test-install-script.sh",
-    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@11.0.8 --dir webui test && corepack pnpm@11.0.8 --dir webui build && npm run test:install"
+    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@11.0.8 --dir webui test && corepack pnpm@11.0.8 --dir webui build:tauri && npm run test:install"
   }
 }

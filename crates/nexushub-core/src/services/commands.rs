@@ -70,13 +70,6 @@ pub const TRANSPORT_UPLOAD_FILES: &str = "uploadFiles";
 pub const TRANSPORT_THREAD_EVENTS: &str = "threadEvents";
 
 pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
-    AUTH_PUBLIC_SETTINGS,
-    AUTH_LOGIN,
-    AUTH_LOGOUT,
-    AUTH_ME,
-    SECURITY_GET,
-    SECURITY_SAVE,
-    SECURITY_CHANGE_PASSWORD,
     SYSTEM_CAPABILITIES,
     SYSTEM_VERSION,
     SYSTEM_PLATFORM,
@@ -118,7 +111,35 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     SESSIONS_BULK_EXECUTE,
 ];
 
-pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[TRANSPORT_THREAD_EVENTS];
+/// Unknown commands fail closed as writes. Remote mutations are never retried.
+pub fn is_mutating_rpc_command(command: &str) -> bool {
+    !matches!(
+        command,
+        SYSTEM_CAPABILITIES
+            | SYSTEM_VERSION
+            | SYSTEM_PLATFORM
+            | SYSTEM_PROVIDERS
+            | THREADS_LIST
+            | THREADS_DETAIL
+            | THREADS_BLOCKS
+            | JOBS_LIST
+            | JOBS_DETAIL
+            | PROBE_STATUS
+            | PROBE_SETTINGS_GET
+            | PROBE_EVENTS
+            | UPDATES_STATUS
+            | GROK_LIST
+            | GROK_DETAIL
+            | GROK_DELETE_PREVIEW
+            | PI_LIST
+            | PI_DETAIL
+            | PI_DELETE_PREVIEW
+            | SESSIONS_ATTACHMENT_READ
+            | SESSIONS_BULK_PREVIEW
+    )
+}
+
+pub const ALLOWED_TRANSPORT_COMMANDS: &[&str] = &[];
 
 pub const INTERNAL_COMMANDS: &[&str] = &[];
 
@@ -195,6 +216,14 @@ pub const DECLARED_COMMANDS: &[&str] = &[
 ];
 
 pub const RETIRED_COMMANDS: &[&str] = &[
+    "auth.login",
+    "auth.logout",
+    "auth.me",
+    "auth.publicSettings",
+    "security.changePassword",
+    "security.get",
+    "security.save",
+    "threadEvents",
     "system.status",
     "system.plugins",
     "system.models",
@@ -362,12 +391,20 @@ mod tests {
     }
 
     #[test]
-    fn transport_commands_are_explicit_exceptions() {
-        assert_eq!(
-            ALLOWED_TRANSPORT_COMMANDS,
-            &["threadEvents"],
-            "non-dot command names are reserved for transport endpoints only"
-        );
+    fn retired_authentication_and_event_transports_are_not_executable() {
+        assert!(ALLOWED_TRANSPORT_COMMANDS.is_empty());
+        for command in [
+            "threadEvents",
+            "auth.login",
+            "auth.logout",
+            "auth.me",
+            "auth.publicSettings",
+            "security.get",
+            "security.save",
+            "security.changePassword",
+        ] {
+            assert_eq!(classify_command(command), CommandKind::Retired, "{command}");
+        }
     }
 
     #[test]

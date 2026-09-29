@@ -2,14 +2,8 @@ use nexushub_core::{
     config::{
         Config, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
-    db::SecuritySettings,
     platform::{PlatformKind, PlatformPaths},
     services::{
-        security::{
-            plan_password_change, plan_password_change_with_capability, plan_security_patch,
-            public_security_view, public_security_view_with_capability, security_view,
-            PasswordChangeRequest, SecurityPatch,
-        },
         settings::{
             build_settings_view, merge_probe_notification_patch, normalize_bark_device_key,
             normalize_probe_settings_patch, plan_probe_settings_save,
@@ -21,7 +15,7 @@ use nexushub_core::{
 };
 
 #[test]
-fn linux_capabilities_expose_web_host_only_features() {
+fn linux_capabilities_expose_api_and_maintenance_features() {
     let config = Config::for_platform_kind(PlatformKind::Linux);
     let capabilities = system_capabilities(&config, &PlatformPaths::for_kind(PlatformKind::Linux));
 
@@ -33,20 +27,13 @@ fn linux_capabilities_expose_web_host_only_features() {
     assert!(capabilities.app_updater);
     assert!(capabilities.thread_cleanup);
     assert!(capabilities.thread_archive_actions);
-    assert!(capabilities.web_auth);
-    assert!(capabilities.csrf);
-    assert!(capabilities.security_settings);
-    assert!(capabilities.turnstile);
     assert!(capabilities.systemd);
-    assert!(capabilities.nginx);
-    assert!(capabilities.public_endpoint);
-    assert!(capabilities.admin_password);
     assert!(capabilities.linux_update_job);
     assert!(capabilities.prune_backups);
 }
 
 #[test]
-fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
+fn macos_capabilities_keep_shared_core_but_disable_linux_maintenance_features() {
     let home = temp_dir("nexushub-capabilities-macos");
     std::fs::create_dir_all(&home).unwrap();
     let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
@@ -63,14 +50,7 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
     assert!(capabilities.app_updater);
     assert!(capabilities.thread_cleanup);
     assert!(capabilities.thread_archive_actions);
-    assert!(!capabilities.web_auth);
-    assert!(!capabilities.csrf);
-    assert!(!capabilities.security_settings);
-    assert!(!capabilities.turnstile);
     assert!(!capabilities.systemd);
-    assert!(!capabilities.nginx);
-    assert!(!capabilities.public_endpoint);
-    assert!(!capabilities.admin_password);
     assert!(!capabilities.linux_update_job);
     assert!(!capabilities.prune_backups);
 
@@ -78,20 +58,13 @@ fn macos_capabilities_keep_shared_core_but_disable_linux_web_host_features() {
 }
 
 #[test]
-fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
+fn macos_linux_maintenance_capabilities_are_rejected_by_gate_and_matrix() {
     let config = Config::for_platform_kind(PlatformKind::Macos);
     let platform = PlatformPaths::for_kind(PlatformKind::Macos);
     let capabilities = system_capabilities(&config, &platform);
 
     for capability in [
-        Capability::WebAuth,
-        Capability::Csrf,
-        Capability::Turnstile,
-        Capability::SecuritySettings,
-        Capability::AdminPassword,
         Capability::Systemd,
-        Capability::Nginx,
-        Capability::PublicEndpoint,
         Capability::LinuxUpdateJob,
         Capability::PruneBackups,
     ] {
@@ -100,15 +73,7 @@ fn macos_linux_web_host_capabilities_are_rejected_by_gate_and_matrix() {
             "{capability:?} must stay unavailable on macOS"
         );
     }
-
-    assert!(!capabilities.web_auth);
-    assert!(!capabilities.csrf);
-    assert!(!capabilities.turnstile);
-    assert!(!capabilities.security_settings);
-    assert!(!capabilities.admin_password);
     assert!(!capabilities.systemd);
-    assert!(!capabilities.nginx);
-    assert!(!capabilities.public_endpoint);
     assert!(!capabilities.linux_update_job);
     assert!(!capabilities.prune_backups);
 }
@@ -375,195 +340,6 @@ fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
 }
 
 #[test]
-fn security_views_use_core_defaults_and_linux_web_host_shape() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
-    let settings = SecuritySettings {
-        turnstile_enabled: true,
-        turnstile_required: false,
-        turnstile_site_key: None,
-        turnstile_secret_configured: true,
-        session_ttl_seconds: 900,
-    };
-
-    let view = security_view(
-        settings.clone(),
-        &config.security,
-        Some("example.com".to_string()),
-        None,
-    );
-    assert_eq!(
-        view.turnstile_site_key,
-        nexushub_core::config::DEFAULT_TURNSTILE_SITE_KEY
-    );
-    assert_eq!(
-        view.turnstile_expected_hostname.as_deref(),
-        Some("example.com")
-    );
-    assert_eq!(view.turnstile_expected_action.as_deref(), Some("login"));
-    assert!(view.turnstile_secret_configured);
-
-    let public = public_security_view(
-        settings,
-        &config.security,
-        Some("signin".to_string()),
-        true,
-        Some("https://panel.example.com/nexushub/".to_string()),
-    );
-    assert_eq!(public.site_name, "NexusHub");
-    assert_eq!(public.turnstile_action, "signin");
-    assert!(public.admin_configured);
-}
-
-#[test]
-fn security_patch_plan_validates_ttl_and_redacts_secret_in_audit_detail() {
-    let plan = plan_security_patch(SecurityPatch {
-        turnstile_enabled: Some(true),
-        turnstile_required: Some(false),
-        turnstile_site_key: Some("site-key".to_string()),
-        turnstile_secret_key: Some(" secret-key ".to_string()),
-        session_ttl_seconds: Some(600),
-        turnstile_expected_hostname: Some(" panel.example.com ".to_string()),
-        turnstile_expected_action: Some(" login ".to_string()),
-    })
-    .unwrap();
-
-    assert_eq!(
-        plan.settings
-            .iter()
-            .map(|write| (write.key, write.value.as_str()))
-            .collect::<Vec<_>>(),
-        vec![
-            ("turnstile_enabled", "true"),
-            ("turnstile_required", "false"),
-            ("turnstile_site_key", "site-key"),
-            ("session_ttl_seconds", "600"),
-            ("turnstile_expected_hostname", "panel.example.com"),
-            ("turnstile_expected_action", "login"),
-        ]
-    );
-    assert_eq!(plan.turnstile_secret_key.as_deref(), Some("secret-key"));
-    assert_eq!(plan.audit_detail["turnstile_secret_key"], "[configured]");
-
-    assert!(plan_security_patch(SecurityPatch {
-        session_ttl_seconds: Some(299),
-        ..SecurityPatch {
-            turnstile_enabled: None,
-            turnstile_required: None,
-            turnstile_site_key: None,
-            turnstile_secret_key: None,
-            session_ttl_seconds: None,
-            turnstile_expected_hostname: None,
-            turnstile_expected_action: None,
-        }
-    })
-    .unwrap_err()
-    .to_string()
-    .contains("session ttl"));
-}
-
-#[test]
-fn password_change_plan_keeps_auth_hashing_in_adapter_but_centralizes_validation() {
-    let request = PasswordChangeRequest {
-        current_password: "old password".to_string(),
-        new_password: "new-password-123".to_string(),
-    };
-    let plan = plan_password_change(request, true).unwrap();
-    assert_eq!(plan.new_password, "new-password-123");
-
-    let invalid_current = plan_password_change(
-        PasswordChangeRequest {
-            current_password: "bad".to_string(),
-            new_password: "new-password-123".to_string(),
-        },
-        false,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(invalid_current.contains("invalid current password"));
-
-    let short_password = plan_password_change(
-        PasswordChangeRequest {
-            current_password: "old".to_string(),
-            new_password: "short".to_string(),
-        },
-        true,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(short_password.contains("at least 12"));
-}
-
-#[test]
-fn auth_public_settings_and_admin_password_facades_are_linux_only() {
-    let config = Config::for_platform_kind(PlatformKind::Linux);
-    let settings = SecuritySettings {
-        turnstile_enabled: true,
-        turnstile_required: true,
-        turnstile_site_key: None,
-        turnstile_secret_configured: false,
-        session_ttl_seconds: 900,
-    };
-    let linux = PlatformPaths::for_kind(PlatformKind::Linux);
-
-    let public = public_security_view_with_capability(
-        &linux,
-        settings,
-        &config.security,
-        Some("signin".to_string()),
-        true,
-        Some("https://example.com/nexushub/".to_string()),
-    )
-    .expect("Linux should expose public web auth settings");
-    assert_eq!(public.required_capability, Capability::WebAuth);
-    assert_eq!(public.public.turnstile_action, "signin");
-    assert!(public.public.turnstile_enabled);
-
-    let password = plan_password_change_with_capability(
-        &linux,
-        PasswordChangeRequest {
-            current_password: "old password".to_string(),
-            new_password: "new-password-123".to_string(),
-        },
-        true,
-    )
-    .expect("Linux should allow admin password changes");
-    assert_eq!(password.required_capability, Capability::AdminPassword);
-    assert_eq!(password.change.new_password, "new-password-123");
-
-    let macos = PlatformPaths::for_kind(PlatformKind::Macos);
-    let macos_settings = SecuritySettings {
-        turnstile_enabled: true,
-        turnstile_required: true,
-        turnstile_site_key: None,
-        turnstile_secret_configured: false,
-        session_ttl_seconds: 900,
-    };
-    let err = public_security_view_with_capability(
-        &macos,
-        macos_settings,
-        &config.security,
-        None,
-        false,
-        None,
-    )
-    .expect_err("macOS should not expose WebUI login settings");
-    assert!(err.to_string().contains("web_auth is unavailable on macos"));
-
-    let err = plan_password_change_with_capability(
-        &macos,
-        PasswordChangeRequest {
-            current_password: "old password".to_string(),
-            new_password: "new-password-123".to_string(),
-        },
-        true,
-    )
-    .expect_err("macOS should not expose Linux WebUI admin password changes");
-    assert!(err
-        .to_string()
-        .contains("admin_password is unavailable on macos"));
-}
-
-#[test]
 fn core_services_do_not_import_host_frameworks_or_process_runners() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
@@ -577,7 +353,6 @@ fn core_services_do_not_import_host_frameworks_or_process_runners() {
     for relative in [
         "src/services/probe.rs",
         "src/services/settings.rs",
-        "src/services/security.rs",
         "src/services/system.rs",
         "src/services/updates.rs",
         "src/services/commands.rs",

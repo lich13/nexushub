@@ -28,8 +28,7 @@ const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
     hasDesktopNav: ["Codex", "Grok Build", "Probe", "设置"].every(function (label) {
       return Boolean(document.querySelector('.side-nav button[aria-label="' + label + '"]'));
     }),
-    hasWebLoginGate: Boolean(document.querySelector(".login-shell")),
-    hasVisibleLinuxHostCopy: Boolean(document.querySelector(".security-workspace, .turnstile-box"))
+    hasMachineSelector: Boolean(document.querySelector('[aria-label="当前机器"]'))
   };
 })()
 "#;

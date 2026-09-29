@@ -6,8 +6,11 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
+pub const API_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemCapabilitiesResponse {
+    pub api_version: u32,
     pub host_surface: HostSurface,
     pub capabilities: SystemCapabilities,
 }
@@ -15,26 +18,26 @@ pub struct SystemCapabilitiesResponse {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostSurface {
-    LinuxServerWebui,
+    LinuxServerApi,
     DesktopEmbeddedTauri,
 }
 
 impl HostSurface {
     pub const ALL: &'static [HostSurface] = &[
-        HostSurface::LinuxServerWebui,
+        HostSurface::LinuxServerApi,
         HostSurface::DesktopEmbeddedTauri,
     ];
 
     pub fn default_for_platform(platform: &PlatformPaths) -> Self {
         match platform.kind {
-            PlatformKind::Linux => Self::LinuxServerWebui,
+            PlatformKind::Linux => Self::LinuxServerApi,
             PlatformKind::Macos | PlatformKind::Windows => Self::DesktopEmbeddedTauri,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::LinuxServerWebui => "linux_server_webui",
+            Self::LinuxServerApi => "linux_server_api",
             Self::DesktopEmbeddedTauri => "desktop_embedded_tauri",
         }
     }
@@ -51,7 +54,7 @@ impl FromStr for HostSurface {
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value.trim().replace('-', "_").as_str() {
-            "linux_server_webui" => Ok(Self::LinuxServerWebui),
+            "linux_server_api" => Ok(Self::LinuxServerApi),
             "desktop_embedded_tauri" => Ok(Self::DesktopEmbeddedTauri),
             other => Err(format!("unsupported host surface: {other}")),
         }
@@ -69,14 +72,7 @@ pub enum Capability {
     AppUpdater,
     ThreadCleanup,
     ThreadArchiveActions,
-    WebAuth,
-    Csrf,
-    SecuritySettings,
-    Turnstile,
     Systemd,
-    Nginx,
-    PublicEndpoint,
-    AdminPassword,
     LinuxUpdateJob,
     PruneBackups,
 }
@@ -91,14 +87,7 @@ impl Capability {
         Capability::AppUpdater,
         Capability::ThreadCleanup,
         Capability::ThreadArchiveActions,
-        Capability::WebAuth,
-        Capability::Csrf,
-        Capability::SecuritySettings,
-        Capability::Turnstile,
         Capability::Systemd,
-        Capability::Nginx,
-        Capability::PublicEndpoint,
-        Capability::AdminPassword,
         Capability::LinuxUpdateJob,
         Capability::PruneBackups,
     ];
@@ -117,14 +106,7 @@ impl Capability {
             Self::AppUpdater => "app_updater",
             Self::ThreadCleanup => "thread_cleanup",
             Self::ThreadArchiveActions => "thread_archive_actions",
-            Self::WebAuth => "web_auth",
-            Self::Csrf => "csrf",
-            Self::SecuritySettings => "security_settings",
-            Self::Turnstile => "turnstile",
             Self::Systemd => "systemd",
-            Self::Nginx => "nginx",
-            Self::PublicEndpoint => "public_endpoint",
-            Self::AdminPassword => "admin_password",
             Self::LinuxUpdateJob => "linux_update_job",
             Self::PruneBackups => "prune_backups",
         }
@@ -136,8 +118,8 @@ impl Capability {
 
     pub fn is_supported_on_surface(self, platform: &PlatformPaths, surface: HostSurface) -> bool {
         let shared_core = matches!(platform.kind, PlatformKind::Linux | PlatformKind::Macos);
-        let linux_server_webui = surface == HostSurface::LinuxServerWebui
-            && matches!(platform.kind, PlatformKind::Linux);
+        let linux_server_api =
+            surface == HostSurface::LinuxServerApi && matches!(platform.kind, PlatformKind::Linux);
         let desktop_embedded = surface == HostSurface::DesktopEmbeddedTauri && shared_core;
         match self {
             Self::Threads
@@ -146,17 +128,9 @@ impl Capability {
             | Self::Settings
             | Self::JobHistory
             | Self::ThreadCleanup
-            | Self::ThreadArchiveActions => linux_server_webui || desktop_embedded,
-            Self::AppUpdater => linux_server_webui || desktop_embedded,
-            Self::WebAuth | Self::Csrf => linux_server_webui,
-            Self::SecuritySettings
-            | Self::Turnstile
-            | Self::Systemd
-            | Self::Nginx
-            | Self::PublicEndpoint
-            | Self::AdminPassword
-            | Self::LinuxUpdateJob
-            | Self::PruneBackups => linux_server_webui,
+            | Self::ThreadArchiveActions => linux_server_api || desktop_embedded,
+            Self::AppUpdater => linux_server_api || desktop_embedded,
+            Self::Systemd | Self::LinuxUpdateJob | Self::PruneBackups => linux_server_api,
         }
     }
 }
@@ -171,14 +145,7 @@ pub struct SystemCapabilities {
     pub app_updater: bool,
     pub thread_cleanup: bool,
     pub thread_archive_actions: bool,
-    pub web_auth: bool,
-    pub csrf: bool,
-    pub security_settings: bool,
-    pub turnstile: bool,
     pub systemd: bool,
-    pub nginx: bool,
-    pub public_endpoint: bool,
-    pub admin_password: bool,
     pub linux_update_job: bool,
     pub prune_backups: bool,
 }
@@ -272,15 +239,7 @@ pub fn system_capabilities_for_surface(
         thread_cleanup: Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface),
         thread_archive_actions: Capability::ThreadArchiveActions
             .is_supported_on_surface(platform, host_surface),
-        web_auth: Capability::WebAuth.is_supported_on_surface(platform, host_surface),
-        csrf: Capability::Csrf.is_supported_on_surface(platform, host_surface),
-        security_settings: Capability::SecuritySettings
-            .is_supported_on_surface(platform, host_surface),
-        turnstile: Capability::Turnstile.is_supported_on_surface(platform, host_surface),
         systemd: Capability::Systemd.is_supported_on_surface(platform, host_surface),
-        nginx: Capability::Nginx.is_supported_on_surface(platform, host_surface),
-        public_endpoint: Capability::PublicEndpoint.is_supported_on_surface(platform, host_surface),
-        admin_password: Capability::AdminPassword.is_supported_on_surface(platform, host_surface),
         linux_update_job: Capability::LinuxUpdateJob
             .is_supported_on_surface(platform, host_surface),
         prune_backups: Capability::PruneBackups.is_supported_on_surface(platform, host_surface),
@@ -299,107 +258,31 @@ fn platform_kind_label(kind: PlatformKind) -> &'static str {
 mod tests {
     use super::{
         capability_gate_plan, capability_gate_plan_for_surface, require_capability,
-        require_capability_for_surface, system_capabilities, system_capabilities_for_surface,
-        Capability, HostSurface,
+        system_capabilities, system_capabilities_for_surface, Capability, HostSurface,
     };
-    use crate::{config::Config, platform::PlatformPaths};
+    use crate::{
+        config::Config,
+        platform::{PlatformKind, PlatformPaths},
+    };
 
     #[test]
-    fn linux_server_webui_keeps_existing_linux_web_capabilities() {
-        let config = Config::for_platform_kind(crate::platform::PlatformKind::Linux);
-        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
-        let matrix =
-            system_capabilities_for_surface(&config, &linux, HostSurface::LinuxServerWebui);
-
-        assert!(matrix.web_auth);
-        assert!(matrix.csrf);
-        assert!(matrix.security_settings);
-        assert!(matrix.turnstile);
-        assert!(matrix.systemd);
-        assert!(matrix.nginx);
-        assert!(matrix.public_endpoint);
-        assert!(matrix.admin_password);
-        assert!(matrix.linux_update_job);
-        assert!(matrix.prune_backups);
-    }
-
-    #[test]
-    fn desktop_embedded_tauri_hides_all_web_host_surfaces() {
-        for kind in [
-            crate::platform::PlatformKind::Linux,
-            crate::platform::PlatformKind::Macos,
+    fn api_surface_has_no_web_authentication_capabilities() {
+        let config = Config::for_platform_kind(PlatformKind::Linux);
+        let platform = PlatformPaths::for_kind(PlatformKind::Linux);
+        let capabilities =
+            system_capabilities_for_surface(&config, &platform, HostSurface::LinuxServerApi);
+        assert!(capabilities.threads && capabilities.linux_update_job);
+        let json = serde_json::to_value(capabilities).unwrap();
+        for key in [
+            "web_auth",
+            "csrf",
+            "turnstile",
+            "admin_password",
+            "security_settings",
         ] {
-            let config = Config::for_platform_kind(kind);
-            let platform = PlatformPaths::for_kind(kind);
-            let matrix = system_capabilities_for_surface(
-                &config,
-                &platform,
-                HostSurface::DesktopEmbeddedTauri,
-            );
-
-            assert!(matrix.threads);
-            assert!(matrix.probe);
-            assert!(matrix.app_updater);
-            assert!(matrix.thread_cleanup);
-            assert!(!matrix.web_auth);
-            assert!(!matrix.security_settings);
-            assert!(!matrix.turnstile);
-            assert!(!matrix.systemd);
-            assert!(!matrix.nginx);
-            assert!(!matrix.public_endpoint);
-            assert!(!matrix.admin_password);
-            assert!(!matrix.linux_update_job);
-            assert!(!matrix.prune_backups);
+            assert!(json.get(key).is_none());
         }
-    }
-
-    #[test]
-    fn desktop_lan_webui_is_not_a_supported_surface() {
-        assert!("desktop-lan-webui".parse::<HostSurface>().is_err());
-        assert!(!HostSurface::ALL
-            .iter()
-            .any(|surface| surface.as_str() == "desktop_lan_webui"));
-        assert!(!Capability::ALL
-            .iter()
-            .any(|capability| capability.as_str() == "desktop_webui_control"));
-    }
-
-    #[test]
-    fn linux_only_capabilities_are_allowed_only_on_linux_server_webui() {
-        let linux = PlatformPaths::for_kind(crate::platform::PlatformKind::Linux);
-        let macos = PlatformPaths::for_kind(crate::platform::PlatformKind::Macos);
-
-        assert!(require_capability(&linux, Capability::SecuritySettings).is_ok());
-        assert!(require_capability(&linux, Capability::LinuxUpdateJob).is_ok());
-        assert!(require_capability(&linux, Capability::WebAuth).is_ok());
-        assert!(require_capability(&linux, Capability::Turnstile).is_ok());
-        assert!(require_capability(&linux, Capability::Systemd).is_ok());
-        assert!(require_capability(&linux, Capability::Nginx).is_ok());
-        assert!(require_capability(&linux, Capability::PublicEndpoint).is_ok());
-        assert!(require_capability(&linux, Capability::AdminPassword).is_ok());
-        assert!(require_capability(&linux, Capability::PruneBackups).is_ok());
-
-        let security_error = require_capability(&macos, Capability::SecuritySettings)
-            .expect_err("macOS must not allow Linux web-host security settings");
-        assert!(security_error
-            .to_string()
-            .contains("security_settings is unavailable on macos"));
-
-        let update_error = require_capability(&macos, Capability::LinuxUpdateJob)
-            .expect_err("macOS must not allow Linux update jobs");
-        assert!(update_error
-            .to_string()
-            .contains("linux_update_job is unavailable on macos"));
-
-        let tauri_linux_error = require_capability_for_surface(
-            &linux,
-            HostSurface::DesktopEmbeddedTauri,
-            Capability::LinuxUpdateJob,
-        )
-        .expect_err("Linux Tauri must not allow server update jobs");
-        assert!(tauri_linux_error
-            .to_string()
-            .contains("desktop_embedded_tauri"));
+        assert!("linux_server_webui".parse::<HostSurface>().is_err());
     }
 
     #[test]
@@ -429,8 +312,6 @@ mod tests {
         assert!(require_capability(&platform, Capability::Settings).is_err());
         assert!(!matrix.thread_cleanup);
         assert!(!matrix.thread_archive_actions);
-        assert!(!matrix.security_settings);
-        assert!(require_capability(&platform, Capability::SecuritySettings).is_err());
     }
 
     #[test]

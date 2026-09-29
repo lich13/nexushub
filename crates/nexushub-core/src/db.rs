@@ -1,8 +1,4 @@
-use crate::{
-    config::{DEFAULT_SESSION_TTL_SECONDS, LEGACY_SESSION_TTL_SECONDS},
-    crypto::SecretBox,
-    security::hash_token,
-};
+use crate::{crypto::SecretBox, security::hash_token};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
@@ -33,43 +29,6 @@ pub struct NotificationRetentionCounts {
     pub dedupe_count: usize,
     pub pending_event_count: usize,
     pub pending_dedupe_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Admin {
-    pub id: String,
-    pub username: String,
-    pub password_hash: String,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub admin_id: String,
-    pub token_hash: String,
-    pub csrf_token_hash: String,
-    pub expires_at: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewSession<'a> {
-    pub id: &'a str,
-    pub admin_id: &'a str,
-    pub token: &'a str,
-    pub csrf_token: &'a str,
-    pub user_agent: Option<&'a str>,
-    pub ip: Option<&'a str>,
-    pub expires_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecuritySettings {
-    pub turnstile_enabled: bool,
-    pub turnstile_required: bool,
-    pub turnstile_site_key: Option<String>,
-    pub turnstile_secret_configured: bool,
-    pub session_ttl_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +113,7 @@ impl PanelDb {
                 .with_context(|| format!("create data dir {}", parent.display()))?;
         }
         let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let db = Self {
             path,
             conn: Arc::new(Mutex::new(conn)),
@@ -177,26 +137,6 @@ impl PanelDb {
             r#"
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
-
-            CREATE TABLE IF NOT EXISTS admins (
-              id TEXT PRIMARY KEY,
-              username TEXT NOT NULL UNIQUE,
-              password_hash TEXT NOT NULL,
-              created_at INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sessions (
-              id TEXT PRIMARY KEY,
-              admin_id TEXT NOT NULL,
-              token_hash TEXT NOT NULL UNIQUE,
-              csrf_token_hash TEXT NOT NULL,
-              user_agent TEXT,
-              ip TEXT,
-              expires_at INTEGER NOT NULL,
-              created_at INTEGER NOT NULL,
-              revoked_at INTEGER,
-              FOREIGN KEY(admin_id) REFERENCES admins(id) ON DELETE CASCADE
-            );
 
             CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY,
@@ -235,17 +175,6 @@ impl PanelDb {
 
             DELETE FROM jobs WHERE kind IN (
               'probe_logs_db_maintain', 'probe_logs_db_maintain_dry_run'
-            );
-
-            CREATE TABLE IF NOT EXISTS turnstile_attempts (
-              token_hash TEXT PRIMARY KEY,
-              action TEXT,
-              hostname TEXT,
-              remote_ip TEXT,
-              success INTEGER NOT NULL,
-              error_codes TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              expires_at INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS thread_followups (
@@ -341,140 +270,73 @@ impl PanelDb {
         add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
         add_column_if_missing(&conn, "jobs", "turn_id", "TEXT")?;
         add_column_if_missing(&conn, "probe_events", "handled_at", "INTEGER")?;
-        let legacy = LEGACY_SESSION_TTL_SECONDS.to_string();
-        let current: Option<String> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key='session_ttl_seconds'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if current.as_deref() == Some(&legacy) {
+        let retired: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('admins','sessions','turnstile_attempts')) OR EXISTS(SELECT 1 FROM settings WHERE key GLOB 'turnstile_*' OR key IN ('session_ttl_seconds','cookie_secure','login_rate_limit_per_minute','web_retirement_pending'))",
+            [], |row| row.get(0))?;
+        if retired {
+            // Only NexusHub's own database is opened here. Erase retired credentials,
+            // including freed pages and WAL, without exporting them to a backup.
+            conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
+                INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('web_retirement_pending','true',unixepoch());
+                DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS admins;
+                DROP TABLE IF EXISTS turnstile_attempts;
+                DELETE FROM settings WHERE key GLOB 'turnstile_*' OR key IN ('session_ttl_seconds','cookie_secure','login_rate_limit_per_minute');
+                COMMIT; VACUUM;")?;
+            let busy: i64 =
+                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+            if busy != 0 {
+                return Err(anyhow!("retired web credential cleanup is waiting for database readers; retry after closing other NexusHub processes"));
+            }
             conn.execute(
-                "UPDATE settings SET value=?1, updated_at=?2 WHERE key='session_ttl_seconds'",
-                params![DEFAULT_SESSION_TTL_SECONDS.to_string(), Self::now()],
+                "DELETE FROM settings WHERE key='web_retirement_pending'",
+                [],
             )?;
         }
-        drop(conn);
-        self.migrate_turnstile_secret_setting()?;
         Ok(())
     }
 
-    fn migrate_turnstile_secret_setting(&self) -> Result<()> {
-        let Some(value) = self.get_setting("turnstile_secret_key")? else {
-            return Ok(());
-        };
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Ok(());
+    /// Generate once, store only its digest, and immediately replace any previous key.
+    pub fn rotate_admin_api_key(&self) -> Result<String> {
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        let key = format!("nhk_{}", hex::encode(bytes));
+        self.set_setting("admin_api_key_sha256", &hash_token(&key))?;
+        self.record_audit(
+            None,
+            "api_key.rotate",
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )?;
+        Ok(key)
+    }
+
+    pub fn revoke_admin_api_key(&self) -> Result<()> {
+        self.set_setting("admin_api_key_sha256", "")?;
+        self.record_audit(
+            None,
+            "api_key.revoke",
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+    }
+
+    pub fn verify_admin_api_key(&self, key: &str) -> Result<bool> {
+        use subtle::ConstantTimeEq;
+        let digest = hash_token(key);
+        let stored = self
+            .get_setting("admin_api_key_sha256")?
+            .unwrap_or_default();
+        let mut expected = [0u8; 64];
+        if stored.len() == expected.len() {
+            expected.copy_from_slice(stored.as_bytes());
         }
-        match encrypted_setting_parts(trimmed) {
-            Some(Ok((ciphertext, nonce))) => {
-                if let Ok(plaintext) = self.crypto.decrypt(&ciphertext, &nonce) {
-                    self.set_secret_setting_bytes("turnstile_secret_key", &plaintext)?;
-                }
-            }
-            Some(Err(_)) => {}
-            None => {
-                self.set_secret_setting_bytes("turnstile_secret_key", trimmed.as_bytes())?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn admin_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().expect("db mutex");
-        Ok(conn.query_row("SELECT count(*) FROM admins", [], |row| {
-            row.get::<_, u64>(0)
-        })?)
-    }
-
-    pub fn upsert_admin(&self, id: &str, username: &str, password_hash: &str) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            INSERT INTO admins(id, username, password_hash, created_at)
-            VALUES(?1, ?2, ?3, ?4)
-            ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash
-            "#,
-            params![id, username, password_hash, Self::now()],
-        )?;
-        Ok(())
-    }
-
-    pub fn admin_by_username(&self, username: &str) -> Result<Option<Admin>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            "SELECT id, username, password_hash, created_at FROM admins WHERE username=?1",
-            params![username],
-            admin_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
-    }
-
-    pub fn admin_by_id(&self, id: &str) -> Result<Option<Admin>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            "SELECT id, username, password_hash, created_at FROM admins WHERE id=?1",
-            params![id],
-            admin_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
-    }
-
-    pub fn create_session(&self, session: NewSession<'_>) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            r#"
-            INSERT INTO sessions(id, admin_id, token_hash, csrf_token_hash, user_agent, ip, expires_at, created_at)
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            params![
-                session.id,
-                session.admin_id,
-                hash_token(session.token),
-                hash_token(session.csrf_token),
-                session.user_agent,
-                session.ip,
-                session.expires_at,
-                Self::now()
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn session_by_token(&self, token: &str) -> Result<Option<Session>> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            r#"
-            SELECT id, admin_id, token_hash, csrf_token_hash, expires_at
-            FROM sessions
-            WHERE token_hash=?1 AND revoked_at IS NULL AND expires_at > ?2
-            "#,
-            params![hash_token(token), Self::now()],
-            |row| {
-                Ok(Session {
-                    id: row.get(0)?,
-                    admin_id: row.get(1)?,
-                    token_hash: row.get(2)?,
-                    csrf_token_hash: row.get(3)?,
-                    expires_at: row.get(4)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
-    }
-
-    pub fn revoke_session(&self, token: &str) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "UPDATE sessions SET revoked_at=?2 WHERE token_hash=?1",
-            params![hash_token(token), Self::now()],
-        )?;
-        Ok(())
+        let matches = digest.as_bytes().ct_eq(&expected);
+        Ok(bool::from(matches) && !key.is_empty() && stored.len() == expected.len())
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -574,87 +436,6 @@ impl PanelDb {
             Some(Err(err)) => Err(err),
             None => Ok(Some(trimmed.as_bytes().to_vec())),
         }
-    }
-
-    pub fn set_turnstile_secret(&self, value: &str) -> Result<()> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Ok(());
-        }
-        self.set_secret_setting_bytes("turnstile_secret_key", trimmed.as_bytes())
-    }
-
-    pub fn security_settings(&self, default_ttl: u64) -> Result<SecuritySettings> {
-        Ok(SecuritySettings {
-            turnstile_enabled: setting_bool(self.get_setting("turnstile_enabled")?, false),
-            turnstile_required: setting_bool(self.get_setting("turnstile_required")?, false),
-            turnstile_site_key: self.get_setting("turnstile_site_key")?,
-            turnstile_secret_configured: self
-                .turnstile_secret()
-                .map(|value| value.is_some_and(|secret| !secret.trim().is_empty()))
-                .unwrap_or(false),
-            session_ttl_seconds: self
-                .get_setting("session_ttl_seconds")?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default_ttl),
-        })
-    }
-
-    pub fn turnstile_secret(&self) -> Result<Option<String>> {
-        self.get_secret_setting_bytes("turnstile_secret_key")?
-            .map(|value| String::from_utf8(value).context("invalid Turnstile secret"))
-            .transpose()
-    }
-
-    pub fn turnstile_token_seen(&self, token: &str) -> Result<bool> {
-        self.prune_expired_turnstile_attempts()?;
-        let conn = self.conn.lock().expect("db mutex");
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM turnstile_attempts WHERE token_hash=?1 AND expires_at>?2",
-            params![hash_token(token), Self::now()],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    pub fn record_turnstile_attempt(
-        &self,
-        token: &str,
-        action: &str,
-        hostname: Option<&str>,
-        remote_ip: Option<&str>,
-        success: bool,
-        error_codes: &[String],
-    ) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        let now = Self::now();
-        conn.execute(
-            r#"
-            INSERT OR IGNORE INTO turnstile_attempts
-              (token_hash, action, hostname, remote_ip, success, error_codes, created_at, expires_at)
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            params![
-                hash_token(token),
-                action,
-                hostname,
-                remote_ip,
-                if success { 1 } else { 0 },
-                serde_json::to_string(error_codes)?,
-                now,
-                now + 600,
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn prune_expired_turnstile_attempts(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "DELETE FROM turnstile_attempts WHERE expires_at <= ?1",
-            params![Self::now()],
-        )?;
-        Ok(())
     }
 
     pub fn record_audit(
@@ -1216,15 +997,6 @@ pub struct JobRecord {
     pub error: Option<String>,
 }
 
-fn admin_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Admin> {
-    Ok(Admin {
-        id: row.get(0)?,
-        username: row.get(1)?,
-        password_hash: row.get(2)?,
-        created_at: row.get(3)?,
-    })
-}
-
 fn job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
     Ok(JobRecord {
         id: row.get(0)?,
@@ -1355,13 +1127,6 @@ fn migrate_probe_error_incidents_schema(conn: &Connection) -> Result<()> {
     result
 }
 
-fn setting_bool(value: Option<String>, default: bool) -> bool {
-    value
-        .as_deref()
-        .map(|v| matches!(v, "true" | "1" | "yes" | "on"))
-        .unwrap_or(default)
-}
-
 fn add_column_if_missing(
     conn: &Connection,
     table: &str,
@@ -1429,14 +1194,14 @@ mod tests {
             db.set_setting(key, "preserve-fixture").unwrap();
         }
         db.migrate().unwrap();
-        for key in ["probe_logs_db_last_maintain", "probe_logs_db_last_compact"] {
+        for key in [
+            "probe_logs_db_last_maintain",
+            "probe_logs_db_last_compact",
+            "turnstile_site_key",
+        ] {
             assert!(db.get_setting(key).unwrap().is_none());
         }
-        for key in [
-            "turnstile_site_key",
-            "probe_bark_device_key",
-            "probe_error_monitor_cursor",
-        ] {
+        for key in ["probe_bark_device_key", "probe_error_monitor_cursor"] {
             assert_eq!(
                 db.get_setting(key).unwrap().as_deref(),
                 Some("preserve-fixture")
@@ -1536,96 +1301,20 @@ mod tests {
     }
 
     #[test]
-    fn creates_admin_and_session() {
+    fn administrator_keys_rotate_revoke_and_never_store_plaintext() {
         let db = PanelDb::open(":memory:").unwrap();
-        db.upsert_admin("a1", "admin", "hash").unwrap();
-        assert_eq!(db.admin_count().unwrap(), 1);
-        db.create_session(super::NewSession {
-            id: "s1",
-            admin_id: "a1",
-            token: "token",
-            csrf_token: "csrf",
-            user_agent: None,
-            ip: None,
-            expires_at: PanelDb::now() + 60,
-        })
-        .unwrap();
-        assert!(db.session_by_token("token").unwrap().is_some());
-    }
-
-    #[test]
-    fn migrate_replaces_legacy_default_session_ttl() {
-        let db = PanelDb::open(":memory:").unwrap();
-        db.set_setting("session_ttl_seconds", "604800").unwrap();
-
-        db.migrate().unwrap();
-
-        assert_eq!(
-            db.security_settings(300).unwrap().session_ttl_seconds,
-            31_536_000
-        );
-    }
-
-    #[test]
-    fn turnstile_attempt_prevents_replay_and_hashes_token() {
-        let db = PanelDb::open(":memory:").unwrap();
-
-        assert!(!db.turnstile_token_seen("token-1").unwrap());
-        db.record_turnstile_attempt(
-            "token-1",
-            "login",
-            Some("panel.example.com"),
-            None,
-            true,
-            &[],
-        )
-        .unwrap();
-
-        assert!(db.turnstile_token_seen("token-1").unwrap());
+        assert!(!db.verify_admin_api_key("").unwrap());
+        let first = db.rotate_admin_api_key().unwrap();
+        assert!(db.verify_admin_api_key(&first).unwrap());
         assert_ne!(
-            db.get_setting("token-1").unwrap(),
-            Some("token-1".to_string())
+            db.get_setting("admin_api_key_sha256").unwrap().unwrap(),
+            first
         );
-    }
-
-    #[test]
-    fn turnstile_secret_is_encrypted_and_blank_update_preserves_existing() {
-        let db = PanelDb::open(":memory:").unwrap();
-
-        db.set_turnstile_secret("secret-one").unwrap();
-        let stored = db.get_setting("turnstile_secret_key").unwrap().unwrap();
-
-        assert_ne!(stored, "secret-one");
-        assert!(
-            db.security_settings(300)
-                .unwrap()
-                .turnstile_secret_configured
-        );
-        assert_eq!(
-            db.turnstile_secret().unwrap().as_deref(),
-            Some("secret-one")
-        );
-
-        db.set_turnstile_secret("   ").unwrap();
-
-        assert_eq!(
-            db.turnstile_secret().unwrap().as_deref(),
-            Some("secret-one")
-        );
-    }
-
-    #[test]
-    fn turnstile_secret_does_not_return_encrypted_json_as_plaintext() {
-        let db = PanelDb::open(":memory:").unwrap();
-        db.set_setting(
-            "turnstile_secret_key",
-            r#"{"ciphertext":"not-base64","nonce":"also-bad"}"#,
-        )
-        .unwrap();
-
-        let err = db.turnstile_secret().unwrap_err().to_string();
-
-        assert!(err.contains("decrypt") || err.contains("invalid encrypted"));
+        let second = db.rotate_admin_api_key().unwrap();
+        assert!(!db.verify_admin_api_key(&first).unwrap());
+        assert!(db.verify_admin_api_key(&second).unwrap());
+        db.revoke_admin_api_key().unwrap();
+        assert!(!db.verify_admin_api_key(&second).unwrap());
     }
 
     #[test]

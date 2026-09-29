@@ -1,3 +1,4 @@
+import { LocalAppUpdate } from "./LocalAppUpdate";
 import {
   Archive,
   CheckCircle2,
@@ -27,7 +28,7 @@ import type {
   UpdateStatus
 } from "../../types";
 
-export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string | null; capabilities: RuntimeCapabilityMatrix }) {
+export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapabilityMatrix }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const { update, jobs } = useOpsQueries({ historyOpen });
   const [plan, setPlan] = useState<ArchiveDeletePlan | null>(null);
@@ -36,7 +37,6 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
   const opsActions = useOpsActions({
-    csrfToken,
     capabilities,
     onArchiveDryRun: (nextPlan) => {
       setPlan(nextPlan);
@@ -89,7 +89,8 @@ export function OpsWorkspace({ csrfToken, capabilities }: { csrfToken?: string |
 
   return (
     <div className="ops-grid">
-      <Panel title={OPS_PANEL_TITLES.updates} icon={<RefreshCw size={18} />}>
+      {capabilities.updateServiceLabels && <LocalAppUpdate />}
+      <Panel title={capabilities.updateServiceLabels ? "腾讯云服务更新" : "本机 App 更新"} icon={<RefreshCw size={18} />}>
         {update.error && <div role="alert" className="form-error">{update.error.message}</div>}
         {jobMutation.error && <div role="alert" className="form-error">{jobMutation.error.message}</div>}
         {startedJob.error && <div role="alert" className="form-error">{startedJob.error.message}</div>}

@@ -15,7 +15,6 @@ import {
   useThreadDetailHydration,
   useThreadDetailQuery,
   useThreadMessageStoreController,
-  useThreadRealtimeSubscription,
   useThreadsQuery,
   type ThreadMessageStoreController
 } from "../lib/query/threads";
@@ -119,13 +118,6 @@ export function useConversationRealtimeController(input: {
     setExplicitBottomFollowRevision((revision) => revision + 1);
   }, [input]);
 
-  useThreadRealtimeSubscription({
-    threadId: input.threadId,
-    messageStore: input.messageStore,
-    threadCache,
-    applyThreadTitleOverride: applyThreadTitleOverride as (summary: ThreadSummary) => ThreadSummary,
-    onBeforeActiveBlocks: updateMessageFollowState
-  });
 
   return {
     explicitBottomFollowRevision,

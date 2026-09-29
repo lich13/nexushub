@@ -14,7 +14,7 @@ pub struct PlatformPaths {
     pub kind: PlatformKind,
     pub data_dir: PathBuf,
     pub config_file: PathBuf,
-    pub webui_dir: PathBuf,
+
     pub log_dir: PathBuf,
     pub service_name: String,
     pub service_kind: String,
@@ -70,7 +70,7 @@ impl PlatformPaths {
                 kind,
                 data_dir: PathBuf::from("/var/lib/nexushub-webd"),
                 config_file: PathBuf::from("/etc/nexushub-webd/config.toml"),
-                webui_dir: PathBuf::from("/usr/share/nexushub-webd/webui"),
+
                 log_dir: PathBuf::from("/var/log/nexushub-webd"),
                 service_name: "nexushub-webd".to_string(),
                 service_kind: "systemd".to_string(),
@@ -80,7 +80,7 @@ impl PlatformPaths {
                 kind,
                 data_dir: home.join("Library/Application Support/NexusHub"),
                 config_file: home.join("Library/Application Support/NexusHub/config.toml"),
-                webui_dir: home.join("Library/Application Support/NexusHub/desktop-assets"),
+
                 log_dir: home.join("Library/Logs/NexusHub"),
                 service_name: "NexusHub.app".to_string(),
                 service_kind: "tauri".to_string(),
@@ -90,7 +90,7 @@ impl PlatformPaths {
                 kind,
                 data_dir: PathBuf::from(r"%ProgramData%\NexusHub"),
                 config_file: PathBuf::from(r"%ProgramData%\NexusHub\config.toml"),
-                webui_dir: PathBuf::from(r"%ProgramData%\NexusHub\webui"),
+
                 log_dir: PathBuf::from(r"%ProgramData%\NexusHub\logs"),
                 service_name: "NexusHub".to_string(),
                 service_kind: "windows_service".to_string(),
@@ -107,7 +107,7 @@ impl PlatformPaths {
                 Self {
                     kind,
                     config_file: home.join(".config/NexusHub/config.toml"),
-                    webui_dir: data_dir.join("desktop-assets"),
+
                     log_dir: home.join(".local/state/NexusHub/logs"),
                     data_dir,
                     service_name: "NexusHub".to_string(),
@@ -120,7 +120,7 @@ impl PlatformPaths {
                 kind,
                 data_dir: home.join("AppData/Roaming/NexusHub"),
                 config_file: home.join("AppData/Roaming/NexusHub/config.toml"),
-                webui_dir: home.join("AppData/Roaming/NexusHub/webui"),
+
                 log_dir: home.join("AppData/Local/NexusHub/Logs"),
                 service_name: "NexusHub".to_string(),
                 service_kind: "tauri".to_string(),

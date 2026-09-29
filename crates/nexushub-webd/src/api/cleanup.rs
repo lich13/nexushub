@@ -1,9 +1,5 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{
-    auth::{require_auth, require_csrf},
-    linux_adapter,
-    state::AppState,
-};
+use crate::{auth::require_auth, linux_adapter, state::AppState};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -20,7 +16,6 @@ pub(crate) async fn archive_delete_dry_run(
     headers: HeaderMap,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
@@ -42,7 +37,6 @@ pub(crate) async fn archive_delete_execute(
     Json(payload): Json<ArchiveExecuteRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
@@ -63,7 +57,6 @@ pub(crate) async fn hidden_threads_delete_dry_run(
     headers: HeaderMap,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()
@@ -78,7 +71,6 @@ pub(crate) async fn hidden_threads_delete_execute(
     Json(payload): Json<ArchiveExecuteRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let platform = http_update_platform();
     let plan = NexusHubUseCases::new(&platform)
         .cleanup()

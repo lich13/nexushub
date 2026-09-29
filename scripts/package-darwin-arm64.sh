@@ -27,7 +27,7 @@ restore_helper_resource() {
 }
 
 cleanup() {
-  [[ -n "${TMP}" && -d "${TMP}" ]] && rm -rf "${TMP}"
+  [[ -n "${TMP}" && -d "${TMP}" ]] && rm -r -- "${TMP}"
   restore_helper_resource
   [[ -n "${HELPER_RESOURCE_BACKUP}" && -f "${HELPER_RESOURCE_BACKUP}" ]] && rm -f "${HELPER_RESOURCE_BACKUP}"
   [[ -n "${TEMP_TAURI_CONFIG}" && -f "${TEMP_TAURI_CONFIG}" ]] && rm -f "${TEMP_TAURI_CONFIG}"
@@ -189,7 +189,7 @@ if [[ "${SKIP_HELPER_BUILD:-0}" != "1" ]]; then
   cargo build --release --package nexushub-webd
 fi
 
-HELPER_BINARY="${ROOT}/target/release/nexushub-webd"
+HELPER_BINARY="${CARGO_TARGET_DIR:-${ROOT}/target}/release/nexushub-webd"
 [[ -x "${HELPER_BINARY}" ]] || die "missing helper binary: ${HELPER_BINARY}"
 cp "${HELPER_BINARY}" "${HELPER_RESOURCE}"
 chmod 755 "${HELPER_RESOURCE}"

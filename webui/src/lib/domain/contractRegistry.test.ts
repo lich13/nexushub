@@ -1,3 +1,4 @@
+import ts from "typescript";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -11,7 +12,7 @@ import {
 import { contractDtoNameSet, contractDtoNames } from "./contractDtoMap";
 import {
   desktopTauriOnlyVisualSurfaces,
-  linuxWebOnlyVisualSurfaces,
+  remoteApiOnlyVisualSurfaces,
   macosForbiddenVisualSurfaces,
   sharedActionLabels,
   sharedCorePanelTitles,
@@ -39,7 +40,7 @@ type NexusHubContract = {
     corePanelTitles: string[];
     actionLabels: Record<string, string>;
     disabledStates: Record<string, string>;
-    linuxWebOnly: string[];
+    remoteApiOnly: string[];
     desktopTauriOnly: string[];
     forbidden: {
       desktopEmbeddedTauri: string[];
@@ -61,6 +62,7 @@ function repositoryFile(path: string): string {
 
 const apiSources = import.meta.glob([
   "../api/**/*.ts",
+  "../runtime.ts",
   "!../api/**/*.test.ts"
 ], {
   eager: true,
@@ -70,18 +72,17 @@ const apiSources = import.meta.glob([
 
 function apiCommandLiterals(): Set<string> {
   const out = new Set<string>();
-  for (const source of Object.values(apiSources)) {
-    for (const pattern of [
-      /\bcallCommand(?:<[^"']+>)?\(\s*["']([^"']+)["']/g,
-      /\bstartProbeCommand\(\s*["']([^"']+)["']/g,
-      /\brunTypedUpdateCommand\(\s*["']([^"']+)["']/g,
-    ]) {
-      for (const match of source.matchAll(pattern)) {
-        out.add(match[1]);
+  const wrappers = new Set(["callCommand", "invokeNative", "changeConnection", "startProbeCommand", "runTypedUpdateCommand"]);
+  for (const [path, source] of Object.entries(apiSources)) {
+    const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && wrappers.has(node.expression.text)) {
+        const command = node.arguments[0];
+        if (command && ts.isStringLiteral(command)) out.add(command.text);
       }
-    }
-    if (source.includes("uploadFilesTransport")) out.add("uploadFiles");
-    if (source.includes("openThreadEventStream")) out.add("threadEvents");
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
   }
   return out;
 }
@@ -185,7 +186,7 @@ describe("contract registry", () => {
     expect(visual.corePanelTitles).toEqual([...sharedCorePanelTitles]);
     expect(visual.actionLabels).toEqual(sharedActionLabels);
     expect(visual.disabledStates).toEqual(sharedDisabledStates);
-    expect(visual.linuxWebOnly).toEqual([...linuxWebOnlyVisualSurfaces]);
+    expect(visual.remoteApiOnly).toEqual([...remoteApiOnlyVisualSurfaces]);
     expect(visual.desktopTauriOnly).toEqual([...desktopTauriOnlyVisualSurfaces]);
     expect(visual.forbidden.desktopEmbeddedTauri).toEqual([...macosForbiddenVisualSurfaces]);
   });
@@ -204,7 +205,7 @@ describe("contract registry", () => {
 
   test("keeps host surface names explicit for runtime capability policy", () => {
     expect(contract().hostSurfaces).toEqual([
-      "linux_server_webui",
+      "linux_server_api",
       "desktop_embedded_tauri",
     ]);
   });

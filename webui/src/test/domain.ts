@@ -9,4 +9,4 @@ export { runtimeCapabilitiesForRuntime } from "../lib/query/system";
 export { probeEventCard } from "../lib/probeUi";
 export { statusTabs } from "../components/chat/ChatWorkspace";
 export { Conversation } from "../components/chat/Conversation";
-export { initialSessionForRuntime, navigationItems, navigationLabelsForRuntime } from "../App";
+export { navigationItems, navigationLabelsForRuntime } from "../App";

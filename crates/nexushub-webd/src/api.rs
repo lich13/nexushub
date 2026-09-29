@@ -19,11 +19,9 @@ mod pi;
 mod probe;
 mod routes;
 mod rpc_dispatch;
-mod security;
 mod sessions;
 mod system;
 mod threads;
-mod web_auth;
 
 #[cfg(test)]
 mod entry_contract_tests;
@@ -53,21 +51,13 @@ pub(crate) use probe::{
     ProbeStatusQuery,
 };
 pub(crate) use routes::router;
-pub(crate) use security::{change_password, get_security, patch_security, public_settings};
 pub(crate) use system::{
     http_update_platform, start_update_action, system_capabilities, system_update_status,
     system_version,
 };
 pub(crate) use threads::{
     archive_thread, list_threads, rename_thread, restore_thread, thread_blocks, thread_detail,
-    thread_events,
 };
-#[cfg(test)]
-pub(crate) use threads::{block_changed, seed_thread_event_blocks, thread_event_block_key};
-pub(crate) use web_auth::{login, logout, me};
-#[cfg(test)]
-pub(crate) use web_auth::{turnstile_login_action, LoginRequest, TurnstileLoginAction};
-
 type ApiResponse = Result<Response, ApiError>;
 
 pub struct ApiError(Box<Response>);

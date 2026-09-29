@@ -61,7 +61,7 @@ function printActionChecklist(action) {
     console.log("- Tauri command: register the typed invoke command and keep bundled-helper behavior thin.");
     console.log("- WebUI wrapper: update query/domain/runtime wrapper and contractDtoMap marker.");
     console.log("- tests: Rust contract guard, Tauri guard, WebUI contract/visual/capability tests, install-script guard.");
-    console.log("- acceptance: Browser for Linux WebUI and Computer Use for macOS Tauri when the visible surface changes.");
+    console.log("- acceptance: Installed macOS App for local and remote API targets when the visible surface changes.");
   } else if (action.scope === "transport") {
     console.log("- contract registry: scope=transport, DTO owner, requestDto, responseDto, and explicit wrapper name.");
     console.log("- transport runtime: update upload/event-stream transport without adding ad hoc command strings.");

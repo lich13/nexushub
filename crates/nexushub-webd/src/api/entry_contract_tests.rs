@@ -27,14 +27,18 @@ fn api_entry_exposes_only_current_submodules() {
         "mod probe;",
         "mod routes;",
         "mod rpc_dispatch;",
-        "mod security;",
         "mod system;",
         "mod threads;",
-        "mod web_auth;",
     ] {
         assert!(api.contains(module), "missing current API module: {module}");
     }
-    for retired in ["mod goals;", "mod uploads;", "mod desktop_webui;"] {
+    for retired in [
+        "mod goals;",
+        "mod uploads;",
+        "mod desktop_webui;",
+        "mod security;",
+        "mod web_auth;",
+    ] {
         assert!(
             !api.contains(retired),
             "retired API module remained: {retired}"
@@ -54,10 +58,11 @@ fn api_entry_exposes_only_current_submodules() {
 }
 
 #[test]
-fn routes_keep_health_events_and_single_rpc_transport_surface() {
+fn routes_keep_health_and_single_rpc_transport_surface() {
     let routes = src("api/routes.rs");
     assert!(routes.contains(".route(\"/healthz\", get(healthz))"));
-    assert!(routes.contains(".route(RPC_THREAD_EVENTS_ROUTE, get(thread_events))"));
+    assert!(!routes.contains("thread_events"));
+    assert!(!routes.contains("RPC_THREAD_EVENTS_ROUTE"));
     assert!(routes.contains(".route(RPC_COMMAND_ROUTE, post(rpc_dispatch))"));
     assert!(routes.contains("LEGACY_API_FALLBACK_ROUTE"));
     assert!(!routes.contains("RPC_UPLOAD_FILES_ROUTE"));

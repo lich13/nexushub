@@ -1,8 +1,5 @@
 use super::{api_error, http_update_platform, ok, ApiResponse};
-use crate::{
-    auth::{require_auth, require_csrf},
-    state::AppState,
-};
+use crate::{auth::require_auth, state::AppState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -51,8 +48,7 @@ pub(crate) async fn pi_rename(
     headers: HeaderMap,
     Json(request): Json<PiRenameRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .pi()
         .rename(&request.session_key, &request.title)
@@ -64,8 +60,7 @@ pub(crate) async fn pi_delete_preview(
     headers: HeaderMap,
     Path(session_key): Path<String>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .pi()
         .delete_preview(&session_key)?)
@@ -76,8 +71,7 @@ pub(crate) async fn pi_delete_execute(
     headers: HeaderMap,
     Json(request): Json<PiDeleteRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     ok(NexusHubUseCases::new(&http_update_platform())
         .pi()
         .delete_execute(request)?)

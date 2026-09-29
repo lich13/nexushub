@@ -1,11 +1,29 @@
 import { expect, type Page } from "@playwright/test";
 import * as demo from "../src/lib/api/demo";
+import type { RemoteConnectionView } from "../src/lib/runtime";
 
-export async function mockApi(page: Page, signedIn = true) {
+type MockArgs = Record<string, any>;
+type MockHandler = (args: MockArgs, next: () => Promise<unknown>) => unknown;
+const mockStates = new WeakMap<Page, { overrides: Map<string, MockHandler>; observers: Array<(command: string, args: MockArgs) => void> }>();
+
+export async function mockCommand(page: Page, command: string, handler: MockHandler) {
+  const state = mockStates.get(page);
+  if (!state) throw new Error("Install mockApi before adding command overrides");
+  state.overrides.set(command, handler);
+}
+
+export function observeCommands(page: Page, observer: (command: string, args: MockArgs) => void) {
+  mockStates.get(page)!.observers.push(observer);
+}
+
+export async function mockApi(page: Page, options: { connection?: Partial<RemoteConnectionView> } = {}) {
+  const state = { overrides: new Map<string, MockHandler>(), observers: [] as Array<(command: string, args: MockArgs) => void> };
+  mockStates.set(page, state);
+  let connection: RemoteConnectionView = { target: "local", revision: 0, baseUrl: null, configured: false, ...options.connection };
   const calls: string[] = [];
   const titles = new Map<string, string>();
   const archived = new Set<string>();
-  let probeSettings = demo.demoProbeSettings();
+  let probeSettings = demo.demoProbeSettings(connection.target === "remote" ? "linux-api" : "macos-tauri");
   probeSettings.notifications = { ...probeSettings.notifications, enabled: true, device_key_configured: true };
   let jobReads = 0;
   let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "recent" }];
@@ -26,73 +44,91 @@ export async function mockApi(page: Page, signedIn = true) {
     deleteBlockReason: null,
     readError: null
   }];
-  if (signedIn) await page.addInitScript((session) => localStorage.setItem("nexushub-session", JSON.stringify(session)), demo.demoSessionUser());
-  await page.route("**/api/rpc/**", async (route) => {
-    const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/api/rpc/")[1]);
-    if (name.startsWith("threadEvents/")) return route.fulfill({ contentType: "text/event-stream", body: ": ready\n\n" });
+  const dispatch = async (name: string, args: MockArgs = {}, target: "local" | "remote" = "local"): Promise<unknown> => {
+    const fixture = () => target === "remote" ? "linux-api" as const : "macos-tauri" as const;
     calls.push(name);
-    if (name === "grok.detail" && !grok.length) return route.fulfill({ status: 500, json: { error: "Grok session not found" } });
-    if (name === "pi.detail" && !pi.length) return route.fulfill({ status: 500, json: { error: "Pi session not found" } });
-    const args = route.request().postDataJSON() ?? {};
-    const responses: Record<string, () => unknown> = {
-      "auth.publicSettings": demo.demoPublicSettings,
-      "auth.login": demo.demoSessionUser,
-      "auth.me": demo.demoSessionUser,
-      "system.capabilities": demo.demoSystemCapabilities,
-      "system.version": demo.demoSystemVersion,
-      "system.platform": demo.demoPlatformOverview,
-      "threads.list": () => demo.demoThreads("all", "").map((thread) => ({ ...thread, title: titles.get(thread.id) ?? thread.title, status: archived.has(thread.id) ? "Archived" : thread.status })).filter((thread) => {
-        const status = args.status ?? "all";
-        return (status === "archived" ? thread.status === "Archived" : thread.status !== "Archived" && (status === "all" || thread.status === ({ running: "Running", "reply-needed": "ReplyNeeded", recoverable: "Recoverable" } as Record<string, string>)[status])) && thread.title.toLowerCase().includes((args.q ?? "").toLowerCase());
-      }),
-      "threads.detail": () => { const detail = demo.demoThreadDetail(args.id); return { ...detail, summary: { ...detail.summary, title: titles.get(args.id) ?? detail.summary.title, status: archived.has(args.id) ? "Archived" : detail.summary.status } }; },
-      "threads.rename": () => { titles.set(args.threadId, args.name); return { ok: true }; },
-      "threads.archive": () => { archived.add(args.threadId); return { ok: true }; },
-      "threads.restore": () => { archived.delete(args.threadId); return { ok: true }; },
-      "threads.blocks": () => demo.demoThreadBlockPage(args.id),
-      "updates.status": demo.demoUpdateStatus,
-      "jobs.list": demo.demoJobs,
-      "jobs.detail": () => ({ ...demo.demoJob(args.id), status: ++jobReads < 3 ? "running" : "succeeded" }),
-      "updates.check": () => ({ job_id: "fixture-job" }),
-      "probe.status": () => ({ available: true, data: demo.demoProbeStatus() }),
-      "probe.settings.get": () => ({ available: true, data: probeSettings }),
-      "probe.settings.save": () => {
-        const input = args.settings;
-        probeSettings = {
-          ...probeSettings,
-          codex: { ...probeSettings.codex, ...input.codex },
-          probe: { ...probeSettings.probe, ...input.probe },
-          notifications: { ...probeSettings.notifications, ...input.probe.notifications }
-        };
-        return probeSettings;
-      },
-      "probe.barkTest": () => ({ job_id: "fixture-job" }),
-      "cleanup.archiveDryRun": demo.demoArchiveDeletePlan,
-      "cleanup.archiveExecute": demo.demoArchiveDeleteResult,
-      "cleanup.hiddenDryRun": demo.demoHiddenThreadDeletePlan,
-      "cleanup.hiddenExecute": demo.demoHiddenThreadDeleteResult,
-      "probe.events": demo.demoProbeEvents,
-      "security.get": demo.demoSecurity,
-      "grok.list": () => grok.filter((item) => item.title.includes(args.q ?? "")),
-      "grok.detail": () => ({ summary: grok[0], events: [{ kind: "user_message_chunk", text: "Check the isolated fixture." }, { kind: "assistant_message_chunk", text: "## Result\n\nReadable response with a [link](https://example.com).\n\n```sh\nprintf test\n```" }] }),
-      "grok.rename": () => { grok = grok.map((item) => ({ ...item, title: args.title })); return grok[0]; },
-      "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
-      "grok.deleteExecute": () => { if (!args.confirmed || args.fingerprint !== "fixture-fingerprint") throw new Error("missing confirmation"); grok = []; return { id: args.id, deleted: true, bytes: 128 }; },
-      "pi.list": () => pi.filter((item) => [item.title, item.id, item.cwd].some((value) => value.toLowerCase().includes((args.q ?? "").toLowerCase()))),
-      "pi.detail": () => ({ summary: pi.find((item) => item.sessionKey === args.sessionKey) ?? pi[0], events: [
-        { kind: "user_message", role: "user", text: "Inspect the current branch." },
-        { kind: "tool_call", text: "read", callId: "fixture-call", status: "in_progress", detail: "{\"path\":\"README.md\"}" },
-        { kind: "tool_result", text: "read", callId: "fixture-call", status: "completed", detail: "NexusHub" },
-        { kind: "compaction", text: "Earlier work was compacted." },
-        { kind: "branch_summary", text: "Current Pi branch" },
-        { kind: "assistant_message", role: "assistant", text: "Pi fixture result" }
-      ] }),
-      "pi.rename": () => { pi = pi.map((item) => item.sessionKey === args.sessionKey ? { ...item, title: args.title } : item); return pi[0]; },
-      "pi.deletePreview": () => ({ ...pi.find((item) => item.sessionKey === args.sessionKey), fingerprint: "pi-fixture-fingerprint", fileCount: 1, bytes: 256 }),
-      "pi.deleteExecute": () => { if (!args.confirmed || args.fingerprint !== "pi-fixture-fingerprint") throw new Error("missing confirmation"); pi = pi.filter((item) => item.sessionKey !== args.sessionKey); return { sessionKey: args.sessionKey, deleted: true, bytes: 256 }; }
+    state.observers.forEach(observer => observer(name, args));
+    const respond = async (): Promise<unknown> => {
+      if (name === "remote.get") return { ...connection };
+      if (name === "remote.verify") return demo.demoSystemCapabilities("linux-api");
+      if (name === "remote.save") {
+        connection = { target: "remote", revision: connection.revision + 1, baseUrl: args.request.baseUrl, configured: true };
+        return { ...connection };
+      }
+      if (name === "remote.select") {
+        connection = { ...connection, target: args.request.target, revision: connection.revision + 1 };
+        return { ...connection };
+      }
+      if (name === "remote.remove") {
+        connection = { target: "local", revision: connection.revision + 1, baseUrl: null, configured: false };
+        return { ...connection };
+      }
+      if (name === "remote.invoke") return dispatch(args.request.command, args.request.args, "remote");
+      if (name === "grok.detail" && !grok.length) throw new Error("Grok session not found");
+      if (name === "pi.detail" && !pi.length) throw new Error("Pi session not found");
+      const responses: Record<string, () => unknown> = {
+        "system.capabilities": () => demo.demoSystemCapabilities(fixture()),
+        "system.version": demo.demoSystemVersion,
+        "system.platform": () => demo.demoPlatformOverview(fixture()),
+        "threads.list": () => demo.demoThreads("all", "").map((thread) => ({ ...thread, title: titles.get(thread.id) ?? thread.title, status: archived.has(thread.id) ? "Archived" : thread.status })).filter((thread) => {
+          const status = args.status ?? "all";
+          return (status === "archived" ? thread.status === "Archived" : thread.status !== "Archived" && (status === "all" || thread.status === ({ running: "Running", "reply-needed": "ReplyNeeded", recoverable: "Recoverable" } as Record<string, string>)[status])) && thread.title.toLowerCase().includes((args.q ?? "").toLowerCase());
+        }),
+        "threads.detail": () => { const detail = demo.demoThreadDetail(args.id); return { ...detail, summary: { ...detail.summary, title: titles.get(args.id) ?? detail.summary.title, status: archived.has(args.id) ? "Archived" : detail.summary.status } }; },
+        "threads.rename": () => { titles.set(args.threadId, args.name); return { ok: true }; },
+        "threads.archive": () => { archived.add(args.threadId); return { ok: true }; },
+        "threads.restore": () => { archived.delete(args.threadId); return { ok: true }; },
+        "threads.blocks": () => demo.demoThreadBlockPage(args.id),
+        "updates.status": () => demo.demoUpdateStatus(fixture()),
+        "jobs.list": demo.demoJobs,
+        "jobs.detail": () => ({ ...demo.demoJob(args.id), status: ++jobReads < 3 ? "running" : "succeeded" }),
+        "updates.check": () => ({ job_id: "fixture-job" }),
+        "probe.status": () => ({ available: true, data: demo.demoProbeStatus(fixture()) }),
+        "probe.settings.get": () => ({ available: true, data: probeSettings }),
+        "probe.settings.save": () => {
+          const input = args.settings;
+          probeSettings = {
+            ...probeSettings,
+            codex: { ...probeSettings.codex, ...input.codex },
+            probe: { ...probeSettings.probe, ...input.probe },
+            notifications: { ...probeSettings.notifications, ...input.probe.notifications }
+          };
+          return probeSettings;
+        },
+        "probe.barkTest": () => ({ job_id: "fixture-job" }),
+        "cleanup.archiveDryRun": demo.demoArchiveDeletePlan,
+        "cleanup.archiveExecute": demo.demoArchiveDeleteResult,
+        "cleanup.hiddenDryRun": demo.demoHiddenThreadDeletePlan,
+        "cleanup.hiddenExecute": demo.demoHiddenThreadDeleteResult,
+        "probe.events": demo.demoProbeEvents,
+        "grok.list": () => grok.filter((item) => item.title.includes(args.q ?? "")),
+        "grok.detail": () => ({ summary: grok[0], events: [{ kind: "user_message_chunk", text: "Check the isolated fixture." }, { kind: "assistant_message_chunk", text: "## Result\n\nReadable response with a [link](https://example.com).\n\n```sh\nprintf test\n```" }] }),
+        "grok.rename": () => { grok = grok.map((item) => ({ ...item, title: args.title })); return grok[0]; },
+        "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
+        "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "fixture-fingerprint") throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
+        "pi.list": () => pi.filter((item) => [item.title, item.id, item.cwd].some((value) => value.toLowerCase().includes((args.q ?? "").toLowerCase()))),
+        "pi.detail": () => ({ summary: pi.find((item) => item.sessionKey === args.sessionKey) ?? pi[0], events: [
+          { kind: "user_message", role: "user", text: "Inspect the current branch." },
+          { kind: "tool_call", text: "read", callId: "fixture-call", status: "in_progress", detail: "{\"path\":\"README.md\"}" },
+          { kind: "tool_result", text: "read", callId: "fixture-call", status: "completed", detail: "NexusHub" },
+          { kind: "compaction", text: "Earlier work was compacted." },
+          { kind: "branch_summary", text: "Current Pi branch" },
+          { kind: "assistant_message", role: "assistant", text: "Pi fixture result" }
+        ] }),
+        "pi.rename": () => { pi = pi.map((item) => item.sessionKey === args.sessionKey ? { ...item, title: args.title } : item); return pi[0]; },
+        "pi.deletePreview": () => ({ ...pi.find((item) => item.sessionKey === args.sessionKey), fingerprint: "pi-fixture-fingerprint", fileCount: 1, bytes: 256 }),
+        "pi.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "pi-fixture-fingerprint") throw new Error("missing confirmation"); pi = pi.filter((item) => item.sessionKey !== request.sessionKey); return { sessionKey: request.sessionKey, deleted: true, bytes: 256 }; }
+      };
+      const response = responses[name];
+      if (!response) throw new Error(`Unmocked command: ${name}`);
+      return response();
     };
-    const response = responses[name];
-    await route.fulfill({ status: response ? 200 : 404, json: response ? response() : { error: `Unmocked command: ${name}` } });
+    const override = state.overrides.get(name);
+    return override ? override(args, respond) : respond();
+  };
+  await page.exposeFunction("__nexushubInvoke", dispatch);
+  await page.addInitScript(() => {
+    (globalThis as any).__NEXUSHUB_TEST_INVOKE__ = (command: string, args?: Record<string, unknown>) => (globalThis as any).__nexushubInvoke(command, args);
   });
   return calls;
 }

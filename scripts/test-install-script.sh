@@ -8,7 +8,6 @@ required=(
   deploy/nexushub-webd/install.sh
   deploy/nexushub-webd/update.sh
   deploy/nexushub-webd/rollback.sh
-  deploy/nexushub-webd/web-update.sh
   scripts/package-darwin-arm64.sh
   scripts/package-webd-linux-x86_64.sh
   scripts/package-linux.sh
@@ -60,6 +59,17 @@ for stale in ["AppImage", ".deb", ".rpm", '"linux-x86_64"', "xvfb-run", "package
 for marker in ["webd-linux:", "macos:", "nexushub-webd-linux-x86_64.tar.gz", "darwin-aarch64", "expected seven release assets"]:
     if marker not in release:
         raise SystemExit(f"Release missing marker: {marker}")
+
+package = (root / "scripts/package-webd-linux-x86_64.sh").read_text()
+if "--dir" in package or "SKIP_WEBUI" in package:
+    raise SystemExit("Linux packaging must not build front-end resources")
+if (root / "deploy/nexushub-webd/web-update.sh").exists():
+    raise SystemExit("retired web updater remains")
+nginx = (root / "deploy/nexushub-webd/nginx.conf").read_text()
+if "api/rpc/" not in nginx or "healthz" not in nginx or "return 404" not in nginx:
+    raise SystemExit("API-only ingress boundary missing")
+if "proxy_pass http://127.0.0.1:15742/;" in nginx:
+    raise SystemExit("retired root web proxy remains")
 
 contract = json.loads((root / "contracts/nexushub-contract.json").read_text())
 active = {action.get("id") for action in contract.get("actions", [])}

@@ -1,6 +1,5 @@
 use nexushub_core::services::commands as rpc_commands;
 
-pub(crate) const RPC_THREAD_EVENTS_ROUTE: &str = "/api/rpc/threadEvents/:id";
 pub(crate) const RPC_COMMAND_ROUTE: &str = "/api/rpc/:command";
 pub(crate) const LEGACY_API_FALLBACK_ROUTE: &str = "/api/*path";
 
@@ -20,13 +19,14 @@ pub(crate) fn is_retired_rpc_command(command: &str) -> bool {
 mod tests {
     use super::{
         is_business_rpc_command, is_retired_rpc_command, is_transport_rpc_command,
-        LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE, RPC_THREAD_EVENTS_ROUTE,
+        LEGACY_API_FALLBACK_ROUTE, RPC_COMMAND_ROUTE,
     };
     use nexushub_core::services::commands as rpc_commands;
 
     #[test]
     fn routes_keep_transport_surface_explicit() {
-        assert_eq!(RPC_THREAD_EVENTS_ROUTE, "/api/rpc/threadEvents/:id");
+        assert!(is_retired_rpc_command("threadEvents"));
+        assert!(!is_transport_rpc_command("threadEvents"));
         assert!(!is_transport_rpc_command("uploadFiles"));
         assert!(is_retired_rpc_command("uploadFiles"));
         assert_eq!(RPC_COMMAND_ROUTE, "/api/rpc/:command");
@@ -54,19 +54,12 @@ mod tests {
 
     #[test]
     fn required_transport_and_retired_exceptions_stay_out_of_business_allowlist() {
-        {
-            let command = "threadEvents";
-            assert!(
-                is_transport_rpc_command(command),
-                "transport exception must remain explicit: {command}"
-            );
-            assert!(
-                !is_business_rpc_command(command),
-                "transport exception must stay out of business allowlist: {command}"
-            );
-        }
-
         for command in [
+            "threadEvents",
+            "auth.login",
+            "auth.logout",
+            "auth.me",
+            "security.get",
             "startProbeJob",
             "runUpdateAction",
             "getDesktopOverview",

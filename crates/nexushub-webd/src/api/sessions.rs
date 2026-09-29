@@ -1,8 +1,5 @@
 use super::{api_error, ok, ApiResponse};
-use crate::{
-    auth::{require_auth, require_csrf},
-    state::AppState,
-};
+use crate::{auth::require_auth, state::AppState};
 use axum::{extract::State, http::HeaderMap, Json};
 use nexushub_core::services::{
     sessions::{SessionBatchExecuteRequest, SessionBatchRequest},
@@ -30,8 +27,7 @@ pub(crate) async fn bulk_preview(
     headers: HeaderMap,
     Json(request): Json<SessionBatchRequest>,
 ) -> ApiResponse {
-    let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let result = tokio::task::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
@@ -48,7 +44,6 @@ pub(crate) async fn bulk_execute(
     Json(request): Json<SessionBatchExecuteRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    require_csrf(&headers, &auth).map_err(|s| api_error(s, "csrf failed"))?;
     let detail = serde_json::json!({"provider": request.provider, "operation": request.operation, "count": request.items.len()});
     state.db.record_audit(
         Some(&auth.admin_id),

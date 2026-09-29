@@ -4,7 +4,7 @@ pub mod commands;
 pub mod contract_dtos;
 pub mod jobs;
 pub mod probe;
-pub mod security;
+pub mod remote;
 pub mod sessions;
 pub mod settings;
 pub mod system;

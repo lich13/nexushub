@@ -17,8 +17,7 @@ import { hostCapabilityPolicy, redactHostCopy } from "./hostCapabilityPolicy";
 
 export type RuntimeCapabilityInput = RuntimeCapabilityMatrix | undefined;
 
-const DEFAULT_RUNTIME_CAPABILITIES = runtimeCapabilitiesForRuntime("web");
-const secondsPerDay = 86400;
+const DEFAULT_RUNTIME_CAPABILITIES = runtimeCapabilitiesForRuntime("desktop");
 
 export function capabilitiesForInput(input?: RuntimeCapabilityInput): RuntimeCapabilityMatrix {
   return input ?? DEFAULT_RUNTIME_CAPABILITIES;
@@ -574,32 +573,6 @@ export function probeAvailabilityView(input: {
     metric: "不可用",
     tone: "danger"
   };
-}
-
-export function cleanHostValue(value?: string | null): string | null {
-  const cleaned = value?.trim();
-  const legacyAlias = ["tencent", "example-user"].join("-");
-  if (!cleaned || cleaned === legacyAlias) return null;
-  return cleaned;
-}
-
-export function hostnameFromPublicEndpoint(value?: string | null): string | null {
-  const endpoint = cleanHostValue(value);
-  if (!endpoint) return null;
-  try {
-    return new URL(endpoint).hostname || null;
-  } catch {
-    return endpoint.replace(/^\/+/, "").split("/")[0]?.split(":")[0] || null;
-  }
-}
-
-export function secondsToDays(seconds: number): number {
-  return Math.max(1, Math.round(seconds / secondsPerDay));
-}
-
-export function normalizeTurnstileAction(value?: string | null): string {
-  const action = value?.trim();
-  return action || "login";
 }
 
 function numberInputDraftValue(value: string): number | "" {

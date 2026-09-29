@@ -53,22 +53,7 @@ export type PiDeletePreview = { sessionKey: string; id: string; title: string; p
 export type PiDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
 export type PiDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
 
-export type SessionUser = {
-  id?: string;
-  username: string;
-  csrf_token?: string | null;
-  session_id?: string;
-};
 
-export type PublicSettings = {
-  site_name: string;
-  turnstile_enabled: boolean;
-  turnstile_required?: boolean;
-  turnstile_site_key: string;
-  turnstile_action?: string | null;
-  admin_configured: boolean;
-  base_url?: string | null;
-};
 
 export type ThreadSummary = {
   id: string;
@@ -182,7 +167,7 @@ export type ThreadBlockPage = {
 
 
 
-export type HostSurface = "linux_server_webui" | "desktop_embedded_tauri";
+export type HostSurface = "linux_server_api" | "desktop_embedded_tauri";
 
 export type SystemCapabilities = {
   threads: boolean;
@@ -191,14 +176,7 @@ export type SystemCapabilities = {
   settings: boolean;
   job_history: boolean;
   app_updater: boolean;
-  web_auth: boolean;
-  csrf: boolean;
-  security_settings: boolean;
-  turnstile: boolean;
   systemd: boolean;
-  nginx: boolean;
-  public_endpoint: boolean;
-  admin_password: boolean;
   linux_update_job: boolean;
   prune_backups: boolean;
   thread_cleanup?: boolean;
@@ -206,6 +184,7 @@ export type SystemCapabilities = {
 };
 
 export type SystemCapabilitiesResponse = {
+  api_version: number;
   host_surface: HostSurface;
   capabilities: SystemCapabilities;
 };
@@ -237,15 +216,6 @@ export type UpdateStatus = {
   capabilities: string[];
 };
 
-export type SecuritySettings = {
-  turnstile_enabled: boolean;
-  turnstile_required: boolean;
-  turnstile_site_key: string;
-  turnstile_secret_configured: boolean;
-  session_ttl_seconds: number;
-  turnstile_expected_hostname?: string | null;
-  turnstile_expected_action?: string | null;
-};
 
 export type JobRecord = {
   id: string;
@@ -333,7 +303,6 @@ export type PlatformOverview = {
   kind: "linux" | "macos" | "windows" | string;
   data_dir: string;
   config_file: string;
-  webui_dir: string;
   log_dir: string;
   service_name: string;
   service_kind: string;
@@ -495,3 +464,5 @@ export type CodexConfig = {
   network_access?: boolean | null;
   collaboration_mode?: string | null;
 };
+
+export type { RemoteConnectionView, RemoteConnectionCredentials, RemoteRevisionRequest, RemoteSelectionRequest, RemoteInvokeRequest, RemoteInvokeResponse } from "./lib/runtime";
