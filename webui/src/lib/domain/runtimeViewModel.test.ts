@@ -154,7 +154,7 @@ describe("runtime view-model helpers", () => {
       hiddenCleanup: { dryRunPending: true, armed: false, executePending: false }
     });
 
-    expect(view.updateActions.map((action) => action.label)).toEqual(["Precheck", "Update", "Prune"]);
+    expect(view.updateActions.map((action) => action.label)).toEqual(["检查更新", "清理更新备份"]);
     expect(failureCategoryLabel("systemd_failure", linuxWebCapabilities)).toBe("systemd 失败");
     expect(view.hiddenCleanup.stage).toEqual({ label: "扫描中", tone: "warning" });
   });

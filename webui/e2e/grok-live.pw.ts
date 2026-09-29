@@ -154,3 +154,26 @@ test("narrow Pi list stops hidden detail reads and reopens with a fresh read", a
   await page.locator(".provider-session").click();
   await expect.poll(() => calls.filter(call => call === "pi.detail").length).toBeGreaterThan(before);
 });
+
+
+test("Grok spinner stops when the selected session ends and unknown activity stays explicit", async ({ page }) => {
+  await mockApi(page);
+  await page.clock.install();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  let status = "running";
+  const summary = () => ({ id: "grok-fixture", title: "Grok activity fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, updatedAt: "2026-01-01T00:00:00Z", status });
+  await mockCommand(page, "grok.list", () => [summary()]);
+  await mockCommand(page, "grok.detail", () => ({ summary: summary(), events: [] }));
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
+  const row = page.locator(".provider-session");
+  await expect(row.getByLabel("运行中")).toBeVisible();
+  status = "recent";
+  await page.clock.fastForward(16000);
+  await expect(row.getByLabel("运行中")).toHaveCount(0);
+  await expect(row).not.toContainText("状态未知");
+  status = "unknown";
+  await page.clock.fastForward(16000);
+  await expect(row).toContainText("状态未知");
+  await expect(row.getByLabel("运行中")).toHaveCount(0);
+});

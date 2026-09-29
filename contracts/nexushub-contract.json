@@ -77,7 +77,7 @@
     },
     "disabledStates": {
       "renameArchivedThread": "取消归档后可改名",
-      "updateInstallWithoutAvailableVersion": "Install/Update disabled until update_available is true",
+      "updateInstallWithoutAvailableVersion": "更新按钮仅在已确认有新版本时显示",
       "cleanupArmBeforeDryRun": "cleanup arm disabled until dry-run returns candidates",
       "cleanupConfirmBeforeArmed": "cleanup execute disabled until confirmation is armed",
       "cleanupDuringMutation": "cleanup controls disabled while dry-run or execute is pending",
@@ -97,7 +97,7 @@
     },
     "remoteApiOnly": [
       "服务更新",
-      "Prune"
+      "清理更新备份"
     ]
   },
   "actions": [

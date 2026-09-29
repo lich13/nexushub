@@ -12,6 +12,8 @@ use std::{
     time::Duration,
 };
 
+mod activity;
+
 #[cfg(test)]
 mod tests;
 
@@ -84,7 +86,6 @@ pub fn list_grok_sessions(
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_ascii_lowercase);
-    let active = read_active_sessions(paths).ok();
     let mut result = Vec::new();
     for workspace in fs::read_dir(&root).with_context(|| format!("read {}", root.display()))? {
         let workspace = workspace?;
@@ -96,8 +97,7 @@ pub fn list_grok_sessions(
             if !session.file_type()?.is_dir() {
                 continue;
             }
-            if let Ok(Some(mut summary)) = read_summary(&session.path()) {
-                summary.status = status_from_snapshot(active.as_ref(), &summary.id).to_string();
+            if let Ok(Some(summary)) = read_summary(&session.path()) {
                 if needle.as_ref().is_some_and(|needle| {
                     !summary.title.to_ascii_lowercase().contains(needle)
                         && !summary.id.to_ascii_lowercase().contains(needle)
@@ -111,6 +111,10 @@ pub fn list_grok_sessions(
     }
     result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
     result.truncate(limit.clamp(1, 200));
+    let active = activity::Snapshot::capture(paths);
+    for summary in &mut result {
+        summary.status = active.status(summary).to_string();
+    }
     Ok(result)
 }
 
@@ -124,6 +128,7 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
     }
     let root = paths.sessions().canonicalize()?;
     let mut seen = std::collections::HashSet::new();
+    let active = activity::Snapshot::capture(paths);
     for workspace in fs::read_dir(&root)? {
         let workspace = workspace?;
         if !workspace.file_type()?.is_dir() {
@@ -141,7 +146,7 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
                 continue;
             }
             let read = (|| -> Result<NativeStreamSnapshot> {
-                let summary = resolve_session(paths, &id)?;
+                let summary = resolve_session_with_activity(paths, &id, &active)?;
                 let event_path = summary.path.join("events.jsonl");
                 let updates_path = summary.path.join("updates.jsonl");
                 let identity = format!(
@@ -476,6 +481,14 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
 }
 
 fn resolve_session(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
+    resolve_session_with_activity(paths, id, &activity::Snapshot::capture(paths))
+}
+
+fn resolve_session_with_activity(
+    paths: &GrokPaths,
+    id: &str,
+    active: &activity::Snapshot,
+) -> Result<GrokSessionSummary> {
     uuid::Uuid::parse_str(id).context("invalid Grok session ID")?;
     let root = paths
         .sessions()
@@ -502,63 +515,11 @@ fn resolve_session(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
         );
         if let Some(mut summary) = read_summary(&canonical)? {
             ensure!(found.is_none(), "ambiguous Grok session ID");
-            summary.status = session_status(paths, id).to_string();
+            summary.status = active.status(&summary).to_string();
             found = Some(summary);
         }
     }
     found.context("Grok session not found")
-}
-
-fn read_active_sessions(paths: &GrokPaths) -> Result<Value> {
-    let path = paths.home.join("active_sessions.json");
-    ensure!(
-        fs::metadata(&path)?.len() <= 1024 * 1024,
-        "Grok active state exceeds size limit"
-    );
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
-}
-
-fn session_status(paths: &GrokPaths, id: &str) -> &'static str {
-    status_from_snapshot(read_active_sessions(paths).ok().as_ref(), id)
-}
-
-fn status_from_snapshot(value: Option<&Value>, id: &str) -> &'static str {
-    let Some(value) = value else {
-        return "unknown";
-    };
-    match value {
-        Value::Array(entries) => {
-            if entries.iter().any(|entry| {
-                entry
-                    .get("sessionId")
-                    .or_else(|| entry.get("session_id"))
-                    .and_then(Value::as_str)
-                    == Some(id)
-            }) {
-                "running"
-            } else {
-                "recent"
-            }
-        }
-        Value::Object(entries) => {
-            if entries.contains_key(id)
-                || entries.values().any(|entry| {
-                    entry
-                        .get("sessionId")
-                        .or_else(|| entry.get("session_id"))
-                        .and_then(Value::as_str)
-                        == Some(id)
-                })
-            {
-                "running"
-            } else if entries.is_empty() || entries.values().all(Value::is_object) {
-                "recent"
-            } else {
-                "unknown"
-            }
-        }
-        _ => "unknown",
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -637,7 +598,9 @@ fn directory_fingerprint(path: &Path) -> Result<(String, usize, u64)> {
 }
 
 pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePreview> {
-    let session = resolve_session(paths, id)?;
+    let active = activity::Snapshot::capture(paths);
+    let session = resolve_session_with_activity(paths, id, &active)?;
+    active.ensure_not_open(&session)?;
     ensure!(
         session.status == "recent",
         "Grok task is running or its activity cannot be confirmed"
@@ -670,6 +633,7 @@ pub fn execute_grok_delete(
         preview.fingerprint == request.fingerprint,
         "Grok task files changed; preview again"
     );
+    let mut session = resolve_session(paths, &request.id)?;
     let parent = preview
         .path
         .parent()
@@ -680,9 +644,12 @@ pub fn execute_grok_delete(
         grok_storage_write_error(parent, "move the selected session into quarantine")
     })?;
     let check = (|| -> Result<()> {
+        session.path = retired.clone();
+        let active = activity::Snapshot::capture(paths);
+        active.ensure_not_open(&session)?;
         ensure!(
-            session_status(paths, &request.id) == "recent",
-            "Grok task became active"
+            active.status(&session) == "recent",
+            "Grok task activity changed"
         );
         ensure!(
             directory_fingerprint(&retired)?.0 == preview.fingerprint,

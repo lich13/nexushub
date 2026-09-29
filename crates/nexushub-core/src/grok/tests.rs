@@ -103,7 +103,7 @@ async fn grok_native_rename_timeout_reaps_the_child() {
     fs::remove_dir_all(paths.home).unwrap();
 }
 
-fn fixture() -> (GrokPaths, String, PathBuf) {
+pub(super) fn fixture() -> (GrokPaths, String, PathBuf) {
     let home = std::env::temp_dir().join(format!("nexushub-grok-{}", uuid::Uuid::new_v4()));
     let id = uuid::Uuid::new_v4().to_string();
     let path = home.join("sessions/%2Fwork").join(&id);
@@ -192,7 +192,7 @@ fn grok_delete_rejects_active_and_unconfirmed_sessions() {
     .is_err());
     fs::write(
         paths.home.join("active_sessions.json"),
-        serde_json::to_vec(&serde_json::json!({id.clone(): {"pid": 123}})).unwrap(),
+        serde_json::to_vec(&serde_json::json!({id.clone(): {}})).unwrap(),
     )
     .unwrap();
     assert!(preview_grok_delete(&paths, &id).is_err());
@@ -214,15 +214,15 @@ fn grok_storage_write_failures_explain_systemd_remediation() {
 }
 
 #[test]
-fn grok_active_session_registry_accepts_native_array_shape() {
+fn grok_registration_without_process_identity_does_not_prove_running() {
     let (paths, id, _path) = fixture();
     fs::write(
         paths.home.join("active_sessions.json"),
-        serde_json::json!([{"session_id": id, "pid": 123}]).to_string(),
+        serde_json::json!([{"session_id": id}]).to_string(),
     )
     .unwrap();
     let sessions = list_grok_sessions(&paths, 10, None).unwrap();
-    assert_eq!(sessions[0].status, "running");
+    assert_eq!(sessions[0].status, "unknown");
     fs::remove_dir_all(paths.home).unwrap();
 }
 
