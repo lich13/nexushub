@@ -351,7 +351,7 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
                     }]
                 }],
                 "PreToolUse": [{
-                    "matcher": "^request_user_input$",
+                    "matcher": nexushub_core::probe::PROBE_QUESTION_HOOK_MATCHER,
                     "hooks": [{
                         "type": "command",
                         "command": "/usr/local/bin/nexushub-webd --config /etc/nexushub-webd/config.toml probe hook-request-user-input",

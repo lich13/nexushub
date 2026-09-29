@@ -1,4 +1,4 @@
-# Architecture — 1.1.8
+# Architecture — 1.1.9
 
 ## Boundaries
 
@@ -57,3 +57,5 @@ Codex errors are selected from canonical main-task identities. Grok requires a p
 CI runs frontend, backend and macOS Tauri checks. Release guard checks the tag/version, contract, privacy and matching successful CI through the Actions API. Release packaging has webd Linux, macOS ARM64 and aggregate stages. The server artifact is `nexushub-webd-linux-x86_64.tar.gz`; the updater manifest contains only `darwin-aarch64`, and the webd tarball is a server asset rather than a desktop updater entry.
 
 Future edits update these six documents and use normal Git commits.
+
+Native Codex question parsing lives in `codex/user_input.rs`. It normalizes synchronous `question` and asynchronous `title` fields and string/object options. The async tracker pairs original turn/call/question identities with complete native reply envelopes and handles explicit cancellation or replacement. The webd asynchronous monitor scans independently of list status and shares the sender recheck with Hook, passive and Stop events. Existing settings hold an enablement baseline and atomic per-call delivery records, so first startup skips history, partial answers do not create new identities, and restarts or TTL expiry do not resend confirmed calls. No RPC or database table is added.

@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.1.8 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.1.9 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -13,7 +13,7 @@ NexusHub 1.1.8 follows a quiet, compact reading workspace aligned with Codex Des
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
-- Markdown file links copy their source path in web, while macOS reveals a resolved path in Finder and offers a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event.
+- Markdown file links copy their source path in web, while macOS reveals a resolved path in Finder and offers a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. Async acceptance and background progress do not dismiss a question; native matched answers update only the corresponding items.
 
 ## User messages and attachments
 

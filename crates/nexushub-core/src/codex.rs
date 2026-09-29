@@ -17,6 +17,7 @@ mod test_support;
 mod tests;
 mod thread_rows;
 mod types;
+mod user_input;
 
 pub use app_server_client::CodexAppServerClient;
 pub use assistant_question::assistant_feedback_request;
@@ -51,6 +52,10 @@ pub use thread_rows::{archived_thread_ids, hidden_thread_ids, thread_source_coun
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
     ThreadStatus, ThreadSummary, UserInputAnswer, UserInputOption, UserInputQuestion,
+};
+pub use user_input::{
+    is_async_question_tool, is_question_tool, normalize_user_input_questions,
+    rollout_async_questions, AsyncQuestionCall,
 };
 
 pub fn list_threads(

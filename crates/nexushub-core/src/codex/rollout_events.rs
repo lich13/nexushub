@@ -18,8 +18,7 @@ pub enum RolloutRequestUserInputState {
 
 use super::{
     extract_proposed_plan_text, session_index::SessionIndexEntry, CodexMessage, MessageBlock,
-    PendingElicitation, ThreadDetail, ThreadSummary, UserInputAnswer, UserInputOption,
-    UserInputQuestion,
+    PendingElicitation, ThreadDetail, ThreadSummary, UserInputAnswer,
 };
 
 pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
@@ -198,6 +197,7 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
         fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
     let mut scan = RolloutScan::default();
     let mut pending_action: Option<PendingAction> = None;
+    let mut async_questions = super::user_input::AsyncQuestionTracker::default();
     let mut current_plan_marker: Option<(Option<String>, Option<String>)> = None;
     let mut last_task_status: Option<String> = None;
     let mut active_tasks: Vec<Option<String>> = Vec::new();
@@ -211,6 +211,7 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
             continue;
         };
         normalize_canonical_turn(&mut value, &mut turn_context);
+        async_questions.push(&value, 0);
         if let Some(payload) = value.get("session_meta").and_then(|v| v.get("payload")) {
             scan.is_subagent |= is_subagent_session_meta(payload);
             scan.cwd = payload
@@ -330,7 +331,9 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
             }
             current_plan_marker = None;
         }
-        if is_request_user_input(&value) {
+        if is_request_user_input(&value)
+            && !super::user_input::question_tool(&value).is_some_and(super::is_async_question_tool)
+        {
             if let Some(elicitation) = parse_pending_elicitation(&value) {
                 pending_action = Some(PendingAction::Elicitation {
                     turn_id: elicitation.turn_id.clone(),
@@ -377,6 +380,10 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
         if let PendingAction::Elicitation { elicitation, .. } = pending {
             scan.pending_elicitation = Some(elicitation);
         }
+    }
+    if let Some(call) = async_questions.pending().next() {
+        scan.reply_needed = true;
+        scan.pending_elicitation = call.pending();
     }
     let _ = max_messages;
     if scan.active_turn_id.is_none() {
@@ -427,6 +434,7 @@ fn select_rollout_message_inner(
     let mut latest_task_complete = None;
     let mut candidate_count = 0usize;
     let mut current_turn_id: Option<String> = None;
+    let mut async_questions = super::user_input::AsyncQuestionTracker::default();
     for (index, line) in text.lines().enumerate() {
         let line_number = index + 1;
         if line.trim().is_empty() {
@@ -436,6 +444,7 @@ fn select_rollout_message_inner(
             continue;
         };
         normalize_canonical_turn(&mut value, &mut current_turn_id);
+        async_questions.push(&value, line_number);
         let effective_turn_id = event_turn_id(&value);
         let matches_turn_scope = turn_id
             .map(|expected_turn_id| effective_turn_id.as_deref() == Some(expected_turn_id))
@@ -459,7 +468,9 @@ fn select_rollout_message_inner(
             });
             event_added_candidate = true;
         }
-        if let Some(elicitation) = parse_pending_elicitation(&value) {
+        if let Some(elicitation) = parse_pending_elicitation(&value).filter(|_| {
+            !super::user_input::question_tool(&value).is_some_and(super::is_async_question_tool)
+        }) {
             let elicitation_turn_id = elicitation.turn_id.clone();
             latest_unresolved_action = Some(PendingHookStopAction {
                 action: PendingAction::Elicitation {
@@ -548,6 +559,19 @@ fn select_rollout_message_inner(
         if event_added_candidate {
             candidate_count += 1;
         }
+    }
+    if let Some(call) = async_questions
+        .pending()
+        .find(|call| turn_id.is_none_or(|id| id == call.turn_id))
+    {
+        return Some(RolloutMessageSelection {
+            message: crate::services::probe::format_probe_pending_elicitation(&call.pending()?),
+            source: "request_user_input".to_string(),
+            strategy: "unresolved_async_question".to_string(),
+            selected_turn_id: Some(call.turn_id.clone()),
+            selected_line: Some(call.line),
+            candidate_count: candidate_count + 1,
+        });
     }
     let mut selection = latest_unresolved_action
         .map(|pending| RolloutMessageSelection {
@@ -831,6 +855,21 @@ pub fn rollout_request_user_input_state(
                 && event_turn_id(&value).as_deref() == Some(turn_id)
                 && event_call_id(&value).as_deref() == Some(call_id)
             {
+                if super::user_input::question_tool(&value)
+                    .is_some_and(super::is_async_question_tool)
+                {
+                    return Ok(super::rollout_async_questions(path)?
+                        .iter()
+                        .find(|call| call.turn_id == turn_id && call.call_id == call_id)
+                        .map(|call| {
+                            if call.pending().is_some() {
+                                RolloutRequestUserInputState::Pending
+                            } else {
+                                RolloutRequestUserInputState::Resolved
+                            }
+                        })
+                        .unwrap_or(RolloutRequestUserInputState::Missing));
+                }
                 found_call = true;
             }
             continue;
@@ -840,6 +879,19 @@ pub fn rollout_request_user_input_state(
         }
     }
 
+    if !found_call {
+        if let Some(call) = super::rollout_async_questions(path)
+            .unwrap_or_default()
+            .iter()
+            .find(|call| call.turn_id == turn_id && call.call_id == call_id)
+        {
+            return Ok(if call.pending().is_some() {
+                RolloutRequestUserInputState::Pending
+            } else {
+                RolloutRequestUserInputState::Resolved
+            });
+        }
+    }
     Ok(if found_call {
         RolloutRequestUserInputState::Pending
     } else {
@@ -922,7 +974,7 @@ fn clear_anonymous_pending_tools(pending_tool_turns: &mut HashMap<String, Option
     pending_tool_turns.retain(|_, pending_turn| pending_turn.is_some());
 }
 
-fn rollout_event_type(value: &Value) -> &str {
+pub(super) fn rollout_event_type(value: &Value) -> &str {
     let top_level = value.get("type").and_then(Value::as_str).unwrap_or("");
     let raw = if top_level == "event_msg" {
         value
@@ -1083,7 +1135,7 @@ fn explicit_event_turn_id(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn event_turn_id(value: &Value) -> Option<String> {
+pub(super) fn event_turn_id(value: &Value) -> Option<String> {
     explicit_event_turn_id(value).or_else(|| {
         value
             .pointer("/payload/internal_chat_message_metadata_passthrough/turn_id")
@@ -1095,7 +1147,7 @@ fn event_turn_id(value: &Value) -> Option<String> {
 
 // Model-response metadata may contain a different internal turn id. Only
 // lifecycle records establish the canonical task context for subsequent items.
-fn normalize_canonical_turn(value: &mut Value, current: &mut Option<String>) {
+pub(super) fn normalize_canonical_turn(value: &mut Value, current: &mut Option<String>) {
     let kind = rollout_event_type(value);
     let explicit = explicit_event_turn_id(value);
     if matches!(
@@ -1154,7 +1206,7 @@ fn event_item_id(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn event_call_id(value: &Value) -> Option<String> {
+pub(super) fn event_call_id(value: &Value) -> Option<String> {
     value
         .get("call_id")
         .or_else(|| value.get("callId"))
@@ -1170,7 +1222,7 @@ pub(crate) fn parse_message_event(value: &Value) -> Option<CodexMessage> {
     Some(message)
 }
 
-fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
+pub(super) fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
     if is_internal_agent_message(value) {
         return None;
     }
@@ -1270,6 +1322,7 @@ struct MessageBlockBuilder {
     block_positions: HashMap<String, usize>,
     pending_tools: HashMap<String, PendingToolCall>,
     suppressed_call_ids: HashSet<String>,
+    async_questions: super::user_input::AsyncQuestionTracker,
     current_plan_marker: Option<(Option<String>, Option<String>)>,
     plan_block_indexes: HashMap<String, usize>,
 }
@@ -1293,6 +1346,7 @@ struct PendingToolCall {
 impl MessageBlockBuilder {
     fn push_event(&mut self, value: &Value, raw_index: usize) {
         let previous_len = self.blocks.len();
+        self.async_questions.push(value, raw_index);
         self.push_event_inner(value, raw_index);
         for block in &self.blocks[previous_len..] {
             self.block_positions
@@ -1353,6 +1407,14 @@ impl MessageBlockBuilder {
 
         if is_tool_output_kind(payload_type) {
             let call_id = payload_call_id(payload);
+            if call_id.as_ref().is_some_and(|id| {
+                self.async_questions
+                    .calls
+                    .iter()
+                    .any(|call| &call.call_id == id)
+            }) {
+                return;
+            }
             if call_id
                 .as_ref()
                 .is_some_and(|id| self.suppressed_call_ids.remove(id))
@@ -1519,6 +1581,26 @@ impl MessageBlockBuilder {
     }
 
     fn finish(mut self) -> Vec<MessageBlock> {
+        for block in &mut self.blocks {
+            if let Some(call) = self.async_questions.calls.iter().find(|call| {
+                block.call_id.as_deref() == Some(&call.call_id)
+                    && block.turn_id.as_deref() == Some(&call.turn_id)
+            }) {
+                let pending = call.pending();
+                block.resolved = Some(pending.is_none());
+                block.status = Some(
+                    if pending.is_some() {
+                        "pending"
+                    } else {
+                        "completed"
+                    }
+                    .to_string(),
+                );
+                if let Some(pending) = pending {
+                    block.questions = pending.questions;
+                }
+            }
+        }
         let mut pending = self.pending_tools.into_values().collect::<Vec<_>>();
         pending.sort_by_key(|call| call.raw_index);
         for call in pending {
@@ -2054,59 +2136,7 @@ fn parse_pending_elicitation(value: &Value) -> Option<PendingElicitation> {
         .or_else(|| payload.get("params").cloned())
         .or_else(|| value.get("params").cloned())
         .or_else(|| Some(payload.clone()))?;
-    let question_values = args
-        .get("questions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let questions = question_values
-        .iter()
-        .enumerate()
-        .map(|(index, question)| {
-            let options = question
-                .get("options")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|option| UserInputOption {
-                            label: option
-                                .get("label")
-                                .or_else(|| option.get("text"))
-                                .or_else(|| option.get("value"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("选项")
-                                .to_string(),
-                            description: option
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            UserInputQuestion {
-                id: question
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("q{}", index + 1)),
-                header: question
-                    .get("header")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                question: question
-                    .get("question")
-                    .and_then(Value::as_str)
-                    .unwrap_or("需要回复")
-                    .to_string(),
-                options,
-            }
-        })
-        .collect::<Vec<_>>();
-    if questions.is_empty() {
-        return None;
-    }
+    let questions = super::normalize_user_input_questions(&args)?;
     Some(PendingElicitation {
         turn_id: payload
             .get("turnId")
@@ -2786,30 +2816,7 @@ fn looks_like_message(s: &str) -> bool {
 }
 
 pub(crate) fn is_request_user_input(value: &Value) -> bool {
-    let payload = value.get("payload").unwrap_or(value);
-    [
-        value.get("type").and_then(Value::as_str),
-        value.get("name").and_then(Value::as_str),
-        value.get("toolName").and_then(Value::as_str),
-        value.get("tool_name").and_then(Value::as_str),
-        value.get("method").and_then(Value::as_str),
-        payload.get("type").and_then(Value::as_str),
-        payload.get("name").and_then(Value::as_str),
-        payload.get("toolName").and_then(Value::as_str),
-        payload.get("tool_name").and_then(Value::as_str),
-        payload.get("method").and_then(Value::as_str),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|name| {
-        matches!(
-            name,
-            "RequestUserInput"
-                | "request_user_input"
-                | "requestUserInput"
-                | "item/tool/requestUserInput"
-        )
-    })
+    super::user_input::question_tool(value).is_some()
 }
 
 fn is_user_input_answer(value: &Value) -> bool {

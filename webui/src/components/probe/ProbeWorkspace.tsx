@@ -318,7 +318,7 @@ function ProbeRuntimeSettingsCard({
         <label className="toggle-row"><span>Pi 通知</span><input type="checkbox" checked={draft.notifications.notify_pi} onChange={(event) => setNotifications({ notify_pi: event.target.checked })} /></label>
         <label className="toggle-row"><span>Pi 完成</span><input type="checkbox" checked={draft.notifications.notify_pi_completion} onChange={(event) => setNotifications({ notify_pi_completion: event.target.checked })} /></label>
         <label className="toggle-row" title="原生记录无法确认自动重试结束"><span>Pi 失败（暂不支持）</span><input type="checkbox" checked={false} disabled /></label>
-        <label className="toggle-row"><span title="包含 Plan、结构化提问及最终回复中明确等待确认或反馈的请求">Codex 回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
+        <label className="toggle-row"><span title="包含 Plan、进行中的同步或异步提问，以及最终回复中明确等待确认或反馈的请求">Codex 回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span>Codex 异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
         <label className="toggle-row"><span>管理 Codex Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
       </div>

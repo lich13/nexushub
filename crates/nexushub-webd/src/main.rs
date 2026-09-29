@@ -1,4 +1,5 @@
 mod api;
+mod async_question_monitor;
 mod auth;
 mod linux_adapter;
 mod provider_monitor;
@@ -8,13 +9,16 @@ mod rpc_surface;
 mod state;
 mod turnstile;
 
+#[cfg(test)]
+mod notification_accuracy_tests;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nexushub_core::{
     codex::{
         resolve_codex_paths, rollout_completion_last_agent_message_selection,
         rollout_hook_stop_message_selection, rollout_request_user_input_state, PendingElicitation,
-        RolloutMessageSelection, RolloutRequestUserInputState, UserInputQuestion,
+        RolloutMessageSelection, RolloutRequestUserInputState,
     },
     config::{
         patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
@@ -443,8 +447,10 @@ async fn handle_hook_request_user_input_confirm_command(config_path: &Path) -> R
         return Ok(());
     }
 
+    let mut diagnostics = question_confirmation_diagnostics();
+    diagnostics.insert("question_tool".into(), json!(hook_payload.tool_name));
     let event_input = hook_request_user_input_event_input(&config, stdin_payload)?
-        .with_body_selection_diagnostics(question_confirmation_diagnostics());
+        .with_body_selection_diagnostics(diagnostics);
     let db = open_panel_db(&config)?;
     let event = probe_runtime(&config).build_event(event_input);
     record_probe_event_with_bark_timeout(&config, &db, event, std::time::Duration::from_secs(3))
@@ -493,7 +499,7 @@ struct HookRequestUserInputPayload {
 
 #[derive(Debug, Deserialize)]
 struct HookRequestUserInputToolInput {
-    questions: Vec<UserInputQuestion>,
+    questions: Vec<Value>,
 }
 
 fn validate_hook_request_user_input_envelope(payload: &Value) -> Result<()> {
@@ -502,7 +508,9 @@ fn validate_hook_request_user_input_envelope(payload: &Value) -> Result<()> {
         "unexpected hook_event_name"
     );
     anyhow::ensure!(
-        read_string_field(payload, &["tool_name"]).as_deref() == Some("request_user_input"),
+        read_string_field(payload, &["tool_name"])
+            .as_deref()
+            .is_some_and(nexushub_core::codex::is_question_tool),
         "unexpected tool_name"
     );
     Ok(())
@@ -511,21 +519,23 @@ fn validate_hook_request_user_input_envelope(payload: &Value) -> Result<()> {
 fn validate_hook_request_user_input_payload(
     payload: &Value,
 ) -> Result<HookRequestUserInputPayload> {
-    let mut hook_payload: HookRequestUserInputPayload =
+    let hook_payload: HookRequestUserInputPayload =
         serde_json::from_value(payload.clone()).context("parse PreToolUse payload")?;
     anyhow::ensure!(
         hook_payload.hook_event_name == "PreToolUse",
         "unexpected hook_event_name"
     );
     anyhow::ensure!(
-        hook_payload.tool_name == "request_user_input",
+        nexushub_core::codex::is_question_tool(&hook_payload.tool_name),
         "unexpected tool_name"
     );
     required_hook_field(&hook_payload.session_id, "session_id")?;
     required_hook_field(&hook_payload.turn_id, "turn_id")?;
     required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
-    hook_payload.tool_input.questions =
-        normalize_hook_questions(hook_payload.tool_input.questions)?;
+    nexushub_core::codex::normalize_user_input_questions(
+        &json!({"questions": hook_payload.tool_input.questions}),
+    )
+    .context("invalid native questions")?;
     Ok(hook_payload)
 }
 
@@ -552,7 +562,10 @@ fn hook_request_user_input_event_input(config: &Config, payload: Value) -> Resul
     let session_id = required_hook_field(&hook_payload.session_id, "session_id")?;
     let turn_id = required_hook_field(&hook_payload.turn_id, "turn_id")?;
     let tool_use_id = required_hook_field(&hook_payload.tool_use_id, "tool_use_id")?;
-    let questions = normalize_hook_questions(hook_payload.tool_input.questions)?;
+    let questions = nexushub_core::codex::normalize_user_input_questions(
+        &json!({"questions":hook_payload.tool_input.questions}),
+    )
+    .context("invalid native questions")?;
     let elicitation = PendingElicitation {
         turn_id: Some(turn_id.to_string()),
         item_id: Some(tool_use_id.to_string()),
@@ -595,44 +608,6 @@ fn required_hook_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
     anyhow::ensure!(!value.is_empty(), "missing {name}");
     Ok(value)
 }
-
-fn normalize_hook_questions(
-    mut questions: Vec<UserInputQuestion>,
-) -> Result<Vec<UserInputQuestion>> {
-    anyhow::ensure!(
-        !questions.is_empty(),
-        "tool_input.questions must not be empty"
-    );
-    for question in &mut questions {
-        question.id = required_hook_field(&question.id, "question.id")?.to_string();
-        question.question =
-            required_hook_field(&question.question, "question.question")?.to_string();
-        question.header = question
-            .header
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        anyhow::ensure!(
-            !question.options.is_empty(),
-            "question.options must not be empty"
-        );
-        for option in &mut question.options {
-            option.label = required_hook_field(&option.label, "option.label")?.to_string();
-            option.description = option
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string);
-        }
-    }
-    Ok(questions)
-}
-
-#[cfg(test)]
-mod notification_accuracy_tests;
-
 fn hook_thread_title(
     config: &Config,
     payload: Option<&Value>,
@@ -1172,7 +1147,7 @@ async fn install_probe_hooks_with_repair(
         | ensure_probe_hook(
             &mut root,
             "PreToolUse",
-            "^request_user_input$",
+            nexushub_core::probe::PROBE_QUESTION_HOOK_MATCHER,
             &request_user_input_hook_command,
             Some(5),
         );
@@ -1454,6 +1429,107 @@ fn is_nexushub_managed_hook_command(command: &str) -> bool {
             || lowered.contains("codex-sentinel"))
 }
 
+fn upgrade_managed_question_hook_groups(root: &mut Value) -> bool {
+    let Some(groups) = root
+        .pointer_mut("/hooks/PreToolUse")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let original = groups.clone();
+    let mut upgraded = Vec::new();
+    for group in &original {
+        let Some(items) = group.get("hooks").and_then(Value::as_array) else {
+            upgraded.push(group.clone());
+            continue;
+        };
+        let (mut owned, others): (Vec<_>, Vec<_>) = items.iter().cloned().partition(|item| {
+            item.get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| {
+                    is_nexushub_managed_hook_command(command)
+                        && command.contains("probe hook-request-user-input")
+                })
+        });
+        if owned.is_empty() {
+            upgraded.push(group.clone());
+            continue;
+        }
+        if !others.is_empty() {
+            let mut remaining = group.clone();
+            remaining["hooks"] = json!(others);
+            upgraded.push(remaining);
+        }
+        for item in &mut owned {
+            item["timeout"] = json!(5);
+            if let Some(item) = item.as_object_mut() {
+                item.remove("async");
+            }
+        }
+        let mut managed = group.clone();
+        managed["matcher"] = json!(nexushub_core::probe::PROBE_QUESTION_HOOK_MATCHER);
+        managed["hooks"] = json!(owned);
+        upgraded.push(managed);
+    }
+    if upgraded == original {
+        return false;
+    }
+    *groups = upgraded;
+    true
+}
+
+fn upgrade_managed_question_hooks(config: &Config) -> Result<bool> {
+    if !config.probe.hooks.manage_stop_hook {
+        return Ok(false);
+    }
+    let path = resolve_codex_paths(&config.codex.home)
+        .home
+        .join("hooks.json");
+    if !path.exists() {
+        return Ok(false);
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "managed hooks source is not a regular file"
+    );
+    let before = fs::read(&path)?;
+    let mut root: Value = serde_json::from_slice(&before)?;
+    if !upgrade_managed_question_hook_groups(&mut root) {
+        return Ok(false);
+    }
+    let staged = path.with_file_name(format!(".nexushub-hooks-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)?;
+        file.set_permissions(metadata.permissions())?;
+        file.write_all(&serde_json::to_vec_pretty(&root)?)?;
+        file.sync_all()?;
+        anyhow::ensure!(
+            fs::read(&path)? == before,
+            "managed hooks changed during upgrade"
+        );
+        fs::rename(&staged, &path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    result?;
+    Ok(true)
+}
+
+fn upgrade_managed_question_hooks_on_start(config: &Config) {
+    if let Err(error) = upgrade_managed_question_hooks(config) {
+        tracing::warn!(
+            "Managed question hook upgrade failed: {}",
+            safe_probe_monitor_error(&error.to_string())
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct HookStopResult {
     stdout: Value,
@@ -1657,6 +1733,7 @@ async fn record_probe_event_with_bark_timeout(
             ),
         ));
     }
+    let event = async_question_monitor::prepare_event(config, db, event)?;
     let event = question_monitor::prepare_event(config, db, event)?;
     if let Some(reason) = event.suppression_reason.as_deref() {
         return Ok((
@@ -1669,7 +1746,8 @@ async fn record_probe_event_with_bark_timeout(
             ),
         ));
     }
-    let feedback_key = question_monitor::delivery_key(&event);
+    let feedback_key = async_question_monitor::delivery_key(&event)
+        .or_else(|| question_monitor::delivery_key(&event));
     if let Some(key) = feedback_key.as_deref() {
         if !db.claim_feedback_delivery(key)? {
             return Ok((
@@ -2147,6 +2225,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
         "Web server is available only on Linux; desktop LAN WebUI has been retired"
     );
     let config = Config::load(&config_path)?;
+    upgrade_managed_question_hooks_on_start(&config);
     let db = open_panel_db(&config)?;
     let state = AppState::new_for_surface(config.clone(), db, host_surface);
     spawn_probe_thread_scan(state.clone());
@@ -2197,9 +2276,14 @@ fn spawn_probe_error_monitor(state: AppState) {
 }
 
 async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
+    let mut upgraded_hooks = false;
     loop {
         let poll_seconds = match Config::load(&config_path) {
             Ok(config) => {
+                if !upgraded_hooks {
+                    upgrade_managed_question_hooks_on_start(&config);
+                    upgraded_hooks = true;
+                }
                 match open_panel_db(&config) {
                     Ok(db) => {
                         if let Err(err) = run_probe_error_monitor_once(&config, &db).await {
@@ -2224,6 +2308,12 @@ async fn run_probe_error_monitor_once(
     db: &PanelDb,
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
+    if let Err(error) = async_question_monitor::run(config, db).await {
+        tracing::warn!(
+            "Codex structured question monitor failed: {}",
+            safe_probe_monitor_error(&error.to_string())
+        );
+    }
     if let Err(error) = question_monitor::run(config, db).await {
         tracing::warn!(
             "Codex feedback monitor failed: {}",
@@ -2768,7 +2858,10 @@ hooks = false
         assert!(hooks_json.to_string().contains("probe hook-stop"));
         let pre_tool_use = hooks_json["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre_tool_use.len(), 1);
-        assert_eq!(pre_tool_use[0]["matcher"], "^request_user_input$");
+        assert_eq!(
+            pre_tool_use[0]["matcher"],
+            "^(functions\\.)?request_user_input(_async)?$"
+        );
         let request_hook = &pre_tool_use[0]["hooks"][0];
         assert!(request_hook["command"]
             .as_str()

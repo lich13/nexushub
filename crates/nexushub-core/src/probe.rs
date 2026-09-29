@@ -21,6 +21,7 @@ use std::{
 use uuid::Uuid;
 
 pub const PROBE_EVENT_DEDUPE_NAMESPACE: &str = "probe_event";
+pub const PROBE_QUESTION_HOOK_MATCHER: &str = r"^(functions\.)?request_user_input(_async)?$";
 pub const PROBE_EVENT_TTL_SECONDS: i64 = 300;
 pub const PROBE_PASSIVE_SCAN_EVENT_TTL_SECONDS: i64 = 6 * 60 * 60;
 pub const INTERNAL_MEMORY_CONSOLIDATION_SUPPRESSION_REASON: &str = "internal_memory_consolidation";
@@ -233,7 +234,7 @@ impl ProbeRuntime {
                 },
                 ExpectedProbeHook {
                     event: "PreToolUse",
-                    matcher: "^request_user_input$",
+                    matcher: PROBE_QUESTION_HOOK_MATCHER,
                     command: &request_user_input_hook_command,
                     timeout_seconds: Some(5),
                 },
@@ -1747,7 +1748,7 @@ mod tests {
                         "hooks": [{"type": "command", "command": stop_command}]
                     }],
                     "PreToolUse": [{
-                        "matcher": "^request_user_input$",
+                        "matcher": PROBE_QUESTION_HOOK_MATCHER,
                         "hooks": [{"type": "command", "command": request_command, "timeout": 5}]
                     }]
                 }
