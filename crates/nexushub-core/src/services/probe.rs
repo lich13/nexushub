@@ -529,15 +529,19 @@ pub fn probe_passive_unresolved_action_marker_key(
             })
             .unwrap_or_else(|| "unknown".to_string())
     } else {
-        request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-            event
-                .payload
-                .get("body_sha256")
-                .and_then(Value::as_str)
-                .and_then(|value| value.get(..16))
-                .unwrap_or("unknown")
-                .to_string()
-        })
+        event.payload["question_content_hash"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| request_user_input_hash_from_text(&event.bark_body))
+            .unwrap_or_else(|| {
+                event
+                    .payload
+                    .get("body_sha256")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.get(..16))
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
     };
     Some(format!(
         "probe_passive_sent_marker:{}:{}:{}:{}:{}:{}",
@@ -814,15 +818,19 @@ fn normalize_request_user_input_dedupe_key(event: &mut probe_core::ProbeBuiltEve
         .or_else(|| event.payload.get("item_id").and_then(Value::as_str))
         .unwrap_or(turn_id.as_str())
         .to_string();
-    let input_hash = request_user_input_hash_from_text(&event.bark_body).unwrap_or_else(|| {
-        event
-            .payload
-            .get("body_sha256")
-            .and_then(Value::as_str)
-            .and_then(|value| value.get(..16))
-            .unwrap_or("unknown")
-            .to_string()
-    });
+    let input_hash = event.payload["question_content_hash"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| request_user_input_hash_from_text(&event.bark_body))
+        .unwrap_or_else(|| {
+            event
+                .payload
+                .get("body_sha256")
+                .and_then(Value::as_str)
+                .and_then(|value| value.get(..16))
+                .unwrap_or("unknown")
+                .to_string()
+        });
     event.dedupe_key = format!(
         "{}:{}:{}:{}:{}",
         dedupe_component(&event.kind),

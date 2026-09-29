@@ -13,6 +13,10 @@ for (const colorScheme of ["light", "dark"] as const) {
       page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
       await mockApi(page);
       await page.goto("/");
+      if (info.project.name === "chromium") {
+        // Exercise classic gutters even when the host uses macOS overlay scrollbars.
+        await page.addStyleTag({ content: "::-webkit-scrollbar { width: 15px; height: 15px; }" });
+      }
       const nav = page.locator(viewport.width <= 767 ? ".mobile-tabs" : ".side-nav");
       const first = page.locator(".thread-item").first();
       await first.click();

@@ -24,7 +24,7 @@ A host filesystem mounted rw can still be ro inside the service namespace. Check
 
 ## Release and install
 
-`v1.1.8` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
+`v1.1.9` publishes seven assets: macOS DMG/checksum, macOS updater archive/signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball/checksum. Build the webd tarball on Linux x86_64 and verify its checksum. It is not a Tauri updater asset.
 
 ```bash
 sudo deploy/nexushub-webd/install.sh --archive /absolute/staging/nexushub-webd-linux-x86_64.tar.gz --domain panel.example --path-prefix /nexushub/
@@ -43,7 +43,7 @@ sudo systemctl is-active nexushub-webd
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
-The 1.1.8 upgrade presents native question replies as question/answer bubbles and folds user AGENTS.md instruction envelopes by default. Confirm answer-only copy, keyboard expansion, literal text and refresh persistence through the authenticated entrypoint. Keep historical tool activity and earlier-page viewport behavior as regressions. This release adds no RPC, database table or native-session migration.
+The 1.1.9 upgrade expands only NexusHub-owned PreToolUse hooks to native synchronous/asynchronous questions and preserves unrelated hooks. Verify that the monitor establishes the async baseline before a dedicated new question. An accepted acknowledgement, further commands and normal completion must leave it pending; native matched answers, cancellation and replacement stop it. Verify the device receives the push while the desktop App is closed, and record latency separately from HTTP delivery. Use an isolated cloud session for the same chain and label that evidence as a fixture. Keep native question bubbles, AGENTS.md folding and historical timelines as regressions. This release adds no RPC, database table or native-session migration.
 
 Use the authenticated public entry with disposable sessions to verify Grok batch deletion, Pi empty state, running spinner, mixed Grok tool folding, plan copy/download, provider Bark delivery and copy-ID feedback. A host without Pi is not evidence of Pi mutation support.
 
@@ -51,4 +51,4 @@ On failure restore the previous service binary/unit and verify health before ret
 
 ## User attachment acceptance
 
-After a 1.1.8 update, verify user bubbles and attachments through the authenticated HTTPS entrypoint. Test an embedded native image and an expired file reference: the former previews while the latter shows an unavailable card. A read request uses only session/message/attachment identities; unauthenticated reads and caller-supplied paths must fail. Preserve the existing systemd sandbox. Server previews only use server-side session data and files; a client-only temporary path can remain unavailable.
+After a 1.1.9 update, verify user bubbles and attachments through the authenticated HTTPS entrypoint. Test an embedded native image and an expired file reference: the former previews while the latter shows an unavailable card. A read request uses only session/message/attachment identities; unauthenticated reads and caller-supplied paths must fail. Preserve the existing systemd sandbox. Server previews only use server-side session data and files; a client-only temporary path can remain unavailable.

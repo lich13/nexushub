@@ -513,14 +513,16 @@ impl PanelDb {
 
     /// Atomically establish a first-enable baseline shared by hooks and the monitor.
     pub fn feedback_notification_baseline(&self, enabled: bool) -> Result<Option<i64>> {
+        self.notification_baseline("probe_feedback_baseline", enabled)
+    }
+
+    pub fn notification_baseline(&self, key: &str, enabled: bool) -> Result<Option<i64>> {
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let previous: Option<String> = tx
-            .query_row(
-                "SELECT value FROM settings WHERE key='probe_feedback_baseline'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()?;
         let previous =
             previous.and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
@@ -532,8 +534,8 @@ impl PanelDb {
         } else {
             chrono::Utc::now().timestamp_millis()
         };
-        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES('probe_feedback_baseline',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
-            rusqlite::params![serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
+        tx.execute("INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            rusqlite::params![key, serde_json::json!({"enabled":enabled,"since_ms":since}).to_string(), Self::now()])?;
         tx.commit()?;
         Ok(enabled.then_some(since))
     }
