@@ -645,6 +645,18 @@
       "requestDto": "RemoteInvokeRequest",
       "responseDto": "RemoteInvokeResponse",
       "hostOnlyReason": "Native desktop connection and Keychain; never exposed by the server RPC dispatcher"
+    },
+    {
+      "id": "plans.save",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.plans.save",
+      "tauriCommand": "commands::plans::savePlanMarkdown",
+      "webuiWrapper": "downloadPlanMarkdown",
+      "dtoOwner": "plans",
+      "requestDto": "PlanSaveRequest",
+      "responseDto": "PlanSaveResult",
+      "hostOnlyReason": "Save a sanitized Markdown filename in the local Downloads directory, including while viewing a remote machine; never a server operation"
     }
   ],
   "dtoCatalog": {
@@ -867,6 +879,14 @@
     "RemoteInvokeResponse": {
       "core": "RemoteInvokeResponse",
       "webui": "RemoteInvokeResponse"
+    },
+    "PlanSaveRequest": {
+      "core": "PlanSaveRequest",
+      "webui": "PlanSaveRequest"
+    },
+    "PlanSaveResult": {
+      "core": "PlanSaveResult",
+      "webui": "PlanSaveResult"
     }
   },
   "retiredActions": [

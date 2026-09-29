@@ -1,4 +1,8 @@
 import { visibleMarkdown } from "./visibleMarkdown";
+import { invokeNative } from "../runtime";
+
+export type PlanSaveRequest = { filename: string; markdown: string };
+export type PlanSaveResult = { filename: string };
 
 export function planFilename(markdown: string, fallbackTitle: string): string {
   markdown = visibleMarkdown(markdown);
@@ -22,17 +26,7 @@ export function planFilename(markdown: string, fallbackTitle: string): string {
   return `${/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem) ? `_${stem}` : stem}.md`;
 }
 
-export function downloadPlanMarkdown(markdown: string, filename: string): void {
-  const url = URL.createObjectURL(new Blob([visibleMarkdown(markdown)], { type: "text/markdown;charset=utf-8" }));
-  try {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.style.display = "none";
-    document.body.append(link);
-    try { link.click(); } finally { link.remove(); }
-  } finally {
-    // WebKit may still be opening the download after the synthetic click returns.
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }
+export function downloadPlanMarkdown(markdown: string, filename: string): Promise<PlanSaveResult> {
+  const request: PlanSaveRequest = { filename, markdown: visibleMarkdown(markdown) };
+  return invokeNative<PlanSaveResult>("plans.save", { request });
 }

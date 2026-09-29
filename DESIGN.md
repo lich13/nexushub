@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.2.0 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.1 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -42,3 +42,5 @@ Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced 
 Place a compact 本机/腾讯云 selector below the navigation brand, with an icon in the collapsed rail and an accessible native selector. Keep the current target visible; errors never trigger a silent fallback. Disable switching during writes. Settings use 更新与维护 and 远程连接; no login, system-status or security panel remains. Label local App updates and remote service updates separately.
 
 Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验证并保存 and 移除连接. Do not display a saved key. Connection errors and save results stay near the controls. Machine changes clear unexecuted confirmations and selection; stable disclosure identities include the machine. All previous conversation layout, themes, keyboard and reduced-motion rules remain.
+
+Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.

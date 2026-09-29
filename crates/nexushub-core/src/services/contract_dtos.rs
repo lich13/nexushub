@@ -1,4 +1,6 @@
 pub const CONTRACT_DTO_NAMES: &[&str] = &[
+    "PlanSaveRequest",
+    "PlanSaveResult",
     "RemoteConnectionView",
     "RemoteConnectionCredentials",
     "RemoteRevisionRequest",
@@ -57,5 +59,6 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
 ];
 
 pub const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
-    "remote", "cleanup", "grok", "jobs", "pi", "probe", "sessions", "system", "threads", "updates",
+    "remote", "cleanup", "grok", "jobs", "pi", "plans", "probe", "sessions", "system", "threads",
+    "updates",
 ];

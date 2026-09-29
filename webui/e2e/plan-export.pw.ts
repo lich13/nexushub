@@ -1,10 +1,13 @@
-import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-import { mockApi, mockCommand } from "./fixtures";
+import { mockApi, mockCommand, observeCommands } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
-test("Codex Plan copies Markdown and downloads an md named after its title", async ({ page }) => {
+test("Codex Plan copies and saves cleaned Markdown with its title through the native command", async ({ page }) => {
   await mockApi(page);
+  const saves: unknown[] = [];
+  const downloads: string[] = [];
+  page.on("download", download => downloads.push(download.suggestedFilename()));
+  await mockCommand(page, "plans.save", args => { saves.push(args); return { filename: args.request.filename }; });
   const markdown = "# Release: Notes/Review?\n\n- **Preserve** formatting\n- [Guide](https://example.com/guide)";
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { document.documentElement.dataset.copied = value; } } });
@@ -21,15 +24,18 @@ test("Codex Plan copies Markdown and downloads an md named after its title", asy
   await plan.getByRole("button", { name: "复制计划" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-copied", markdown);
   await expect(plan.getByRole("button", { name: "已复制计划" })).toBeVisible();
-  const downloadPromise = page.waitForEvent("download");
   await plan.getByRole("button", { name: "下载计划 Markdown" }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("Release Notes Review.md");
-  expect(await readFile(await download.path(), "utf8")).toBe(markdown);
+  await expect(plan.getByRole("status")).toHaveText("已保存到下载文件夹");
+  expect(saves).toEqual([{ request: { filename: "Release Notes Review.md", markdown } }]);
+  expect(downloads).toEqual([]);
 });
 
-test("Grok Plan exposes the same actions and reports clipboard failure nearby", async ({ page }) => {
-  await mockApi(page);
+test("a remote Grok Plan saves on the local machine and reports clipboard failure nearby", async ({ page }) => {
+  await mockApi(page, { connection: { target: "remote", revision: 3, configured: true, baseUrl: "https://api.example.com/nexushub/" } });
+  const saves: unknown[] = [];
+  const remoteCommands: string[] = [];
+  observeCommands(page, (command, args) => { if (command === "remote.invoke") remoteCommands.push(args.request.command); });
+  await mockCommand(page, "plans.save", args => { saves.push(args); return { filename: args.request.filename }; });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } });
   });
@@ -43,11 +49,56 @@ test("Grok Plan exposes the same actions and reports clipboard failure nearby", 
   const plan = page.locator(".provider-event.plan");
   await plan.getByRole("button", { name: "复制计划" }).click();
   await expect(plan.getByRole("status")).toContainText("复制失败");
-  const downloadPromise = page.waitForEvent("download");
   await plan.getByRole("button", { name: "下载计划 Markdown" }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("Grok Plan.md");
-  expect(await readFile(await download.path(), "utf8")).toBe(markdown);
+  await expect(plan.getByRole("status")).toHaveText("已保存到下载文件夹");
+  expect(saves).toEqual([{ request: { filename: "Grok Plan.md", markdown } }]);
+  expect(remoteCommands).toContain("grok.detail");
+  expect(remoteCommands).not.toContain("plans.save");
+  await expect(page.getByRole("combobox", { name: "当前机器" })).toHaveValue("remote");
+});
+
+test("a failed Plan save shows inline feedback and can be retried", async ({ page }) => {
+  await mockApi(page);
+  let attempts = 0;
+  await mockCommand(page, "plans.save", args => {
+    if (++attempts === 1) throw new Error("Downloads is not writable");
+    return { filename: args.request.filename };
+  });
+  await page.goto("/");
+  await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+  const plan = page.locator(".plan-cell");
+  const save = plan.getByRole("button", { name: "下载计划 Markdown" });
+  await save.click();
+  await expect(plan.getByRole("status")).toHaveText("保存失败，请重试。");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(plan.getByRole("status")).toHaveText("已保存到下载文件夹");
+  expect(attempts).toBe(2);
+});
+
+test("a pending native Plan save prevents duplicate clicks and waits before reporting success", async ({ page }) => {
+  await mockApi(page);
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  let attempts = 0;
+  await mockCommand(page, "plans.save", async args => {
+    attempts++;
+    await pending;
+    return { filename: args.request.filename };
+  });
+  await page.goto("/");
+  await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+  const plan = page.locator(".plan-cell");
+  const save = plan.getByRole("button", { name: "下载计划 Markdown" });
+  try {
+    await save.dblclick();
+    await expect.poll(() => attempts).toBe(1);
+    await expect(save).toBeDisabled();
+    await expect(plan.getByRole("status")).toHaveText("");
+  } finally { finish(); }
+  await expect(plan.getByRole("status")).toHaveText("已保存到下载文件夹");
+  await expect(save).toBeEnabled();
+  expect(attempts).toBe(1);
 });
 
 test("an empty Grok Plan has no copy or download action", async ({ page }) => {

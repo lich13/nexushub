@@ -1,4 +1,4 @@
-# Linux management API — 1.2.0
+# Linux management API — 1.2.1
 
 Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Pi or a Linux desktop app.
 
