@@ -7,8 +7,8 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 const choices = new Map<string, boolean>();
 export const DisclosureScope = createContext<string | null>(null);
 
-export function ActivityDetails({ className, stateKey, stateAliases = [], initiallyOpen, summary, children }: {
-  className: string; stateKey: string; stateAliases?: string[]; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode);
+export function ActivityDetails({ className, stateKey, stateAliases = [], initiallyOpen, summary, children, timelineId, timelineAliases = [] }: {
+  className: string; stateKey: string; stateAliases?: string[]; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode); timelineId?: string; timelineAliases?: string[];
 }) {
   const scope = useContext(DisclosureScope);
   const id = scope ? `${machineScope()}:${scope}:${stateKey}` : null;
@@ -25,7 +25,7 @@ export function ActivityDetails({ className, stateKey, stateAliases = [], initia
     }
     setChoice(next);
   };
-  return <details className={className} open={open} onToggle={event => {
+  return <details className={className} data-timeline-id={timelineId} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined} open={open} onToggle={event => {
     if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
     remember(event.currentTarget.open);
   }}>

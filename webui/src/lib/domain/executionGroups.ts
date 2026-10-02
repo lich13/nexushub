@@ -5,6 +5,7 @@ import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQ
 export type ExecutionStatus = "running" | "failed" | "completed";
 export type ExecutionCommand = {
   id: string;
+  sourceIds: string[];
   title: string;
   preview?: string;
   status: ExecutionStatus;
@@ -20,7 +21,7 @@ export type ExecutionGroup = {
   failedCount: number;
 };
 export type ExecutionRenderItem<T> =
-  | { kind: "item"; item: T; key: string }
+  | { kind: "item"; item: T; key: string; sourceIds: string[] }
   | { kind: "group"; group: ExecutionGroup };
 
 const RUNNING = new Set(["pending", "running", "in_progress", "inprogress", "active", "generating"]);
@@ -82,6 +83,7 @@ function activityPreview(...sources: Array<string | null | undefined>): string |
 type Activity<T> = {
   item: T;
   key: string;
+  sourceIds: string[];
   callId?: string | null;
   turnId?: string | null;
   tool: boolean;
@@ -95,7 +97,7 @@ type Activity<T> = {
 };
 
 function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup["provider"]): ExecutionRenderItem<T>[] {
-  type Entry = { kind: "item"; item: T; key: string } | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean };
+  type Entry = { kind: "item"; item: T; key: string; sourceIds: string[] } | { kind: "command"; command: ExecutionCommand; isCommand: boolean; newTurn: boolean };
   const entries: Entry[] = [];
   const pending = new Map<string, ExecutionCommand>();
   const occurrences = new Map<string, number>();
@@ -114,14 +116,17 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
       for (const section of activity.sections) {
         if (!previous.sections.some(existing => existing.label === section.label && existing.text === section.text)) previous.sections.push(section);
       }
+      for (const sourceId of activity.sourceIds) if (!previous.sourceIds.includes(sourceId)) previous.sourceIds.push(sourceId);
+      if (activity.phase === "result" && activity.callId) pending.delete(activity.callId);
       continue;
     }
     if (!activity.tool) {
-      entries.push({ kind: "item", item: activity.item, key });
+      entries.push({ kind: "item", item: activity.item, key, sourceIds: [...activity.sourceIds] });
       continue;
     }
     const command: ExecutionCommand = {
       id: key,
+      sourceIds: [...activity.sourceIds],
       title: activity.title,
       preview: activity.preview,
       instructionFile: activity.instructionFile,
@@ -158,7 +163,8 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
     const tool = isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isPlanBlock(block) && !isQuestionBlock(block) && !isQuestionResultBlock(block);
     return {
       item: block,
-      key: `codex:${block.turn_id ?? ""}:${block.call_id ?? block.item_id ?? block.id}`,
+      key: `codex:${block.turn_id ?? ""}:${block.call_id ?? block.item_id ?? "event"}:${block.id}`,
+      sourceIds: [block.id, block.call_id, block.item_id].filter((value): value is string => Boolean(value)),
       callId: block.call_id,
       turnId: block.turn_id,
       tool,
@@ -174,11 +180,12 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
 }
 
 export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRenderItem<GrokHistoryEvent>[] {
-  return groupActivities(events.map(event => {
+  return groupActivities(events.map((event, index) => {
     const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
     return {
       item: event,
       key: `grok:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
+      sourceIds: [`event:${index}`, event.callId].filter((value): value is string => Boolean(value)),
       callId: event.callId,
       tool: event.kind.startsWith("tool_"),
       instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),
@@ -196,9 +203,10 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
 }
 
 export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {
-  return groupActivities(events.map(event => ({
+  return groupActivities(events.map((event, index) => ({
     item: event,
     key: `pi:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
+    sourceIds: [`event:${index}`, event.callId].filter((value): value is string => Boolean(value)),
     callId: event.callId,
     tool: event.kind === "tool_call" || event.kind === "tool_result",
     instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),
@@ -218,6 +226,7 @@ export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRender
   return groupActivities(events.map(event => ({
     item: event,
     key: `claude:${event.id}`,
+    sourceIds: [event.id],
     callId: event.callId,
     turnId: event.turnId,
     tool: event.kind === "tool_call" || event.kind === "tool_result",

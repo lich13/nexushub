@@ -1,4 +1,4 @@
-# Linux management API — 1.2.3
+# Linux management API — 1.2.4
 
 Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Claude Code, Pi or a Linux desktop app.
 
@@ -38,6 +38,8 @@ The upgrade removes NexusHub web administrators/sessions, Turnstile data and ret
 Only retained runtime files/data may have one task-level recovery copy. Do not archive the retired website or login database. Remove the static directory and obsolete web updater; preserve shared Nginx, TLS and unrelated paths. Future rollback targets must be API-era releases. A failed update restores retained service state, then checks health before retrying.
 
 The installed App’s 腾讯云 target shows only 腾讯云服务更新. 检查更新, 更新至 and 清理更新备份 operate on that service. Switch to 本机 to update the App. An idle Grok thread may still be open in its native process and therefore protected from deletion; do not clear its registration to bypass that protection.
+
+The desktop may call `sessions.search` through the same authenticated RPC allowlist. It is read-only, bounded by provider/session scope and cursor, and returns cleaned snippets with opaque event positions. It never accepts a client filesystem path or returns memory metadata. Search and timeline state belong to the selected machine; a connection revision drops late responses during a switch.
 
 ## Acceptance
 

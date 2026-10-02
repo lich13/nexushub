@@ -135,6 +135,13 @@ impl<'a> NexusHubUseCases<'a> {
         }
     }
 
+    pub fn search(
+        self,
+        codex: crate::codex::CodexPaths,
+    ) -> crate::services::search::SearchUseCases {
+        crate::services::search::SearchUseCases::new(self.platform, codex)
+    }
+
     pub fn cleanup(self) -> CleanupUseCases<'a> {
         CleanupUseCases {
             platform: self.platform,

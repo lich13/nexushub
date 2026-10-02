@@ -76,7 +76,7 @@ export async function remoteSelect(target: MachineTarget) {
 }
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
-const reads = new Set(["system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "pi.list", "pi.detail", "pi.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.bulkPreview"]);
+const reads = new Set(["system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "pi.list", "pi.detail", "pi.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
 const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");

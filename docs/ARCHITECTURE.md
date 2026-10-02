@@ -1,4 +1,4 @@
-# Architecture — 1.2.3
+# Architecture — 1.2.4
 
 ## Boundaries
 
@@ -24,13 +24,15 @@ NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_
 
 Batch actions use explicit provider keys and return per-item preview/execute results. Files are isolated before deletion and indexes are replaced atomically. Failures retain a recovery path and are not cascaded to unselected records.
 
+`sessions.search` is a shared read-only action. The core searches provider summaries and bounded detail pages using the same visible Markdown cleaner as rendering and export. Its request contains provider, thread/provider scope, an opaque session key, query, cursor and limit; clients cannot submit filesystem paths. Results carry a stable event/block position key. The WebUI scopes requests to the active machine, opens a result in its provider workspace, loads bounded history for Codex/Claude, and uses the shared timeline anchor for centering and highlighting.
+
 ## Grok activity
 
 The shared Grok activity snapshot validates array/object registry entries against one process table, native executable identity and process start time. Exited, zombie and reused PIDs cannot prove execution. A bounded cache incrementally consumes complete native primary-turn events, retaining file identity and a prefix anchor to detect replacement/truncation; unread or corrupt state stays unknown. Display requires both a live owner and an unfinished primary turn. Deletion separately rechecks native ownership and file fingerprints before and after quarantine, including idle open sessions.
 
 ## Activity timeline
 
-Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. No RPC, native file format or database migration is added.
+Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. The timeline rail is outside the document flow, so it cannot add history height; activity aliases let search locate a command inside a closed group without changing its disclosure state. No native file format or database migration is added.
 
 ## Visible Markdown
 

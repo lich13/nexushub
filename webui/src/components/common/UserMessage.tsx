@@ -10,12 +10,12 @@ import { FilePathLink } from "./FilePathLink";
 
 export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string } | null>(null);
 
-export function UserMessage({ message, text = "", activityId = "user-message" }: { message?: UserMessageContent | null; text?: string; activityId?: string }) {
+export function UserMessage({ message, text = "", activityId = "user-message", timelineId, timelineAliases = [] }: { message?: UserMessageContent | null; text?: string; activityId?: string; timelineId?: string; timelineAliases?: string[] }) {
   const body = message?.text ?? text;
   const segments = useMemo(() => userMessageSegments(body), [body]);
   const identity = message?.id ?? activityId;
   if (!segments.length && !message?.attachments.length) return null;
-  return <article className="user-message">
+  return <article className="user-message" data-timeline-id={timelineId ?? identity} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined}>
     {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
     {segments.map(segment => segment.kind === "instructions"
       ? <ActivityDetails key={segment.id} className="user-instructions instruction-file execution-command" stateKey={`${identity}:${segment.id}`} initiallyOpen={false} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>

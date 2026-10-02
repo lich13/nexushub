@@ -45,7 +45,7 @@ test("update errors, new releases and jobs show accurate inline state and block 
   await mockCommand(page, "updates.status", () => current);
   await mockCommand(page, "updates.check", () => {
     if (fail) throw new Error("检查更新失败：fixture offline");
-    current = { ...status, latest_version: "v1.2.3", update_available: true };
+    current = { ...status, latest_version: "v1.2.4", update_available: true };
     return { job_id: "update-fixture", status: current };
   });
   await mockCommand(page, "jobs.detail", args => ({ ...demoJob(args.id), status: finish ? "succeeded" : "running" }));
@@ -59,12 +59,12 @@ test("update errors, new releases and jobs show accurate inline state and block 
   await panel.getByRole("button", { name: "检查更新" }).click();
   await expect(panel.getByRole("status")).toContainText("正在检查更新");
   await expect(picker(page)).toBeDisabled();
-  await expect(panel.getByRole("button", { name: "更新至 1.2.3" })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeDisabled();
   finish = true;
-  await expect(panel.getByRole("button", { name: "更新至 1.2.3" })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeEnabled();
   await expect(picker(page)).toBeEnabled();
   await page.setViewportSize({ width: 680, height: 820 });
-  await expect(panel.getByRole("button", { name: "更新至 1.2.3" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "更新至 1.2.4" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

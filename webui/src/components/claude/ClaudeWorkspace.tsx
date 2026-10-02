@@ -4,10 +4,10 @@ import { MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState, type ReactNode } from "react";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { useClaudeActions, useClaudeDetail, useClaudeSessions } from "../../lib/query/claude";
-import type { ClaudeDeletePreview, ClaudeHistoryEvent, ClaudeSessionSummary } from "../../types";
+import type { ClaudeDeletePreview, ClaudeHistoryEvent, ClaudeSessionSummary, SessionSearchResult } from "../../types";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { PlanActions } from "../common/PlanActions";
@@ -19,6 +19,9 @@ import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchCon
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupClaudeEvents } from "../../lib/domain/executionGroups";
+import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
+import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function ClaudeWorkspace() {
   const menuTrigger = useRef<HTMLElement>(null);
@@ -31,6 +34,7 @@ export function ClaudeWorkspace() {
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<ClaudeDeletePreview | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = useClaudeSessions(query);
   const batch = useSessionSelection("claude_code", query, (sessions.data ?? []).map(s => s.sessionKey), keys => {
     if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
@@ -48,9 +52,21 @@ export function ClaudeWorkspace() {
       seen.add(event.id); return true;
     });
   }, [detail.data]);
+  const groupedEvents = useMemo(() => groupClaudeEvents(events), [events]);
+  const timelineEntries: TimelineEntry[] = groupedEvents.map(entry => entry.kind === "group"
+    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
+    : { id: entry.key, title: entry.item.kind, preview: entry.item.text ?? entry.item.detail ?? undefined });
   const olderScroll = useRef<{ key: string; height: number; top: number } | null>(null);
   const actions = useClaudeActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
+  const selectSearchResult = useCallback((result: SessionSearchResult) => {
+    setSelectedKey(result.sessionKey);
+    setPendingSearch(result);
+    setRenaming(false);
+    setPreview(null);
+    setFeedback("");
+  }, []);
+  useSearchWorkspace(useMemo(() => ({ provider: "claude_code" as const, sessionKey: selected?.sessionKey ?? null, selectResult: selectSearchResult }), [selected?.sessionKey, selectSearchResult]));
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -72,6 +88,12 @@ export function ClaudeWorkspace() {
       olderScroll.current = null;
     } else if (scrollState.current.follow && !older) element.scrollTop = element.scrollHeight;
   }, [selected?.sessionKey, selectedKey, detailVisible, events, detail.isFetchingNextPage]);
+  useEffect(() => {
+    if (!pendingSearch || pendingSearch.sessionKey !== selected?.sessionKey || detail.isLoading || detail.isFetchingNextPage) return;
+    if (locateTimelineTarget(pendingSearch.positionKey)) setPendingSearch(null);
+    else if (detail.hasNextPage) void detail.fetchNextPage();
+    else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
+  }, [pendingSearch, selected?.sessionKey, detail.isLoading, detail.isFetchingNextPage, detail.hasNextPage, detail.fetchNextPage, events]);
 
   const copyId = async () => {
     if (!selected) return;
@@ -107,7 +129,7 @@ export function ClaudeWorkspace() {
     <main className="provider-detail">
       {!selected && <div className="empty-state"><Terminal size={28} /><strong>选择一个 Claude Code 任务</strong></div>}
       {selected && <>
-        <header className="conversation-header">
+        <header className="conversation-header" data-timeline-id="session">
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
           <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1><span className="muted-text">{selected.cwd}</span></div>
           <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
@@ -121,16 +143,16 @@ export function ClaudeWorkspace() {
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
           {detail.hasNextPage && <button className="secondary-button history-load-button" disabled={detail.isFetchingNextPage} onClick={() => {
             const element = stream.current;
             if (element) { olderScroll.current = { key: selected.sessionKey, height: element.scrollHeight, top: element.scrollTop }; scrollState.current.follow = false; }
             void detail.fetchNextPage();
           }}>{detail.isFetchingNextPage ? "正在加载..." : "加载较早消息"}</button>}
-          <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}>{renderClaudeEvents(events, selected.title)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+          <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}
-        </div>
+        </div></div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -141,18 +163,19 @@ export function ClaudeWorkspace() {
   </div>;
 }
 
-function ClaudeEvent({ event, activityId, title }: { event: ClaudeHistoryEvent; activityId: string; title: string }) {
-  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} />;
-  if (event.kind === "plan") return <article className="provider-event plan"><header className="plan-heading"><strong>计划</strong><PlanActions markdown={event.text ?? ""} fallbackTitle={title} /></header><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} /></article>;
-  if (event.detail) return <ActivityDetails className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>{() => <ToolOutput text={event.detail!} />}</ActivityDetails>;
+function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event: ClaudeHistoryEvent; activityId: string; title: string; timelineAliases?: string[] }) {
+  const timelineProps = { "data-timeline-id": activityId, "data-timeline-aliases": timelineAliases.length ? timelineAliases.join(" ") : undefined };
+  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} timelineId={activityId} timelineAliases={timelineAliases} />;
+  if (event.kind === "plan") return <article className="provider-event plan" {...timelineProps}><header className="plan-heading"><strong>计划</strong><PlanActions markdown={event.text ?? ""} fallbackTitle={title} /></header><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} /></article>;
+  if (event.detail) return <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>{() => <ToolOutput text={event.detail!} />}</ActivityDetails>;
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
-  return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{claudeEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  return <article className={`provider-event ${event.kind}`} {...timelineProps}><div className="chat-meta">{claudeEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
-function renderClaudeEvents(events: ClaudeHistoryEvent[], title: string): ReactNode {
-  return groupClaudeEvents(events).map(entry => entry.kind === "group"
+function renderClaudeEvents(entries: ExecutionRenderItem<ClaudeHistoryEvent>[], title: string): ReactNode {
+  return entries.map(entry => entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : <ClaudeEvent key={entry.key} activityId={entry.key} event={entry.item} title={title} />);
+    : <ClaudeEvent key={entry.key} activityId={entry.key} event={entry.item} title={title} timelineAliases={entry.sourceIds} />);
 }
 
 function claudeEventLabel(event: ClaudeHistoryEvent): string {

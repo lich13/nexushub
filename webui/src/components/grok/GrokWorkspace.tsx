@@ -3,7 +3,7 @@ import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useGrokActions, useGrokDetail, useGrokSessions } from "../../lib/query/grok";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { MarkdownContent } from "../common/MarkdownContent";
@@ -12,12 +12,15 @@ import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { PlanActions } from "../common/PlanActions";
 import { TaskMenu } from "../common/TaskMenu";
 import { ConfirmDialog } from "../common/ConfirmDialog";
-import type { GrokDeletePreview, GrokHistoryEvent, GrokSessionSummary } from "../../types";
+import type { GrokDeletePreview, GrokHistoryEvent, GrokSessionSummary, SessionSearchResult } from "../../types";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchControls";
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupGrokCommandEvents } from "../../lib/domain/executionGroups";
+import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
+import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function GrokWorkspace({}: { }) {
   const menuTrigger = useRef<HTMLElement>(null);
@@ -30,13 +33,26 @@ export function GrokWorkspace({}: { }) {
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<GrokDeletePreview | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = useGrokSessions(query);
   const batch = useSessionSelection("grok", query, (sessions.data ?? []).map(s => s.id), (keys) => { if (selectedId && keys.includes(selectedId)) setSelectedId(null); setPreview(null); setRenaming(false); });
   const selected = sessions.data?.find((item) => item.id === selectedId) ?? sessions.data?.[0];
   const detailVisible = !narrow || Boolean(selectedId);
   const detail = useGrokDetail(detailVisible ? selected?.id : undefined);
+  const groupedEvents = groupGrokCommandEvents(detail.data?.events ?? []);
+  const timelineEntries: TimelineEntry[] = groupedEvents.map(entry => entry.kind === "group"
+    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
+    : { id: entry.key, title: entry.item.kind, preview: entry.item.text ?? entry.item.detail ?? undefined });
   const actions = useGrokActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
+  const selectSearchResult = useCallback((result: SessionSearchResult) => {
+    setSelectedId(result.sessionKey);
+    setPendingSearch(result);
+    setRenaming(false);
+    setPreview(null);
+    setFeedback("");
+  }, []);
+  useSearchWorkspace(useMemo(() => ({ provider: "grok" as const, sessionKey: selected?.id ?? null, selectResult: selectSearchResult }), [selected?.id, selectSearchResult]));
   const copyId = async () => {
     if (!selected) return;
     try {
@@ -61,6 +77,11 @@ export function GrokWorkspace({}: { }) {
     }
     if (scrollState.current.follow) element.scrollTop = element.scrollHeight;
   }, [selected?.id, selectedId, detailVisible, detail.data?.events]);
+  useEffect(() => {
+    if (!pendingSearch || pendingSearch.sessionKey !== selected?.id || detail.isLoading) return;
+    if (locateTimelineTarget(pendingSearch.positionKey)) setPendingSearch(null);
+    else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
+  }, [pendingSearch, selected?.id, detail.isLoading, detail.data?.events]);
   return <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>
     <aside className="provider-list">
       <header className="workspace-heading"><h1>Grok Build</h1><button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={16} /></button></header>
@@ -84,7 +105,7 @@ export function GrokWorkspace({}: { }) {
     <main className="provider-detail">
       {!selected && <div className="empty-state"><Terminal size={28} /><strong>选择一个 Grok 任务</strong></div>}
       {selected && <>
-        <header className="conversation-header">
+        <header className="conversation-header" data-timeline-id="session">
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /></button>
           <div className="conversation-title-copy"><h1 className="conversation-title">{grokSessionLabel(selected)}</h1><span className="muted-text">{selected.cwd}</span></div>
           <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
@@ -96,7 +117,7 @@ export function GrokWorkspace({}: { }) {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}>{renderGrokEvents(detail.data?.events ?? [], grokSessionLabel(selected))}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={event => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}>{renderGrokEvents(groupedEvents, grokSessionLabel(selected))}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}</div></div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -107,16 +128,17 @@ export function GrokWorkspace({}: { }) {
   </div>;
 }
 
-function renderGrokEvents(events: GrokHistoryEvent[], sessionTitle: string): ReactNode {
-  return groupGrokCommandEvents(events).map(entry => entry.kind === "group"
+function renderGrokEvents(entries: ExecutionRenderItem<GrokHistoryEvent>[], sessionTitle: string): ReactNode {
+  return entries.map(entry => entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : renderGrokEvent(entry.item, entry.key, sessionTitle));
+    : renderGrokEvent(entry.item, entry.key, sessionTitle, entry.sourceIds));
 }
 
-function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: string): ReactNode {
-  if (event.kind === "user_message_chunk") return <UserMessage key={event.userMessage?.id ?? key} message={event.userMessage} text={event.text ?? ""} activityId={key} />;
+function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: string, sourceIds: string[]): ReactNode {
+  const timelineProps = { "data-timeline-id": key, "data-timeline-aliases": sourceIds.join(" ") || undefined };
+  if (event.kind === "user_message_chunk") return <UserMessage key={event.userMessage?.id ?? key} message={event.userMessage} text={event.text ?? ""} activityId={key} timelineId={key} timelineAliases={sourceIds} />;
   if (!visibleMarkdown(event.text ?? "").trim() && event.kind !== "plan") return null;
-  return <article className={`provider-event ${event.kind}`} key={key}>
+  return <article className={`provider-event ${event.kind}`} {...timelineProps} key={key}>
     <div className={event.kind === "plan" ? "plan-header" : "chat-meta"}>
       <span className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</span>
       {event.kind === "plan" && <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />}

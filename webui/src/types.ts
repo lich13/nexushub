@@ -171,6 +171,37 @@ export type ThreadBlockPage = {
   before_cursor?: string | null;
 };
 
+export type SearchProvider = "codex" | "claude_code" | "grok" | "pi";
+export type SearchScope = "thread" | "provider";
+export type SessionSearchRequest = {
+  provider: SearchProvider;
+  scope: SearchScope;
+  sessionKey?: string | null;
+  query: string;
+  cursor?: string | null;
+  limit?: number;
+};
+export type SessionSearchResult = {
+  resultId: string;
+  sessionKey: string;
+  nativeId: string;
+  title: string;
+  cwd?: string | null;
+  matchKind: string;
+  positionKey: string;
+  snippet: string;
+  timestamp?: string | null;
+};
+export type SessionSearchResponse = {
+  provider: SearchProvider;
+  scope: SearchScope;
+  query: string;
+  results: SessionSearchResult[];
+  nextCursor?: string | null;
+  truncated: boolean;
+  warnings?: string[];
+};
+
 
 
 

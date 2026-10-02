@@ -1,4 +1,5 @@
 pub const SESSIONS_ATTACHMENT_READ: &str = "sessions.attachmentRead";
+pub const SESSIONS_SEARCH: &str = "sessions.search";
 pub const GROK_LIST: &str = "grok.list";
 pub const SESSIONS_BULK_PREVIEW: &str = "sessions.bulkPreview";
 pub const SESSIONS_BULK_EXECUTE: &str = "sessions.bulkExecute";
@@ -117,6 +118,7 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     PI_DELETE_EXECUTE,
     CLAUDE_DELETE_EXECUTE,
     SESSIONS_ATTACHMENT_READ,
+    SESSIONS_SEARCH,
     SESSIONS_BULK_PREVIEW,
     SESSIONS_BULK_EXECUTE,
 ];
@@ -148,6 +150,7 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | CLAUDE_DELETE_PREVIEW
             | PI_DELETE_PREVIEW
             | SESSIONS_ATTACHMENT_READ
+            | SESSIONS_SEARCH
             | SESSIONS_BULK_PREVIEW
     )
 }
@@ -158,6 +161,7 @@ pub const INTERNAL_COMMANDS: &[&str] = &[];
 
 pub const DECLARED_COMMANDS: &[&str] = &[
     SESSIONS_ATTACHMENT_READ,
+    SESSIONS_SEARCH,
     SESSIONS_BULK_PREVIEW,
     SESSIONS_BULK_EXECUTE,
     GROK_LIST,
