@@ -111,12 +111,14 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
+          python3 scripts/release-notes.py "${version}" > "${RUNNER_TEMP}/release-notes.md"
           python3 - "${version}" "${tag}" "$(cat dist/nexushub-darwin-arm64.tar.gz.sig)" <<'PY'
-          import json, os, pathlib, sys
+          import json, os, pathlib, subprocess, sys
           version, tag, signature = sys.argv[1:]
+          notes = subprocess.check_output([sys.executable, "scripts/release-notes.py", version, "--updater"], text=True).strip()
           data = {
               "version": version,
-              "notes": f"Release v{version}",
+              "notes": notes,
               "pub_date": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat().replace("+00:00", "Z"),
               "platforms": {"darwin-aarch64": {
                   "signature": signature,
@@ -133,6 +135,7 @@ jobs:
           [[ "${count}" == "7" ]] || { echo "expected seven release assets, found ${count}" >&2; find dist -maxdepth 1 -type f -print; exit 1; }
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: ${{ runner.temp }}/release-notes.md
           files: |
             dist/NexusHub-*-darwin-arm64.dmg
             dist/NexusHub-*-darwin-arm64.dmg.sha256

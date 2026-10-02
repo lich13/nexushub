@@ -1,47 +1,61 @@
-# Linux management API — 1.2.6
+# Linux API 部署手册（1.2.6）
 
-Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Claude Code, Pi or a Linux desktop app.
+NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code、Pi 或 Linux 桌面 App。
 
-## Runtime and isolation
+部署时从仓库外显式提供 SSH 主机、HTTPS 域名和归档路径。域名、主机、API Key、用户会话和配置不写入 Git。
 
-- Binary/unit: `/usr/local/bin/nexushub-webd`, `/etc/systemd/system/nexushub-webd.service`.
-- Config/env: `/etc/nexushub-webd/config.toml`, `/etc/nexushub-webd/env`.
-- Database/logs: `/var/lib/nexushub-webd/`, `/var/log/nexushub-webd/`.
-- Listener: loopback only; public Nginx exposes the chosen prefix's `api/rpc/` and `healthz`. Other paths return 404.
+## 服务与隔离
 
-Keep `ProtectSystem=full`, `ProtectHome=read-only`, `NoNewPrivileges=true` and `PrivateTmp=true`. Claude/Grok/Pi session roots use exact optional `ReadWritePaths`; missing provider directories do not prevent startup. Creating a directory or changing a custom root requires regenerating the unit/drop-in, `daemon-reload` and restart. A host rw mount can remain ro inside systemd; chmod cannot override it.
+- 程序：`/usr/local/bin/nexushub-webd`
+- systemd 单元：`/etc/systemd/system/nexushub-webd.service`
+- 配置：`/etc/nexushub-webd/config.toml` 和 `/etc/nexushub-webd/env`
+- 数据：`/var/lib/nexushub-webd/`
+- 日志：`/var/log/nexushub-webd/`
+- 监听：仅回环地址；反向代理只转发 `api/rpc/` 和 `healthz`，其他路径返回 404
 
-Grok's native leader socket and lock use `/var/lib/nexushub-webd/grok-leader.sock` through `GROK_LEADER_SOCKET`. This keeps native rename available with a read-only provider home; credentials and configuration remain protected. Native mutation working directories must be visible in the service namespace, so host `/tmp` fixtures are unsuitable with `PrivateTmp=true`.
+保留 `ProtectSystem=full`、`ProtectHome=read-only`、`NoNewPrivileges=true` 和 `PrivateTmp=true`。Provider 会话根只有在配置存在时才加入精确的 `ReadWritePaths`；新增目录或修改自定义根目录后，需要重新生成 drop-in、执行 `daemon-reload` 并重启服务。
 
-## Installation and administrator Key
+Grok 原生 leader 使用 `/var/lib/nexushub-webd/grok-leader.sock`。凭据和 Provider 配置保持隔离，原生管理操作需要在服务命名空间中可见的工作目录。
 
-The seven release assets remain macOS DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and Linux webd tarball/checksum. The Linux archive contains the API binary and deployment tools only. Verify the exact approved tag and hashes.
+## 安装与升级
+
+发布页提供七项资产：macOS ARM64 DMG、校验文件、updater 压缩包及签名、`latest.json`，以及 Linux x86_64 `webd` 服务包和校验文件。`latest.json` 的平台键为 `darwin-aarch64`，文件名中的 `darwin-arm64` 表示同一架构；Linux 服务包不能用于桌面 updater。
+
+使用明确的外部参数部署：
 
 ```bash
-NEXUSHUB_DOMAIN=api.example.com bash scripts/deploy-cloud.sh SSH_HOST /absolute/staging/nexushub-webd-linux-x86_64.tar.gz
+NEXUSHUB_DOMAIN=panel.example.invalid \
+  bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
+```
+
+升级前先核对校验文件和当前服务状态。升级脚本会保留业务数据库、Bark 加密材料、通知游标、任务记录和审计数据；原生 Provider 会话和 Codex 数据库不迁移、不改写。
+
+## 管理员 API Key
+
+在服务器生成 Key：
+
+```bash
 sudo /usr/local/bin/nexushub-webd admin key-generate --output /absolute/private/api-key
 ```
 
-The Key output file must not already exist and is created with mode 0600. Enter the value in the macOS App's 远程连接 settings, using the HTTPS base prefix. Delete the temporary Key file after it is saved in Keychain. The server stores only the digest.
+输出文件必须不存在，权限为 `0600`。将 Key 输入 App 的“设置 → 远程连接”后立即删除临时文件。服务器只保存摘要，不保存原文。
+
+轮换或撤销：
 
 ```bash
 sudo /usr/local/bin/nexushub-webd admin key-rotate --output /absolute/private/new-api-key
 sudo /usr/local/bin/nexushub-webd admin key-revoke
 ```
 
-Rotation immediately invalidates the old Key; update the App connection. Revocation or a missing Key denies all business requests. Never pass a Key in a URL, shell argument, log or repository file. Browser cookies cannot authenticate.
+轮换会立即使旧 Key 失效；撤销或未配置 Key 会拒绝业务 RPC。Key 不得出现在 URL、命令参数、日志、浏览器请求或仓库文件中。旧网页 Cookie、登录入口和 Turnstile 配置不再生效。
 
-## Migration and recovery
+## 更新与回滚
 
-The upgrade removes NexusHub web administrators/sessions, Turnstile data and retired settings, then erases SQLite freed pages and WAL. Bark encryption material, events, delivery dedupe, jobs and business audit survive. Config migration removes old website settings. Provider sessions and native Codex databases stay untouched.
+App 的“更新与维护”页面在本机目标显示“本机 App 更新”，在远程目标显示“腾讯云服务更新”。两者使用各自的更新接口和状态缓存；切换机器不会复用另一台机器的结果。
 
-Only retained runtime files/data may have one task-level recovery copy. Do not archive the retired website or login database. Remove the static directory and obsolete web updater; preserve shared Nginx, TLS and unrelated paths. Future rollback targets must be API-era releases. A failed update restores retained service state, then checks health before retrying.
+服务器更新在受保护的 API 服务外启动短时 root unit，写入完成并记录成功后再安排服务重启。若更新失败，先恢复仍保留的服务状态，再检查健康接口。
 
-The installed App’s 腾讯云 target shows only 腾讯云服务更新. 检查更新, 更新至 and 清理更新备份 operate on that service. Switch to 本机 to update the App. An idle Grok thread may still be open in its native process and therefore protected from deletion; do not clear its registration to bypass that protection.
-
-The desktop may call `sessions.search` through the same authenticated RPC allowlist. It is read-only, bounded by provider/session scope and cursor, and returns cleaned snippets with opaque event positions. It never accepts a client filesystem path or returns memory metadata. Search and timeline state belong to the selected machine; a connection revision drops late responses during a switch.
-
-## Acceptance
+## 部署后检查
 
 ```bash
 sudo /usr/local/bin/nexushub-webd --version
@@ -50,8 +64,12 @@ sudo systemctl show nexushub-webd -p MainPID -p ProtectHome -p ProtectSystem -p 
 curl -fsS http://127.0.0.1:15742/healthz
 ```
 
-Verify public health succeeds, old pages/assets/login return 404 and unauthenticated RPC returns 401. In the official App, connect to the API, read disposable sessions/attachments, perform an allowed management action and switch back to local data. Verify wrong, rotated and revoked keys, target isolation, failed connections, pending writes, server-path copying and local Plan saving.
+预期结果：服务为 `active`，健康接口返回成功；未认证业务请求返回 `401`，旧页面和静态资源返回 `404`。
 
-Keep the native asynchronous-question tracker, final-reply notification classification, provider terminal evidence and dedupe as regressions. App closure must not stop either machine's monitor. A cloud host without Pi is covered by empty state and isolated readers, not a claim of native Pi mutation acceptance. Remove only task-created staging, test data and recovery files after acceptance.
+在正式 App 中验证远程连接、会话读取、搜索、附件按需读取、路径复制和 Plan 本地保存。没有原生 Claude、Pi 会话的机器显示空状态，相关管理操作保持禁用。
 
-Claude Code reads existing `CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`; deployment does not create either directory or install a CLI. The default projects root is an optional systemd write path. A custom config root adds only its `projects` child through the managed drop-in. Restart after introducing a previously absent root. Verify the Claude navigation empty state and rejected unknown session keys when no native data exists; label remote fixture tests separately from native session acceptance.
+## 原生数据边界
+
+Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 JSONL。未知格式、损坏记录、半写入尾行或活动身份无法确认时保持只读。Grok、Pi 和 Codex 同样只读取当前机器已发现的数据根。
+
+服务关闭不会停止两台机器各自的 monitor。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 NexusHub 无关的服务文件。

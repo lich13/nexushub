@@ -1,4 +1,6 @@
-# Architecture — 1.2.6
+# NexusHub 架构说明（维护者文档）— 1.2.6
+
+本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
 ## Boundaries
 
