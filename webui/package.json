@@ -1,7 +1,7 @@
 {
   "name": "nexushub-webui",
   "private": true,
-  "version": "1.2.4",
+  "version": "1.2.5",
   "packageManager": "pnpm@11.0.8",
   "type": "module",
   "scripts": {
