@@ -208,6 +208,38 @@ fn content_text(content: &Value) -> String {
         .map(|parts| {
             parts
                 .iter()
+                .filter_map(|p| match field(p, "type") {
+                    "text" => Some(field(p, "text").to_owned()),
+                    "tool_reference" => {
+                        let name = if field(p, "tool_name").is_empty() {
+                            field(p, "name")
+                        } else {
+                            field(p, "tool_name")
+                        };
+                        (!name.is_empty()).then(|| format!("工具引用：{name}"))
+                    }
+                    "tool_search_tool_result" => p
+                        .get("content")
+                        .map(content_text)
+                        .or_else(|| p.get("tool_references").map(content_text))
+                        .filter(|text| !text.is_empty()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .map(|s| bounded(&s))
+        .unwrap_or_default()
+}
+fn text_content_only(content: &Value) -> String {
+    if let Some(s) = content.as_str() {
+        return bounded(s);
+    }
+    content
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
                 .filter(|p| field(p, "type") == "text")
                 .map(|p| field(p, "text"))
                 .collect::<Vec<_>>()
@@ -220,6 +252,9 @@ fn millis(value: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|t| t.timestamp_millis())
+}
+fn terminal_stop_reason(value: &str) -> bool {
+    matches!(value, "end_turn" | "stop_sequence" | "max_tokens")
 }
 fn event(
     id: String,
@@ -250,6 +285,41 @@ fn issue(parsed: &mut Parsed, message: &str) {
         parsed.issues.push(message.into());
     }
 }
+fn warning(parsed: &mut Parsed, message: &str) {
+    if !parsed.warnings.iter().any(|i| i == message) {
+        parsed.warnings.push(message.into());
+    }
+}
+fn alias_field<'a>(value: &'a Value, keys: &[&str]) -> &'a str {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("")
+}
+fn alias_conflict(record: &Value, keys: &[&str]) -> bool {
+    let mut value = None;
+    for key in keys {
+        let Some(candidate) = record
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if let Some(prior) = value {
+            if prior != candidate {
+                return true;
+            }
+        } else {
+            value = Some(candidate);
+        }
+    }
+    false
+}
 
 fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
     let mut parsed = Parsed {
@@ -267,6 +337,8 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
     let mut questions = HashMap::<String, crate::native_probe::NativeTurnEvent>::new();
     let mut permission_calls = HashMap::<String, String>::new();
     let mut seen = HashMap::<String, String>::new();
+    let mut last_assistant_text = None;
+    let mut last_stop_reason = String::new();
     // Main messages only. A rewind replaces the prior suffix; compaction with
     // a null parent preserves earlier history and supplies its own boundary.
     let mut main = Vec::<usize>::new();
@@ -299,7 +371,13 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
         if matches!(kind, "user" | "assistant") && !uuid.is_empty() && !allowed.contains(uuid) {
             continue;
         }
-        let session = field(record, "sessionId");
+        if alias_conflict(record, &["sessionId", "session_id"]) {
+            issue(&mut parsed, "会话身份字段冲突，管理操作已禁用");
+        }
+        if alias_conflict(record, &["version", "claude_code_version"]) {
+            issue(&mut parsed, "会话版本字段冲突，管理操作已禁用");
+        }
+        let session = alias_field(record, &["sessionId", "session_id"]);
         if !session.is_empty() {
             if parsed.id.is_empty() {
                 parsed.id = session.into();
@@ -311,8 +389,9 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
         if !field(record, "cwd").is_empty() {
             parsed.cwd = field(record, "cwd").into();
         }
-        if !field(record, "version").is_empty() {
-            parsed.version = field(record, "version").into();
+        let version = alias_field(record, &["version", "claude_code_version"]);
+        if !version.is_empty() {
+            parsed.version = version.into();
         }
         if !field(record, "timestamp").is_empty() {
             parsed.updated_at = Some(field(record, "timestamp").into());
@@ -370,6 +449,9 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                         .iter()
                         .any(|p| matches!(field(p, "type"), "text" | "image" | "document"));
                 if visible_user {
+                    // A new request supersedes any undelivered event from the
+                    // previous turn. The persisted delivery ledger keeps history.
+                    parsed.native_events.clear();
                     turn = Some(key.clone());
                     parsed.turn_open = true;
                     parsed.last_turn_at = millis(field(record, "timestamp"));
@@ -377,6 +459,8 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                     questions.clear();
                     permission_calls.clear();
                     calls.clear();
+                    last_assistant_text = None;
+                    last_stop_reason.clear();
                     if uuid.is_empty() {
                         issue(&mut parsed, "原生消息身份缺失，通知和管理操作已禁用");
                     }
@@ -426,6 +510,29 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                         "thinking" if kind == "assistant" => {
                             e.kind = "thinking".into();
                             e.text = Some(bounded(field(part, "thinking")));
+                        }
+                        "tool_reference" => {
+                            let name = if field(part, "tool_name").is_empty() {
+                                field(part, "name")
+                            } else {
+                                field(part, "tool_name")
+                            };
+                            e.kind = "tool_reference".into();
+                            e.text = Some(if name.is_empty() {
+                                "工具引用".into()
+                            } else {
+                                name.into()
+                            });
+                            e.role = (!name.is_empty()).then(|| name.into());
+                            e.detail = Some(printable(part));
+                            if name.is_empty() {
+                                warning(&mut parsed, "工具引用缺少工具名称，已保留为警告");
+                            }
+                        }
+                        "tool_search_tool_result" => {
+                            e.kind = "tool_reference".into();
+                            e.text = Some("工具引用结果".into());
+                            e.detail = part.get("content").map(printable);
                         }
                         "redacted_thinking" => {
                             continue;
@@ -539,14 +646,27 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                             e.kind = "unknown".into();
                             e.text = Some("未知内容块".into());
                             e.detail = Some(printable(part));
-                            issue(&mut parsed, "存在未知内容块，管理操作已禁用");
+                            warning(&mut parsed, "存在未知内容块，已保留为警告");
                         }
                     }
                     parsed.events.push(e);
                 }
+                if kind == "assistant" {
+                    let text = text_content_only(content);
+                    if !text.trim().is_empty() {
+                        last_assistant_text = Some(text);
+                    }
+                    last_stop_reason = field(message, "stop_reason").into();
+                    if !terminal_stop_reason(&last_stop_reason) || !pending.is_empty() {
+                        parsed.turn_open = turn.is_some();
+                        parsed.native_events.clear();
+                    }
+                }
+                let assistant_terminal = terminal_stop_reason(field(message, "stop_reason"));
                 if kind == "assistant"
-                    && field(message, "stop_reason") == "end_turn"
+                    && assistant_terminal
                     && pending.is_empty()
+                    && questions.is_empty()
                 {
                     finish(
                         &mut parsed,
@@ -554,7 +674,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                         position,
                         record,
                         "completion",
-                        content_text(content),
+                        last_assistant_text.clone().unwrap_or_default(),
                     );
                 }
             }
@@ -568,14 +688,37 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                             | "error_max_budget_usd"
                             | "error_max_structured_output_retries"
                     );
-                if subtype == "success" && pending.is_empty() {
+                let stop_reason = record.get("stop_reason").and_then(Value::as_str);
+                let explicit_terminal = stop_reason.is_some_and(terminal_stop_reason);
+                let inferred_terminal = stop_reason.is_none()
+                    && (last_stop_reason.is_empty() || terminal_stop_reason(&last_stop_reason))
+                    && record.get("is_error").and_then(Value::as_bool) == Some(false);
+                if subtype == "success"
+                    && stop_reason.is_some_and(|reason| !terminal_stop_reason(reason))
+                {
+                    parsed
+                        .native_events
+                        .retain(|event| event.kind != "completion");
+                    parsed.turn_open = turn.is_some();
+                }
+                if subtype == "success"
+                    && record.get("is_error").and_then(Value::as_bool) != Some(true)
+                    && pending.is_empty()
+                    && questions.is_empty()
+                    && (explicit_terminal || inferred_terminal)
+                {
+                    let result = bounded(field(record, "result"));
                     finish(
                         &mut parsed,
                         &turn,
                         position,
                         record,
                         "completion",
-                        bounded(field(record, "result")),
+                        if result.trim().is_empty() {
+                            last_assistant_text.clone().unwrap_or_default()
+                        } else {
+                            result
+                        },
                     );
                 } else if is_failure {
                     questions.clear();
@@ -597,6 +740,10 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 let subtype = field(record, "subtype");
                 if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
                     parsed.turn_open = false;
+                    parsed.native_events.clear();
+                    turn = None;
+                    last_stop_reason.clear();
+                    last_assistant_text = None;
                     questions.clear();
                     for call in &pending {
                         if let Some(index) = calls.get(call) {
@@ -604,6 +751,11 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                         }
                     }
                     pending.clear();
+                }
+                if subtype == "init" {
+                    // Identity/cwd/version were extracted above. Startup
+                    // configuration is metadata, not a conversation activity.
+                    continue;
                 }
                 if subtype == "compact_boundary" {
                     parsed.events.push(event(
@@ -616,7 +768,8 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 } else {
                     let known = matches!(
                         subtype,
-                        "turn_duration"
+                        "init"
+                            | "turn_duration"
                             | "stop_hook_summary"
                             | "interrupted"
                             | "cancelled"
@@ -633,7 +786,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                     e.detail = Some(printable(record));
                     parsed.events.push(e);
                     if !known {
-                        issue(&mut parsed, "存在未知系统活动，管理操作已禁用");
+                        warning(&mut parsed, "存在新格式系统活动，管理操作已禁用");
                     }
                 }
             }
@@ -654,7 +807,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 if !request.is_empty()
                     && pending.contains(call)
                     && field(record, "agent_id").is_empty()
-                    && field(record, "sessionId") == parsed.id
+                    && alias_field(record, &["sessionId", "session_id"]) == parsed.id
                 {
                     if let (Some(turn), Some(ts)) = (&turn, millis(field(record, "timestamp"))) {
                         let body = format!(
@@ -698,7 +851,47 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 Some(bounded(field(record, "summary"))),
                 &turn,
             )),
+            "tool_reference" | "tool_search_tool_result" => {
+                let name = if field(record, "tool_name").is_empty() {
+                    field(record, "name")
+                } else {
+                    field(record, "tool_name")
+                };
+                let mut e = event(
+                    key,
+                    record,
+                    "tool_reference",
+                    Some(if name.is_empty() {
+                        if kind == "tool_search_tool_result" {
+                            "工具引用结果".into()
+                        } else {
+                            "工具引用".into()
+                        }
+                    } else {
+                        name.into()
+                    }),
+                    &turn,
+                );
+                e.role = (!name.is_empty()).then(|| name.into());
+                e.detail = Some(printable(record));
+                parsed.events.push(e);
+                let nested_reference = ["content", "tool_references"].iter().any(|key| {
+                    record
+                        .get(*key)
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                field(part, "type") == "tool_reference"
+                                    && !alias_field(part, &["tool_name", "name"]).is_empty()
+                            })
+                        })
+                });
+                if name.is_empty() && !nested_reference {
+                    warning(&mut parsed, "工具引用缺少工具名称，已保留为警告");
+                }
+            }
             "file-history-snapshot"
+            | "file-history-delta"
             | "queue-operation"
             | "attachment"
             | "atis-latch"
@@ -724,7 +917,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                     kind,
                     Some(
                         match kind {
-                            "file-history-snapshot" => "文件历史快照",
+                            "file-history-snapshot" | "file-history-delta" => "文件历史快照",
                             "queue-operation" => "队列活动",
                             "atis-latch" => "会话设置",
                             "cost-state" => "用量记录",
@@ -738,7 +931,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 parsed.events.push(e);
             }
             "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
-            | "saved_hook_context" => {}
+            | "saved_hook_context" | "mode" | "permission-mode" => {}
             _ => {
                 let mut e = event(
                     key,
@@ -749,7 +942,7 @@ fn parse(records: &[Arc<Value>], path: &Path, issues: Vec<String>) -> Parsed {
                 );
                 e.detail = Some(printable(record));
                 parsed.events.push(e);
-                issue(&mut parsed, "存在未知记录格式，管理操作已禁用");
+                warning(&mut parsed, "存在新格式活动，管理操作已禁用");
             }
         }
     }
@@ -790,22 +983,27 @@ fn finish(
     body: String,
 ) {
     parsed.turn_open = false;
-    if let (Some(turn), Some(ts)) = (turn, millis(field(record, "timestamp"))) {
-        if !body.trim().is_empty()
-            && !parsed
-                .native_events
-                .iter()
-                .any(|e| e.turn_id == *turn && e.kind == kind)
-        {
-            parsed
-                .native_events
-                .push(crate::native_probe::NativeTurnEvent {
-                    position: position as u64 + 1,
-                    turn_id: turn.clone(),
-                    kind: kind.into(),
-                    body,
-                    timestamp_ms: ts,
-                });
-        }
+    if body.trim().is_empty() {
+        return;
     }
+    let (Some(turn), Some(ts)) = (turn, millis(field(record, "timestamp"))) else {
+        return;
+    };
+    if parsed
+        .native_events
+        .iter()
+        .any(|e| e.turn_id == *turn && e.kind == kind)
+    {
+        return;
+    }
+    parsed.native_events.retain(|e| e.turn_id != *turn);
+    parsed
+        .native_events
+        .push(crate::native_probe::NativeTurnEvent {
+            position: position as u64 + 1,
+            turn_id: turn.clone(),
+            kind: kind.into(),
+            body,
+            timestamp_ms: ts,
+        });
 }

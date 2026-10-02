@@ -28,7 +28,7 @@ NEXUSHUB_DOMAIN=panel.example.invalid \
   bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
 ```
 
-升级前先核对校验文件和当前服务状态。升级脚本会保留业务数据库、Bark 加密材料、通知游标、任务记录和审计数据；原生 Provider 会话和 Codex 数据库不迁移、不改写。
+升级前先核对校验文件和当前服务状态。1.2.7 首次扫描会为 Claude 新兼容的记录建立基线，不补推历史完成通知；升级后使用新回合验收 Bark。升级脚本会保留业务数据库、Bark 加密材料、通知游标、任务记录和审计数据；原生 Provider 会话和 Codex 数据库不迁移、不改写。
 
 ## 管理员 API Key
 

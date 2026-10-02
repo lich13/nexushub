@@ -68,7 +68,7 @@ fn fingerprint_prefix(path: &Path, limit: u64) -> Result<String> {
 }
 fn ensure_inactive(parsed: &Parsed, path: &Path) -> Result<()> {
     ensure!(
-        parsed.issues.is_empty(),
+        parsed.issues.is_empty() && parsed.warnings.is_empty(),
         "Claude 会话格式或身份不明，管理操作已禁用"
     );
     ensure!(

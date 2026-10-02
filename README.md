@@ -8,7 +8,7 @@ NexusHub 是一个只读优先的会话管理工具，用于在 macOS App 中查
 - 保留文本与工具的原始顺序；连续工具活动可以展开查看，AGENTS.md 和记忆元数据按安全规则处理。
 - 复制线程 ID、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
 - 在 Provider 允许时双击线程标题改名，并对 Codex、Grok、Pi 和 Claude Code 提供受保护的归档、删除或恢复操作；Claude Code 兼容常见记录读取，未知或不完整记录保持只读。
-- 通过 Bark 接收明确的完成、失败和需要回复通知；空结果或挂起工具不会误推进完成通知状态。
+- 通过 Bark 接收明确的完成、失败和需要回复通知；Claude 的空结果可回退到当前回合最后一段回复，工具执行中和取消状态不误报完成。
 
 NexusHub 不发送消息、不接管进程、不执行用户命令，也不会安装或配置 Claude Code、Pi 或其他 Provider。原生会话文件保持不变。
 

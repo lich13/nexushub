@@ -20,7 +20,8 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupClaudeEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
-import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { TimelineRail } from "../common/TimelineRail";
+import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function ClaudeWorkspace() {
@@ -53,9 +54,8 @@ export function ClaudeWorkspace() {
     });
   }, [detail.data]);
   const groupedEvents = useMemo(() => groupClaudeEvents(events), [events]);
-  const timelineEntries: TimelineEntry[] = groupedEvents.map(entry => entry.kind === "group"
-    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
-    : { id: entry.key, title: entry.item.kind, preview: entry.item.text ?? entry.item.detail ?? undefined });
+  const timelineEntries = userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : []));
   const olderScroll = useRef<{ key: string; height: number; top: number } | null>(null);
   const actions = useClaudeActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
@@ -141,7 +141,8 @@ export function ClaudeWorkspace() {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ sessionKey: selected.sessionKey, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Claude Code 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
-        {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
+        {selected.readWarning && <div className="task-feedback" role="status">{selected.readWarning}</div>}
+        {!selected.readError && !selected.readWarning && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
           {detail.hasNextPage && <button className="secondary-button history-load-button" disabled={detail.isFetchingNextPage} onClick={() => {

@@ -55,7 +55,7 @@ export type PiDeleteResult = { sessionKey: string; deleted: boolean; bytes: numb
 
 
 
-export type ClaudeSessionSummary = Omit<PiSessionSummary, "formatVersion"> & { formatVersion: string };
+export type ClaudeSessionSummary = Omit<PiSessionSummary, "formatVersion"> & { formatVersion: string; readWarning?: string | null };
 export type ClaudeHistoryEvent = PiHistoryEvent & { id: string; turnId?: string | null; result?: string | null };
 export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
 export type ClaudeSessionDetail = { summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };

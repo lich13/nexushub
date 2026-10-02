@@ -19,7 +19,8 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupPiCommandEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
-import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { TimelineRail } from "../common/TimelineRail";
+import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function PiWorkspace({}: { }) {
@@ -44,9 +45,8 @@ export function PiWorkspace({}: { }) {
   const detailVisible = !narrow || Boolean(selectedKey);
   const detail = usePiDetail(detailVisible ? selected?.sessionKey : undefined);
   const groupedEvents = groupPiCommandEvents(detail.data?.events ?? []);
-  const timelineEntries: TimelineEntry[] = groupedEvents.map(entry => entry.kind === "group"
-    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
-    : { id: entry.key, title: entry.item.kind, preview: entry.item.text ?? entry.item.detail ?? undefined });
+  const timelineEntries = userTimelineEntries("pi", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : []));
   const actions = usePiActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
   const selectSearchResult = useCallback((result: SessionSearchResult) => {

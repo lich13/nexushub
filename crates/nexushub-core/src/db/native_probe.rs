@@ -38,7 +38,16 @@ impl PanelDb {
                 |r| Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?)),
             )
             .optional()?;
-        let baseline = enabled && prior.is_none_or(|(was_enabled, _)| !was_enabled);
+        // The compatible Claude reader can now see streams previously rejected
+        // as unknown format. Baseline them once instead of replaying old replies.
+        let reader_upgrade = provider == NativeProvider::Claude
+            && tx.query_row("SELECT count(*) FROM settings WHERE key='native_claude_reader_revision' AND value='2'", [], |r| r.get::<_, i64>(0))? == 0;
+        let baseline =
+            enabled && (reader_upgrade || prior.is_none_or(|(was_enabled, _)| !was_enabled));
+        if enabled && reader_upgrade {
+            tx.execute("INSERT INTO settings(key,value,updated_at) VALUES('native_claude_reader_revision','2',?1) ON CONFLICT(key) DO UPDATE SET value='2',updated_at=excluded.updated_at", [Self::now()])?;
+            tx.execute("UPDATE native_probe_deliveries SET status='skipped',updated_at=?1 WHERE provider=?2 AND status='pending'", params![Self::now(),provider.as_str()])?;
+        }
         let activated_ms = if baseline {
             chrono::Utc::now().timestamp_millis()
         } else {
@@ -142,6 +151,20 @@ impl PanelDb {
         }
         Ok(())
     }
+    /// Only retry explicit transient server rejections. A lost response has an
+    /// unknown delivery outcome, so it must not be replayed automatically.
+    pub fn retry_rejected_claude_deliveries(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("db mutex");
+        conn.execute(
+            "UPDATE native_probe_deliveries SET status='pending',updated_at=?1
+             WHERE provider='claude_code' AND status='failed' AND updated_at < ?1-60
+             AND (SELECT count(*) FROM probe_events e WHERE e.dedupe_key=native_probe_deliveries.event_key) < 3
+             AND (SELECT json_extract(e.payload_json,'$.bark.http_status') FROM probe_events e
+                  WHERE e.dedupe_key=native_probe_deliveries.event_key ORDER BY e.created_at DESC LIMIT 1) IN (429,500,502,503,504)",
+            [Self::now()],
+        )?;
+        Ok(())
+    }
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
         let mut statuses = Vec::new();
@@ -179,6 +202,67 @@ impl PanelDb {
 mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
+    #[test]
+    fn claude_upgrade_baselines_old_streams_and_confirmed_rejections_retry_boundedly() {
+        let db = PanelDb::open(":memory:").unwrap();
+        let config = config();
+        let now = chrono::Utc::now().timestamp_millis() + 1000;
+        let mut old = scan("fixture", 1, now);
+        old.streams[0].provider = NativeProvider::Claude;
+        // Simulate an already-enabled pre-upgrade scanner that rejected this file.
+        db.conn.lock().unwrap().execute("INSERT INTO native_probe_providers(provider,enabled,activated_ms,scanned_at,stream_count,error_count) VALUES('claude_code',1,0,0,0,1)", []).unwrap();
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Claude, &old, &config)
+                .unwrap(),
+            0
+        );
+        old.streams[0].record_count = 2;
+        old.streams[0].settled_count = 2;
+        old.streams[0].events = vec![NativeTurnEvent {
+            position: 2,
+            turn_id: "new-turn".into(),
+            kind: "completion".into(),
+            body: "Fixture complete".into(),
+            timestamp_ms: now,
+        }];
+        assert_eq!(
+            db.stage_native_notifications(NativeProvider::Claude, &old, &config)
+                .unwrap(),
+            1
+        );
+        let delivery = db.pending_native_deliveries(10).unwrap().pop().unwrap();
+        for attempt in 1..=3 {
+            assert!(db.claim_native_delivery(&delivery.event_key).unwrap());
+            assert!(!db.claim_native_delivery(&delivery.event_key).unwrap());
+            db.finish_native_delivery(
+                &delivery,
+                json!({"sent":false,"skipped":false,"http_status":503}),
+            )
+            .unwrap();
+            db.retry_rejected_claude_deliveries().unwrap();
+            assert!(db.pending_native_deliveries(10).unwrap().is_empty());
+            db.conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE native_probe_deliveries SET updated_at=0", [])
+                .unwrap();
+            db.retry_rejected_claude_deliveries().unwrap();
+            assert_eq!(
+                db.pending_native_deliveries(10).unwrap().len(),
+                usize::from(attempt < 3)
+            );
+        }
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT status FROM native_probe_deliveries", [], |r| r
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+            "failed"
+        );
+    }
+
     fn config() -> Config {
         let mut c = Config::default();
         c.probe.notifications.enabled = true;
