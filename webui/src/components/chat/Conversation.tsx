@@ -13,7 +13,8 @@ import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCom
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { SessionSearchResult, ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
-import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { TimelineRail } from "../common/TimelineRail";
+import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
 
 
@@ -48,9 +49,8 @@ export function Conversation(props: {
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
-  const timelineEntries: TimelineEntry[] = visibleItems.map((entry) => entry.kind === "group"
-    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
-    : { id: entry.item.id, title: entry.item.kind || entry.item.role, preview: entry.item.text ?? entry.item.summary ?? entry.item.input ?? undefined, status: entry.item.status ?? undefined });
+  const timelineEntries = userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : []));
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const older = useThreadBlockPageMutation({
     onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,

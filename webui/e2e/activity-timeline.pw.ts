@@ -123,3 +123,49 @@ test("native pagination inserts older activity while preserving the visible anch
   await expect(stream.locator(".execution-group")).toHaveCount(40);
   await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
 });
+
+for (const provider of ["codex", "claude", "grok", "pi"] as const) {
+  test(`${provider} rail marks user instructions and keeps non-user search anchors`, async ({ page }) => {
+    await mockApi(page);
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: provider === "grok" ? "light" : "dark" });
+    const kind = provider === "grok" ? "user_message_chunk" : "user_message";
+    const assistant = provider === "grok" ? "agent_message_chunk" : "assistant_message";
+    const events = [
+      { id: "first", kind, text: "First fixture instruction" },
+      { id: "answer", kind: assistant, text: "Long fixture reply\n\n".repeat(90) },
+      { id: "call", kind: "tool_call", callId: "fixture-call", method: "exec_command", role: "bash", text: "exec_command", detail: "printf fixture", status: "completed" },
+      { id: "second", kind, text: "Second fixture instruction" },
+      { id: "last", kind: assistant, text: "Final fixture reply" }
+    ];
+    const summary = { id: "fixture-thread", sessionKey: "fixture-key", title: "Fixture thread", cwd: "/fixture", path: "/fixture/native.jsonl", status: "recent", formatVersion: "2.1.284", messageCount: 4, canRename: true, canDelete: true };
+    if (provider === "codex") {
+      const detail = demo.demoThreadDetail("019e95a0-demo");
+      detail.blocks = events.map(event => ({ id: event.id, role: event.kind === kind ? "user" : event.kind === "tool_call" ? "tool" : "assistant", kind: event.kind === "tool_call" ? "function_call_output" : "message", text: event.text, input: event.detail, call_id: event.callId, tool_name: event.method, status: event.status, questions: [] }));
+      detail.has_more_blocks = false;
+      await mockCommand(page, "threads.detail", () => detail);
+    } else {
+      await mockCommand(page, `${provider}.list`, () => [summary]);
+      await mockCommand(page, `${provider}.detail`, () => ({ summary, events, totalEvents: events.length, hasMore: false }));
+    }
+    await page.goto("/");
+    if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+    else await page.locator(".side-nav").getByRole("button", { name: { claude: "Claude Code", grok: "Grok Build", pi: "Pi" }[provider], exact: true }).click();
+    const markers = page.locator(".timeline-rail-item");
+    await expect(markers).toHaveCount(2);
+    await expect(markers.nth(0)).toHaveAccessibleName("时间线：First fixture instruction");
+    await markers.nth(0).focus(); await page.keyboard.press("Enter");
+    await expect(markers.nth(0)).toHaveClass(/active/);
+    const stream = page.locator(provider === "codex" ? ".message-stream" : ".provider-events");
+    await stream.evaluate(node => { node.scrollTop += 500; });
+    await expect(markers.nth(0)).toHaveClass(/active/);
+    await stream.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await expect(markers.nth(1)).toHaveClass(/active/);
+    await stream.evaluate(node => { node.scrollTop = 0; });
+    await expect(markers.nth(0)).toHaveClass(/active/);
+    await expect(stream.locator("[data-timeline-id]")).toHaveCount(5);
+    await expect(stream.locator(".execution-group")).toHaveCount(1);
+    await page.getByTitle("刷新任务").click();
+    await expect(markers).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - innerHeight)).toBeLessThanOrEqual(1);
+  });
+}

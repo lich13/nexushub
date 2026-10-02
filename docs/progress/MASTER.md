@@ -2,13 +2,13 @@
 
 ## 版本
 
-当前版本为 **1.2.7**。它包含仅显示用户指令的时间线短线、Claude Code 记录读取兼容和 Bark 完成通知修复。
+正在交付 **1.2.7**，正式运行版本仍为 1.2.6。它包含仅显示用户指令的时间线短线、Claude Code 记录读取兼容和 Bark 完成通知修复。
 
 - 主分支：`main`
-- 发布标签：`v1.2.7`
+- 目标发布标签：`v1.2.7`（待 CI 通过）
 - 发布资产：macOS ARM64 App/updater、`latest.json` 和 Linux x86_64 `webd` 服务包，共七项
 
-## 已交付能力
+## 当前能力
 
 - Codex、Claude Code、Grok Build、Pi 的会话读取、搜索和时间线定位。
 - 当前线程与当前 Provider 搜索，结果按机器隔离，并能加载较早历史定位命中内容。
@@ -17,7 +17,7 @@
 - 用户消息、附件、Plan、文件路径、AGENTS.md 折叠和记忆元数据清理保持一致。
 - Claude Code 兼容常见记录读取；未知或不完整记录继续保持只读。
 - 本机与远程 API 快速切换；远程 Key 使用 macOS Keychain 保存。
-- Bark 完成、失败和需要回复通知；空结果或挂起工具不会误推进完成通知状态。
+- Bark 完成、失败和需要回复通知；Claude 的空结果回退到当前回合回复，工具执行中和取消不误报完成。
 
 ## 当前边界
 
@@ -30,10 +30,12 @@
 
 发布门槛包括 Rust workspace、Tauri、WebUI、浏览器、契约、安装脚本、隐私和差异检查；frontend、backend、macOS Tauri 三项 CI 需通过。
 
-正式 App 已验证本机与远程切换、更新状态隔离、搜索入口和时间线定位。关闭 App 后 monitor 仍可运行，且不监听额外 TCP 端口。
+本地门禁已通过：根 workspace 598 项测试、Tauri 71 项测试及各自 fmt/Clippy；WebUI 271 项单元测试、204 项 Chromium/WebKit 回归、类型检查和构建。安装、契约、隐私与差异检查通过。
+
+1.2.7 的正式安装、远程部署及设备 Bark 确认尚未完成；通过后在此更新结果。
 
 ## 发布说明
 
-GitHub Release 使用中文说明，列出本版本三项修复、支持平台、七项资产用途和升级提示：[v1.2.7](https://github.com/lich13/nexushub/releases/tag/v1.2.7)。
+GitHub Release 使用中文说明，列出本版本三项修复、支持平台、七项资产用途和升级提示：`v1.2.7`。
 
 后续发布需要同步版本文件、六份当前 Markdown、中文 Release Notes、隐私扫描和三项 CI；部署参数、用户会话和凭据继续放在仓库外。

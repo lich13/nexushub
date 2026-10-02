@@ -163,7 +163,7 @@ export function locateTimelineTarget(positionKey: string): boolean {
     .find(candidate => candidate.dataset.timelineId === positionKey || candidate.dataset.timelineAliases?.split(/\s+/).includes(positionKey)
       || Boolean(candidate.dataset.timelineId && (candidate.dataset.timelineId.includes(`:${positionKey}:`) || candidate.dataset.timelineId.endsWith(`:${positionKey}`))));
   if (!element) return false;
-  element.scrollIntoView({ behavior: "smooth", block: "center" });
+  element.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
   element.classList.remove("timeline-target-highlight");
   void element.offsetWidth;
   element.classList.add("timeline-target-highlight");

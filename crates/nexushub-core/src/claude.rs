@@ -55,6 +55,8 @@ pub struct ClaudeSessionSummary {
     pub can_delete: bool,
     pub delete_block_reason: Option<String>,
     pub read_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_warning: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +125,7 @@ struct Parsed {
     updated_at: Option<String>,
     events: Vec<ClaudeHistoryEvent>,
     issues: Vec<String>,
+    warnings: Vec<String>,
     last_turn_at: Option<i64>,
     turn_open: bool,
     native_events: Vec<crate::native_probe::NativeTurnEvent>,
@@ -215,8 +218,12 @@ fn summary(
     snapshot: &activity::Snapshot,
 ) -> Result<ClaudeSessionSummary> {
     let owner = snapshot.ownership(parsed, path);
-    let reason = if !parsed.issues.is_empty() {
-        Some(parsed.issues.join("；"))
+    let fatal_reason = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
+    let warning_reason = (!parsed.warnings.is_empty()).then(|| parsed.warnings.join("；"));
+    let reason = if let Some(reason) = fatal_reason.clone() {
+        Some(reason)
+    } else if let Some(reason) = warning_reason.clone() {
+        Some(reason)
     } else if parsed.turn_open || owner != activity::Ownership::Inactive {
         Some("Claude 会话仍被原生进程占用或归属无法确认，请关闭后重试".into())
     } else {
@@ -231,6 +238,13 @@ fn summary(
     } else {
         "unknown"
     };
+    /*
+     * Fatal parse errors remain the read error and force an unknown status.
+     * Compatibility warnings are shown separately and still guard mutations,
+     * while notification scanning may use their terminal evidence.
+     */
+    let read_error = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
+    let read_warning = warning_reason;
     let messages: Vec<_> = parsed
         .events
         .iter()
@@ -254,7 +268,8 @@ fn summary(
         can_delete: reason.is_none(),
         rename_block_reason: reason.clone(),
         delete_block_reason: reason,
-        read_error: (!parsed.issues.is_empty()).then(|| parsed.issues.join("；")),
+        read_error,
+        read_warning,
     })
 }
 pub fn list_claude_sessions(
@@ -349,6 +364,8 @@ pub(crate) fn notification_snapshots(
                 continue;
             }
         };
+        // Compatibility warnings are safe to scan; only fatal parse/identity
+        // issues suppress terminal evidence and increment the scan error count.
         if !parsed.issues.is_empty() {
             scan.errors += 1;
             continue;

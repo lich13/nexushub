@@ -206,7 +206,8 @@ fn cache_recovers_partial_tail_truncation_replacement_and_keeps_unknown_records(
     f.append(&json!({"type":"future-record","sessionId":"native-fixture","example":"visible"}));
     let unknown = reader::read(&f.file).unwrap();
     assert_eq!(unknown.events.last().unwrap().kind, "unknown");
-    assert!(!unknown.issues.is_empty());
+    assert!(unknown.issues.is_empty());
+    assert!(!unknown.warnings.is_empty());
     f.complete();
     assert!(reader::read(&f.file).unwrap().issues.is_empty());
     fs::remove_file(&f.file).unwrap();
@@ -483,6 +484,8 @@ fn claude_notifications_baseline_dedupe_and_terminal_evidence_survive_restart() 
     );
     assert!(db.pending_native_deliveries(10).unwrap().is_empty());
     let mut failure = json!({"type":"result","sessionId":"native-fixture","subtype":"error_max_turns","is_error":true,"errors":["Terminal fixture failure"],"timestamp":user["timestamp"]});
+    user["uuid"] = json!("failure-turn");
+    user["parentUuid"] = json!("done");
     f.append(&user);
     failure["timestamp"] = user["timestamp"].clone();
     f.append(&failure);
@@ -548,4 +551,255 @@ fn oversized_unrelated_file_does_not_hide_readable_sessions_and_cache_is_reused(
     assert!(blocked.read_error.is_some());
     assert!(!blocked.can_delete);
     assert_eq!(resolve(&f.paths, &f.key()).unwrap().1.id, "native-fixture");
+}
+
+#[test]
+fn reads_stream_init_aliases_tool_references_and_empty_result_falls_back() {
+    let f = Fixture::new();
+    f.write(&[
+        json!({
+            "type": "system",
+            "subtype": "init",
+            "uuid": "init",
+            "session_id": "snake-session",
+            "claude_code_version": "2.1.284",
+            "cwd": f.root.join("workspace"),
+            "timestamp": "2026-09-29T00:00:00Z"
+        }),
+        json!({
+            "type": "user",
+            "uuid": "u1",
+            "session_id": "snake-session",
+            "cwd": f.root.join("workspace"),
+            "claude_code_version": "2.1.284",
+            "timestamp": "2026-09-29T00:00:01Z",
+            "message": {"role":"user","content":"Start","stop_reason":""}
+        }),
+        json!({
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": "u1",
+            "session_id": "snake-session",
+            "timestamp": "2026-09-29T00:00:02Z",
+            "message": {
+                "role":"assistant",
+                "content":[
+                    {"type":"tool_reference","tool_name":"mcp__fixture__search"},
+                    {"type":"text","text":"Fallback answer"}
+                ],
+                "stop_reason":"end_turn"
+            }
+        }),
+        json!({
+            "type": "result",
+            "uuid": "result",
+            "session_id": "snake-session",
+            "subtype": "success",
+            "is_error": false,
+            "result": "",
+            "timestamp": "2026-09-29T00:00:03Z"
+        }),
+    ]);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    assert_eq!(parsed.id, "snake-session");
+    assert_eq!(parsed.version, "2.1.284");
+    assert!(parsed.events.iter().any(|event| {
+        event.kind == "tool_reference" && event.role.as_deref() == Some("mcp__fixture__search")
+    }));
+    assert_eq!(parsed.native_events.len(), 1);
+    assert_eq!(parsed.native_events[0].body, "Fallback answer");
+    assert!(!parsed.turn_open);
+}
+
+#[test]
+fn success_result_does_not_finish_with_pending_tool_and_unknown_system_is_warning() {
+    let f = Fixture::new();
+    f.write(&[
+        f.row("u1", None, "user", json!("Start")),
+        f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"tool_use","id":"call","name":"Search","input":{}}]),
+        ),
+        json!({
+            "type":"result",
+            "uuid":"result",
+            "sessionId":"native-fixture",
+            "subtype":"success",
+            "is_error":false,
+            "result":"Finished too early",
+            "timestamp":"2026-09-29T00:00:01Z"
+        }),
+        json!({
+            "type":"system",
+            "subtype":"future_activity",
+            "uuid":"future",
+            "sessionId":"native-fixture",
+            "timestamp":"2026-09-29T00:00:02Z"
+        }),
+    ]);
+    let parsed = reader::read(&f.file).unwrap();
+    assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+    assert!(parsed
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("新格式系统活动")));
+    assert!(parsed.turn_open);
+    assert!(parsed.native_events.is_empty());
+    let summary = list_claude_sessions(&f.paths, 10, None)
+        .unwrap()
+        .into_iter()
+        .find(|summary| summary.id == "native-fixture")
+        .expect("fixture summary");
+    assert_eq!(summary.status, "unknown");
+    assert!(summary.read_error.is_none());
+    assert!(summary.read_warning.is_some());
+    assert!(!summary.can_rename && !summary.can_delete);
+    let scan = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams.len(), 1);
+}
+
+#[test]
+fn compatible_auxiliary_records_are_readable_but_unknown_formats_stay_mutation_guarded() {
+    let f = Fixture::new();
+    f.complete();
+    for kind in [
+        "mode",
+        "permission-mode",
+        "file-history-delta",
+        "future-fixture-record",
+    ] {
+        f.append(&json!({"type":kind,"sessionId":"native-fixture"}));
+    }
+    f.append(&json!({"type":"system","subtype":"informational","session_id":"native-fixture"}));
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            session_key: f.key(),
+            limit: Some(200),
+            before: None,
+        },
+    )
+    .unwrap();
+    assert!(detail.summary.read_error.is_none());
+    assert!(detail.summary.read_warning.is_some());
+    assert_eq!(detail.summary.status, "recent");
+    assert!(!detail.summary.can_rename && !detail.summary.can_delete);
+    assert!(rename_claude_session(&f.paths, &f.key(), "Blocked").is_err());
+    assert!(preview_claude_delete(&f.paths, &f.key()).is_err());
+    let scan = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(scan.errors, 0);
+    assert_eq!(scan.streams[0].events.len(), 1);
+    assert_eq!(scan.streams[0].events[0].kind, "completion");
+}
+
+#[test]
+fn empty_success_result_uses_this_turn_text_and_never_tool_use_or_cancelled_turns() {
+    let f = Fixture::new();
+    let user = f.row("u1", None, "user", json!("Fixture request"));
+    let mut answer = f.row(
+        "a1",
+        Some("u1"),
+        "assistant",
+        json!([{"type":"text","text":"Fixture final reply"}]),
+    );
+    answer["message"]["stop_reason"] = Value::Null;
+    f.write(&[user.clone(), answer.clone()]);
+    assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+    let result = json!({"type":"result","session_id":"native-fixture","subtype":"success","is_error":false,"result":"","timestamp":"2026-09-29T00:00:02Z"});
+    f.append(&result);
+    assert_eq!(
+        reader::read(&f.file).unwrap().native_events[0].body,
+        "Fixture final reply"
+    );
+    for reason in ["tool_use", "pause_turn", "refusal"] {
+        answer["message"]["stop_reason"] = json!(reason);
+        f.write(&[user.clone(), answer.clone(), result.clone()]);
+        assert!(
+            reader::read(&f.file).unwrap().native_events.is_empty(),
+            "implicit {reason}"
+        );
+        let mut explicit = result.clone();
+        explicit["stop_reason"] = json!(reason);
+        f.write(&[user.clone(), answer.clone(), explicit.clone()]);
+        assert!(
+            reader::read(&f.file).unwrap().native_events.is_empty(),
+            "{reason}"
+        );
+        answer["message"]["stop_reason"] = json!("end_turn");
+        f.write(&[user.clone(), answer.clone(), explicit]);
+        assert!(
+            reader::read(&f.file).unwrap().native_events.is_empty(),
+            "later result overrides completion: {reason}"
+        );
+    }
+    answer["message"]["stop_reason"] = json!("end_turn");
+    f.write(&[
+        user.clone(),
+        answer,
+        json!({"type":"system","subtype":"cancelled"}),
+        result,
+    ]);
+    assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+    f.complete();
+    f.append(&f.row("u2", Some("a1"), "user", json!("New request")));
+    assert!(reader::read(&f.file).unwrap().native_events.is_empty());
+}
+
+#[test]
+fn terminal_evidence_respects_pending_tools_identity_and_record_integrity() {
+    let f = Fixture::new();
+    for reason in ["end_turn", "stop_sequence"] {
+        let mut answer = f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"text","text":"Finished"}]),
+        );
+        answer["message"]["stop_reason"] = json!(reason);
+        f.write(&[f.row("u1", None, "user", json!("Start")), answer]);
+        assert_eq!(
+            notification_snapshots(&f.paths).unwrap().streams[0]
+                .events
+                .len(),
+            1
+        );
+        let mut conflict = json!({"type":"system","subtype":"init","sessionId":"native-fixture","session_id":"other-fixture"});
+        f.append(&conflict);
+        assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
+        f.complete();
+        conflict["session_id"] = json!("native-fixture");
+        conflict["claude_code_version"] = json!("3.0.0");
+        f.append(&conflict);
+        assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
+    }
+    f.write(&[
+        f.row("u1", None, "user", json!("Start")),
+        f.row(
+            "a1",
+            Some("u1"),
+            "assistant",
+            json!([{"type":"tool_use","id":"call","name":"Bash","input":{"command":"pwd"}}]),
+        ),
+        f.row(
+            "a2",
+            Some("a1"),
+            "assistant",
+            json!([{"type":"text","text":"Premature answer"}]),
+        ),
+    ]);
+    assert!(notification_snapshots(&f.paths).unwrap().streams[0]
+        .events
+        .is_empty());
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&f.file)
+        .unwrap()
+        .write_all(b"{\"type\":")
+        .unwrap();
+    assert!(notification_snapshots(&f.paths).unwrap().streams.is_empty());
 }
