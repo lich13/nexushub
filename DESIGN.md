@@ -1,4 +1,6 @@
-# NexusHub Design System
+# NexusHub 界面设计规范（维护者文档）
+
+本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
 NexusHub 1.2.6 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
@@ -13,7 +15,7 @@ NexusHub 1.2.6 follows a quiet, compact reading workspace aligned with Codex Des
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
-- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offers a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. Async acceptance and background progress do not dismiss a question; native matched answers update only the corresponding items.
+- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items.
 - The reading column has a narrow timeline rail outside the document flow. Each user message, assistant reply, plan, attachment and adjacent activity group has a stable marker; clicking or pressing Enter centers it, and hover/focus shows a cleaned short preview. Mobile uses a compact popup rail. `⌘F` on macOS and `Ctrl+F` elsewhere opens the shared search panel with 当前线程 and 当前 Provider scopes. Results use cleaned visible content, include AGENTS.md text, exclude memory metadata, load older pages when needed, and remain isolated to the selected machine.
 
 ## User messages and attachments
@@ -36,7 +38,7 @@ Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus i
 
 ## Verification
 
-Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, plan export and provider empty states. Official macOS acceptance uses the installed Tauri app. Remote acceptance connects the installed App to the API using disposable provider sessions and explicit deployment inputs.
+Browser checks cover both themes, 1440x900, 1280x820 and mobile widths, reduced motion, spinner state, mixed Grok tool grouping, keyboard expansion, long-session scroll containment, Plan export and provider empty states. The installed Tauri App is the reference desktop surface; remote checks use the same App through the API and explicit deployment inputs.
 
 ## Machine scope
 
