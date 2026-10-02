@@ -84,7 +84,7 @@ if "--dir" in package or "SKIP_WEBUI" in package:
 if (root / "deploy/nexushub-webd/web-update.sh").exists():
     raise SystemExit("retired web updater remains")
 update = (root / "deploy/nexushub-webd/update.sh").read_text()
-for marker in ["systemd-run", "ProtectSystem=no", "ProtectHome=no", "--no-enable", "systemctl restart nexushub-webd"]:
+for marker in ["systemd-run", "ProtectSystem=off", "ProtectHome=off", "ReadWritePaths=/usr/local/bin", "--no-enable", "systemctl restart nexushub-webd"]:
     if marker not in update:
         raise SystemExit(f"server updater missing isolated restart marker: {marker}")
 nginx = (root / "deploy/nexushub-webd/nginx.conf").read_text()

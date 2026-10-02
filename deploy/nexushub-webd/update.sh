@@ -57,9 +57,16 @@ if [[ "${PRECHECK}" -eq 0 && "${NEXUSHUB_WEBD_UPDATE_TRANSIENT:-0}" != "1" ]]; t
     --property=User=root \
     --property=Group=root \
     --property=Type=exec \
-    --property=ProtectSystem=no \
-    --property=ProtectHome=no \
+    --property=ProtectSystem=off \
+    --property=ProtectHome=off \
     --property=PrivateTmp=no \
+    --property=ReadWritePaths=/usr/local/bin \
+    --property=ReadWritePaths=/etc/systemd/system \
+    --property=ReadWritePaths=/etc/nexushub-webd \
+    --property=ReadWritePaths=/var/lib/nexushub-webd \
+    --property=ReadWritePaths=/var/log/nexushub-webd \
+    --property=ReadWritePaths=/root/.codex \
+    --property=ReadWritePaths=/home/ubuntu/.codex \
     /usr/bin/env NEXUSHUB_WEBD_UPDATE_TRANSIENT=1 "$0" "$@"
 fi
 

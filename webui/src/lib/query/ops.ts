@@ -11,8 +11,8 @@ import {
   type UnifiedUpdateAction
 } from "../api";
 import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
-import { preservePreviousQueryData } from "./shared";
 import { backgroundJobKey } from "./jobs";
+import { machineScope } from "../runtime";
 
 export const opsQueryKeys = {
   updateStatus: ["update-status"] as const,
@@ -23,18 +23,16 @@ export const opsQueryKeys = {
 export function useOpsQueries({ historyOpen }: { historyOpen: boolean }) {
   return {
     update: useQuery({
-      queryKey: opsQueryKeys.updateStatus,
+      queryKey: [...opsQueryKeys.updateStatus, machineScope()] as const,
       queryFn: getUpdateStatus,
       refetchInterval: 30000,
-      staleTime: 15000,
-      placeholderData: preservePreviousQueryData
+      staleTime: 15000
     }),
     jobs: useQuery({
-      queryKey: opsQueryKeys.jobs,
+      queryKey: [...opsQueryKeys.jobs, machineScope()] as const,
       queryFn: listJobs,
       enabled: historyOpen,
-      refetchInterval: 5000,
-      placeholderData: preservePreviousQueryData
+      refetchInterval: 5000
     })
   };
 }
