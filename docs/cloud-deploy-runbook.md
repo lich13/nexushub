@@ -1,4 +1,4 @@
-# Linux API 部署手册（1.2.6）
+# Linux API 部署手册（1.2.7）
 
 NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code、Pi 或 Linux 桌面 App。
 
@@ -66,10 +66,10 @@ curl -fsS http://127.0.0.1:15742/healthz
 
 预期结果：服务为 `active`，健康接口返回成功；未认证业务请求返回 `401`，旧页面和静态资源返回 `404`。
 
-在正式 App 中验证远程连接、会话读取、搜索、附件按需读取、路径复制和 Plan 本地保存。没有原生 Claude、Pi 会话的机器显示空状态，相关管理操作保持禁用。
+在正式 App 中验证远程连接、会话读取、搜索、附件按需读取、路径复制、Plan 本地保存和用户指令时间线短线。没有原生 Claude、Pi 会话的机器显示空状态，相关管理操作保持禁用。
 
 ## 原生数据边界
 
-Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 JSONL。未知格式、损坏记录、半写入尾行或活动身份无法确认时保持只读。Grok、Pi 和 Codex 同样只读取当前机器已发现的数据根。
+Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 JSONL，并兼容常见记录字段。未知格式、损坏记录、半写入尾行或活动身份无法确认时保持只读。Grok、Pi 和 Codex 同样只读取当前机器已发现的数据根。
 
 服务关闭不会停止两台机器各自的 monitor。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 NexusHub 无关的服务文件。

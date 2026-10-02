@@ -1,14 +1,14 @@
-# NexusHub 1.2.6
+# NexusHub 1.2.7
 
 NexusHub 是一个只读优先的会话管理工具，用于在 macOS App 中查看 Codex、Claude Code、Grok Build 和 Pi 的本机会话，也可以通过受保护的 API 管理一台远程机器。
 
 ## 主要能力
 
-- 按 Provider 搜索会话、搜索当前线程或全部线程，并用时间线定位消息、Plan、附件和工具活动。
+- 按 Provider 搜索会话、搜索当前线程或全部线程，并用时间线定位消息、Plan、附件和工具活动；时间线短线只显示识别到的用户指令。
 - 保留文本与工具的原始顺序；连续工具活动可以展开查看，AGENTS.md 和记忆元数据按安全规则处理。
 - 复制线程 ID、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
-- 在 Provider 允许时双击线程标题改名，并对 Codex、Grok、Pi 和 Claude Code 提供受保护的归档、删除或恢复操作。
-- 通过 Bark 接收明确的完成、失败和需要回复通知。通知只在读取器确认状态后发送。
+- 在 Provider 允许时双击线程标题改名，并对 Codex、Grok、Pi 和 Claude Code 提供受保护的归档、删除或恢复操作；Claude Code 兼容常见记录读取，未知或不完整记录保持只读。
+- 通过 Bark 接收明确的完成、失败和需要回复通知；空结果或挂起工具不会误推进完成通知状态。
 
 NexusHub 不发送消息、不接管进程、不执行用户命令，也不会安装或配置 Claude Code、Pi 或其他 Provider。原生会话文件保持不变。
 
@@ -48,9 +48,9 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 - 服务保持 systemd 文件隔离；只为已配置的 Provider 会话根开放精确写入路径。
 - 文件路径、附件和搜索结果都在当前机器范围内解析，客户端不能提交任意文件路径。
 
-## 1.2.6 发布资产
+## 1.2.7 发布资产
 
-[查看 v1.2.6 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.6)。发布页包含七项资产：
+[查看 v1.2.7 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.7)。发布页包含七项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；

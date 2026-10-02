@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.6 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.7 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
@@ -15,8 +15,8 @@ NexusHub 1.2.6 follows a quiet, compact reading workspace aligned with Codex Des
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
-- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items.
-- The reading column has a narrow timeline rail outside the document flow. Each user message, assistant reply, plan, attachment and adjacent activity group has a stable marker; clicking or pressing Enter centers it, and hover/focus shows a cleaned short preview. Mobile uses a compact popup rail. `⌘F` on macOS and `Ctrl+F` elsewhere opens the shared search panel with 当前线程 and 当前 Provider scopes. Results use cleaned visible content, include AGENTS.md text, exclude memory metadata, load older pages when needed, and remain isolated to the selected machine.
+- Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Empty result records and pending tool calls do not advance Bark completion state.
+- The reading column has a narrow timeline rail outside the document flow. The rail shows only recognized user messages as compact short lines; assistant replies, plans, attachments and adjacent activity groups retain stable anchors for search and centering without adding rail lines. Mobile uses a compact popup rail. `⌘F` on macOS and `Ctrl+F` elsewhere opens the shared search panel with 当前线程 and 当前 Provider scopes. Results use cleaned visible content, include AGENTS.md text, exclude memory metadata, load older pages when needed, and remain isolated to the selected machine.
 
 ## User messages and attachments
 
@@ -48,4 +48,4 @@ Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验
 
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
 
-Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Unknown format or uncertain activity disables management with the native blocker.
+Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Common record variants remain readable; unknown or incomplete formats and uncertain activity disable management with the native blocker.
