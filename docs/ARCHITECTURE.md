@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.6
+# NexusHub 架构说明（维护者文档）— 1.2.7
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -34,7 +34,7 @@ The shared Grok activity snapshot validates array/object registry entries agains
 
 ## Activity timeline
 
-Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. The timeline rail is outside the document flow, so it cannot add history height; activity aliases let search locate a command inside a closed group without changing its disclosure state. No native file format or database migration is added.
+Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. The timeline rail is outside the document flow and contains only recognized user-message entries; tools, plans, assistant replies and activity groups keep stable anchors for search and focus without creating rail entries. Activity aliases still locate a command inside a closed group without changing its disclosure state. No native file format or database migration is added.
 
 ## Visible Markdown
 
@@ -54,7 +54,7 @@ File links are parsed from the original Markdown target before browser URL resol
 
 Settings contain `更新与维护` and `远程连接`. `system.status` is a retired tombstone; `system.capabilities` returns API protocol version, host surface and the capability matrix. Updates and cleanup retain their own dry-run records.
 
-Codex final replies are classified locally for explicit user feedback requests after a verified terminal turn. The monitor, Stop Hook and completion path share the `assistant_question` source and persistent delivery claims. Existing provider completion/error rules remain unchanged.
+Codex final replies are classified locally for explicit user feedback requests after a verified terminal turn. The monitor, Stop Hook and completion path share the `assistant_question` source and persistent delivery claims. Empty result records and pending tool calls do not advance Bark completion state. Existing provider completion/error rules remain unchanged.
 
 ## Probe and notifications
 
@@ -82,7 +82,7 @@ Opening only the NexusHub database drops administrators, web sessions and Turnst
 
 ## Claude Code
 
-`claude` owns recursive native JSONL discovery, bounded incremental file caching, branch-aware timeline parsing and process ownership checks. `claude.*` actions and the `claude_code` provider use the existing core facade, API Key bridge and Tauri adapters. The opaque session key binds relative transcript location and native ID, so duplicate IDs remain independent. Subagent files are not separate primary sessions. Details page by stable event identity; attachments remain lazy and bounded to 20 MiB.
+`claude` owns recursive native JSONL discovery, bounded incremental file caching, branch-aware timeline parsing and process ownership checks. `claude.*` actions and the `claude_code` provider use the existing core facade, API Key bridge and Tauri adapters. The opaque session key binds relative transcript location and native ID, so duplicate IDs remain independent. Subagent files are not separate primary sessions. Details page by stable event identity; attachments remain lazy and bounded to 20 MiB. Common Claude Code record variants remain readable during discovery and detail loading.
 
 Known 2.x records include user/assistant blocks, title records, tools, queue/history/usage metadata and compaction. Unknown records remain readable; malformed records, incomplete tails or unverified formats disable mutation. Claude running state needs a live identified process, matching start time/session/project and an unfinished turn. Management separately refuses any potentially owning process. Rename appends `custom-title` and verifies persistence; deletion isolates and rechecks one JSONL without changing native indexes, configuration or the workspace.
 
