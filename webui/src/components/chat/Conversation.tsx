@@ -2,7 +2,7 @@ import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { TaskMenu } from "../common/TaskMenu";
@@ -11,8 +11,10 @@ import { threadStatusLabel, type SelectedThread, type View } from "../../lib/dom
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
-import type { ThreadDetail, ThreadSummary } from "../../types";
+import type { SessionSearchResult, ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
+import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { locateTimelineTarget } from "../common/SessionSearch";
 
 
 
@@ -28,6 +30,10 @@ export function Conversation(props: {
   nextThreadAfterArchive: string | null;
   capabilities: RuntimeCapabilityMatrix;
   onBack?: () => void;
+  searchTarget?: SessionSearchResult | null;
+  searchReady?: boolean;
+  onSearchResolved?: () => void;
+  onSearchMiss?: () => void;
 }) {
   const { detail, slot } = props;
   const summary = props.selectedSummary?.id === detail.summary.id
@@ -42,6 +48,9 @@ export function Conversation(props: {
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
+  const timelineEntries: TimelineEntry[] = visibleItems.map((entry) => entry.kind === "group"
+    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
+    : { id: entry.item.id, title: entry.item.kind || entry.item.role, preview: entry.item.text ?? entry.item.summary ?? entry.item.input ?? undefined, status: entry.item.status ?? undefined });
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const older = useThreadBlockPageMutation({
     onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
@@ -70,6 +79,20 @@ export function Conversation(props: {
       element.scrollTop = element.scrollHeight;
     }
   }, [props.threadId, blocks, historyExpanded]);
+  useEffect(() => {
+    const target = props.searchTarget;
+    if (!target || target.sessionKey !== props.threadId || !props.searchReady || older.isPending) return;
+    if (locateTimelineTarget(target.positionKey)) {
+      props.onSearchResolved?.();
+      return;
+    }
+    if (slot.hasMoreBlocks && slot.beforeCursor) {
+      older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor });
+      return;
+    }
+    setFeedback("结果所在历史未加载，请刷新后重试");
+    props.onSearchMiss?.();
+  }, [props.searchTarget, props.threadId, props.searchReady, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, older.isPending, blocks.length]);
   const copy = async (text: string | null | undefined) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
@@ -78,7 +101,7 @@ export function Conversation(props: {
   const archived = Boolean(props.archivedView) || summary.status === "Archived";
   return <div className="conversation-shell compact-readonly-conversation">
     <main className="conversation-main">
-      <header className="conversation-header">
+      <header className="conversation-header" data-timeline-id="session">
         <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
           <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1><span className="muted-text">{summary.cwd ?? summary.id}</span></div>
           <div className="conversation-header-actions">
@@ -100,7 +123,7 @@ export function Conversation(props: {
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-      <div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
+      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
         {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
         {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
         <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
@@ -108,7 +131,7 @@ export function Conversation(props: {
           setHistoryExpanded(true);
         }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}
-      </div>
+      </div></div>
     </main>
   </div>;
 }

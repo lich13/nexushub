@@ -18,6 +18,7 @@ import { PROBE_NAV_LABEL } from "./lib/probeUi";
 import { GrokWorkspace } from "./components/grok/GrokWorkspace";
 import { ClaudeWorkspace } from "./components/claude/ClaudeWorkspace";
 import { PiWorkspace } from "./components/pi/PiWorkspace";
+import { SearchWorkspaceProvider } from "./components/common/SessionSearch";
 import { useBackgroundJobs } from "./lib/query/jobs";
 import {
   useBootstrapRuntimeCapabilities,
@@ -78,8 +79,7 @@ export default function App() {
     });
   };
 
-  return (
-    <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
+  return <SearchWorkspaceProvider><div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
       <SideNav view={view} setView={setView} collapsed={navCollapsed} capabilities={capabilities} onCollapse={toggleNavCollapsed} onConfigure={() => { setView("ops"); setSettingsSection("remote"); }} />
         <main className="main-workspace">
           {(connection.error || systemCapabilities.error) && <div role="alert" className="form-error">{connection.error || systemCapabilities.error?.message}</div>}
@@ -106,9 +106,7 @@ export default function App() {
             </div>}
           </WorkspaceErrorBoundary>
         </main>
-      </div>
-
-  );
+      </div></SearchWorkspaceProvider>;
 }
 
 class WorkspaceErrorBoundary extends Component<

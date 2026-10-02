@@ -28,6 +28,7 @@ pub fn run() {
             commands::sessions::readSessionAttachment,
             commands::sessions::previewSessionBatch,
             commands::sessions::executeSessionBatch,
+            commands::sessions::searchSessions,
             commands::system::getSystemCapabilities,
             commands::system::getSystemVersion,
             commands::system::listProviders,

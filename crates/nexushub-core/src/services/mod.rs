@@ -6,6 +6,7 @@ pub mod jobs;
 pub mod plans;
 pub mod probe;
 pub mod remote;
+pub mod search;
 pub mod sessions;
 pub mod settings;
 pub mod system;

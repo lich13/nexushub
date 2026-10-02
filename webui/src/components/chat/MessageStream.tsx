@@ -57,10 +57,10 @@ export function MessageBlockView({
   if (!shouldRenderConversationMessage(block)) {
     return null;
   }
-  if (block.role === "user") return <UserMessage message={block.user_message} text={block.text ?? ""} activityId={block.id} />;
+  if (block.role === "user") return <UserMessage message={block.user_message} text={block.text ?? ""} activityId={block.id} timelineId={block.id} />;
   const presentation = conversationMessagePresentation(block);
   return (
-    <article className={presentation.rowClassName}>
+      <article className={presentation.rowClassName} data-timeline-id={block.id}>
       <div className="chat-meta">
         <span>{roleLabel(block.role)}</span>
         <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
@@ -77,7 +77,7 @@ function ToolBlockView({ block }: { block: MessageBlock }) {
   const summary = toolBlockSummary(block);
   const detail = toolBlockDetailText(block);
   const instructionFile = isInstructionFileActivity(block.tool_name, block.input, summary, detail);
-  return <ActivityDetails className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`} stateKey={block.call_id ?? block.id} initiallyOpen={false} summary={<>
+  return <ActivityDetails timelineId={block.id} className={`tool-card ${isRunningToolBlock(block) ? "running" : ""}`} stateKey={block.call_id ?? block.id} initiallyOpen={false} summary={<>
     <span className="tool-title">{instructionFile ? "AGENTS.md" : visibleMarkdown(toolBlockTitle(block))}</span>
     {isRunningToolBlock(block) && <RunningIndicator />}
     <small>{toolBlockStatus(block)}</small>
@@ -94,7 +94,7 @@ function HistoryCollapseCell({ block, onShowHistory, expanded }: { block: Messag
   const label = toolBlockSummary(block) ?? (kind === "tool" ? "历史工具活动已折叠" : kind === "action" ? "历史计划和问题已折叠" : "较早消息已折叠");
   const eyebrow = kind === "tool" ? "Tool activity" : kind === "action" ? "Plan & questions" : "Earlier messages";
   return (
-    <article className="history-collapse-cell">
+    <article className="history-collapse-cell" data-timeline-id={block.id}>
       <div>
         <span>{eyebrow}</span>
         <strong>{label}</strong>
@@ -113,7 +113,7 @@ function ProposedPlanCell({ block, fallbackTitle }: { block: MessageBlock; fallb
   const markdown = content.trim() ? extractPlanText(content) : "暂无计划内容";
   const hasContent = Boolean(content.trim());
   return (
-    <article className="plan-cell">
+    <article className="plan-cell" data-timeline-id={block.id}>
       <div className="plan-header">
         <div className="message-meta">
           <span>Proposed Plan</span>
@@ -129,7 +129,7 @@ function ProposedPlanCell({ block, fallbackTitle }: { block: MessageBlock; fallb
 function QuestionResultCell({ block }: { block: MessageBlock }) {
   const answers = block.answers ?? [];
   return (
-    <article className="question-result-cell">
+    <article className="question-result-cell" data-timeline-id={block.id}>
       <div className="message-meta">
         <span>Questions</span>
         <small>{block.status || "completed"}</small>
@@ -153,7 +153,7 @@ function QuestionResultCell({ block }: { block: MessageBlock }) {
 
 function QuestionCell({ block }: { block: MessageBlock }) {
   return (
-    <article className="question-cell active-choice">
+    <article className="question-cell active-choice" data-timeline-id={block.id}>
       <div className="message-meta">
         <span>Questions</span>
         <small>{block.turn_id || block.item_id || block.call_id || "request_user_input"}</small>

@@ -13,6 +13,8 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "SessionBatchPreview",
     "SessionBatchExecuteRequest",
     "SessionBatchResult",
+    "SessionSearchRequest",
+    "SessionSearchResponse",
     "CleanupArchiveDryRunResponse",
     "CleanupArchiveExecuteResponse",
     "CleanupHiddenDryRunResponse",

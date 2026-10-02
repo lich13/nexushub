@@ -25,8 +25,8 @@ describe("selected-machine update panel", () => {
     expect(render({ status: { ...status, latest_version: "unknown" }, action: "check", finished: true })).not.toContain("已是最新版本");
   });
   test("only confirmed newer versions offer installation with normalized text", () => {
-    const next = { ...status, latest_version: "v1.2.3", update_available: true };
-    expect(render({ status: next })).toContain("更新至 1.2.3");
+    const next = { ...status, latest_version: "v1.2.4", update_available: true };
+    expect(render({ status: next })).toContain("更新至 1.2.4");
     expect(render({ status: { ...status, update_available: true } })).not.toContain("更新至");
     expect(render({ status: next, error: "读取失败" })).not.toContain("更新至");
     const failed = render({ status, action: "check", finished: true, error: "检查失败" });

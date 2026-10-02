@@ -1,11 +1,28 @@
 #![allow(non_snake_case)]
 use crate::overview::DesktopState;
 use nexushub_core::services::{
+    search::{SessionSearchRequest, SessionSearchResponse},
     sessions::{
         SessionBatchExecuteRequest, SessionBatchPreview, SessionBatchRequest, SessionBatchResult,
     },
     use_cases::NexusHubUseCases,
 };
+
+#[tauri::command(rename = "sessions.search")]
+pub async fn searchSessions(
+    state: tauri::State<'_, DesktopState>,
+    request: SessionSearchRequest,
+) -> Result<SessionSearchResponse, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        NexusHubUseCases::new(state.platform())
+            .search(state.codex_paths())
+            .search(request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
 
 #[tauri::command(rename = "sessions.attachmentRead")]
 pub async fn readSessionAttachment(

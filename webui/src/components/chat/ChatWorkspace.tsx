@@ -1,5 +1,5 @@
 import { MessageSquare, RefreshCw, Search } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { threadDetailFromSlot, useConversationController } from "../../hooks/useConversationController";
 import {
   isThreadListItemRunning,
@@ -18,6 +18,8 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { useReadOnlyThreadActions } from "../../lib/query/threads";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
+import type { SessionSearchResult } from "../../types";
+import { useSearchWorkspace } from "../common/SessionSearch";
 
 export const statusTabs = [
   { id: "all", label: "全部" },
@@ -71,6 +73,16 @@ export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView
   );
   const selectedSlot = resolvedSelected ? messageStore.getSlot(resolvedSelected) : null;
   const selectedFallback = selectedThreadSummary ?? selectedSlot?.summary ?? null;
+  const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
+  const selectSearchResult = useCallback((result: SessionSearchResult) => {
+    selectThread(result.sessionKey);
+    setPendingSearch(result);
+  }, [selectThread]);
+  useSearchWorkspace(useMemo(() => ({
+    provider: "codex" as const,
+    sessionKey: resolvedSelected,
+    selectResult: selectSearchResult
+  }), [resolvedSelected, selectSearchResult]));
 
   return (
     <div className={`chat-layout ${!mobileThreadsOpen && resolvedSelected ? "has-selection" : ""}`}>
@@ -89,6 +101,10 @@ export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView
             nextThreadAfterArchive={nextThreadAfterRemoval}
             capabilities={capabilities}
             onBack={() => setMobileThreadsOpen(true)}
+            searchTarget={pendingSearch}
+            searchReady={Boolean(selectedDetail || selectedSlot?.blocks.length)}
+            onSearchResolved={() => setPendingSearch(null)}
+            onSearchMiss={() => { setPendingSearch(null); }}
           />
         ) : (
           <div className="empty-state"><MessageSquare size={28} /><strong>{detailLoading ? "正在读取任务" : "选择一个任务"}</strong></div>

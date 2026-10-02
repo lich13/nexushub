@@ -72,6 +72,14 @@ pub(super) async fn rpc_dispatch(
             )
             .await
         }
+        rpc_commands::SESSIONS_SEARCH => {
+            super::sessions::search(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
+        }
         rpc_commands::SESSIONS_BULK_PREVIEW => {
             super::sessions::bulk_preview(
                 State(state),

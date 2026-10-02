@@ -576,6 +576,18 @@
       "responseDto": "SessionAttachmentResponse"
     },
     {
+      "id": "sessions.search",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "sessions.search",
+      "linuxRpc": "sessions.search",
+      "tauriCommand": "commands::sessions::searchSessions",
+      "webuiWrapper": "searchSessions",
+      "dtoOwner": "sessions",
+      "requestDto": "SessionSearchRequest",
+      "responseDto": "SessionSearchResponse"
+    },
+    {
       "id": "remote.get",
       "kind": "rpc",
       "scope": "host_only",
@@ -984,6 +996,14 @@
     "ClaudeDetailRequest": {
       "core": "ClaudeDetailRequest",
       "webui": "ClaudeDetailRequest"
+    },
+    "SessionSearchRequest": {
+      "core": "SessionSearchRequest",
+      "webui": "SessionSearchRequest"
+    },
+    "SessionSearchResponse": {
+      "core": "SessionSearchResponse",
+      "webui": "SessionSearchResponse"
     }
   },
   "retiredActions": [

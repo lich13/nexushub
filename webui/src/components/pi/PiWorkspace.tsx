@@ -4,10 +4,10 @@ import { MarkdownPathScope } from "../common/FilePathLink";
 import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
 import { isInstructionFileActivity, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
 import { usePiActions, usePiDetail, usePiSessions } from "../../lib/query/pi";
-import type { PiDeletePreview, PiHistoryEvent, PiSessionSummary } from "../../types";
+import type { PiDeletePreview, PiHistoryEvent, PiSessionSummary, SessionSearchResult } from "../../types";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
@@ -18,6 +18,9 @@ import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchCon
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { groupPiCommandEvents } from "../../lib/domain/executionGroups";
+import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
+import { TimelineRail, type TimelineEntry } from "../common/TimelineRail";
+import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
 export function PiWorkspace({}: { }) {
   const menuTrigger = useRef<HTMLElement>(null);
@@ -30,6 +33,7 @@ export function PiWorkspace({}: { }) {
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState<PiDeletePreview | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [pendingSearch, setPendingSearch] = useState<SessionSearchResult | null>(null);
   const sessions = usePiSessions(query);
   const batch = useSessionSelection("pi", query, (sessions.data ?? []).map(s => s.sessionKey), keys => {
     if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
@@ -39,8 +43,20 @@ export function PiWorkspace({}: { }) {
   const selected = sessions.data?.find((item) => item.sessionKey === selectedKey) ?? sessions.data?.[0];
   const detailVisible = !narrow || Boolean(selectedKey);
   const detail = usePiDetail(detailVisible ? selected?.sessionKey : undefined);
+  const groupedEvents = groupPiCommandEvents(detail.data?.events ?? []);
+  const timelineEntries: TimelineEntry[] = groupedEvents.map(entry => entry.kind === "group"
+    ? { id: entry.group.id, title: `${entry.group.provider} ${entry.group.kind === "tool" ? "工具" : "命令"}`, preview: entry.group.commands[0]?.preview ?? entry.group.commands[0]?.title, status: entry.group.running ? "进行中" : entry.group.failedCount ? "失败" : "完成" }
+    : { id: entry.key, title: entry.item.kind, preview: entry.item.text ?? entry.item.detail ?? undefined });
   const actions = usePiActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? detail.error ?? sessions.error;
+  const selectSearchResult = useCallback((result: SessionSearchResult) => {
+    setSelectedKey(result.sessionKey);
+    setPendingSearch(result);
+    setRenaming(false);
+    setPreview(null);
+    setFeedback("");
+  }, []);
+  useSearchWorkspace(useMemo(() => ({ provider: "pi" as const, sessionKey: selected?.sessionKey ?? null, selectResult: selectSearchResult }), [selected?.sessionKey, selectSearchResult]));
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -58,6 +74,11 @@ export function PiWorkspace({}: { }) {
     }
     if (scrollState.current.follow) element.scrollTop = element.scrollHeight;
   }, [selected?.sessionKey, selectedKey, detailVisible, detail.data?.events]);
+  useEffect(() => {
+    if (!pendingSearch || pendingSearch.sessionKey !== selected?.sessionKey || detail.isLoading) return;
+    if (locateTimelineTarget(pendingSearch.positionKey)) setPendingSearch(null);
+    else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
+  }, [pendingSearch, selected?.sessionKey, detail.isLoading, detail.data?.events]);
 
   const copyId = async () => {
     if (!selected) return;
@@ -93,7 +114,7 @@ export function PiWorkspace({}: { }) {
     <main className="provider-detail">
       {!selected && <div className="empty-state"><Terminal size={28} /><strong>选择一个 Pi 任务</strong></div>}
       {selected && <>
-        <header className="conversation-header">
+        <header className="conversation-header" data-timeline-id="session">
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
           <div className="conversation-title-copy"><h1 className="conversation-title">{piSessionLabel(selected)}</h1><span className="muted-text">{selected.cwd}</span></div>
           <TaskMenu label="Pi 任务操作" triggerRef={menuTrigger}>
@@ -107,11 +128,11 @@ export function PiWorkspace({}: { }) {
         {selected.readError && <div className="form-error" role="alert">{selected.readError}</div>}
         {!selected.readError && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
-          <UserMessageScope.Provider value={{ provider: "pi", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(detail.data?.events ?? [])}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
+          <UserMessageScope.Provider value={{ provider: "pi", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`pi:${selected.sessionKey}`}>{renderPiEvents(groupedEvents)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !detail.data?.events.length && <div className="muted-row">暂无历史活动</div>}
-        </div>
+        </div></div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="pi-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -122,24 +143,24 @@ export function PiWorkspace({}: { }) {
   </div>;
 }
 
-function PiEvent({ event, activityId }: { event: PiHistoryEvent; activityId: string }) {
-  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} />;
+function PiEvent({ event, activityId, timelineAliases = [] }: { event: PiHistoryEvent; activityId: string; timelineAliases?: string[] }) {
+  if (event.kind === "user_message") return <UserMessage message={event.userMessage} text={event.text ?? ""} activityId={activityId} timelineId={activityId} timelineAliases={timelineAliases} />;
   if (event.kind === "tool_call" || event.kind === "tool_result") {
     const instructionFile = isInstructionFileActivity(event.role, event.text, event.detail);
-    return <ActivityDetails className="grok-tool execution-command" stateKey={activityId} initiallyOpen={false} summary={<>
+    return <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool execution-command" stateKey={activityId} initiallyOpen={false} summary={<>
       <span className="tool-title">{instructionFile ? "AGENTS.md" : visibleMarkdown(event.text ?? "工具活动")}</span>
       {event.status === "in_progress" && <RunningIndicator />}
       <small>{event.status === "completed" ? "完成" : event.status === "failed" ? "失败" : event.status === "in_progress" ? "进行中" : ""}</small>
     </>}>{event.detail && <ToolOutput text={event.detail} />}</ActivityDetails>;
   }
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
-  return <article className={`provider-event ${event.kind}`}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  return <article className={`provider-event ${event.kind}`} data-timeline-id={activityId} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined}><div className="chat-meta">{piEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
-function renderPiEvents(events: PiHistoryEvent[]): ReactNode {
-  return groupPiCommandEvents(events).map(entry => entry.kind === "group"
+function renderPiEvents(entries: ExecutionRenderItem<PiHistoryEvent>[]): ReactNode {
+  return entries.map(entry => entry.kind === "group"
     ? <ExecutionGroupView key={entry.group.id} group={entry.group} />
-    : <PiEvent key={entry.key} activityId={entry.key} event={entry.item} />);
+    : <PiEvent key={entry.key} activityId={entry.key} event={entry.item} timelineAliases={entry.sourceIds} />);
 }
 
 function piEventLabel(event: PiHistoryEvent): string {
