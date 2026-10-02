@@ -8,8 +8,8 @@ import {
   type RuntimeCapabilityMatrix
 } from "../domain/capabilities";
 import { currentRuntimeContext } from "../api/transport";
+import { machineScope } from "../runtime";
 import type { SystemCapabilitiesResponse } from "../../types";
-import { preservePreviousQueryData } from "./shared";
 
 export const systemQueryKeys = {
   capabilities: ["system-capabilities"] as const
@@ -35,12 +35,11 @@ export function useRuntimeCapabilities(
 
 export function useSystemCapabilitiesQuery(options: { enabled?: boolean; refetchInterval?: number } = {}) {
   return useQuery({
-    queryKey: systemQueryKeys.capabilities,
+    queryKey: [...systemQueryKeys.capabilities, machineScope()] as const,
     queryFn: getSystemCapabilities,
     enabled: options.enabled,
     refetchInterval: options.refetchInterval,
-    staleTime: 5000,
-    placeholderData: preservePreviousQueryData
+    staleTime: 5000
   });
 }
 

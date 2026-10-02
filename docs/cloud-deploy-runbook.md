@@ -1,4 +1,4 @@
-# Linux management API — 1.2.5
+# Linux management API — 1.2.6
 
 Supply the SSH host, HTTPS domain and archive path explicitly. Private values stay outside Git. The server has no website and does not install Claude Code, Pi or a Linux desktop app.
 

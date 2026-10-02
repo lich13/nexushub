@@ -1,6 +1,6 @@
 # NexusHub Design System
 
-NexusHub 1.2.5 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.6 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 

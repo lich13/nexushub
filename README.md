@@ -1,4 +1,4 @@
-# NexusHub 1.2.5
+# NexusHub 1.2.6
 
 NexusHub is a read-first workspace for Codex, Claude Code, Grok Build and Pi sessions. The React UI runs in the macOS ARM64 Tauri app. A headless Linux `webd` API manages the remote machine. Deployment hosts, domains and credentials are supplied explicitly and stay outside Git.
 
@@ -59,7 +59,7 @@ Codex uses its official local state DB, session index, rollouts and logs. Claude
 
 ## Release and deployment
 
-Release `v1.2.5` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query. Search is the read-only `sessions.search` action; it accepts provider/session scope and a bounded cursor, never a client path. The Linux updater runs its mutating install in a short-lived root unit outside the locked-down API service namespace and schedules the service restart after the job records success.
+Release `v1.2.6` publishes seven files: macOS DMG and checksum, macOS updater archive and signature, `latest.json` with only `darwin-aarch64`, and the Linux webd tarball and checksum. Linux Tauri desktop packages and desktop updater entries are retired. The server tarball is never placed in `latest.json`. Settings expose one `更新与维护` surface; `system.status` is retired and `system.capabilities` is the only runtime capability query. Search is the read-only `sessions.search` action; it accepts provider/session scope and a bounded cursor, never a client path. Update status, capabilities and job history are keyed by the selected machine; the Linux updater runs its mutating install in a short-lived root unit outside the locked-down API service namespace and schedules the service restart after the job records success.
 
 ```bash
 bash scripts/package-darwin-arm64.sh
