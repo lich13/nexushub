@@ -41,6 +41,28 @@ done
 
 ASSET="nexushub-webd-linux-${ARCH}.tar.gz"
 
+# The API service is intentionally mounted with ProtectSystem=full. Run the
+# mutating install step in a short-lived root unit with its own writable host
+# namespace, while keeping the long-lived webd service locked down.
+if [[ "${PRECHECK}" -eq 0 && "${NEXUSHUB_WEBD_UPDATE_TRANSIENT:-0}" != "1" ]]; then
+  command -v systemd-run >/dev/null 2>&1 || {
+    echo "systemd-run is required for a server update" >&2
+    exit 1
+  }
+  exec systemd-run \
+    --wait \
+    --collect \
+    --pipe \
+    --unit="nexushub-webd-update-$(date +%s)-$$" \
+    --property=User=root \
+    --property=Group=root \
+    --property=Type=exec \
+    --property=ProtectSystem=no \
+    --property=ProtectHome=no \
+    --property=PrivateTmp=no \
+    /usr/bin/env NEXUSHUB_WEBD_UPDATE_TRANSIENT=1 "$0" "$@"
+fi
+
 if [[ "${PRECHECK}" -eq 1 ]]; then
   test -x /usr/local/bin/nexushub-webd
   systemctl is-active --quiet nexushub-webd
@@ -81,4 +103,12 @@ if not match or tuple(map(int, match.groups())) < (1, 2, 0):
     raise SystemExit("refusing release with retired web authentication")
 PYVERSION
 [[ ! -d "${ROOT}/webui" && ! -f "${ROOT}/deploy/web-update.sh" ]] || { echo "refusing retired web payload" >&2; exit 1; }
-"${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}"
+"${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}" --no-enable
+
+# Let the update job finish and persist its successful result before the
+# service is restarted. The restart runs outside the API service cgroup.
+systemd-run \
+  --collect \
+  --unit="nexushub-webd-restart-$(date +%s)-$$" \
+  --on-active=2s \
+  /usr/bin/systemctl restart nexushub-webd

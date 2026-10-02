@@ -83,6 +83,10 @@ if "--dir" in package or "SKIP_WEBUI" in package:
     raise SystemExit("Linux packaging must not build front-end resources")
 if (root / "deploy/nexushub-webd/web-update.sh").exists():
     raise SystemExit("retired web updater remains")
+update = (root / "deploy/nexushub-webd/update.sh").read_text()
+for marker in ["systemd-run", "ProtectSystem=no", "ProtectHome=no", "--no-enable", "systemctl restart nexushub-webd"]:
+    if marker not in update:
+        raise SystemExit(f"server updater missing isolated restart marker: {marker}")
 nginx = (root / "deploy/nexushub-webd/nginx.conf").read_text()
 if "api/rpc/" not in nginx or "healthz" not in nginx or "return 404" not in nginx:
     raise SystemExit("API-only ingress boundary missing")

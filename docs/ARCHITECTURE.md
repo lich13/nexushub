@@ -1,4 +1,4 @@
-# Architecture — 1.2.4
+# Architecture — 1.2.5
 
 ## Boundaries
 
