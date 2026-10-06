@@ -4,7 +4,7 @@ import type { ThreadDetail, ThreadStatus, ThreadSummary } from "../../types";
 import { isNoisyThreadTitle, mergeThreadSummaryTitle } from "../threadMessageStore";
 import { capabilitiesForInput, resolvedSelectedThreadId, type RuntimeCapabilityInput } from "./runtimeViewModel";
 
-export type View = "codex" | "grok" | "pi" | "claude" | "probe" | "ops";
+export type View = "codex" | "grok" | "claude" | "probe" | "ops";
 export type SelectedThread = string | null;
 export type ThreadTitleLike = {
   title?: string | null;

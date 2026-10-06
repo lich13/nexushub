@@ -7,7 +7,6 @@ pub mod db;
 pub mod grok;
 pub mod jobs;
 pub mod local;
-pub mod pi;
 pub mod platform;
 pub mod probe;
 pub mod probe_error_monitor;

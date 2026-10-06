@@ -50,7 +50,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
     onHiddenExecute: (result) => {
       setHiddenDeleteArmed(false);
       setHiddenDeleteResult(result);
-      setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], hidden_source_counts: {} } : current);
+      setHiddenPlan((current) => current ? { ...current, hidden_threads: result.hidden_threads, hidden_ids: [], candidates: [], hidden_source_counts: {} } : current);
     }
   });
   const jobMutation = opsActions.updateJob;
@@ -123,7 +123,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
       </Panel>}
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
-          <span>删除 non-archived subagent/internal</span>
+          <span>逐项清理隐藏线程，受保护项目自动跳过</span>
           <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
         </div>
         <div className="archive-plan">
@@ -133,6 +133,14 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           <Metric label="integrity" value={opsView.hiddenStats.integrity} tone={opsView.hiddenStats.integrity === "ok" ? "success" : "danger"} />
           <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
         </div>
+        {hiddenPlan && <ul className="hidden-cleanup-candidates">
+          {hiddenPlan.candidates.map(item => <li key={item.id}><strong>{item.title || item.id}</strong><span>{item.allowed ? "可清理" : item.reason || "受保护"}</span></li>)}
+        </ul>}
+        {hiddenPlan && !hiddenPlan.candidates.some(item => item.allowed) && <p role="status">无可清理项目</p>}
+        {hiddenDeleteResult && <div role="status">
+          <p>已删除 {hiddenDeleteResult.deleted_threads}，已跳过 {hiddenDeleteResult.skipped_threads}，失败 {hiddenDeleteResult.failed_threads}，剩余 {hiddenDeleteResult.hidden_threads}</p>
+          {hiddenDeleteResult.items.filter(item => item.status !== "deleted").map(item => <p key={item.id}>{item.id}：{item.reason}</p>)}
+        </div>}
         {hiddenCleanupError && <div className="form-error cleanup-error">{hiddenCleanupError}</div>}
         <div className="button-row ops-action-row cleanup-actions">
           <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => { executeHiddenDelete.reset(); hiddenDryRun.mutate(); }}><Database size={17} />扫描隐藏线程</button>
@@ -140,7 +148,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
             <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
           ) : (
             <>
-              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: opsView.hiddenStats.hidden })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
+              <button className="danger-button" onClick={() => executeHiddenDelete.mutate({ expectedCount: hiddenPlan?.candidates.length ?? 0, candidates: (hiddenPlan?.candidates ?? []).map(({ id, fingerprint }) => ({ id, fingerprint })) })} disabled={executeHiddenDelete.isPending}><Trash2 size={17} />确认清理隐藏</button>
               <button className="secondary-button" onClick={() => setHiddenDeleteArmed(false)} disabled={executeHiddenDelete.isPending}>取消</button>
             </>
           )}

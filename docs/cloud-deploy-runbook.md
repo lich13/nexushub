@@ -1,6 +1,6 @@
-# Linux API 部署手册（1.2.7）
+# Linux API 部署手册（1.2.8）
 
-NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code、Pi 或 Linux 桌面 App。
+NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code 或 Linux 桌面 App。
 
 部署时从仓库外显式提供 SSH 主机、HTTPS 域名和归档路径。域名、主机、API Key、用户会话和配置不写入 Git。
 
@@ -28,7 +28,7 @@ NEXUSHUB_DOMAIN=panel.example.invalid \
   bash scripts/deploy-cloud.sh SSH_HOST ./dist/nexushub-webd-linux-x86_64.tar.gz
 ```
 
-升级前先核对校验文件和当前服务状态。1.2.7 首次扫描会为 Claude 新兼容的记录建立基线，不补推历史完成通知；升级后使用新回合验收 Bark。升级脚本会保留业务数据库、Bark 加密材料、通知游标、任务记录和审计数据；原生 Provider 会话和 Codex 数据库不迁移、不改写。
+升级前先核对校验文件和当前服务状态。1.2.8 将远程 API 协议升为 2，必须先升级服务，再安装新版 App。协议不兼容时会提示更新并拒绝远程操作，本机仍可使用。升级会清除 NexusHub 自有的 Pi 提供方、流、投递和 Pi 专属事件，以及三项 notify_pi 设置和 Pi 路径变量；其余业务数据库内容、Bark 加密材料、通知游标、任务记录和审计数据保留；原生 Provider 会话和 Codex 数据库不迁移、不改写。
 
 ## 管理员 API Key
 
@@ -66,10 +66,16 @@ curl -fsS http://127.0.0.1:15742/healthz
 
 预期结果：服务为 `active`，健康接口返回成功；未认证业务请求返回 `401`，旧页面和静态资源返回 `404`。
 
-在正式 App 中验证远程连接、会话读取、搜索、附件按需读取、路径复制、Plan 本地保存和用户指令时间线短线。没有原生 Claude、Pi 会话的机器显示空状态，相关管理操作保持禁用。
+在正式 App 中验证远程连接、会话读取、搜索、附件按需读取、路径复制、Plan 本地保存和用户指令时间线短线。没有原生 Claude 会话的机器显示空状态，相关管理操作保持禁用。
 
 ## 原生数据边界
 
-Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 JSONL，并兼容常见记录字段。未知格式、损坏记录、半写入尾行或活动身份无法确认时保持只读。Grok、Pi 和 Codex 同样只读取当前机器已发现的数据根。
+Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 JSONL，并兼容常见记录字段。未知格式、损坏记录、半写入尾行或活动身份无法确认时保持只读。Grok 和 Codex 同样只读取当前机器已发现的数据根。
 
-服务关闭不会停止两台机器各自的 monitor。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 NexusHub 无关的服务文件。
+关闭桌面 App 后两台机器继续独立监测；停止远程服务会同时停止该服务内的远程监测。清理只针对本次部署产生的暂存文件；不要删除用户会话、凭据、Keychain 项或与 NexusHub 无关的服务文件。
+
+## 1.2.8 验收要点
+
+`system.providers` 只报告 Codex、Claude Code 和 Grok；`pi.*` 返回不可用。检查生成的 systemd 会话写入白名单不再包含 Pi，保留现有隔离参数与其他项目配置。不得删除 Pi 原生会话、程序或工作目录。
+
+用专用数据验证普通/归档 Codex 删除及隐藏候选混合清理，确认执行只覆盖预览 ID 和指纹。用户数据不用于破坏性验收。核对 API Key、Keychain 连接和其他 Provider Bark 设置仍可用。恢复材料仅保留到正式验收完成，之后精确删除本轮暂存。

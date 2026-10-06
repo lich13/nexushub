@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 
-const providers = ["codex", "grok", "pi"] as const;
+const providers = ["codex", "grok"] as const;
 type Provider = typeof providers[number];
 
 const questionOne = "Which fictional branch label should I inspect?\nInclude the requested status line.";
@@ -50,13 +50,9 @@ async function installLegacyRoute(page: Parameters<typeof mockApi>[0], provider:
       }));
       return detail;
     }
-    const events = texts.map(text => provider === "grok"
-      ? { kind: "user_message_chunk", text }
-      : { kind: "user_message", role: "user", text });
+    const events = texts.map(text => ({ kind: "user_message_chunk", text }));
     return {
-      summary: provider === "grok"
-        ? { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace" }
-        : { sessionKey: "project/session-fixture.jsonl", title: "Pi fixture", cwd: "/isolated/pi-workspace" },
+      summary: { id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace" },
       events
     };
   });
@@ -73,7 +69,7 @@ async function openProvider(page: Parameters<typeof mockApi>[0], provider: Provi
     await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
   } else {
     const navigation = page.locator(mobile ? ".mobile-tabs" : ".side-nav");
-    await navigation.getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+    await navigation.getByRole("button", { name: "Grok Build", exact: true }).click();
     if (mobile) await page.locator(".provider-session").click();
   }
 }
@@ -146,7 +142,7 @@ test("a failed answer copy shows an accessible error without copying the questio
       value: { writeText: async () => { throw new Error("clipboard denied by fixture"); } }
     });
   });
-  await openProvider(page, "pi", false, () => [replyEnvelope]);
+  await openProvider(page, false, () => [replyEnvelope]);
   const reply = page.locator(".user-question-reply").first();
   await reply.getByRole("button", { name: "复制回答", exact: true }).click();
   const error = reply.locator('[aria-live="polite"]');

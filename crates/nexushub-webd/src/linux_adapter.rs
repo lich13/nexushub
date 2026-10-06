@@ -249,9 +249,8 @@ pub fn execute_cleanup_plan(
         }
         cleanup_service::CleanupTarget::Hidden => {
             let result = if plan.execute {
-                let before = cleanup.dry_run_hidden(&paths)?;
-                cleanup.validate_expected_count(&plan, before.hidden_threads)?;
-                let result = cleanup.execute_hidden(&paths)?;
+                let candidates = cleanup_service::hidden_candidates(&plan)?;
+                let result = cleanup.execute_hidden(&paths, &candidates)?;
                 state.db.record_audit(
                     Some(&auth.admin_id),
                     "hidden_threads.delete.execute",
@@ -261,6 +260,8 @@ pub fn execute_cleanup_plan(
                     json!({
                         "before_hidden": result.before.hidden_threads,
                         "deleted_threads": result.deleted_threads,
+                        "skipped_threads": result.skipped_threads,
+                        "failed_threads": result.failed_threads,
                         "deleted_rollout_files": result.deleted_rollout_files,
                     }),
                 )?;

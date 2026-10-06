@@ -11,7 +11,6 @@ import sys
 
 DEFAULT_ROOTS = {
     Path("/root/.grok/sessions"),
-    Path("/root/.pi/agent/sessions"),
     Path("/root/.claude/projects"),
 }
 FORBIDDEN_ROOTS = {
@@ -25,8 +24,6 @@ FORBIDDEN_ROOTS = {
 SUPPORTED_KEYS = {
     "GROK_HOME",
     "CLAUDE_CONFIG_DIR",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
 }
 
 
@@ -74,15 +71,6 @@ def custom_session_roots(values: dict[str, str]) -> list[Path]:
     roots: list[Path] = []
     if grok_home := values.get("GROK_HOME"):
         roots.append(normalize_session_root(str(Path(grok_home) / "sessions"), "GROK_HOME"))
-    if pi_sessions := values.get("PI_CODING_AGENT_SESSION_DIR"):
-        roots.append(normalize_session_root(pi_sessions, "PI_CODING_AGENT_SESSION_DIR"))
-    elif pi_agent := values.get("PI_CODING_AGENT_DIR"):
-        roots.append(
-            normalize_session_root(
-                str(Path(pi_agent) / "sessions"),
-                "PI_CODING_AGENT_DIR",
-            )
-        )
     if claude_config := values.get("CLAUDE_CONFIG_DIR"):
         roots.append(normalize_session_root(str(Path(claude_config) / "projects"), "CLAUDE_CONFIG_DIR"))
     return sorted(set(roots) - DEFAULT_ROOTS, key=str)

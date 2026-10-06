@@ -1,5 +1,5 @@
 import { callCommand } from "./transport";
-export type SessionProvider = "codex" | "grok" | "pi" | "claude_code";
+export type SessionProvider = "codex" | "grok" | "claude_code";
 export type SessionOperation = "archive" | "restore" | "delete";
 export type SessionBatchRequest = { provider: SessionProvider; operation: SessionOperation; sessionKeys: string[] };
 export type SessionBatchItem = { sessionKey: string; id: string; title: string; paths: string[]; bytes: number; allowed: boolean; reason: string | null; fingerprint: string | null };

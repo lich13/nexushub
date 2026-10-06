@@ -1,7 +1,6 @@
 pub mod claude;
 pub mod grok;
 pub mod jobs;
-pub mod pi;
 pub mod plans;
 pub mod probe;
 pub mod sessions;

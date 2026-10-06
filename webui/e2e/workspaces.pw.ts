@@ -1,7 +1,21 @@
 import { expect, test } from "@playwright/test";
-import { assertContrast, assertNoOverflow, mockApi } from "./fixtures";
+import { assertContrast, assertNoOverflow, mockApi, mockCommand } from "./fixtures";
 
 const viewports = [{ width: 1440, height: 900 }, { width: 1280, height: 820 }, { width: 390, height: 844 }, { width: 320, height: 844 }, ...[700, 701, 767, 768].map(width => ({ width, height: 844 }))];
+
+const claudeSummary = {
+  id: "claude-layout-fixture",
+  sessionKey: "claude:layout-fixture",
+  title: "Claude layout fixture",
+  cwd: "/isolated/claude-workspace",
+  path: "/isolated/claude-sessions/layout-fixture.jsonl",
+  status: "recent",
+  formatVersion: "2.1.284",
+  messageCount: 1,
+  canRename: true,
+  canDelete: true,
+  updatedAt: "2026-10-01T00:00:00Z"
+};
 
 for (const colorScheme of ["light", "dark"] as const) {
   for (const viewport of viewports) {
@@ -12,6 +26,10 @@ for (const colorScheme of ["light", "dark"] as const) {
       page.on("pageerror", error => errors.push(error.message));
       page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
       await mockApi(page);
+      await mockCommand(page, "claude.list", () => [claudeSummary]);
+      await mockCommand(page, "claude.detail", () => ({
+        summary: claudeSummary, events: [{ id: "assistant-1", kind: "assistant_message", text: "Claude fixture result" }], hasMore: false, totalEvents: 1
+      }));
       await page.goto("/");
       if (info.project.name === "chromium") {
         // Exercise classic gutters even when the host uses macOS overlay scrollbars.
@@ -48,10 +66,9 @@ for (const colorScheme of ["light", "dark"] as const) {
         await page.getByTitle("返回任务列表").click();
         await expect(page.locator(".provider-session")).toBeVisible();
       }
-      await nav.getByRole("button", { name: "Pi", exact: true }).click();
+      await nav.getByRole("button", { name: "Claude Code", exact: true }).click();
       await page.locator(".provider-session").first().click();
-      await expect(page.locator(".provider-events")).toContainText("Pi fixture result");
-      await expect(page.locator(".provider-events")).toContainText("Current Pi branch");
+      await expect(page.locator(".provider-events")).toContainText("Claude fixture result");
       await assertContrast(page, ".provider-detail .conversation-title, .provider-events .markdown-content");
       await assertNoOverflow(page);
       if (viewport.width <= 767) {
@@ -159,7 +176,7 @@ test("Grok rename and guarded deletion use a scoped preview with Escape and focu
   expect(calls.filter(name => name === "grok.deleteExecute")).toHaveLength(1);
 });
 
-test("provider list rows rename on double-click without changing provider contracts", async ({ page }) => {
+test("Codex and Grok list rows rename on double-click without changing provider contracts", async ({ page }) => {
   const calls = await mockApi(page);
   await page.goto("/");
 
@@ -184,39 +201,8 @@ test("provider list rows rename on double-click without changing provider contra
   await expect(grokRow.locator("strong")).toHaveText("Grok double click");
   expect(calls).toContain("grok.rename");
 
-  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
-  const piRow = page.locator(".provider-session").first();
-  await piRow.click();
-  await expect(page.locator(".conversation-title")).toBeVisible();
-  await piRow.dblclick();
-  const piInput = page.getByLabel("线程名称", { exact: true });
-  await piInput.fill("Pi double click");
-  await piInput.press("Enter");
-  await expect(piRow.locator("strong")).toHaveText("Pi double click");
-  expect(calls).toContain("pi.rename");
 });
 
-test("Pi rename and guarded single-file deletion use sessionKey", async ({ page }) => {
-  const calls = await mockApi(page);
-  await page.goto("/");
-  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
-  await page.locator(".provider-session").click();
-  await expect(page.locator(".conversation-title")).toBeVisible();
-  const menu = page.getByLabel("Pi 任务操作");
-  await menu.click();
-  await page.getByRole("button", { name: "改名", exact: true }).click();
-  await page.getByLabel("Pi 任务名称").fill("Renamed Pi fixture");
-  await page.getByTitle("保存名称").click();
-  await expect(page.locator(".conversation-title")).toHaveText("Renamed Pi fixture");
-  await menu.click();
-  await page.getByRole("button", { name: "删除任务文件", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("1 个 JSONL 文件");
-  expect(calls).not.toContain("pi.deleteExecute");
-  await page.getByRole("button", { name: "确认删除任务文件", exact: true }).click();
-  await expect(page.getByText("未发现 Pi 会话")).toBeVisible();
-  expect(calls.filter(name => name === "pi.rename")).toHaveLength(1);
-  expect(calls.filter(name => name === "pi.deleteExecute")).toHaveLength(1);
-});
 
 test("hidden histories stop polling while started jobs continue to terminal", async ({ page }, info) => {
   const calls = await mockApi(page);

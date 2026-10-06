@@ -86,7 +86,7 @@ fn rpc_surface_separates_retired_commands_from_current_allowlist() {
 fn current_adapters_delegate_thread_and_provider_operations() {
     let threads = production_section(&src("api/threads.rs")).to_string();
     let grok = production_section(&src("api/grok.rs")).to_string();
-    let pi = production_section(&src("api/pi.rs")).to_string();
+    let claude = production_section(&src("api/claude.rs")).to_string();
     assert!(threads.contains("list_threads"));
     assert!(threads.contains("thread_detail"));
     for operation in [
@@ -102,15 +102,15 @@ fn current_adapters_delegate_thread_and_provider_operations() {
         );
     }
     for operation in [
-        "pi_list",
-        "pi_detail",
-        "pi_rename",
-        "pi_delete_preview",
-        "pi_delete_execute",
+        "claude_list",
+        "claude_detail",
+        "claude_rename",
+        "claude_delete_preview",
+        "claude_delete_execute",
     ] {
         assert!(
-            pi.contains(operation),
-            "missing Pi adapter operation: {operation}"
+            claude.contains(operation),
+            "missing Claude adapter operation: {operation}"
         );
     }
     for retired in [

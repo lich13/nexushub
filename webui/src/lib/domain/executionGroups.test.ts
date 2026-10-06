@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { groupClaudeEvents, groupCodexCommandBlocks, groupGrokCommandEvents, groupPiCommandEvents } from "./executionGroups";
+import { groupClaudeEvents, groupCodexCommandBlocks, groupGrokCommandEvents } from "./executionGroups";
 
 describe("execution groups", () => {
   test("groups adjacent Codex tools without hiding their rows", () => {
@@ -74,27 +74,7 @@ describe("execution groups", () => {
     expect(after[0].group.commands.slice(0, 2).map(command => command.id)).toEqual(before[0].group.commands.map(command => command.id));
   });
 
-  test("recognizes Pi bashExecution without a call id", () => {
-    const result = groupPiCommandEvents([
-      { kind: "tool_result", role: "bashExecution", status: "completed", text: "printf example", detail: "example" },
-      { kind: "assistant_message", text: "done" }
-    ]);
-    expect(result[0].kind).toBe("group");
-    expect(result[1].kind).toBe("item");
-    if (result[0].kind === "group") {
-      expect(result[0].group.commands[0].preview).toBe("printf example");
-      expect(result[0].group.commands[0].sections.map(section => section.text)).toEqual(["printf example", "example"]);
-    }
-  });
 
-  test("recognizes Pi tool calls when the message role is assistant", () => {
-    const result = groupPiCommandEvents([
-      { kind: "tool_call", role: "assistant", text: "bash", callId: "c1", status: "completed" },
-      { kind: "tool_result", role: "toolResult", text: "bash", callId: "c1", status: "completed", detail: "ok" }
-    ]);
-    expect(result).toHaveLength(1);
-    expect(result[0].kind).toBe("group");
-  });
 
   test("combines different native command names into one outer group", () => {
     const result = groupGrokCommandEvents([
@@ -110,7 +90,7 @@ describe("execution groups", () => {
   });
 
   test("pairs a call and result as one command row", () => {
-    const result = groupPiCommandEvents([
+    const result = groupGrokCommandEvents([
       { kind: "tool_call", role: "assistant", text: "bash", callId: "c1", status: "in_progress", detail: "pwd" },
       { kind: "tool_result", role: "toolResult", text: "bash", callId: "c1", status: "completed", detail: "/workspace" }
     ]);
@@ -147,16 +127,6 @@ test("a new turn with a reused call id starts a distinct group", () => {
   expect(result[0].group.id).not.toBe(result[1].group.id);
 });
 
-test("Pi groups non-command tools and keeps no-id command identities on prepend", () => {
-  const event = { kind: "tool_result", role: "bashExecution", timestamp: "2026-01-01T00:00:01Z", detail: "printf retained" };
-  const before = groupPiCommandEvents([event]);
-  const after = groupPiCommandEvents([{ ...event, timestamp: "2026-01-01T00:00:00Z", detail: "printf earlier" }, event]);
-  if (before[0].kind !== "group" || after[0].kind !== "group") throw new Error("group missing");
-  expect(after[0].group.commands[1].id).toBe(before[0].group.commands[0].id);
-  const read = groupPiCommandEvents([{kind: "tool_call", text: "read", callId: "read"}, {kind: "tool_result", text: "read", callId: "read", detail: "ok"}]);
-  if (read[0].kind !== "group") throw new Error("group missing");
-  expect(read[0].group.commands).toHaveLength(1);
-});
 
 test("Claude preserves paired results and text boundaries with stable native keys", () => {
   const events = [

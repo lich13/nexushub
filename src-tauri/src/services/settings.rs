@@ -202,9 +202,8 @@ pub(crate) fn hidden_delete_execute_with_state(
     let paths = state.codex_paths();
     let cleanup = NexusHubUseCases::new(state.platform()).cleanup();
     let plan = cleanup.execute_confirmed(cleanup_service::CleanupTarget::Hidden, request)?;
-    let dry_run = cleanup.dry_run_hidden(&paths)?;
-    cleanup.validate_expected_count(&plan, dry_run.hidden_threads)?;
-    cleanup.execute_hidden(&paths)
+    let candidates = cleanup_service::hidden_candidates(&plan)?;
+    cleanup.execute_hidden(&paths, &candidates)
 }
 
 pub(crate) fn probe_events_with_state(
@@ -450,6 +449,7 @@ mod tests {
             DesktopCleanupExecuteRequest {
                 confirmed: true,
                 expected_count: Some(0),
+                candidates: None,
             },
         )
         .expect("confirmed archive cleanup with matching count should execute");
@@ -459,7 +459,25 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_hidden_execute_rejects_stale_expected_count() {
+    fn cleanup_hidden_execute_requires_preview_candidates() {
+        let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
+
+        let err = hidden_delete_execute_with_state(
+            &state,
+            DesktopCleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(0),
+                candidates: None,
+            },
+        )
+        .expect_err("hidden cleanup execute must be bound to preview candidates")
+        .to_string();
+
+        assert!(err.contains("预览候选"), "{err}");
+    }
+
+    #[test]
+    fn cleanup_hidden_execute_rejects_candidate_count_mismatch() {
         let (_temp, state, _platform) = command_test_state(PlatformKind::Macos);
 
         let err = hidden_delete_execute_with_state(
@@ -467,12 +485,13 @@ mod tests {
             DesktopCleanupExecuteRequest {
                 confirmed: true,
                 expected_count: Some(1),
+                candidates: Some(Vec::new()),
             },
         )
-        .expect_err("hidden cleanup execute must reject stale dry-run counts")
+        .expect_err("hidden cleanup execute must reject a mismatched candidate count")
         .to_string();
 
-        assert!(!err.is_empty(), "{err}");
+        assert!(err.contains("候选数"), "{err}");
     }
 
     fn settings_source_before_test_module() -> &'static str {

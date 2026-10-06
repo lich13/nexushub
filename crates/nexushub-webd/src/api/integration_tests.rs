@@ -75,43 +75,6 @@ impl Drop for ConfigEnvGuard {
     }
 }
 
-struct PiEnvGuard {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    previous_agent_dir: Option<std::ffi::OsString>,
-    previous_session_dir: Option<std::ffi::OsString>,
-}
-
-impl PiEnvGuard {
-    fn set(agent_dir: &std::path::Path, session_dir: &std::path::Path) -> Self {
-        let guard = CONFIG_ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_agent_dir = env::var_os("PI_CODING_AGENT_DIR");
-        let previous_session_dir = env::var_os("PI_CODING_AGENT_SESSION_DIR");
-        env::set_var("PI_CODING_AGENT_DIR", agent_dir);
-        env::set_var("PI_CODING_AGENT_SESSION_DIR", session_dir);
-        Self {
-            _guard: guard,
-            previous_agent_dir,
-            previous_session_dir,
-        }
-    }
-}
-
-impl Drop for PiEnvGuard {
-    fn drop(&mut self) {
-        match self.previous_agent_dir.as_ref() {
-            Some(previous) => env::set_var("PI_CODING_AGENT_DIR", previous),
-            None => env::remove_var("PI_CODING_AGENT_DIR"),
-        }
-        match self.previous_session_dir.as_ref() {
-            Some(previous) => env::set_var("PI_CODING_AGENT_SESSION_DIR", previous),
-            None => env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
-        }
-    }
-}
-
 fn temp_test_dir(prefix: &str) -> PathBuf {
     let unique = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
     env::temp_dir().join(format!("{}-{}-{unique}", prefix, std::process::id()))
@@ -464,75 +427,45 @@ async fn rpc_cleanup_execute_requires_expected_count_confirmation() {
 }
 
 #[tokio::test]
-async fn rpc_pi_reads_native_session_keys_and_protects_mutations() {
-    let root = temp_test_dir("nexushub-pi-rpc");
-    let agent_dir = root.join("agent");
-    let sessions_dir = agent_dir.join("sessions");
-    let session_file = sessions_dir.join("project/session.jsonl");
-    let workspace = root.join("workspace");
-    fs::create_dir_all(session_file.parent().unwrap()).unwrap();
-    fs::create_dir_all(&workspace).unwrap();
-    let header = json!({
-        "type": "session",
-        "version": 3,
-        "id": "native-pi-id",
-        "timestamp": "2026-09-22T00:00:00Z",
-        "cwd": workspace,
-    });
-    let message = json!({
-        "type": "message",
-        "id": "message-1",
-        "parentId": null,
-        "timestamp": "2026-09-22T00:00:01Z",
-        "message": {"role": "user", "content": "Pi RPC fixture", "timestamp": 1}
-    });
-    fs::write(&session_file, format!("{header}\n{message}\n")).unwrap();
-    let _pi_env = PiEnvGuard::set(&agent_dir, &sessions_dir);
+async fn rpc_hidden_cleanup_execute_requires_preview_candidates() {
     let (state, api_key) = authenticated_test_state();
     let app = router(state);
 
-    assert_eq!(
-        request_rpc_status(app.clone(), "pi.list", "{}", None).await,
-        StatusCode::UNAUTHORIZED
-    );
-    let listed =
-        request_rpc_json(app.clone(), "pi.list", r#"{"q":"native-pi-id"}"#, &api_key).await;
-    assert_eq!(listed.as_array().unwrap().len(), 1);
-    assert_eq!(listed[0]["id"], "native-pi-id");
-    assert_eq!(listed[0]["sessionKey"], "project/session.jsonl");
-
-    let detail = request_rpc_json(
+    let missing_candidates = request_rpc_status(
         app.clone(),
-        "pi.detail",
-        r#"{"sessionKey":"project/session.jsonl"}"#,
-        &api_key,
+        "cleanup.hiddenExecute",
+        r#"{"confirmed":true,"expectedCount":0}"#,
+        Some(&api_key),
     )
     .await;
-    assert_eq!(detail["summary"]["id"], "native-pi-id");
-    assert_eq!(detail["events"][0]["text"], "Pi RPC fixture");
+    assert_eq!(missing_candidates, StatusCode::BAD_REQUEST);
 
-    assert_eq!(
-        request_rpc_status(
-            app.clone(),
-            "pi.rename",
-            r#"{"sessionKey":"project/session.jsonl","title":"Renamed"}"#,
-            Some("nhk_invalid_fixture")
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        request_rpc_status(
-            app,
-            "pi.deletePreview",
-            r#"{"sessionKey":"project/session.jsonl"}"#,
-            Some("nhk_invalid_fixture")
-        )
-        .await,
-        StatusCode::UNAUTHORIZED
-    );
-    drop(_pi_env);
-    fs::remove_dir_all(root).unwrap();
+    let mismatched_count = request_rpc_status(
+        app,
+        "cleanup.hiddenExecute",
+        r#"{"confirmed":true,"expectedCount":1,"candidates":[]}"#,
+        Some(&api_key),
+    )
+    .await;
+    assert_eq!(mismatched_count, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn retired_pi_commands_are_unavailable() {
+    let (state, api_key) = authenticated_test_state();
+    let app = router(state);
+    for command in [
+        "pi.list",
+        "pi.detail",
+        "pi.rename",
+        "pi.deletePreview",
+        "pi.deleteExecute",
+    ] {
+        assert_eq!(
+            request_rpc_status(app.clone(), command, "{}", Some(&api_key)).await,
+            StatusCode::NOT_FOUND
+        );
+    }
 }
 
 #[test]
@@ -702,7 +635,7 @@ async fn rpc_runtime_capabilities_has_minimal_dto_shape() {
 
     let rpc = request_rpc_json(app, "system.capabilities", "{}", &api_key).await;
 
-    assert_eq!(rpc["api_version"], 1);
+    assert_eq!(rpc["api_version"], 2);
     assert_eq!(rpc["host_surface"], "linux_server_api");
     assert_eq!(rpc["capabilities"]["threads"], true);
     assert!(rpc["capabilities"].get("web_auth").is_none());
@@ -834,7 +767,7 @@ async fn runtime_capabilities_preserve_linux_features() {
 
     let payload = request_rpc_json(app, "system.capabilities", "{}", &api_key).await;
     assert_eq!(payload["host_surface"], "linux_server_api");
-    assert_eq!(payload["api_version"], 1);
+    assert_eq!(payload["api_version"], 2);
     assert_eq!(payload.as_object().unwrap().len(), 3);
     assert_eq!(payload["capabilities"]["threads"], true);
     assert_eq!(payload["capabilities"]["jobs"], true);
@@ -2660,7 +2593,7 @@ async fn rpc_api_key_rejects_unconfigured_missing_wrong_and_legacy_credentials()
     assert!(response.headers().get("set-cookie").is_none());
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["api_version"], 1);
+    assert_eq!(payload["api_version"], 2);
     assert_eq!(payload["host_surface"], "linux_server_api");
     assert!(!String::from_utf8(body.to_vec()).unwrap().contains(&key));
 }

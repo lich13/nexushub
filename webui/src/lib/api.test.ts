@@ -7,7 +7,6 @@ import apiSource from "./api.ts?raw";
 import apiGrokSource from "./api/grok.ts?raw";
 import apiSessionsSource from "./api/sessions.ts?raw";
 import apiClaudeSource from "./api/claude.ts?raw";
-import apiPiSource from "./api/pi.ts?raw";
 import apiJobsSource from "./api/jobs.ts?raw";
 import apiProbeSource from "./api/probe.ts?raw";
 import apiSharedSource from "./api/shared.ts?raw";
@@ -25,7 +24,6 @@ import type { MessageBlock, ProbeStatus, SystemCapabilitiesResponse, ThreadDetai
 
 const domainApiSource = [
   apiGrokSource,
-  apiPiSource,
   apiClaudeSource,
   apiSessionsSource,
   apiJobsSource,
@@ -932,14 +930,9 @@ describe("archive delete API compatibility", () => {
       "grok.rename",
       "jobs.detail",
       "jobs.list",
-      "pi.deleteExecute",
       "sessions.attachmentRead",
       "sessions.bulkPreview",
       "sessions.bulkExecute",
-      "pi.deletePreview",
-      "pi.detail",
-      "pi.list",
-      "pi.rename",
       "probe.barkTest",
       "probe.events",
       "probe.installHooks",
@@ -1190,8 +1183,8 @@ describe("archive delete API compatibility", () => {
   test("NexusHub navigation exposes the slim provider workspaces", async () => {
     const app = await import("../test/domain");
 
-    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "claude", "grok", "pi", "probe", "ops"]);
-    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Claude Code", "Grok Build", "Pi", "Probe", "设置"]);
+    expect(app.navigationItems.map((item: { id: string }) => item.id)).toEqual(["codex", "claude", "grok", "probe", "ops"]);
+    expect(app.navigationItems.map((item: { label: string }) => item.label)).toEqual(["Codex", "Claude Code", "Grok Build", "Probe", "设置"]);
   });
 
   test("thread list item text only exposes the title", async () => {
@@ -1656,6 +1649,7 @@ describe("archive delete API compatibility", () => {
       rollout_files: 9,
       hidden_ids: ["child-a", "child-b"],
       hidden_source_counts: { exec: 1, subagent: 1 },
+      candidates: [{ id: "child-a", title: "Fixture A", fingerprint: "fixture", allowed: true, reason: null }, { id: "child-b", title: "Fixture B", fingerprint: null, allowed: false, reason: "protected" }],
       integrity: "ok"
     };
 
@@ -1666,7 +1660,7 @@ describe("archive delete API compatibility", () => {
       integrity: "ok"
     });
     expect(app.canStartHiddenThreadDelete(hiddenPlan)).toBe(true);
-    expect(app.canStartHiddenThreadDelete({ ...hiddenPlan, hidden_threads: 0 })).toBe(false);
+    expect(app.canStartHiddenThreadDelete({ ...hiddenPlan, hidden_threads: 0, candidates: [] })).toBe(false);
     expect(app.canStartHiddenThreadDelete(null)).toBe(false);
   });
 

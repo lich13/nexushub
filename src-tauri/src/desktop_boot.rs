@@ -33,12 +33,26 @@ const DESKTOP_BOOT_PROBE_SCRIPT: &str = r#"
 })()
 "#;
 
+/// Reveal an already initialized window without touching its geometry.
+///
+/// Reapplying maximize/position/size during Ready, reopen, or a machine switch
+/// makes macOS animate the window repeatedly and can block the WebView for
+/// several seconds. Geometry belongs to the one-time startup path below.
 pub(crate) fn reveal_main_window<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.unminimize();
-    let _ = window.maximize();
-    fit_main_window_to_work_area(window);
     let _ = window.set_focus();
+}
+
+/// Initialize the main window once after the explicit WebView has been built.
+/// Native maximize is preferred; the work-area size is a single bounded
+/// fallback for platforms where maximize does not resize a newly-created
+/// hidden window.
+pub(crate) fn initialize_main_window<R: Runtime>(window: &WebviewWindow<R>) {
+    let _ = window.maximize();
+    if !window.is_maximized().unwrap_or(false) {
+        fit_main_window_to_work_area(window);
+    }
 }
 
 fn fit_main_window_to_work_area<R: Runtime>(window: &WebviewWindow<R>) {
@@ -61,17 +75,6 @@ fn fit_main_window_to_work_area<R: Runtime>(window: &WebviewWindow<R>) {
         work_area.size.width,
         work_area.size.height,
     )));
-}
-
-pub(crate) fn schedule_delayed_main_window_reveal<R: Runtime>(window: &WebviewWindow<R>) {
-    let delayed_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        let main_thread_window = delayed_window.clone();
-        let _ = delayed_window.run_on_main_thread(move || {
-            reveal_main_window(&main_thread_window);
-        });
-    });
 }
 
 fn append_desktop_app_log(message: &str) {

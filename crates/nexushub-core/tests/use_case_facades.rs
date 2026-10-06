@@ -165,6 +165,14 @@ fn cleanup_use_cases_expose_execute_ready_plans_without_host_types() {
             CleanupExecuteRequest {
                 confirmed: true,
                 expected_count: Some(3),
+                candidates: Some(
+                    (0..3)
+                        .map(|n| nexushub_core::archive::HiddenThreadSelection {
+                            id: format!("fixture-{n}"),
+                            fingerprint: Some(format!("fingerprint-{n}")),
+                        })
+                        .collect(),
+                ),
             },
         )
         .unwrap();
@@ -173,7 +181,7 @@ fn cleanup_use_cases_expose_execute_ready_plans_without_host_types() {
     assert_eq!(confirmed.confirmation.expected_count, Some(3));
     assert_eq!(
         confirmed.confirmation.payload,
-        json!({"confirmed": true, "expectedCount": 3})
+        json!({"confirmed": true, "expectedCount": 3, "candidates": (0..3).map(|n| json!({"id":format!("fixture-{n}"),"fingerprint":format!("fingerprint-{n}")})).collect::<Vec<_>>()})
     );
 
     assert!(use_cases
@@ -183,6 +191,7 @@ fn cleanup_use_cases_expose_execute_ready_plans_without_host_types() {
             CleanupExecuteRequest {
                 confirmed: false,
                 expected_count: Some(1),
+                candidates: None,
             },
         )
         .unwrap_err()
@@ -202,6 +211,7 @@ fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
     let request = CleanupExecuteRequest {
         confirmed: true,
         expected_count: Some(8),
+        candidates: None,
     };
     let linux_plan = linux
         .cleanup()
@@ -221,7 +231,7 @@ fn cleanup_confirmation_plan_is_shared_for_linux_and_macos_execute_adapters() {
     assert_eq!(linux_plan.confirmation.expected_count, Some(8));
     assert_eq!(
         linux_plan.confirmation.payload,
-        json!({"confirmed": true, "expectedCount": 8})
+        json!({"confirmed": true, "expectedCount": 8, "candidates": null})
     );
 
     std::fs::remove_dir_all(mac_home).unwrap();

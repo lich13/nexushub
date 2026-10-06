@@ -5,7 +5,7 @@ import * as demo from "../src/lib/api/demo";
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=";
 const text = "# User heading\n  Keep spaces\n- plain list\n```text\n<image>example</image>\n```";
 
-for (const provider of ["codex", "grok", "pi"] as const) {
+for (const provider of ["codex", "grok"] as const) {
   for (const mobile of [false, true]) {
     test(`${provider} literal user bubble and image preview ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
       await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 980 });
@@ -26,7 +26,7 @@ for (const provider of ["codex", "grok", "pi"] as const) {
         ? { ...demo.demoThreadDetail("019e95a0-demo"), blocks: [{ id: "user-1", role: "user", kind: "message", questions: [], text: "attachment envelope", user_message: user }] }
         : { summary: {}, events: [{ kind: provider === "grok" ? "user_message_chunk" : "user_message", userMessage: user, text: "attachment envelope" }] });
       await page.goto("/");
-      if (provider !== "codex") await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+      if (provider !== "codex") await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
       if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
       else if (mobile) await page.locator(".provider-session").click();
       const bubble = page.locator(".user-message-bubble");

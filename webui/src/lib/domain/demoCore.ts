@@ -67,7 +67,7 @@ export function buildDemoFixture(fixture: DemoFixtureKey): DemoFixture {
       service_kind: desktop ? "tauri" : "systemd"
     },
     system: {
-      api_version: 1,
+      api_version: 2,
       host_surface: desktop ? "desktop_embedded_tauri" : "linux_server_api",
       capabilities: buildDemoCapabilities(fixture)
     },

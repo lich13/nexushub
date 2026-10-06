@@ -116,6 +116,7 @@ small { font-size: 12px; }
 .thread-item, .provider-session { width: 100%; min-width: 0; margin-bottom: 4px; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; }
 .thread-item:hover, .thread-item.selected, .provider-session:hover, .provider-session.selected { background: var(--surface-elevated); }
 .renameable-session { min-width: 0; }
+.renameable-session { width: 100%; flex: 1 1 auto; }
 .renameable-session > .thread-item, .renameable-session > .provider-session { margin-bottom: 0; }
 .session-rename { min-width: 0; display: grid; gap: 4px; padding: 8px 10px; border-radius: 6px; background: var(--surface-elevated); }
 .session-rename input { width: 100%; min-width: 0; height: 30px; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface); color: var(--text); }
@@ -477,3 +478,16 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
   .search-overlay { padding-top: calc(var(--mobile-top) + 10px); }
   .session-search-panel { width: calc(100vw - 20px); max-height: calc(100dvh - var(--mobile-top) - 28px); }
 }
+
+/* Row and context menus share the same actions without selecting their target. */
+.renameable-session { position: relative; }
+.renameable-session > .thread-item, .renameable-session > .provider-session { width: 100%; padding-right: 38px; }
+.session-row-menu { position: absolute; top: 8px; right: 6px; opacity: 0; }
+.renameable-session:hover .session-row-menu, .renameable-session:focus-within .session-row-menu { opacity: 1; }
+.context-task-menu { right: auto; min-width: 200px; max-width: min(280px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; }
+.task-menu-items .danger-menu-item { color: var(--danger, #e6677c); }
+@media (hover: none) { .session-row-menu { opacity: 1; } }
+
+.hidden-cleanup-candidates { max-height: 260px; overflow: auto; padding-left: 18px; }
+.hidden-cleanup-candidates li { padding: 6px 0; overflow-wrap: anywhere; }
+.hidden-cleanup-candidates li span { display: block; color: var(--text-secondary); font-size: .875rem; }

@@ -110,12 +110,6 @@ impl<'a> NexusHubUseCases<'a> {
         }
     }
 
-    pub fn pi(self) -> PiUseCases {
-        PiUseCases {
-            paths: crate::pi::PiPaths::default_for_user(),
-        }
-    }
-
     pub fn jobs(self) -> JobUseCases<'a> {
         JobUseCases {
             platform: self.platform,
@@ -130,7 +124,6 @@ impl<'a> NexusHubUseCases<'a> {
             platform: self.platform.clone(),
             codex,
             grok: crate::grok::GrokPaths::default_for_user(),
-            pi: crate::pi::PiPaths::default_for_user(),
             claude: crate::claude::ClaudePaths::default_for_user(),
         }
     }
@@ -186,43 +179,6 @@ impl<'a> NexusHubUseCases<'a> {
 
 pub struct GrokUseCases {
     paths: crate::grok::GrokPaths,
-}
-
-pub struct PiUseCases {
-    paths: crate::pi::PiPaths,
-}
-
-impl PiUseCases {
-    pub fn list(
-        &self,
-        limit: usize,
-        query: Option<&str>,
-    ) -> Result<Vec<crate::pi::PiSessionSummary>> {
-        crate::pi::list_pi_sessions(&self.paths, limit, query)
-    }
-
-    pub fn detail(&self, session_key: &str) -> Result<crate::pi::PiSessionDetail> {
-        crate::pi::pi_session_detail(&self.paths, session_key)
-    }
-
-    pub async fn rename(
-        &self,
-        session_key: &str,
-        title: &str,
-    ) -> Result<crate::pi::PiSessionSummary> {
-        crate::pi::rename_pi_session(&self.paths, session_key, title).await
-    }
-
-    pub fn delete_preview(&self, session_key: &str) -> Result<crate::pi::PiDeletePreview> {
-        crate::pi::preview_pi_delete(&self.paths, session_key)
-    }
-
-    pub fn delete_execute(
-        &self,
-        request: crate::pi::PiDeleteRequest,
-    ) -> Result<crate::pi::PiDeleteResult> {
-        crate::pi::execute_pi_delete(&self.paths, request)
-    }
 }
 
 impl GrokUseCases {
@@ -408,8 +364,9 @@ impl<'a> CleanupUseCases<'a> {
     pub fn execute_hidden(
         self,
         paths: &crate::codex::CodexPaths,
+        candidates: &[crate::archive::HiddenThreadSelection],
     ) -> Result<cleanup::HiddenThreadDeleteResult> {
-        cleanup::execute_hidden_with_capability(self.platform, paths)
+        cleanup::execute_hidden_with_capability(self.platform, paths, candidates)
     }
 
     pub fn archive_delete_dry_run(self) -> Result<CleanupActionPlan> {

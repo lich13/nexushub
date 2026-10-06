@@ -41,9 +41,6 @@ export type ProbeSettingsDraft = {
     notify_grok: boolean;
     notify_grok_completion: boolean;
     notify_grok_failure: boolean;
-    notify_pi: boolean;
-    notify_pi_completion: boolean;
-    notify_pi_failure: boolean;
     notify_claude: boolean;
     notify_claude_completion: boolean;
     notify_claude_failure: boolean;
@@ -106,9 +103,6 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
       notify_grok: notifications.notify_grok !== false,
       notify_grok_completion: notifications.notify_grok_completion !== false,
       notify_grok_failure: notifications.notify_grok_failure !== false,
-      notify_pi: notifications.notify_pi !== false,
-      notify_pi_completion: notifications.notify_pi_completion !== false,
-      notify_pi_failure: notifications.notify_pi_failure !== false,
       notify_claude: notifications.notify_claude !== false,
       notify_claude_completion: notifications.notify_claude_completion !== false,
       notify_claude_failure: notifications.notify_claude_failure !== false,
@@ -152,9 +146,6 @@ export function buildProbeSettingsPayload(
     notify_grok: draft.notifications.notify_grok,
     notify_grok_completion: draft.notifications.notify_grok_completion,
     notify_grok_failure: draft.notifications.notify_grok_failure,
-    notify_pi: draft.notifications.notify_pi,
-    notify_pi_completion: draft.notifications.notify_pi_completion,
-    notify_pi_failure: draft.notifications.notify_pi_failure,
     notify_claude: draft.notifications.notify_claude,
     notify_claude_completion: draft.notifications.notify_claude_completion,
     notify_claude_failure: draft.notifications.notify_claude_failure,

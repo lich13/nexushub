@@ -29,6 +29,8 @@ pub(crate) struct ArchiveExecuteRequest {
     confirmed: bool,
     #[serde(default, alias = "expectedCount", alias = "expected_count")]
     expected_count: Option<u64>,
+    #[serde(default)]
+    candidates: Option<Vec<nexushub_core::archive::HiddenThreadSelection>>,
 }
 
 pub(crate) async fn archive_delete_execute(
@@ -45,6 +47,7 @@ pub(crate) async fn archive_delete_execute(
             CleanupExecuteRequest {
                 confirmed: payload.confirmed,
                 expected_count: payload.expected_count,
+                candidates: payload.candidates,
             },
         )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
@@ -79,6 +82,7 @@ pub(crate) async fn hidden_threads_delete_execute(
             CleanupExecuteRequest {
                 confirmed: payload.confirmed,
                 expected_count: payload.expected_count,
+                candidates: payload.candidates,
             },
         )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;

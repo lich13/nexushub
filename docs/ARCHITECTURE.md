@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.7
+# NexusHub 架构说明（维护者文档）— 1.2.8
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -8,8 +8,8 @@
 
 | Area | Responsibility |
 | --- | --- |
-| Codex | Official state/index/rollout/log reads, identity, native rename, archive/restore and scoped archived deletion |
-| Grok / Pi | Native session discovery, branch-aware history, identity, activity checks, rename and scoped deletion |
+| Codex | Official state/index/rollout/log reads, identity, native rename, archive/restore and preview-bound normal/archived deletion |
+| Grok | Native session discovery, branch-aware history, identity, activity checks, rename and scoped deletion |
 | Probe | Error detection, provider terminal evidence, cursors, dedupe, redaction, retention and Bark delivery |
 | Database/config | NexusHub settings, events, deliveries and migration; Codex native data stays outside this schema |
 | WebUI | Shared visual contract, provider queries, pure execution-group view models and Plan filename/content preparation |
@@ -42,9 +42,9 @@ Codex retains completed tool blocks and positions paired results at the native c
 
 ## User message attachments
 
-Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Pi groups text and images within the active native entry. Native files are never rewritten.
+Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Claude groups native text/image parts in the same message. Native files are never rewritten.
 
-The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All four renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
+The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All three renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
 
 `sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and isolated by machine and cleared when the active connection changes. Remote-only references are not fetched. Polling contains descriptors, not image data.
 
@@ -58,7 +58,7 @@ Codex final replies are classified locally for explicit user feedback requests a
 
 ## Probe and notifications
 
-Codex errors are selected from canonical main-task identities. Grok requires a primary native turn ending; Pi requires the current branch, a stopped assistant and no pending tool call. Unknown Pi failure state never becomes a failure notification. Persistent delivery claims prevent duplicate sends after restart; first enable establishes a baseline.
+Codex errors are selected from canonical main-task identities. Grok requires a primary native turn ending; Claude requires verified terminal evidence and no pending tool call. Persistent delivery claims prevent duplicate sends after restart; first enable establishes a baseline.
 
 ## Release matrix
 
@@ -86,4 +86,14 @@ Opening only the NexusHub database drops administrators, web sessions and Turnst
 
 Known 2.x records include user/assistant blocks, title records, tools, queue/history/usage metadata and compaction. Unknown records remain readable; malformed records, incomplete tails or unverified formats disable mutation. Claude running state needs a live identified process, matching start time/session/project and an unfinished turn. Management separately refuses any potentially owning process. Rename appends `custom-title` and verifies persistence; deletion isolates and rechecks one JSONL without changing native indexes, configuration or the workspace.
 
-Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable and the 1.2.7 compatible-reader upgrade establish a baseline without replaying history. New user requests supersede undelivered prior events. Explicit transient Bark HTTP rejections retry after 60 seconds, up to three total attempts; uncertain transport outcomes remain failed without automatic replay. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.
+Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable and the compatible-reader upgrade establish a baseline without replaying history. New user requests supersede undelivered prior events. Explicit transient Bark HTTP rejections retry after 60 seconds, up to three total attempts; uncertain transport outcomes remain failed without automatic replay. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.
+
+## 1.2.8：定向删除与退役迁移
+
+`selected_codex` 为普通和归档线程生成安全快照；身份、明确终态、DB/索引关联、共享引用和文件指纹全部通过才允许删除。文件先进入私有暂存，数据库事务与索引原子替换配合；失败恢复文件和索引，不删除未选中的子线程。
+
+`cleanup.hiddenDryRun` 返回候选、指纹、允许状态和阻止原因。`cleanup.hiddenExecute` 的 `candidates` 是本次执行边界，`expectedCount` 校验其长度，不与全局隐藏数比较。每项重新检查后用 savepoint 执行；项目级错误记录并继续，公共数据库/索引/存储故障回滚整批。提交前复核暂存文件和数据库完整性。
+
+`system.capabilities.api_version` 为 2，桌面桥接校验版本后才转发业务请求。旧无候选请求不能进入隐藏清理。Pi 只保留 retired tombstone；迁移在解码待投递 JSON 前清除 NexusHub 自有 Pi 数据，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；其他提供方、密钥和业务记录不变。
+
+窗口生命周期集中于 `desktop_boot`：隐藏创建 → 一次最大化或工作区回退 → Ready 显示。Reopen 只显示、取消最小化和聚焦，不再次设置几何信息。

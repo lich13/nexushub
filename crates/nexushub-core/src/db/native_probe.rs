@@ -168,16 +168,12 @@ impl PanelDb {
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
         let mut statuses = Vec::new();
-        for provider in [
-            NativeProvider::Grok,
-            NativeProvider::Pi,
-            NativeProvider::Claude,
-        ] {
+        for provider in [NativeProvider::Grok, NativeProvider::Claude] {
             let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
             let failed:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status='failed'",[provider.as_str()],|r|r.get(0))?;
             let pending:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status IN ('pending','delivering')",[provider.as_str()],|r|r.get(0))?;
-            statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":provider!=NativeProvider::Pi}));
+            statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":true}));
         }
         Ok(Value::Array(statuses))
     }
@@ -272,7 +268,7 @@ mod tests {
         NativeScan {
             errors: 0,
             streams: vec![NativeStreamSnapshot {
-                provider: NativeProvider::Pi,
+                provider: NativeProvider::Grok,
                 session_key: id.into(),
                 id: "duplicate-native-id".into(),
                 title: "test".into(),
@@ -298,12 +294,12 @@ mod tests {
         let c = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &scan("a", 1, now), &c)
+            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
                 .unwrap(),
             0
         );
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &scan("a", 2, now), &c)
+            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
                 .unwrap(),
             1
         );
@@ -314,13 +310,13 @@ mod tests {
         drop(db);
         let db = PanelDb::open(&p).unwrap();
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &scan("a", 2, now), &c)
+            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
                 .unwrap(),
             0
         );
         assert!(db.pending_native_deliveries(100).unwrap().is_empty());
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &scan("b", 1, now), &c)
+            db.stage_native_notifications(NativeProvider::Grok, &scan("b", 1, now), &c)
                 .unwrap(),
             1
         );
@@ -333,7 +329,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            db.native_notification_status().unwrap()[1]["failed_deliveries"],
+            db.native_notification_status()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|status| status["provider"] == "grok")
+                .unwrap()["failed_deliveries"],
             1
         );
         assert_eq!(db.list_probe_events(10).unwrap().len(), 2);
@@ -345,23 +347,23 @@ mod tests {
         let db = PanelDb::open(":memory:").unwrap();
         let mut c = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
-        db.stage_native_notifications(NativeProvider::Pi, &scan("a", 1, now), &c)
+        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 1, now), &c)
             .unwrap();
-        c.probe.notifications.notify_pi = false;
-        db.stage_native_notifications(NativeProvider::Pi, &scan("a", 2, now), &c)
+        c.probe.notifications.notify_grok = false;
+        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 2, now), &c)
             .unwrap();
-        c.probe.notifications.notify_pi = true;
-        db.stage_native_notifications(NativeProvider::Pi, &scan("a", 3, now), &c)
+        c.probe.notifications.notify_grok = true;
+        db.stage_native_notifications(NativeProvider::Grok, &scan("a", 3, now), &c)
             .unwrap();
         assert!(db.pending_native_deliveries(100).unwrap().is_empty());
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &scan("a", 4, now), &c)
+            db.stage_native_notifications(NativeProvider::Grok, &scan("a", 4, now), &c)
                 .unwrap(),
             1
         );
         let old = scan("imported", 20, now - 86_400_000);
         assert_eq!(
-            db.stage_native_notifications(NativeProvider::Pi, &old, &c)
+            db.stage_native_notifications(NativeProvider::Grok, &old, &c)
                 .unwrap(),
             0
         );

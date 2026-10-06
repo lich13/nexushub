@@ -1,5 +1,5 @@
 import { isInstructionFileActivity, visibleMarkdown } from "./visibleMarkdown";
-import type { MessageBlock, GrokHistoryEvent, PiHistoryEvent, ClaudeHistoryEvent } from "../../types";
+import type { MessageBlock, GrokHistoryEvent, ClaudeHistoryEvent } from "../../types";
 import { isToolBlock, isHistoryCollapsedBlock, isPlanBlock, isQuestionBlock, isQuestionResultBlock, toolBlockDetailText } from "./conversationViewModel";
 
 export type ExecutionStatus = "running" | "failed" | "completed";
@@ -16,7 +16,7 @@ export type ExecutionGroup = {
   id: string;
   commands: ExecutionCommand[];
   kind: "command" | "tool";
-  provider: "Codex" | "Grok" | "Pi" | "Claude Code";
+  provider: "Codex" | "Grok" | "Claude Code";
   running: boolean;
   failedCount: number;
 };
@@ -200,26 +200,6 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
       ]
     };
   }), "Grok");
-}
-
-export function groupPiCommandEvents(events: PiHistoryEvent[]): ExecutionRenderItem<PiHistoryEvent>[] {
-  return groupActivities(events.map((event, index) => ({
-    item: event,
-    key: `pi:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${event.role ?? ""}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
-    sourceIds: [`event:${index}`, event.callId].filter((value): value is string => Boolean(value)),
-    callId: event.callId,
-    tool: event.kind === "tool_call" || event.kind === "tool_result",
-    instructionFile: isInstructionFileActivity(event.role, event.text, event.detail),
-    command: (event.kind === "tool_call" || event.kind === "tool_result") && (isCommandText(event.role) || isCommandText(event.text)),
-    title: isCommandText(event.role) || isCommandText(event.text) ? commandTitle(event.role, event.text) : event.text?.trim() || event.role || "工具活动",
-    preview: activityPreview(event.role === "bashExecution" ? event.text : event.kind === "tool_call" ? event.detail : undefined),
-    phase: event.kind === "tool_call" ? "call" : "result",
-    status: event.status,
-    sections: [
-      ...(event.role === "bashExecution" && event.text ? [{ label: "命令", text: event.text }] : []),
-      ...(event.detail ? [{ label: event.kind === "tool_call" ? "调用参数" : "结果", text: event.detail }] : [])
-    ]
-  })), "Pi");
 }
 
 export function groupClaudeEvents(events: ClaudeHistoryEvent[]): ExecutionRenderItem<ClaudeHistoryEvent>[] {

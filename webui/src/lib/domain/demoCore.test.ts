@@ -9,7 +9,7 @@ describe("machine demo fixtures", () => {
   test("both hosts use API version 1 and omit retired browser authentication fields", () => {
     for (const fixture of fixtureKeys) {
       const view = buildDemoFixture(fixture);
-      expect(view.system.api_version).toBe(1);
+      expect(view.system.api_version).toBe(2);
       expect(view).not.toHaveProperty("security");
       expect(view.platform).not.toHaveProperty("webui_dir");
       for (const field of retiredKeys) expect(view.system.capabilities).not.toHaveProperty(field);

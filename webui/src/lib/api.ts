@@ -27,7 +27,6 @@ export {
 } from "./api/probe";
 export { getUpdateStatus, updates } from "./api/updates";
 export { listGrokSessions, getGrokSession, renameGrokSession, previewGrokSessionDelete, deleteGrokSession } from "./api/grok";
-export { listPiSessions, getPiSession, renamePiSession, previewPiSessionDelete, deletePiSession } from "./api/pi";
 export type { UnifiedUpdateAction, UpdateActionResult } from "./api/updates";
 export {
   listThreads,

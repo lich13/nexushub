@@ -1,5 +1,6 @@
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { createPortal } from "react-dom";
+import { useLayoutEffect, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 
 export function TaskMenu({ label = "任务操作", children, triggerRef }: { label?: string; children: ReactNode; triggerRef?: Ref<HTMLElement> }) {
   const menu = useRef<HTMLDivElement>(null);
@@ -42,4 +43,85 @@ export function TaskMenu({ label = "任务操作", children, triggerRef }: { lab
       if ((event.target as Element).closest("button")) close(true);
     }}>{children}</div>}
   </div>;
+}
+
+export type ThreadMenuAction = {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  disabled?: boolean;
+  reason?: string | null;
+  danger?: boolean;
+  run: () => void;
+};
+
+export function ThreadMenuItems({ actions }: { actions: ThreadMenuAction[] }) {
+  return <>{actions.map(action => <button key={action.id} type="button" role="menuitem"
+    disabled={action.disabled} title={action.reason ?? undefined}
+    className={action.danger ? "danger-menu-item" : undefined} onClick={action.run}>
+    {action.icon}{action.label}
+  </button>)}</>;
+}
+
+export function ContextTaskMenu({ x, y, onClose, returnFocus, children }: {
+  x: number; y: number;
+  onClose: () => void;
+  returnFocus: HTMLElement | null;
+  children: ReactNode;
+}) {
+  const menu = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const [position, setPosition] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const rect = menu.current?.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(x, window.innerWidth - (rect?.width ?? 240) - 8)),
+      top: Math.max(8, Math.min(y, window.innerHeight - (rect?.height ?? 260) - 8)),
+    });
+    menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+  }, [x, y]);
+  useEffect(() => {
+    const close = () => { closeRef.current(); returnFocus?.focus({ preventScroll: true }); };
+    const outside = (event: Event) => {
+      if (!menu.current?.contains(event.target as Node)) {
+        closeRef.current();
+        if (!(event.target instanceof Element) || !event.target.closest("button,input,select,textarea,a,[tabindex]")) returnFocus?.focus({ preventScroll: true });
+      }
+    };
+    const scrolled = (event: Event) => {
+      if (!menu.current?.contains(event.target as Node)) close();
+    };
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("scroll", scrolled, true);
+    document.addEventListener("keydown", key, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("scroll", scrolled, true);
+      document.removeEventListener("keydown", key, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [returnFocus]);
+  return createPortal(<div ref={menu} className="task-menu-items context-task-menu" role="menu"
+    aria-label="线程操作" style={{ position: "fixed", ...position, zIndex: 100 }}
+    onContextMenu={event => event.preventDefault()}
+    onKeyDown={event => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+        : index < 0 ? 0 : (index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length;
+      buttons[next]?.focus();
+    }}
+    onClick={event => {
+      if ((event.target as Element).closest("button:not(:disabled)")) closeRef.current();
+    }}>{children}</div>, document.body);
 }

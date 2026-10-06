@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::{
     claude::{self, ClaudeDetailRequest},
-    codex, grok, pi,
+    codex, grok,
     platform::PlatformPaths,
     services::sessions::SessionProvider,
 };
@@ -62,7 +62,6 @@ pub struct SessionSearchResponse {
 pub struct SearchUseCases {
     codex: codex::CodexPaths,
     grok: grok::GrokPaths,
-    pi: pi::PiPaths,
     claude: claude::ClaudePaths,
 }
 
@@ -71,7 +70,6 @@ impl SearchUseCases {
         Self {
             codex,
             grok: grok::GrokPaths::default_for_user(),
-            pi: pi::PiPaths::default_for_user(),
             claude: claude::ClaudePaths::default_for_user(),
         }
     }
@@ -90,9 +88,6 @@ impl SearchUseCases {
             }
             SessionProvider::Grok => {
                 self.search_grok(&request, &needle, &mut matches, &mut warnings)?
-            }
-            SessionProvider::Pi => {
-                self.search_pi(&request, &needle, &mut matches, &mut warnings)?
             }
         }
         let offset = request
@@ -226,65 +221,6 @@ impl SearchUseCases {
                     push_result(
                         output,
                         &summary.id,
-                        &summary.id,
-                        &summary.title,
-                        Some(summary.cwd.clone()),
-                        &event.kind,
-                        position,
-                        snippet,
-                        event.timestamp.clone(),
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn search_pi(
-        &self,
-        request: &SessionSearchRequest,
-        needle: &str,
-        output: &mut Vec<SessionSearchResult>,
-        warnings: &mut Vec<String>,
-    ) -> Result<()> {
-        let summaries = pi::list_pi_sessions(&self.pi, MAX_SESSIONS, None)?;
-        for summary in summaries {
-            if request.scope == SearchScope::Thread
-                && request.session_key.as_deref() != Some(summary.session_key.as_str())
-            {
-                continue;
-            }
-            let metadata =
-                strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if metadata.to_lowercase().contains(needle) {
-                push_metadata(
-                    output,
-                    &summary.session_key,
-                    &summary.id,
-                    &summary.title,
-                    Some(summary.cwd.clone()),
-                    &metadata,
-                    needle,
-                    summary.updated_at.clone(),
-                );
-            }
-            let detail = match pi::pi_session_detail(&self.pi, &summary.session_key) {
-                Ok(detail) => detail,
-                Err(_) => {
-                    push_warning(warnings);
-                    continue;
-                }
-            };
-            for (index, event) in detail.events.into_iter().enumerate() {
-                let corpus = json_corpus(&event)?;
-                if let Some(snippet) = find_snippet(&corpus, needle) {
-                    let position = event
-                        .call_id
-                        .clone()
-                        .unwrap_or_else(|| format!("event:{index}"));
-                    push_result(
-                        output,
-                        &summary.session_key,
                         &summary.id,
                         &summary.title,
                         Some(summary.cwd.clone()),

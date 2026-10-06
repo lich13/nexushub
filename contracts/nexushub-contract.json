@@ -57,7 +57,6 @@
       "Codex",
       "Claude Code",
       "Grok Build",
-      "Pi",
       "Probe",
       "设置"
     ],
@@ -81,8 +80,7 @@
       "updateInstallWithoutAvailableVersion": "更新按钮仅在已确认有新版本时显示",
       "cleanupArmBeforeDryRun": "cleanup arm disabled until dry-run returns candidates",
       "cleanupConfirmBeforeArmed": "cleanup execute disabled until confirmation is armed",
-      "cleanupDuringMutation": "cleanup controls disabled while dry-run or execute is pending",
-      "piMutationActivityUnknown": "Pi 已打开或活动状态无法确认，关闭 Pi 后重试"
+      "cleanupDuringMutation": "cleanup controls disabled while dry-run or execute is pending"
     },
     "desktopTauriOnly": [
       "远程连接",
@@ -384,7 +382,7 @@
       "tauriCommand": "commands::settings::startArchiveDelete",
       "webuiWrapper": "startArchiveDelete",
       "dtoOwner": "cleanup",
-      "requestDto": "NoRequest",
+      "requestDto": "CleanupExecuteRequest",
       "responseDto": "CleanupArchiveExecuteResponse"
     },
     {
@@ -408,7 +406,7 @@
       "tauriCommand": "commands::settings::startHiddenThreadDelete",
       "webuiWrapper": "startHiddenThreadDelete",
       "dtoOwner": "cleanup",
-      "requestDto": "NoRequest",
+      "requestDto": "CleanupExecuteRequest",
       "responseDto": "CleanupHiddenExecuteResponse"
     },
     {
@@ -470,66 +468,6 @@
       "dtoOwner": "grok",
       "requestDto": "GrokDeleteRequest",
       "responseDto": "GrokMutationResponse"
-    },
-    {
-      "id": "pi.list",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "pi.list",
-      "linuxRpc": "pi.list",
-      "tauriCommand": "commands::pi::listPiSessions",
-      "webuiWrapper": "listPiSessions",
-      "dtoOwner": "pi",
-      "requestDto": "PiListRequest",
-      "responseDto": "PiListResponse"
-    },
-    {
-      "id": "pi.detail",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "pi.detail",
-      "linuxRpc": "pi.detail",
-      "tauriCommand": "commands::pi::getPiSession",
-      "webuiWrapper": "getPiSession",
-      "dtoOwner": "pi",
-      "requestDto": "PiSessionRequest",
-      "responseDto": "PiDetailResponse"
-    },
-    {
-      "id": "pi.rename",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "pi.rename",
-      "linuxRpc": "pi.rename",
-      "tauriCommand": "commands::pi::renamePiSession",
-      "webuiWrapper": "renamePiSession",
-      "dtoOwner": "pi",
-      "requestDto": "PiRenameRequest",
-      "responseDto": "PiMutationResponse"
-    },
-    {
-      "id": "pi.deletePreview",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "pi.delete_preview",
-      "linuxRpc": "pi.deletePreview",
-      "tauriCommand": "commands::pi::previewPiSessionDelete",
-      "webuiWrapper": "previewPiDelete",
-      "dtoOwner": "pi",
-      "requestDto": "PiSessionRequest",
-      "responseDto": "PiDeletePreview"
-    },
-    {
-      "id": "pi.deleteExecute",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "pi.delete_execute",
-      "linuxRpc": "pi.deleteExecute",
-      "tauriCommand": "commands::pi::deletePiSession",
-      "webuiWrapper": "deletePiSession",
-      "dtoOwner": "pi",
-      "requestDto": "PiDeleteRequest",
-      "responseDto": "PiMutationResponse"
     },
     {
       "id": "sessions.bulkPreview",
@@ -885,38 +823,6 @@
       "core": "UpdatesStatusResponse",
       "webui": "UpdatesStatusResponse"
     },
-    "PiDeletePreview": {
-      "core": "PiDeletePreview",
-      "webui": "PiDeletePreview"
-    },
-    "PiDeleteRequest": {
-      "core": "PiDeleteRequest",
-      "webui": "PiDeleteRequest"
-    },
-    "PiDetailResponse": {
-      "core": "PiDetailResponse",
-      "webui": "PiDetailResponse"
-    },
-    "PiListRequest": {
-      "core": "PiListRequest",
-      "webui": "PiListRequest"
-    },
-    "PiListResponse": {
-      "core": "PiListResponse",
-      "webui": "PiListResponse"
-    },
-    "PiMutationResponse": {
-      "core": "PiMutationResponse",
-      "webui": "PiMutationResponse"
-    },
-    "PiRenameRequest": {
-      "core": "PiRenameRequest",
-      "webui": "PiRenameRequest"
-    },
-    "PiSessionRequest": {
-      "core": "PiSessionRequest",
-      "webui": "PiSessionRequest"
-    },
     "SystemCapabilitiesResponse": {
       "core": "SystemCapabilitiesResponse",
       "webui": "SystemCapabilitiesResponse"
@@ -1004,6 +910,10 @@
     "SessionSearchResponse": {
       "core": "SessionSearchResponse",
       "webui": "SessionSearchResponse"
+    },
+    "CleanupExecuteRequest": {
+      "core": "CleanupExecuteRequest",
+      "webui": "CleanupExecuteRequest"
     }
   },
   "retiredActions": [
@@ -1051,6 +961,11 @@
     "security.changePassword",
     "security.get",
     "security.save",
-    "threadEvents"
+    "threadEvents",
+    "pi.list",
+    "pi.detail",
+    "pi.rename",
+    "pi.deletePreview",
+    "pi.deleteExecute"
   ]
 }
