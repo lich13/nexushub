@@ -97,6 +97,13 @@ export function GrokWorkspace({}: { }) {
           selected={item.id === selected?.id}
           onSelect={() => { if (batch.selecting) { batch.toggle(item.id); return; } setSelectedId(item.id); setRenaming(false); setPreview(null); setFeedback(""); }}
           onRename={(next) => actions.rename.mutateAsync({ id: item.id, title: next })}
+          menuActions={[
+            { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => {
+              void navigator.clipboard.writeText(item.id).then(() => setFeedback("已复制线程 ID")).catch(() => setFeedback("复制失败：剪贴板不可用"));
+            } },
+            { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !(item.status === "recent"),
+              reason: "运行中或状态未知的任务不能删除", run: () => { actions.remove.reset(); actions.preview.mutate(item.id, { onSuccess: setPreview }); } },
+          ]}
         ><strong>{grokSessionLabel(item)}</strong><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>}</RenameableSession></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">暂无 Grok 任务</div>}
@@ -123,7 +130,7 @@ export function GrokWorkspace({}: { }) {
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
       <h2 id="grok-delete-title">删除任务文件</h2><strong>{preview.title}</strong><code className="delete-path">{preview.path}</code><p>{preview.fileCount} 个文件，{preview.bytes.toLocaleString()} 字节。仅删除此 session 目录；工作目录、worktree、配置与云端任务保留。</p>
       {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
-      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ id: preview.id, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedId(null); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
+      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ id: preview.id, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedId(current => current === preview.id ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
     </ConfirmDialog>}
   </div>;
 }

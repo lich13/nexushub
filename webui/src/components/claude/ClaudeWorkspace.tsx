@@ -121,6 +121,13 @@ export function ClaudeWorkspace() {
           renameBlockReason={!item.canRename ? item.renameBlockReason : undefined}
           onSelect={() => { if (batch.selecting) { batch.toggle(item.sessionKey); return; } setSelectedKey(item.sessionKey); setRenaming(false); setPreview(null); setFeedback(""); }}
           onRename={(next) => actions.rename.mutateAsync({ sessionKey: item.sessionKey, title: next })}
+          menuActions={[
+            { id: "copy-id", label: "复制线程 ID", icon: <Copy size={15} />, run: () => {
+              void navigator.clipboard.writeText(item.id).then(() => setFeedback("已复制线程 ID")).catch(() => setFeedback("复制失败：剪贴板不可用"));
+            } },
+            { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !(item.canDelete),
+              reason: item.deleteBlockReason, run: () => { actions.remove.reset(); actions.preview.mutate(item.sessionKey, { onSuccess: setPreview }); } },
+          ]}
         ><strong>{claudeSessionLabel(item)}</strong><span>{item.id}</span><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{claudeStatusLabel(item)}</small>}</RenameableSession></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">未发现 Claude Code 会话</div>}
@@ -159,7 +166,7 @@ export function ClaudeWorkspace() {
     {preview && <ConfirmDialog labelledBy="claude-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
       <h2 id="claude-delete-title">删除任务文件</h2><strong>{preview.title}</strong><code className="delete-path">{preview.path}</code><p>{preview.fileCount} 个 JSONL 文件，{preview.bytes.toLocaleString()} 字节。只删除此会话文件；工作目录、其他会话和 Claude 配置保留。</p>
       {actions.remove.error && <div role="alert" className="form-error">{actions.remove.error.message}</div>}
-      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedKey(null); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
+      <div className="button-row"><button className="secondary-button" disabled={actions.remove.isPending} onClick={() => setPreview(null)}>取消</button><button className="danger-button" disabled={actions.remove.isPending} onClick={() => actions.remove.mutate({ sessionKey: preview.sessionKey, confirmed: true, fingerprint: preview.fingerprint }, { onSuccess: () => { setPreview(null); setSelectedKey(current => current === preview.sessionKey ? null : current); } })}><Trash2 size={16} />{actions.remove.isPending ? "正在删除..." : "确认删除任务文件"}</button></div>
     </ConfirmDialog>}
   </div>;
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { activeUserTimelineId, userTimelineEntries } from "./timelineViewModel";
 
 describe("user instruction timeline", () => {
-  it.each(["codex", "claude_code", "grok", "pi"] as const)("%s keeps user anchors while excluding assistant, plan and tool items", provider => {
+  it.each(["codex", "claude_code", "grok"] as const)("%s keeps user anchors while excluding assistant, plan and tool items", provider => {
     const userKind = provider === "grok" ? "user_message_chunk" : "user_message";
     const user = { id: "u1", role: "user", kind: userKind, text: "Fixture request" };
     const entries = userTimelineEntries(provider, [

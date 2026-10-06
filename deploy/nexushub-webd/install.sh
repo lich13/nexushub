@@ -222,7 +222,7 @@ install_config() {
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-retired = {"NEXUSHUB_ADMIN_PASSWORD", "NEXUSHUB_TURNSTILE_SITE_KEY", "NEXUSHUB_TURNSTILE_SECRET_KEY", "NEXUSHUB_SESSION_TTL_SECONDS", "NEXUSHUB_COOKIE_SECURE"}
+retired = {"NEXUSHUB_ADMIN_PASSWORD", "NEXUSHUB_TURNSTILE_SITE_KEY", "NEXUSHUB_TURNSTILE_SECRET_KEY", "NEXUSHUB_SESSION_TTL_SECONDS", "NEXUSHUB_COOKIE_SECURE", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_BIN"}
 text = path.read_text()
 updated = "".join(line for line in text.splitlines(keepends=True) if line.strip().removeprefix("export ").split("=", 1)[0].strip() not in retired)
 if updated != text: path.write_text(updated)
@@ -450,7 +450,7 @@ install_provider_session_write_paths() {
   rendered="$(mktemp)"
   if ! python3 "${source_dir}/provider-session-write-paths.py" "${ENV_FILE}" "${rendered}"; then
     rm -- "${rendered}"
-    die "invalid custom Grok/Pi session root in ${ENV_FILE}"
+    die "invalid custom provider session root in ${ENV_FILE}"
   fi
   if [[ -e "${PROVIDER_PATHS_DROPIN}" || -L "${PROVIDER_PATHS_DROPIN}" ]]; then
     if [[ ! -f "${PROVIDER_PATHS_DROPIN}" || -L "${PROVIDER_PATHS_DROPIN}" ]]; then

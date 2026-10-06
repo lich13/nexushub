@@ -97,9 +97,9 @@ export function useOpsActions(input: {
       onSuccess: input.onHiddenDryRun
     }),
     hiddenExecute: useMutation({
-      mutationFn: ({ expectedCount }: { expectedCount: number }) => {
+      mutationFn: ({ expectedCount, candidates }: { expectedCount: number; candidates: import("../../types").HiddenThreadSelection[] }) => {
         requireThreadCleanup();
-        return startHiddenThreadDelete({ expectedCount });
+        return startHiddenThreadDelete({ expectedCount, candidates });
       },
       onSuccess: (result) => {
         input.onHiddenExecute(result);

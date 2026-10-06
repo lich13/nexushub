@@ -27,23 +27,6 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
   probeSettings.notifications = { ...probeSettings.notifications, enabled: true, device_key_configured: true };
   let jobReads = 0;
   let grok = [{ id: "grok-fixture", title: "Grok fixture", cwd: "/isolated/workspace", path: "/isolated/sessions/grok-fixture", messageCount: 2, status: "recent" }];
-  let pi = [{
-    id: "pi-native-fixture",
-    sessionKey: "project/session-fixture.jsonl",
-    title: "Pi fixture",
-    cwd: "/isolated/pi-workspace",
-    path: "/isolated/pi-sessions/project/session-fixture.jsonl",
-    updatedAt: "2026-09-22T08:00:00Z",
-    messageCount: 3,
-    lastMessage: "Current Pi branch",
-    status: "recent",
-    formatVersion: 3,
-    canRename: true,
-    renameBlockReason: null,
-    canDelete: true,
-    deleteBlockReason: null,
-    readError: null
-  }];
   const dispatch = async (name: string, args: MockArgs = {}, target: "local" | "remote" = "local"): Promise<unknown> => {
     const fixture = () => target === "remote" ? "linux-api" as const : "macos-tauri" as const;
     calls.push(name);
@@ -65,7 +48,6 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
       }
       if (name === "remote.invoke") return dispatch(args.request.command, args.request.args, "remote");
       if (name === "grok.detail" && !grok.length) throw new Error("Grok session not found");
-      if (name === "pi.detail" && !pi.length) throw new Error("Pi session not found");
       const responses: Record<string, () => unknown> = {
         "system.capabilities": () => demo.demoSystemCapabilities(fixture()),
         "system.version": demo.demoSystemVersion,
@@ -107,18 +89,7 @@ export async function mockApi(page: Page, options: { connection?: Partial<Remote
         "grok.deletePreview": () => ({ ...grok[0], fingerprint: "fixture-fingerprint", fileCount: 2, bytes: 128 }),
         "grok.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "fixture-fingerprint") throw new Error("missing confirmation"); grok = []; return { id: request.id, deleted: true, bytes: 128 }; },
         "claude.list": () => [],
-        "pi.list": () => pi.filter((item) => [item.title, item.id, item.cwd].some((value) => value.toLowerCase().includes((args.q ?? "").toLowerCase()))),
-        "pi.detail": () => ({ summary: pi.find((item) => item.sessionKey === args.sessionKey) ?? pi[0], events: [
-          { kind: "user_message", role: "user", text: "Inspect the current branch." },
-          { kind: "tool_call", text: "read", callId: "fixture-call", status: "in_progress", detail: "{\"path\":\"README.md\"}" },
-          { kind: "tool_result", text: "read", callId: "fixture-call", status: "completed", detail: "NexusHub" },
-          { kind: "compaction", text: "Earlier work was compacted." },
-          { kind: "branch_summary", text: "Current Pi branch" },
-          { kind: "assistant_message", role: "assistant", text: "Pi fixture result" }
-        ] }),
-        "pi.rename": () => { pi = pi.map((item) => item.sessionKey === args.sessionKey ? { ...item, title: args.title } : item); return pi[0]; },
-        "pi.deletePreview": () => ({ ...pi.find((item) => item.sessionKey === args.sessionKey), fingerprint: "pi-fixture-fingerprint", fileCount: 1, bytes: 256 }),
-        "pi.deleteExecute": () => { const request = args.request; if (!request.confirmed || request.fingerprint !== "pi-fixture-fingerprint") throw new Error("missing confirmation"); pi = pi.filter((item) => item.sessionKey !== request.sessionKey); return { sessionKey: request.sessionKey, deleted: true, bytes: 256 }; }
+
       };
       const response = responses[name];
       if (!response) throw new Error(`Unmocked command: ${name}`);

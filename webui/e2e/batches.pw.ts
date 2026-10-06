@@ -65,20 +65,20 @@ test("filter changes invalidate an in-flight batch preview and never select newl
   await expect(page.getByText("已选 0 / 100", { exact: true })).toBeVisible();
 });
 
-for (const provider of ["grok", "pi"] as const) {
+for (const provider of ["grok"] as const) {
   test(`${provider} batch deletion uses distinct keys and excludes protected files on mobile`, async ({ page }) => {
     await mockApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    const keys = provider === "pi" ? ["project/a.jsonl", "project/b.jsonl"] : ["grok-one", "grok-two"];
-    await mockCommand(page, `${provider}.list`, args => keys.map((key, index) => ({ id: provider === "pi" ? "duplicate-native-id" : key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
-    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: provider === "pi" ? "duplicate-native-id" : key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "活动状态不明", fingerprint: index === 0 ? "fixture" : null })) }));
+    const keys = ["grok-one", "grok-two"];
+    await mockCommand(page, `${provider}.list`, args => keys.map((key, index) => ({ id: key, sessionKey: key, title: `Fixture ${index}`, cwd: "/isolated/workspace", path: `/isolated/sessions/${key}`, status: "recent", messageCount: 1, canRename: true, canDelete: index === 0 })));
+    await mockCommand(page, "sessions.bulkPreview", args => ({ provider, operation: "delete", items: keys.map((key, index) => ({ sessionKey: key, id: key, title: `Fixture ${index}`, paths: [`/isolated/sessions/${key}`], bytes: 64, allowed: index === 0, reason: index === 0 ? null : "活动状态不明", fingerprint: index === 0 ? "fixture" : null })) }));
     let executed: any;
     await mockCommand(page, "sessions.bulkExecute", args => {
       executed = args.request;
       return { items: [{ sessionKey: keys[0], status: "succeeded" }] };
     });
     await page.goto("/");
-    await page.locator(".mobile-tabs").getByRole("button", { name: provider === "pi" ? "Pi" : "Grok Build", exact: true }).click();
+    await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
     await page.getByRole("button", { name: "多选线程", exact: true }).click();
     await page.getByRole("button", { name: "全选当前结果", exact: true }).click();
     await expect(page.getByText("已选 2 / 100", { exact: true })).toBeVisible();

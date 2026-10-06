@@ -2,11 +2,10 @@ use super::{
     api_error, archive_delete_dry_run, archive_delete_execute, archive_thread, get_probe_events,
     get_probe_settings, get_probe_status, grok_delete_execute, grok_delete_preview, grok_detail,
     grok_list, grok_rename, hidden_threads_delete_dry_run, hidden_threads_delete_execute,
-    job_detail, list_jobs, list_providers, patch_probe_settings, pi_delete_execute,
-    pi_delete_preview, pi_detail, pi_list, pi_rename, platform_overview, rename_thread,
+    job_detail, list_jobs, list_providers, patch_probe_settings, platform_overview, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, system_version, thread_blocks, thread_detail, ApiResponse, GrokListQuery,
-    PiListQuery, ProbeEventsQuery, ProbeStatusQuery,
+    ProbeEventsQuery, ProbeStatusQuery,
 };
 use super::{
     claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,
@@ -50,7 +49,7 @@ pub(super) async fn rpc_dispatch(
     if is_retired_rpc_command(&command) {
         return Err(api_error(
             StatusCode::NOT_FOUND,
-            &format!("retired rpc command: {command}"),
+            &format!("unavailable: retired rpc command: {command}"),
         ));
     }
     if !is_business_rpc_command(&command) {
@@ -130,42 +129,6 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::GROK_DELETE_EXECUTE => {
             grok_delete_execute(
-                State(state),
-                headers,
-                Json(rpc_wrapped_payload(&args, &["request"])?),
-            )
-            .await
-        }
-        rpc_commands::PI_LIST => {
-            pi_list(
-                State(state),
-                headers,
-                axum::extract::Query(PiListQuery {
-                    q: args
-                        .get("q")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                    limit: args
-                        .get("limit")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                }),
-            )
-            .await
-        }
-        rpc_commands::PI_DETAIL => {
-            let session_key = rpc_required_string(&args, "sessionKey")?;
-            pi_detail(State(state), headers, axum::extract::Path(session_key)).await
-        }
-        rpc_commands::PI_RENAME => {
-            pi_rename(State(state), headers, Json(rpc_payload(&args)?)).await
-        }
-        rpc_commands::PI_DELETE_PREVIEW => {
-            let session_key = rpc_required_string(&args, "sessionKey")?;
-            pi_delete_preview(State(state), headers, axum::extract::Path(session_key)).await
-        }
-        rpc_commands::PI_DELETE_EXECUTE => {
-            pi_delete_execute(
                 State(state),
                 headers,
                 Json(rpc_wrapped_payload(&args, &["request"])?),
@@ -455,20 +418,6 @@ mod tests {
                 "fingerprint": "fixture-fingerprint"
             }),
             "Grok deletion requires confirmation",
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn pi_desktop_delete_request_wrapper_reaches_confirmation_guard() {
-        assert_unconfirmed_desktop_delete_request(
-            "pi.deleteExecute",
-            serde_json::json!({
-                "sessionKey": "fixture-project/session.jsonl",
-                "confirmed": false,
-                "fingerprint": "fixture-fingerprint"
-            }),
-            "Pi deletion requires confirmation",
         )
         .await;
     }

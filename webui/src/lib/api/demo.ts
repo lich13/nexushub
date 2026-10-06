@@ -107,14 +107,6 @@ export function demoProviders(): AgentProviderInfo[] {
       capabilities: ["sessions", "messages", "tools", "rename", "delete_local_session"],
       safety: "改名走原生协议，删除仅限本地 session 目录"
     },
-    {
-      id: "pi",
-      label: "Pi",
-      status: "ready",
-      description: "读取 Pi 原生 JSONL 当前分支，并提供受保护的原生改名与单文件删除。",
-      capabilities: ["sessions", "messages", "tools", "rename", "delete_local_session"],
-      safety: "活动或归属不明的会话根保持只读，删除仅限单个 JSONL"
-    },
     { id: "cursor", label: "Cursor CLI", status: "planned", capabilities: [], safety: "未开放命令执行" },
     { id: "gemini", label: "Gemini CLI", status: "planned", capabilities: [], safety: "未开放命令执行" }
   ];
@@ -399,6 +391,7 @@ export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
     session_index_lines: 42,
     rollout_files: 42,
     hidden_ids: ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"],
+    candidates: ["019e-hidden-a", "019e-hidden-b", "019e-hidden-c", "019e-hidden-d"].map(id => ({ id, title: id, fingerprint: "fixture-fingerprint", allowed: true, reason: null })),
     hidden_source_counts: { exec: 1, subagent: 3 },
     integrity: "ok"
   };
@@ -407,6 +400,7 @@ export function demoHiddenThreadDeletePlan(): HiddenThreadDeletePlan {
 export function demoHiddenThreadDeleteResult(): HiddenThreadDeleteResult {
   return {
     before: demoHiddenThreadDeletePlan(),
+    skipped_threads: 0, failed_threads: 0, items: [],
     deleted_threads: 4,
     after_total_threads: 38,
     after_visible_threads: 38,

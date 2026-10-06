@@ -81,8 +81,7 @@ mod tests {
         for required in [
             "resources::sync_nexushub_webd_helper_from_resource(&resource_dir)",
             "resources::repair_probe_error_monitor_launch_agent(",
-            "desktop_boot::reveal_main_window(&window)",
-            "desktop_boot::schedule_delayed_main_window_reveal(&window)",
+            "desktop_boot::initialize_main_window(&window)",
             "desktop_boot::schedule_desktop_boot_probe(&window)",
         ] {
             assert!(
@@ -113,9 +112,10 @@ mod tests {
         );
         assert!(
             boot_source.contains("fn fit_main_window_to_work_area")
+                && boot_source.contains("pub(crate) fn initialize_main_window")
                 && boot_source.contains("pub(crate) fn reveal_main_window")
                 && boot_source.contains("pub(crate) fn schedule_desktop_boot_probe"),
-            "desktop_boot.rs must own window reveal and boot probe implementation"
+            "desktop_boot.rs must own one-time window initialization, reveal, and boot probe implementation"
         );
     }
 
@@ -970,12 +970,13 @@ mod tests {
             r#""height": 820"#,
             r#""minWidth": 1000"#,
             r#""minHeight": 680"#,
-            r#""maximized": true"#,
+            r#""maximized": false"#,
             r#""fullscreen": false"#,
+            r#""visible": false"#,
         ] {
             assert!(
                 config.contains(required),
-                "main Tauri window config must preserve the default maximized window contract: {required}"
+                "main Tauri window config must start hidden and unmaximized before one-time geometry initialization: {required}"
             );
         }
         assert!(
@@ -990,24 +991,64 @@ mod tests {
             lib_source.contains("RunEvent::Ready"),
             "Tauri must re-show and focus the main window once the event loop is ready"
         );
-        let show_index = boot_source
+        let setup_source = lib_source
+            .split(".setup(|app| {")
+            .nth(1)
+            .and_then(|source| source.split(".run(|app, event| {").next())
+            .expect("Tauri setup must build and initialize the main window");
+        assert!(
+            setup_source.contains("desktop_boot::initialize_main_window(&window)")
+                && setup_source.contains("desktop_boot::schedule_desktop_boot_probe(&window)"),
+            "setup must initialize the hidden window and start the desktop boot probe"
+        );
+        assert!(
+            !setup_source.contains("desktop_boot::reveal_main_window(&window)"),
+            "setup must not reveal the window before the Ready event"
+        );
+        let run_source = lib_source
+            .split(".run(|app, event| {")
+            .nth(1)
+            .expect("Tauri run loop must own Ready and Reopen window handling");
+        assert!(
+            run_source.contains("RunEvent::Ready") && run_source.contains("RunEvent::Reopen"),
+            "Ready and Reopen must both use the main window lifecycle handler"
+        );
+        assert_eq!(
+            run_source
+                .matches("desktop_boot::reveal_main_window(&window)")
+                .count(),
+            2,
+            "Ready and Reopen must each reveal the initialized window once"
+        );
+
+        let reveal_source = boot_source
+            .split("pub(crate) fn reveal_main_window")
+            .nth(1)
+            .and_then(|source| source.split("pub(crate) fn initialize_main_window").next())
+            .expect("desktop_boot.rs must define reveal_main_window before initialization");
+        let show_index = reveal_source
             .find("window.show()")
             .expect("reveal_main_window must show the main window");
-        let unminimize_index = boot_source
+        let unminimize_index = reveal_source
             .find("window.unminimize()")
-            .expect("reveal_main_window must unminimize the main window before maximizing it");
-        let maximize_index = boot_source
-            .find("window.maximize()")
-            .expect("reveal_main_window must maximize the main window");
-        let focus_index = boot_source
+            .expect("reveal_main_window must unminimize the main window");
+        let focus_index = reveal_source
             .find("window.set_focus()")
             .expect("reveal_main_window must focus the main window");
         assert!(
-            show_index < unminimize_index
-                && unminimize_index < maximize_index
-                && maximize_index < focus_index,
-            "reveal_main_window must preserve show -> unminimize -> maximize -> set_focus startup order"
+            show_index < unminimize_index && unminimize_index < focus_index,
+            "reveal_main_window must preserve show -> unminimize -> set_focus order"
         );
+        for forbidden in [
+            "window.maximize()",
+            "fit_main_window_to_work_area(",
+            "window.current_monitor()",
+        ] {
+            assert!(
+                !reveal_source.contains(forbidden),
+                "reveal_main_window must not reapply startup geometry: {forbidden}"
+            );
+        }
         for required in [
             "fn fit_main_window_to_work_area",
             "window.current_monitor()",
@@ -1021,20 +1062,48 @@ mod tests {
                 "explicit macOS window creation must fall back to the monitor work area when native maximize does not resize the window: {required}"
             );
         }
+        let initialize_source = boot_source
+            .split("pub(crate) fn initialize_main_window")
+            .nth(1)
+            .and_then(|source| source.split("\nfn fit_main_window_to_work_area").next())
+            .expect("desktop_boot.rs must define initialization before its geometry fallback");
         for required in [
-            "fn schedule_delayed_main_window_reveal",
-            "std::time::Duration::from_millis",
-            "run_on_main_thread",
+            "window.maximize()",
+            "window.is_maximized().unwrap_or(false)",
+            "fit_main_window_to_work_area(window)",
         ] {
             assert!(
-                boot_source.contains(required),
-                "explicit macOS window creation must replay reveal after the event loop has settled: {required}"
+                initialize_source.contains(required),
+                "initialize_main_window must own the one-time geometry adjustment: {required}"
+            );
+        }
+        assert_eq!(
+            initialize_source.matches("window.maximize()").count(),
+            1,
+            "initialize_main_window must maximize only once"
+        );
+        assert_eq!(
+            initialize_source
+                .matches("fit_main_window_to_work_area(window)")
+                .count(),
+            1,
+            "initialize_main_window must apply at most one work-area fallback"
+        );
+        for forbidden in [
+            "window.show()",
+            "window.unminimize()",
+            "window.set_focus()",
+            "reveal_main_window(window)",
+        ] {
+            assert!(
+                !initialize_source.contains(forbidden),
+                "initialize_main_window must leave reveal to Ready: {forbidden}"
             );
         }
         assert!(
-            lib_source.contains("desktop_boot::schedule_delayed_main_window_reveal(&window)")
-                && lib_source.contains("desktop_boot::schedule_desktop_boot_probe(&window)"),
-            "Tauri setup must schedule delayed reveal and boot probe through the desktop boot module"
+            !boot_source.contains("schedule_delayed_main_window_reveal")
+                && !lib_source.contains("schedule_delayed_main_window_reveal"),
+            "startup must not schedule a delayed second reveal"
         );
         assert!(
             boot_source.contains("desktop_boot_probe"),

@@ -17,59 +17,69 @@ pub fn run() {
         .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![
-            commands::plans::savePlanMarkdown,
-            remote::remoteGet,
-            remote::remoteVerify,
-            remote::remoteSave,
-            remote::remoteRemove,
-            remote::remoteSelect,
-            remote::remoteInvoke,
-            commands::sessions::readSessionAttachment,
-            commands::sessions::previewSessionBatch,
-            commands::sessions::executeSessionBatch,
-            commands::sessions::searchSessions,
-            commands::system::getSystemCapabilities,
-            commands::system::getSystemVersion,
-            commands::system::listProviders,
-            commands::system::getPlatformOverview,
-            commands::threads::listThreads,
-            commands::threads::getThread,
-            commands::threads::getThreadBlocks,
-            commands::threads::archiveThread,
-            commands::threads::restoreThread,
-            commands::threads::renameThread,
-            commands::probe::getProbeStatus,
-            commands::updates::getUpdateStatus,
-            commands::updates::updatesCheck,
-            commands::updates::updatesInstall,
-            commands::settings::getProbeSettings,
-            commands::settings::saveProbeSettings,
-            commands::settings::getProbeEvents,
-            commands::settings::probeBarkTest,
-            commands::settings::probeInstallHooks,
-            commands::settings::dryRunArchiveDelete,
-            commands::settings::startArchiveDelete,
-            commands::settings::dryRunHiddenThreadDelete,
-            commands::settings::startHiddenThreadDelete,
-            commands::jobs::listJobs,
-            commands::jobs::getJob,
-            commands::grok::listGrokSessions,
-            commands::grok::getGrokSession,
-            commands::grok::renameGrokSession,
-            commands::grok::previewGrokSessionDelete,
-            commands::grok::deleteGrokSession,
-            commands::claude::listClaudeSessions,
-            commands::claude::getClaudeSession,
-            commands::claude::renameClaudeSession,
-            commands::claude::previewClaudeSessionDelete,
-            commands::claude::deleteClaudeSession,
-            commands::pi::listPiSessions,
-            commands::pi::getPiSession,
-            commands::pi::renamePiSession,
-            commands::pi::previewPiSessionDelete,
-            commands::pi::deletePiSession
-        ])
+        .invoke_handler(|invoke| {
+            if nexushub_core::services::commands::is_retired_command(invoke.message.command())
+                || matches!(
+                    invoke.message.command(),
+                    "listPiSessions"
+                        | "getPiSession"
+                        | "renamePiSession"
+                        | "previewPiSessionDelete"
+                        | "deletePiSession"
+                )
+            {
+                invoke.resolver.reject("unavailable: retired command");
+                return true;
+            }
+            (tauri::generate_handler![
+                commands::plans::savePlanMarkdown,
+                remote::remoteGet,
+                remote::remoteVerify,
+                remote::remoteSave,
+                remote::remoteRemove,
+                remote::remoteSelect,
+                remote::remoteInvoke,
+                commands::sessions::readSessionAttachment,
+                commands::sessions::previewSessionBatch,
+                commands::sessions::executeSessionBatch,
+                commands::sessions::searchSessions,
+                commands::system::getSystemCapabilities,
+                commands::system::getSystemVersion,
+                commands::system::listProviders,
+                commands::system::getPlatformOverview,
+                commands::threads::listThreads,
+                commands::threads::getThread,
+                commands::threads::getThreadBlocks,
+                commands::threads::archiveThread,
+                commands::threads::restoreThread,
+                commands::threads::renameThread,
+                commands::probe::getProbeStatus,
+                commands::updates::getUpdateStatus,
+                commands::updates::updatesCheck,
+                commands::updates::updatesInstall,
+                commands::settings::getProbeSettings,
+                commands::settings::saveProbeSettings,
+                commands::settings::getProbeEvents,
+                commands::settings::probeBarkTest,
+                commands::settings::probeInstallHooks,
+                commands::settings::dryRunArchiveDelete,
+                commands::settings::startArchiveDelete,
+                commands::settings::dryRunHiddenThreadDelete,
+                commands::settings::startHiddenThreadDelete,
+                commands::jobs::listJobs,
+                commands::jobs::getJob,
+                commands::grok::listGrokSessions,
+                commands::grok::getGrokSession,
+                commands::grok::renameGrokSession,
+                commands::grok::previewGrokSessionDelete,
+                commands::grok::deleteGrokSession,
+                commands::claude::listClaudeSessions,
+                commands::claude::getClaudeSession,
+                commands::claude::renameClaudeSession,
+                commands::claude::previewClaudeSessionDelete,
+                commands::claude::deleteClaudeSession,
+            ])(invoke)
+        })
         .setup(|app| {
             if let Err(err) = resources::retire_legacy_desktop_web_service(
                 &nexushub_core::platform::PlatformPaths::desktop_current(),
@@ -101,19 +111,25 @@ pub fn run() {
                 .map_err(|err| err.to_string())?
                 .build()
                 .map_err(|err| err.to_string())?;
-            desktop_boot::reveal_main_window(&window);
-            desktop_boot::schedule_delayed_main_window_reveal(&window);
+            desktop_boot::initialize_main_window(&window);
             desktop_boot::schedule_desktop_boot_probe(&window);
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build NexusHub desktop app")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Ready) {
+        .run(|app, event| match event {
+            tauri::RunEvent::Ready => {
                 if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {
                     desktop_boot::reveal_main_window(&window);
                 }
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app.get_webview_window(desktop_boot::MAIN_WINDOW_LABEL) {
+                    desktop_boot::reveal_main_window(&window);
+                }
+            }
+            _ => {}
         });
 }
 

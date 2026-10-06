@@ -66,6 +66,8 @@ pub struct CleanupExecuteRequest {
     pub confirmed: bool,
     #[serde(default, alias = "expectedCount", alias = "expected_count")]
     pub expected_count: Option<u64>,
+    #[serde(default)]
+    pub candidates: Option<Vec<archive::HiddenThreadSelection>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +195,7 @@ pub fn cleanup_confirmation_plan(request: CleanupExecuteRequest) -> CleanupConfi
         payload: json!({
             "confirmed": request.confirmed,
             "expectedCount": request.expected_count,
+            "candidates": request.candidates,
         }),
     }
 }
@@ -214,7 +217,29 @@ fn validate_cleanup_execute_confirmation(
     if request.expected_count.is_none() {
         anyhow::bail!(CLEANUP_EXPECTED_COUNT_REQUIRED_MESSAGE);
     }
+    if target == CleanupTarget::Hidden {
+        let candidates = request
+            .candidates
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("隐藏清理需要预览候选，请重新扫描"))?;
+        anyhow::ensure!(
+            request.expected_count == Some(candidates.len() as u64),
+            "预览候选数与确认数不一致"
+        );
+    }
     Ok(())
+}
+
+pub fn hidden_candidates(
+    plan: &CleanupOperationPlan,
+) -> Result<Vec<archive::HiddenThreadSelection>> {
+    let candidates = plan
+        .confirmation
+        .payload
+        .get("candidates")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| anyhow::anyhow!("隐藏清理缺少预览候选"))?;
+    Ok(serde_json::from_value(candidates.clone())?)
 }
 
 pub fn validate_cleanup_expected_count(
@@ -262,14 +287,16 @@ pub fn dry_run_hidden_with_capability(
 pub fn execute_hidden_with_capability(
     platform: &PlatformPaths,
     paths: &CodexPaths,
+    candidates: &[archive::HiddenThreadSelection],
 ) -> Result<HiddenThreadDeleteResult> {
     plan_cleanup_action(platform, CleanupAction::HiddenDeleteExecute)?;
-    archive::execute_delete_hidden(paths)
+    archive::execute_delete_hidden(paths, candidates)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
+        archive::HiddenThreadSelection,
         platform::{PlatformKind, PlatformPaths},
         services::{
             cleanup::{
@@ -321,6 +348,16 @@ mod tests {
             CleanupExecuteRequest {
                 confirmed: true,
                 expected_count: Some(2),
+                candidates: Some(vec![
+                    HiddenThreadSelection {
+                        id: "candidate-one".into(),
+                        fingerprint: Some("fingerprint-one".into()),
+                    },
+                    HiddenThreadSelection {
+                        id: "candidate-two".into(),
+                        fingerprint: Some("fingerprint-two".into()),
+                    },
+                ]),
             },
         )
         .unwrap();
@@ -337,11 +374,28 @@ mod tests {
         );
         assert!(execute.confirmation.confirmed);
         assert_eq!(execute.confirmation.expected_count, Some(2));
+        assert_eq!(
+            execute.confirmation.payload["candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         validate_cleanup_expected_count(&dry_run, 999).unwrap();
-        validate_cleanup_expected_count(&execute, 2).unwrap();
 
-        let mismatch = validate_cleanup_expected_count(&execute, 3)
-            .expect_err("cleanup execute must reject stale dry-run counts");
+        let archived_execute = plan_cleanup_execute_operation(
+            &macos,
+            CleanupTarget::Archived,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(2),
+                candidates: None,
+            },
+        )
+        .unwrap();
+        validate_cleanup_expected_count(&archived_execute, 2).unwrap();
+        let mismatch = validate_cleanup_expected_count(&archived_execute, 3)
+            .expect_err("archive cleanup must reject stale dry-run counts");
         assert!(mismatch.to_string().contains("expected=2 actual=3"));
 
         let missing_count = plan_cleanup_execute_operation(
@@ -350,6 +404,7 @@ mod tests {
             CleanupExecuteRequest {
                 confirmed: true,
                 expected_count: None,
+                candidates: Some(Vec::new()),
             },
         )
         .expect_err("execute cleanup operation must carry the dry-run count");
@@ -363,6 +418,32 @@ mod tests {
             cleanup_confirmation_message(CleanupTarget::Hidden),
             HIDDEN_DELETE_CONFIRMATION_MESSAGE
         );
+
+        let missing_candidates = plan_cleanup_execute_operation(
+            &macos,
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(0),
+                candidates: None,
+            },
+        )
+        .expect_err("hidden cleanup must be bound to a preview candidate list");
+        assert!(missing_candidates
+            .to_string()
+            .contains("隐藏清理需要预览候选"));
+
+        let count_mismatch = plan_cleanup_execute_operation(
+            &macos,
+            CleanupTarget::Hidden,
+            CleanupExecuteRequest {
+                confirmed: true,
+                expected_count: Some(1),
+                candidates: Some(Vec::new()),
+            },
+        )
+        .expect_err("hidden cleanup count must match submitted candidates");
+        assert!(count_mismatch.to_string().contains("候选数"));
 
         assert!(plan_cleanup_operation(
             &windows,

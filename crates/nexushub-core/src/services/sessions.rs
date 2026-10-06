@@ -1,7 +1,6 @@
 use crate::{
     codex::{self, CodexPaths},
     grok::{self, GrokPaths},
-    pi::{self, PiPaths},
     selected_codex,
 };
 use anyhow::{ensure, Result};
@@ -17,7 +16,6 @@ pub enum SessionProvider {
     #[serde(rename = "claude_code")]
     Claude,
     Grok,
-    Pi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +90,6 @@ pub struct SessionUseCases {
     pub platform: crate::platform::PlatformPaths,
     pub codex: CodexPaths,
     pub grok: GrokPaths,
-    pub pi: PiPaths,
     pub claude: crate::claude::ClaudePaths,
 }
 
@@ -147,11 +144,6 @@ impl SessionUseCases {
                     .filter_map(|event| event.user_message)
                     .find(|message| message.id == request.message_id)
             }
-            SessionProvider::Pi => pi::pi_session_detail(&self.pi, &request.session_key)?
-                .events
-                .into_iter()
-                .filter_map(|event| event.user_message)
-                .find(|message| message.id == request.message_id),
         }
         .ok_or_else(|| anyhow::anyhow!("会话消息已变化或不存在，请刷新会话"))?;
         message.read_attachment(&request.attachment_id)
@@ -213,9 +205,6 @@ impl SessionUseCases {
             SessionProvider::Grok => grok::grok_session_summary(&self.grok, key)
                 .ok()
                 .map(|s| (s.id, s.title, vec![s.path])),
-            SessionProvider::Pi => pi::pi_session_summary(&self.pi, key)
-                .ok()
-                .map(|s| (s.id, s.title, vec![s.path])),
         };
         if let Some((id, title, paths)) = summary {
             item.id = id;
@@ -257,7 +246,7 @@ impl SessionUseCases {
                     "线程身份无法确认为主任务"
                 );
                 if operation == SessionOperation::Delete {
-                    let p = selected_codex::preview(&self.codex, key)?;
+                    let p = selected_codex::preview_delete(&self.codex, key)?;
                     (p.id, p.title, p.paths, p.bytes, p.fingerprint)
                 } else {
                     let p = selected_codex::preview_archive(
@@ -270,10 +259,6 @@ impl SessionUseCases {
             }
             SessionProvider::Grok => {
                 let p = grok::preview_grok_delete(&self.grok, key)?;
-                (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
-            }
-            SessionProvider::Pi => {
-                let p = pi::preview_pi_delete(&self.pi, key)?;
                 (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
             }
         };
@@ -341,8 +326,12 @@ impl SessionUseCases {
                 )
                 .map(|_| ()),
                 (SessionProvider::Codex, SessionOperation::Delete) => {
-                    selected_codex::execute(&self.codex, &item.session_key, &item.fingerprint)
-                        .map(|_| ())
+                    selected_codex::execute_delete(
+                        &self.codex,
+                        &item.session_key,
+                        &item.fingerprint,
+                    )
+                    .map(|_| ())
                 }
                 (SessionProvider::Codex, action) => selected_codex::execute_archive(
                     &self.codex,
@@ -354,15 +343,6 @@ impl SessionUseCases {
                     &self.grok,
                     grok::GrokDeleteRequest {
                         id: item.session_key.clone(),
-                        confirmed: true,
-                        fingerprint: item.fingerprint.clone(),
-                    },
-                )
-                .map(|_| ()),
-                (SessionProvider::Pi, _) => pi::execute_pi_delete(
-                    &self.pi,
-                    pi::PiDeleteRequest {
-                        session_key: item.session_key.clone(),
                         confirmed: true,
                         fingerprint: item.fingerprint.clone(),
                     },

@@ -2,15 +2,15 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.7 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.8 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
 
 ## Layout and interaction
 
-- Navigation contains Codex, Grok Build, Pi, Probe and settings.
+- Navigation contains Codex, Claude Code, Grok Build, Probe and settings.
 - Desktop uses a compact navigation rail, a 276px task list and a message column no wider than 780px. At 767px and below, each provider keeps one mounted list/detail/back flow.
 - Search, provider changes and status changes clear batch selection. The list shows the selected count and limits batches to 100 explicit keys. Menus support keyboard navigation and restore focus after dialogs.
-- Running Codex, Claude Code, Grok and Pi sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
-- Codex, Claude Code, Grok and Pi pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
+- Running Codex, Claude Code and Grok sessions use the same spinner, `aria-label` and reduced-motion behavior. Unknown state remains text.
+- Codex, Claude Code and Grok pair native calls/results and group adjacent tool rows at the original call position. Text, Plans, questions and history markers end a group. A muted icon row names the provider and shows activity/failure counts even when closed; each expanded row shows its tool name, clipped input preview and state. Groups have a bounded scrolling list and lazily rendered details. Historical tools are never replaced by one global summary. Both levels use native `<details>`: completed groups/rows start closed, active and failed groups/rows open, and user toggle state survives polling and appended events.
 - Visible assistant replies in all three providers expose a compact copy button that copies Markdown after structured memory metadata is removed. Codex and Grok plan cards add copy and title-named Markdown download actions. Provider list rows enter inline rename on double-click; Enter or blur saves and Escape cancels, while activity-protected or archived rows remain read-only.
 - AGENTS.md tools and body sections default to closed even when running or failed. Instruction-only outer groups also stay closed; mixed groups retain normal state rules. Summaries show the basename, line/byte counts for body sections and activity status without private paths. Native disclosures preserve user choices across polling, appended text, theme changes and mobile navigation. Open file bodies have their own bounded scroll area.
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
@@ -49,3 +49,13 @@ Remote connection inputs are HTTPS 地址 and 管理员 API Key, followed by 验
 Plan export uses native local file saving, including remote sessions. Show success only after UTF-8 content is written; never overwrite an existing download.
 
 Claude Code keeps a fixed navigation entry on both machine targets. Missing native data shows an empty state. Reuse provider lists, reply/Plan actions, attachment previews and stable tool disclosures; paged history prepends without moving the visible anchor. Common record variants remain readable; unknown or incomplete formats and uncertain activity disable management with the native blocker.
+
+## 线程菜单、清理与窗口
+
+线程项右键立即在指针处打开共享操作菜单，不改变当前详情。省略号、Shift+F10 和菜单键使用同一动作列表；Escape、外部点击和列表滚动关闭，菜单在视口边缘自动避让。复制、改名、归档和永久删除都有明确目标，批量模式不混入右键操作。
+
+列表项与外层改名容器均填满可用宽度，保留 min-width: 0；长短标题、运行 spinner、复选框和选中背景的左右边界一致。
+
+永久删除先显示候选范围与保护原因。隐藏清理呈现本次候选的允许状态，结束后显示删除、跳过、失败、剩余数量和逐项原因；全部受保护时显示“无可清理项目”。失败重试需重新预览。
+
+主窗口隐藏创建，初始化时一次最大化，必要时一次工作区回退，然后显示。Dock 重开、最小化恢复和机器切换不重新调整尺寸或位置；不切换 macOS 独立全屏 Space。Pi 不再显示导航或设置项。

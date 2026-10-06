@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import type { SessionSelection, SessionOperation } from "../../lib/query/sessions";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -6,14 +5,14 @@ const labels: Record<SessionOperation, string> = { archive: "归档", restore: "
 export function SessionCheckbox({ batch, sessionKey, title }: { batch: SessionSelection; sessionKey: string; title: string }) {
   return <input className="session-checkbox" type="checkbox" aria-label={`选择 ${title}`} checked={batch.selection.includes(sessionKey)} disabled={batch.busy || (batch.selection.length >= 100 && !batch.selection.includes(sessionKey))} onChange={() => batch.toggle(sessionKey)} />;
 }
-export function SessionBatchControls({ batch, operations }: { batch: SessionSelection; operations: SessionOperation[] }) {
-  const trigger = useRef<HTMLElement | null>(null);
+export function SessionBatchControls({ batch, operations, showSelection = true }: { batch: SessionSelection; operations: SessionOperation[]; showSelection?: boolean }) {
+  const trigger = batch.returnFocus;
   const allowed = batch.preview?.items.filter(i => i.allowed).length ?? 0;
   return <div className="session-batch-controls">
-    {!batch.selecting ? <button className="secondary-button" onClick={batch.begin}>多选线程</button> : <>
+    {showSelection && (!batch.selecting ? <button className="secondary-button" onClick={batch.begin}>多选线程</button> : <>
       <div className="button-row"><span role="status">已选 {batch.selection.length} / 100</span><button disabled={batch.busy} onClick={batch.selectAll}>全选当前结果</button><button disabled={batch.busy} onClick={batch.clear}>清空</button><button disabled={batch.busy} onClick={batch.cancel}>取消多选</button></div>
       <div className="button-row">{operations.map(operation => <button key={operation} className={operation === "delete" ? "danger-button" : "secondary-button"} disabled={!batch.selection.length || batch.busy} onClick={(event) => { trigger.current = event.currentTarget; batch.execute.reset(); batch.prepare.mutate(operation); }}>{labels[operation]}所选线程</button>)}</div>
-    </>}
+    </>)}
     {batch.prepare.error && <p role="alert" className="form-error">{batch.prepare.error.message}</p>}
     {batch.execute.error && <p role="alert" className="form-error">{batch.execute.error.message}。请刷新并重新预览。</p>}
     {batch.result && <div role="status"><p>已完成 {batch.result.items.filter(i => i.status === "succeeded").length} 项，未完成 {batch.result.items.filter(i => i.status !== "succeeded").length} 项</p>{batch.result.items.filter(i => i.status !== "succeeded").map(item => <p className="form-error" key={item.sessionKey}>{item.sessionKey}：{item.message}</p>)}</div>}

@@ -16,7 +16,6 @@ mod cleanup;
 mod grok;
 mod jobs;
 mod payload;
-mod pi;
 mod probe;
 mod routes;
 mod rpc_dispatch;
@@ -45,9 +44,6 @@ pub(crate) use grok::{
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename, GrokListQuery,
 };
 pub(crate) use jobs::{job_detail, list_jobs};
-pub(crate) use pi::{
-    pi_delete_execute, pi_delete_preview, pi_detail, pi_list, pi_rename, PiListQuery,
-};
 #[cfg(test)]
 pub(crate) use probe::probe_config_path;
 pub(crate) use probe::{

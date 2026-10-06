@@ -122,14 +122,6 @@ test("copy commands use the selected task and long load errors stay readable", a
   await page.getByRole("button", { name: "复制线程 ID", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-copied", "grok-fixture");
   await expect(page.getByText("已复制线程 ID", { exact: true })).toBeVisible();
-  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
-  await page.locator(".provider-session").click();
-  await page.getByLabel("Pi 任务操作").click();
-  await page.getByRole("button", { name: "复制线程 ID", exact: true }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-copied", "pi-native-fixture");
-  await expect(page.getByText("已复制线程 ID", { exact: true })).toBeVisible();
-  await page.locator(".provider-events .assistant_message .copy-reply").click();
-  await expect(page.locator("html")).toHaveAttribute("data-copied", "Pi fixture result");
   await page.setViewportSize({ width: 320, height: 844 });
   await mockCommand(page, "grok.list", args => Promise.reject(new Error("Fixture load failure: " + "long-path/".repeat(40))));
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
@@ -144,9 +136,9 @@ test("provider copy reports clipboard failures", async ({ page }) => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } });
   });
   await page.goto("/");
-  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
+  await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   await page.locator(".provider-session").click();
-  await page.getByLabel("Pi 任务操作").click();
+  await page.getByLabel("Grok 任务操作").click();
   await page.getByRole("button", { name: "复制线程 ID", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("复制失败：denied");
 });

@@ -109,12 +109,6 @@ pub struct ProbeNotificationsConfig {
     #[serde(default = "default_true")]
     pub notify_grok_failure: bool,
     #[serde(default = "default_true")]
-    pub notify_pi: bool,
-    #[serde(default = "default_true")]
-    pub notify_pi_completion: bool,
-    #[serde(default = "default_true")]
-    pub notify_pi_failure: bool,
-    #[serde(default = "default_true")]
     pub notify_claude: bool,
     #[serde(default = "default_true")]
     pub notify_claude_completion: bool,
@@ -186,9 +180,6 @@ pub struct ProbeNotificationsConfigPatch {
     pub notify_grok: Option<bool>,
     pub notify_grok_completion: Option<bool>,
     pub notify_grok_failure: Option<bool>,
-    pub notify_pi: Option<bool>,
-    pub notify_pi_completion: Option<bool>,
-    pub notify_pi_failure: Option<bool>,
     pub notify_claude: Option<bool>,
     pub notify_claude_completion: Option<bool>,
     pub notify_claude_failure: Option<bool>,
@@ -281,9 +272,6 @@ impl Default for ProbeNotificationsConfig {
             notify_grok: true,
             notify_grok_completion: true,
             notify_grok_failure: true,
-            notify_pi: true,
-            notify_pi_completion: true,
-            notify_pi_failure: true,
             notify_claude: true,
             notify_claude_completion: true,
             notify_claude_failure: true,
@@ -536,7 +524,9 @@ impl Config {
         let goal_migrated = migrate_retired_probe_goal_config(migration_input)?;
         let previous = goal_migrated.or(logs_migrated);
         let web_migrated = migrate_retired_web_config(previous.as_deref().unwrap_or(&text))?;
-        let migrated = web_migrated.or(previous);
+        let previous = web_migrated.or(previous);
+        let pi_migrated = migrate_retired_pi_config(previous.as_deref().unwrap_or(&text))?;
+        let migrated = pi_migrated.or(previous);
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
         config.load_sibling_env(path)?;
@@ -786,17 +776,6 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
                 "notify_grok_failure",
                 notifications.notify_grok_failure,
             );
-            editor.set_bool("probe.notifications", "notify_pi", notifications.notify_pi);
-            editor.set_bool(
-                "probe.notifications",
-                "notify_pi_completion",
-                notifications.notify_pi_completion,
-            );
-            editor.set_bool(
-                "probe.notifications",
-                "notify_pi_failure",
-                notifications.notify_pi_failure,
-            );
 
             editor.set_bool(
                 "probe.notifications",
@@ -880,6 +859,21 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
 /// Retain the notification retention preference while removing the retired
 /// native log maintenance configuration. TOML editing preserves other values
 /// and comments, including credentials and inline/quoted table definitions.
+fn migrate_retired_pi_config(text: &str) -> Result<Option<String>> {
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    let mut changed = false;
+    if let Some(notifications) = doc
+        .get_mut("probe")
+        .and_then(|item| item.get_mut("notifications"))
+        .and_then(|item| item.as_table_like_mut())
+    {
+        for key in ["notify_pi", "notify_pi_completion", "notify_pi_failure"] {
+            changed |= notifications.remove(key).is_some();
+        }
+    }
+    Ok(changed.then(|| doc.to_string()))
+}
+
 fn migrate_retired_web_config(text: &str) -> Result<Option<String>> {
     let mut doc: toml_edit::DocumentMut = text.parse()?;
     let mut changed = false;
@@ -1673,5 +1667,36 @@ custom = { token = "fixture-custom-value" }
             config.update.precheck_command,
             "/opt/custom/precheck --strict"
         );
+    }
+}
+
+#[cfg(test)]
+mod retired_provider_tests {
+    #[test]
+    fn pi_configuration_upgrade_is_precise_and_idempotent() {
+        let before = r#"[probe.notifications]
+enabled = true
+notify_pi = true
+notify_pi_completion = false
+notify_pi_failure = true
+notify_claude = true
+server_url = "https://example.invalid"
+[security]
+secret_key = "fixture-only-key"
+"#;
+        let after = super::migrate_retired_pi_config(before).unwrap().unwrap();
+        let doc: toml::Value = toml::from_str(&after).unwrap();
+        for key in ["notify_pi", "notify_pi_completion", "notify_pi_failure"] {
+            assert!(doc["probe"]["notifications"].get(key).is_none());
+        }
+        assert_eq!(
+            doc["probe"]["notifications"]["notify_claude"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            doc["security"]["secret_key"].as_str(),
+            Some("fixture-only-key")
+        );
+        assert!(super::migrate_retired_pi_config(&after).unwrap().is_none());
     }
 }

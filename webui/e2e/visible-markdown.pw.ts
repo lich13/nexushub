@@ -4,7 +4,7 @@ import * as demo from "../src/lib/api/demo";
 
 const metadata = "<oai-mem-citation><citation_entries>internal-entry</citation_entries><rollout_ids>internal-id</rollout_ids></oai-mem-citation>";
 
-for (const provider of ["codex", "grok", "pi"]) {
+for (const provider of ["codex", "grok"]) {
   test(`${provider} hides metadata and copies the visible Markdown`, async ({ page }) => {
     await mockApi(page);
     const markdown = "**Visible reply**\n\nRead MEMORY.md.\n\n```xml\n<rollout_ids>literal example</rollout_ids>\n```";
@@ -21,7 +21,7 @@ for (const provider of ["codex", "grok", "pi"]) {
     });
     await page.goto("/");
     if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
-    else await page.locator(".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+    else await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
     const reply = page.locator(".markdown-content");
     await expect(reply).toContainText("Visible reply");
     await expect(reply).not.toContainText("internal-entry");
@@ -90,7 +90,7 @@ test("running and failed AGENTS tools stay folded inside mixed Grok activity", a
   await expect(commands.nth(0)).toHaveAttribute("open", "");
 });
 
-for (const provider of ["codex", "grok", "pi"]) {
+for (const provider of ["codex", "grok"]) {
   test(`${provider} remote file Markdown copies the source path without navigation`, async ({ page }) => {
     await mockApi(page, { connection: { target: "remote", revision: 1, baseUrl: "https://api.example.com/nexushub/", configured: true } });
     await page.addInitScript(() => {
@@ -112,13 +112,13 @@ for (const provider of ["codex", "grok", "pi"]) {
     }
     await page.goto("/");
     if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
-    else await page.locator(".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+    else await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
     const first = page.locator(".file-path-label").first();
     await expect(first).toBeVisible();
     await first.click();
     await expect(page.locator("html")).toHaveAttribute("data-copied-path", "/isolated/workspace/文件 A.md");
     await expect(page).toHaveURL(/\/$/);
     await page.getByRole("button", { name: "复制文件路径", exact: true }).last().click();
-    await expect(page.locator("html")).toHaveAttribute("data-copied-path", provider === "pi" ? "/isolated/pi-workspace/docs/notes.md" : "/isolated/workspace/docs/notes.md");
+    await expect(page.locator("html")).toHaveAttribute("data-copied-path", "/isolated/workspace/docs/notes.md");
   });
 }

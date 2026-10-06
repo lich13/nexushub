@@ -42,7 +42,6 @@ const providerLabels: Record<SessionProvider, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
   grok: "Grok Build",
-  pi: "Pi"
 };
 
 const kindLabels: Record<string, string> = {

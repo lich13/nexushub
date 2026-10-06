@@ -1,6 +1,8 @@
+import { MoreHorizontal, Pencil } from "lucide-react";
+import { ContextTaskMenu, ThreadMenuItems, type ThreadMenuAction } from "./TaskMenu";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-export function RenameableSession({ title, className, disabled, selecting, selected = false, renameBlockReason, onSelect, onRename, children }: {
+export function RenameableSession({ title, className, disabled, selecting, selected = false, renameBlockReason, onSelect, onRename, menuActions, children }: {
   title: string;
   className: string;
   disabled?: boolean;
@@ -9,8 +11,10 @@ export function RenameableSession({ title, className, disabled, selecting, selec
   renameBlockReason?: string | null;
   onSelect: () => void;
   onRename: (title: string) => Promise<unknown>;
+  menuActions?: ThreadMenuAction[];
   children: ReactNode;
 }) {
+  const [context, setContext] = useState<{ x: number; y: number } | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const [error, setError] = useState("");
@@ -53,6 +57,7 @@ export function RenameableSession({ title, className, disabled, selecting, selec
     if (selecting || disabled) {
       cancelled.current = true;
       setEditing(false);
+      setContext(null);
       setError("");
     }
   }, [selecting, disabled]);
@@ -98,12 +103,26 @@ export function RenameableSession({ title, className, disabled, selecting, selec
       onSelect();
       return;
     }
+    cancelled.current = false;
     clearTimeout(clickTimer.current);
     clickTimer.current = setTimeout(() => {
       clickTimer.current = undefined;
       if (!cancelled.current && mounted.current) onSelect();
     }, 220);
   };
+  const cancelPendingClick = () => {
+    clearTimeout(clickTimer.current); clickTimer.current = undefined;
+    clearTimeout(outsideFlushTimer.current); outsideFlushTimer.current = undefined;
+  };
+  const openMenu = (x: number, y: number) => {
+    cancelPendingClick();
+    if (!selecting && !disabled) setContext({ x, y });
+  };
+  const actions: ThreadMenuAction[] = [
+    { id: "rename", label: "改名", icon: <Pencil size={15} />, disabled: Boolean(renameBlockReason) || disabled,
+      reason: renameBlockReason, run: begin },
+    ...(menuActions ?? []),
+  ].map(action => ({ ...action, run: () => { button.current?.focus({ preventScroll: true }); action.run(); } }));
   return <div ref={root} className="renameable-session">
     {editing ? <div className={`${className} session-rename`}>
       <input ref={input} aria-label="线程名称" maxLength={200} value={draft} disabled={saving} aria-invalid={Boolean(error)}
@@ -117,10 +136,24 @@ export function RenameableSession({ title, className, disabled, selecting, selec
       <small>{saving ? "正在保存…" : "Enter 保存 · Esc 取消"}</small>
     </div> : <button ref={button} type="button" className={className} disabled={disabled} title={title}
       onClick={handleClick}
-      onDoubleClick={event => { event.preventDefault(); flushPendingSelection(); begin(); }}
-      onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); begin(); } }}>
+      onContextMenu={event => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
+      onDoubleClick={event => { event.preventDefault(); cancelPendingClick(); begin(); }}
+      onKeyDown={event => {
+        if (event.key === "F2") { event.preventDefault(); begin(); }
+        if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          openMenu(rect.left + 24, rect.top + Math.min(rect.height, 36));
+        }
+      }}>
       {children}
     </button>}
+    {!editing && !selecting && !disabled && <div className="session-row-menu" onPointerDown={cancelPendingClick}>
+      <button type="button" className="icon-button" title="线程操作" aria-label="线程操作" aria-expanded={Boolean(context)} onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom + 4); }}><MoreHorizontal size={18} /></button>
+    </div>}
+    {context && <ContextTaskMenu x={context.x} y={context.y} onClose={() => setContext(null)} returnFocus={button.current}>
+      <ThreadMenuItems actions={actions} />
+    </ContextTaskMenu>}
     {error && <div className="session-rename-error" role="alert">{error}</div>}
   </div>;
 }

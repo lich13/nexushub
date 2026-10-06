@@ -1,7 +1,9 @@
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::Mutex,
     time::SystemTime,
@@ -11,18 +13,33 @@ use std::{
 struct Stamp {
     size: u64,
     modified: SystemTime,
+    edge_hash: [u8; 32],
     #[cfg(unix)]
     identity: (u64, u64, i64, i64),
 }
 
 impl Stamp {
     fn read(path: &Path) -> Option<Self> {
-        let metadata = fs::metadata(path).ok()?;
+        let mut file = fs::File::open(path).ok()?;
+        let metadata = file.metadata().ok()?;
+        // Coarse filesystem clocks can give a same-sized rewrite the same stamp.
+        // Read bounded edges so an appended/replaced native record cannot reuse
+        // a snapshot merely because its metadata timestamps share one clock tick.
+        let mut digest = Sha256::new();
+        let mut edge = [0_u8; 4096];
+        let head = file.read(&mut edge).ok()?;
+        digest.update(&edge[..head]);
+        if metadata.len() > edge.len() as u64 {
+            file.seek(SeekFrom::End(-(edge.len() as i64))).ok()?;
+            let tail = file.read(&mut edge).ok()?;
+            digest.update(&edge[..tail]);
+        }
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Some(Self {
             size: metadata.len(),
             modified: metadata.modified().ok()?,
+            edge_hash: digest.finalize().into(),
             #[cfg(unix)]
             identity: (
                 metadata.dev(),

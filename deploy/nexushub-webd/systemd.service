@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/root/.codex /home/ubuntu/.codex -/root/.grok/sessions -/root/.pi/agent/sessions -/root/.claude/projects /etc/nexushub-webd /var/lib/nexushub-webd /var/log/nexushub-webd
+ReadWritePaths=/root/.codex /home/ubuntu/.codex -/root/.grok/sessions -/root/.claude/projects /etc/nexushub-webd /var/lib/nexushub-webd /var/log/nexushub-webd
 
 [Install]
 WantedBy=multi-user.target

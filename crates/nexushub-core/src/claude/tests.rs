@@ -399,7 +399,6 @@ fn batch_delete_has_partial_results_and_never_removes_an_unselected_sibling() {
         platform: crate::platform::PlatformPaths::desktop_current(),
         codex: crate::codex::CodexPaths::new(f.root.join("codex")),
         grok: crate::grok::GrokPaths::default_for_user(),
-        pi: crate::pi::PiPaths::default_for_user(),
         claude: f.paths.clone(),
     };
     let unknown = format!("claude:{}", "f".repeat(64));

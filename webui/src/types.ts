@@ -30,7 +30,7 @@ export type GrokDeletePreview = { id: string; title: string; path: string; finge
 export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint: string };
 export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number };
 
-export type PiSessionSummary = {
+export type ClaudeSessionSummary = {
   id: string;
   sessionKey: string;
   title: string;
@@ -40,28 +40,22 @@ export type PiSessionSummary = {
   messageCount: number;
   lastMessage?: string | null;
   status: string;
-  formatVersion: number;
+  formatVersion: string;
+  readWarning?: string | null;
   canRename: boolean;
   renameBlockReason?: string | null;
   canDelete: boolean;
   deleteBlockReason?: string | null;
   readError?: string | null;
 };
-export type PiHistoryEvent = { userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
-export type PiSessionDetail = { summary: PiSessionSummary; events: PiHistoryEvent[] };
-export type PiDeletePreview = { sessionKey: string; id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
-export type PiDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
-export type PiDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
-
-
-
-export type ClaudeSessionSummary = Omit<PiSessionSummary, "formatVersion"> & { formatVersion: string; readWarning?: string | null };
-export type ClaudeHistoryEvent = PiHistoryEvent & { id: string; turnId?: string | null; result?: string | null };
+export type ClaudeHistoryEvent = { id: string; turnId?: string | null; result?: string | null; userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
 export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
 export type ClaudeSessionDetail = { summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
-export type ClaudeDeletePreview = PiDeletePreview;
-export type ClaudeDeleteRequest = PiDeleteRequest;
-export type ClaudeDeleteResult = PiDeleteResult;
+export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
+export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
+export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
+
+
 
 export type ThreadSummary = {
   id: string;
@@ -171,7 +165,7 @@ export type ThreadBlockPage = {
   before_cursor?: string | null;
 };
 
-export type SearchProvider = "codex" | "claude_code" | "grok" | "pi";
+export type SearchProvider = "codex" | "claude_code" | "grok";
 export type SearchScope = "thread" | "provider";
 export type SessionSearchRequest = {
   provider: SearchProvider;
@@ -296,6 +290,11 @@ export type ArchiveDeleteResult = {
   deleted_rollout_files: number;
 };
 
+export type HiddenThreadSelection = { id: string; fingerprint: string | null };
+export type HiddenThreadCandidate = HiddenThreadSelection & { title: string; allowed: boolean; reason: string | null };
+export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped" | "failed"; reason: string | null };
+export type CleanupExecuteRequest = { confirmed: boolean; expectedCount: number; candidates?: HiddenThreadSelection[] };
+
 export type HiddenThreadDeletePlan = {
   total_threads: number;
   visible_threads: number;
@@ -304,11 +303,15 @@ export type HiddenThreadDeletePlan = {
   session_index_lines: number;
   rollout_files: number;
   hidden_ids: string[];
+  candidates: HiddenThreadCandidate[];
   hidden_source_counts: Record<string, number>;
   integrity: string;
 };
 
 export type HiddenThreadDeleteResult = {
+  skipped_threads: number;
+  failed_threads: number;
+  items: HiddenThreadItemResult[];
   before: HiddenThreadDeletePlan;
   deleted_threads: number;
   after_total_threads: number;
@@ -330,7 +333,7 @@ export type OptionalResult<T> = {
 };
 
 export type AgentProviderInfo = {
-  id: "codex" | "grok_build" | "pi" | "cursor" | "gemini" | string;
+  id: "codex" | "grok_build" | "cursor" | "gemini" | string;
   label: string;
   status: "ready" | "preview" | "planned" | string;
   description?: string;
@@ -358,7 +361,7 @@ export type PluginInfo = {
 };
 
 export type ProbeStatus = {
-  provider_notifications?: { provider: "grok" | "pi" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
+  provider_notifications?: { provider: "grok" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
   label?: string | null;
   enabled: boolean;
   available?: boolean | null;
@@ -454,9 +457,6 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
-      notify_pi?: boolean;
-      notify_pi_completion?: boolean;
-      notify_pi_failure?: boolean;
     notify_claude?: boolean;
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;
@@ -487,9 +487,6 @@ export type ProbeSettings = {
       notify_grok?: boolean;
       notify_grok_completion?: boolean;
       notify_grok_failure?: boolean;
-      notify_pi?: boolean;
-      notify_pi_completion?: boolean;
-      notify_pi_failure?: boolean;
     notify_claude?: boolean;
     notify_claude_completion?: boolean;
     notify_claude_failure?: boolean;

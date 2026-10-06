@@ -42,15 +42,6 @@ pub fn local_plugin_catalog() -> Vec<LocalPluginInfo> {
             invocation_template: "@Grok Build ".to_string(),
         },
         LocalPluginInfo {
-            id: "pi".to_string(),
-            label: "Pi".to_string(),
-            status: "ready".to_string(),
-            kind: "builtin".to_string(),
-            description: "Pi 原生 JSONL 会话、消息和工具活动浏览".to_string(),
-            unavailable_reason: None,
-            invocation_template: "@Pi ".to_string(),
-        },
-        LocalPluginInfo {
             id: "system_ops".to_string(),
             label: "System/Ops".to_string(),
             status: "ready".to_string(),

@@ -6,7 +6,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemCapabilitiesResponse {

@@ -1,4 +1,4 @@
-import { MessageSquare, RefreshCw, Search } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, MessageSquare, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { threadDetailFromSlot, useConversationController } from "../../hooks/useConversationController";
 import {
@@ -17,6 +17,8 @@ import { SessionBatchControls, SessionCheckbox } from "../common/SessionBatchCon
 import { RunningIndicator } from "../common/RunningIndicator";
 import { RenameableSession } from "../common/RenameableSession";
 import { useReadOnlyThreadActions } from "../../lib/query/threads";
+import { getThread } from "../../lib/api/threads";
+import { latestAssistantCopyText, threadResumeCommand } from "../../lib/domain/conversationViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import type { SessionSearchResult } from "../../types";
 import { useSearchWorkspace } from "../common/SessionSearch";
@@ -129,6 +131,12 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
 }) {
   const batch = useSessionSelection("codex", `${status}\0${q}`, threads.map(t => t.id), onBatchSucceeded);
   const rename = useReadOnlyThreadActions({});
+  const [menuFeedback, setMenuFeedback] = useState("");
+  const copy = async (value: string | null | undefined) => {
+    if (!value) { setMenuFeedback("没有可复制的内容"); return; }
+    try { await navigator.clipboard.writeText(value); setMenuFeedback("已复制"); }
+    catch { setMenuFeedback("复制失败：剪贴板不可用"); }
+  };
   return (
     <div className="thread-list">
       <div className="section-title thread-title-row">
@@ -149,7 +157,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
         ))}
       </div>
       <div className="thread-scroll">
-        <SessionBatchControls batch={batch} operations={status === "archived" ? ["restore", "delete"] : ["archive"]} />
+        <SessionBatchControls batch={batch} operations={status === "archived" ? ["restore", "delete"] : ["archive", "delete"]} />
         {error && <div className="form-error" role="alert">{error}</div>}
         {loading && <div className="muted-row">正在读取 Codex 状态...</div>}
         {threads.map((thread) => {
@@ -168,6 +176,18 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
               renameBlockReason={thread.status === "Archived" ? sharedDisabledStates.renameArchivedThread : undefined}
               onSelect={() => batch.selecting ? batch.toggle(thread.id) : onSelect(thread.id)}
               onRename={(next) => rename.mutateAsync({ kind: "rename", id: thread.id, title: next })}
+              menuActions={[
+                { id: "archive", label: thread.status === "Archived" ? "恢复" : "归档", icon: thread.status === "Archived" ? <ArchiveRestore size={15} /> : <Archive size={15} />,
+                  disabled: batch.busy, run: () => batch.prepareSingle(thread.id, thread.status === "Archived" ? "restore" : "archive") },
+                { id: "copy-answer", label: "复制答复", icon: <Copy size={15} />, run: () => {
+                  void getThread(thread.id).then(detail => copy(latestAssistantCopyText(detail.blocks))).catch(() => setMenuFeedback("读取答复失败，请重试"));
+                } },
+                { id: "copy-id", label: "复制 ID", icon: <Copy size={15} />, run: () => { void copy(thread.id); } },
+                { id: "copy-path", label: "复制路径", icon: <Copy size={15} />, disabled: !thread.rollout_path, run: () => { void copy(thread.rollout_path); } },
+                { id: "copy-resume", label: "复制恢复命令", icon: <Copy size={15} />, run: () => { void copy(threadResumeCommand(thread.id)); } },
+                { id: "delete", label: "永久删除", icon: <Trash2 size={15} />, danger: true, disabled: batch.busy,
+                  run: () => batch.prepareSingle(thread.id, "delete") },
+              ]}
             >
               <span className="thread-item-content">
                 <span className="thread-item-title">{title}</span>
@@ -186,6 +206,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
         })}
         {!loading && !error && threads.length === 0 && <div className="muted-row">没有匹配任务</div>}
       </div>
+      {menuFeedback && <div role="status" className="task-feedback">{menuFeedback}</div>}
     </div>
   );
 }

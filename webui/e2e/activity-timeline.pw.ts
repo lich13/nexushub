@@ -3,7 +3,7 @@ import { mockApi, mockCommand } from "./fixtures";
 import * as demo from "../src/lib/api/demo";
 import type { MessageBlock } from "../src/types";
 
-for (const provider of ["codex", "grok", "pi"] as const) {
+for (const provider of ["codex", "grok"] as const) {
   for (const mobile of [false, true]) {
     test(`${provider} historical activity stays between replies and remembers choices (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
       await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 850 });
@@ -24,7 +24,7 @@ for (const provider of ["codex", "grok", "pi"] as const) {
       await page.goto("/");
       if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
       else {
-        await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: provider === "grok" ? "Grok Build" : "Pi", exact: true }).click();
+        await page.locator(mobile ? ".mobile-tabs" : ".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
         if (mobile) await page.locator(".provider-session").click();
       }
       const stream = page.locator(provider === "codex" ? ".message-stream" : ".provider-events");
@@ -85,21 +85,6 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   expect(await page.locator(".message-stream").evaluate(element => element.scrollTop >= 0 && element.scrollTop <= element.scrollHeight - element.clientHeight + 1)).toBe(true);
 });
 
-test("Pi standalone bash exposes the original command and its output", async ({ page }) => {
-  await mockApi(page);
-  await mockCommand(page, "pi.detail", args => ({ summary: {}, events: [
-    { kind: "assistant_message", text: "Before command" },
-    { kind: "tool_result", role: "bashExecution", text: "printf standalone", detail: "standalone result", status: "completed" },
-    { kind: "assistant_message", text: "After command" }
-  ] }));
-  await page.goto("/");
-  await page.locator(".side-nav").getByRole("button", { name: "Pi", exact: true }).click();
-  await page.locator(".execution-group > summary").click();
-  const command = page.locator(".execution-command");
-  await expect(command.locator("summary")).toContainText("printf standalone");
-  await command.locator("summary").click();
-  await expect(command.locator(".execution-section")).toHaveText(["命令printf standalone", "结果standalone result"]);
-});
 
 test("native pagination inserts older activity while preserving the visible anchor", async ({ page }) => {
   await mockApi(page);
@@ -124,7 +109,7 @@ test("native pagination inserts older activity while preserving the visible anch
   await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
 });
 
-for (const provider of ["codex", "claude", "grok", "pi"] as const) {
+for (const provider of ["codex", "claude", "grok"] as const) {
   test(`${provider} rail marks user instructions and keeps non-user search anchors`, async ({ page }) => {
     await mockApi(page);
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: provider === "grok" ? "light" : "dark" });
@@ -149,7 +134,7 @@ for (const provider of ["codex", "claude", "grok", "pi"] as const) {
     }
     await page.goto("/");
     if (provider === "codex") await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
-    else await page.locator(".side-nav").getByRole("button", { name: { claude: "Claude Code", grok: "Grok Build", pi: "Pi" }[provider], exact: true }).click();
+    else await page.locator(".side-nav").getByRole("button", { name: { claude: "Claude Code", grok: "Grok Build" }[provider], exact: true }).click();
     const markers = page.locator(".timeline-rail-item");
     await expect(markers).toHaveCount(2);
     await expect(markers.nth(0)).toHaveAccessibleName("时间线：First fixture instruction");

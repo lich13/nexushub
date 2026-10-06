@@ -76,12 +76,30 @@ function hiddenPlan(): HiddenThreadDeletePlan {
     session_index_lines: 9,
     rollout_files: 9,
     hidden_ids: ["child-a", "child-b"],
+    candidates: [
+      { id: "child-a", title: "child a", fingerprint: "fingerprint-a", allowed: true, reason: null },
+      { id: "child-b", title: "child b", fingerprint: "fingerprint-b", allowed: true, reason: null }
+    ],
     hidden_source_counts: { subagent: 2 },
     integrity: "ok"
   };
 }
 
 describe("runtime view-model helpers", () => {
+  test("arms hidden deletion only when integrity is sound and a preview candidate is allowed", () => {
+    expect(canStartHiddenThreadDelete(hiddenPlan())).toBe(true);
+
+    const blocked = hiddenPlan();
+    blocked.candidates = blocked.candidates.map(candidate => ({
+      ...candidate,
+      fingerprint: null,
+      allowed: false,
+      reason: "thread is running"
+    }));
+    expect(canStartHiddenThreadDelete(blocked)).toBe(false);
+    expect(canStartHiddenThreadDelete({ ...hiddenPlan(), integrity: "corrupt" })).toBe(false);
+  });
+
   test("derives Ops workspace copy and gating from capabilities without leaking Linux labels to macOS", () => {
     const updateStatus: UpdateStatus = {
       current_version: "0.1.100",
@@ -95,6 +113,12 @@ describe("runtime view-model helpers", () => {
       capabilities: ["check", "confirm_install"]
     };
     const hiddenDeleteResult: HiddenThreadDeleteResult = {
+      skipped_threads: 0,
+      failed_threads: 0,
+      items: [
+        { id: "child-a", status: "deleted", reason: null },
+        { id: "child-b", status: "deleted", reason: null }
+      ],
       before: hiddenPlan(),
       deleted_threads: 2,
       after_total_threads: 7,

@@ -73,7 +73,7 @@ export function resolvedSelectedThreadId(selectedId: string | null): string | nu
 }
 
 export function canStartHiddenThreadDelete(plan: HiddenThreadDeletePlan | null | undefined): boolean {
-  return (plan?.hidden_threads ?? 0) > 0;
+  return plan?.integrity === "ok" && Boolean(plan.candidates?.some(item => item.allowed));
 }
 
 export function canStartUpdateInstall(status: UpdateStatus | null | undefined): boolean {

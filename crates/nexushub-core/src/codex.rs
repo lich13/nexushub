@@ -33,7 +33,8 @@ use rollout_events::{
     should_repair_thread_title_from_local_metadata,
 };
 pub(crate) use rollout_events::{
-    hidden_thread_metadata_category, rollout_has_running_signal, ThreadVisibilityMetadata,
+    hidden_thread_metadata_category, rollout_has_confirmed_inactive_state,
+    rollout_has_running_signal, ThreadVisibilityMetadata,
 };
 pub use rollout_events::{
     is_macos_network_volume_path, message_blocks_from_events,

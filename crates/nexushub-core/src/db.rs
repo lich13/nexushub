@@ -265,6 +265,39 @@ impl PanelDb {
 
             "#,
         )?;
+        // Retire only NexusHub-owned Pi records before any queued event JSON is decoded.
+        // Native provider files, configurations and credentials are never opened here.
+        let retire_pi: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM native_probe_providers WHERE provider='pi')
+             OR EXISTS(SELECT 1 FROM native_probe_streams WHERE provider='pi')
+             OR EXISTS(SELECT 1 FROM native_probe_deliveries WHERE provider='pi'
+                 OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END)
+             OR EXISTS(SELECT 1 FROM probe_events WHERE CASE WHEN json_valid(payload_json)
+                 THEN json_extract(payload_json,'$.provider')='pi' ELSE 0 END)
+             OR EXISTS(SELECT 1 FROM settings WHERE key IN ('notify_pi','notify_pi_completion','notify_pi_failure','pi_retirement_pending'))",
+            [], |row| row.get(0))?;
+        if retire_pi {
+            conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
+                INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('pi_retirement_pending','true',unixepoch());
+                DELETE FROM probe_events WHERE dedupe_key IN (
+                    SELECT event_key FROM native_probe_deliveries WHERE provider='pi'
+                    OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END)
+                    OR CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.provider')='pi' ELSE 0 END;
+                DELETE FROM native_probe_deliveries WHERE provider='pi'
+                    OR CASE WHEN json_valid(event_json) THEN json_extract(event_json,'$.provider')='pi' ELSE 0 END;
+                DELETE FROM native_probe_streams WHERE provider='pi';
+                DELETE FROM native_probe_providers WHERE provider='pi';
+                DELETE FROM settings WHERE key IN ('notify_pi','notify_pi_completion','notify_pi_failure');
+                COMMIT; VACUUM;")?;
+            let busy: i64 =
+                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+            if busy != 0 {
+                return Err(anyhow!(
+                    "retired provider cleanup is waiting for NexusHub database readers"
+                ));
+            }
+            conn.execute("DELETE FROM settings WHERE key='pi_retirement_pending'", [])?;
+        }
         migrate_probe_error_incidents_schema(&conn)?;
         conn.execute_batch("DROP TABLE IF EXISTS codex_thread_goals;")?;
         add_column_if_missing(&conn, "jobs", "thread_id", "TEXT")?;
@@ -1517,5 +1550,84 @@ mod tests {
         assert_eq!(counts.dedupe_count, 1);
         assert_eq!(counts.pending_event_count, 0);
         assert_eq!(counts.pending_dedupe_count, 0);
+    }
+}
+
+#[cfg(test)]
+mod retired_provider_tests {
+    use super::*;
+
+    #[test]
+    fn pi_upgrade_erases_only_owned_records_before_queue_decoding() {
+        let root = std::env::temp_dir().join(format!(
+            "nexushub-retired-provider-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = root.join("nexushub.sqlite");
+        let native = root.join("native-session.jsonl");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&native, "native fixture remains unchanged").unwrap();
+        let db = PanelDb::open(&path).unwrap();
+        let api_key = db.rotate_admin_api_key().unwrap();
+        db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
+            .unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch(r#"
+                INSERT INTO native_probe_providers VALUES('pi',1,1,1,1,0),('grok',1,1,1,1,0);
+                INSERT INTO native_probe_streams VALUES('pi','old','identity',7,1),('grok','kept','identity',7,1);
+                INSERT INTO native_probe_deliveries VALUES('retired','pi','not valid JSON','pending',1,1),
+                    ('retired-json','legacy','{"provider":"pi"}','delivering',1,1);
+                INSERT INTO probe_events(id,kind,dedupe_key,source,payload_json,created_at)
+                    VALUES('retired-event','completion','retired','native_provider_monitor','{}',1),
+                    ('retired-payload','failure',NULL,'native_provider_monitor','{"provider":"pi"}',1),
+                    ('kept-event','completion',NULL,'native_provider_monitor','{"provider":"grok"}',1);
+                INSERT INTO settings VALUES('notify_pi','true',1),('notify_pi_completion','true',1),
+                    ('notify_pi_failure','false',1),('fixture-preserved','yes',1);
+            "#).unwrap();
+        }
+        drop(db);
+        for _ in 0..2 {
+            let db = PanelDb::open(&path).unwrap();
+            assert!(db.pending_native_deliveries(100).unwrap().is_empty());
+            db.recover_interrupted_native_deliveries().unwrap();
+            assert!(db.verify_admin_api_key(&api_key).unwrap());
+            assert_eq!(
+                db.get_secret_setting_bytes("probe_bark_device_key")
+                    .unwrap()
+                    .as_deref(),
+                Some(b"fixture-device".as_slice())
+            );
+            assert_eq!(
+                db.get_setting("fixture-preserved").unwrap().as_deref(),
+                Some("yes")
+            );
+            assert!(db.get_setting("notify_pi").unwrap().is_none());
+            let conn = db.conn.lock().unwrap();
+            for table in ["native_probe_providers", "native_probe_streams"] {
+                assert_eq!(
+                    conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    conn.query_row(&format!("SELECT provider FROM {table}"), [], |r| r
+                        .get::<_, String>(0))
+                        .unwrap(),
+                    "grok"
+                );
+            }
+            assert_eq!(
+                conn.query_row("SELECT id FROM probe_events", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "kept-event"
+            );
+            assert_eq!(
+                fs::read_to_string(&native).unwrap(),
+                "native fixture remains unchanged"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

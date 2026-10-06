@@ -180,18 +180,6 @@ fn provider_registry_exposes_codex_grok_build_and_pi() {
         .any(|capability| capability == "rename"));
     assert!(grok.safety.contains("native rename"));
 
-    let pi = providers
-        .iter()
-        .find(|provider| provider.id == AgentProviderId::Pi)
-        .unwrap();
-    assert_eq!(pi.status, "ready");
-    assert!(pi
-        .capabilities
-        .iter()
-        .any(|capability| capability == "rename"));
-    assert!(pi.safety.contains("single-file scoped"));
-    assert!(pi.safety.contains("active or uncertain"));
-
     assert!(providers
         .iter()
         .any(|provider| provider.id == AgentProviderId::Cursor));
@@ -205,7 +193,7 @@ fn local_plugin_catalog_matches_existing_builtin_surface() {
     let plugins = local_plugin_catalog();
     let plugin_json = serde_json::to_value(&plugins).unwrap();
 
-    assert_eq!(plugin_json.as_array().unwrap().len(), 5);
+    assert_eq!(plugin_json.as_array().unwrap().len(), 4);
     assert_eq!(plugin_json[0]["id"], "codex");
     assert_eq!(plugin_json[0]["status"], "ready");
     assert_eq!(plugin_json[0]["kind"], "builtin");
@@ -214,10 +202,7 @@ fn local_plugin_catalog_matches_existing_builtin_surface() {
     assert_eq!(plugin_json[2]["id"], "grok_build");
     assert_eq!(plugin_json[2]["status"], "ready");
     assert_eq!(plugin_json[2]["invocation_template"], "@Grok Build ");
-    assert_eq!(plugin_json[3]["id"], "pi");
-    assert_eq!(plugin_json[3]["status"], "ready");
-    assert_eq!(plugin_json[3]["invocation_template"], "@Pi ");
-    assert_eq!(plugin_json[4]["id"], "system_ops");
+    assert_eq!(plugin_json[3]["id"], "system_ops");
 }
 
 #[tokio::test]
@@ -425,7 +410,7 @@ fn capabilities_response_has_no_status_collection_or_private_paths() {
     let json = serde_json::to_value(response).unwrap();
     assert_eq!(json["host_surface"], "desktop_embedded_tauri");
     assert_eq!(json["capabilities"]["thread_cleanup"], true);
-    assert_eq!(json["api_version"], 1);
+    assert_eq!(json["api_version"], 2);
     assert_eq!(json.as_object().unwrap().len(), 3);
     assert!(json["capabilities"].get("status").is_none());
 }

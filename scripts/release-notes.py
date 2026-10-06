@@ -82,6 +82,11 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "修复本机与腾讯云切换后更新状态和能力缓存串机。",
         "统一本机 App 与腾讯云服务的更新反馈，保留远程 API Key 和监测配置。",
     ],
+    "1.2.8": [
+        "线程右键直接打开操作菜单，Codex 普通与归档线程支持预览后永久删除。",
+        "隐藏线程清理逐项跳过受保护项目，修复列表宽度并优化一次性启动窗口适配。",
+        "移除 NexusHub 的 Pi 集成，保留原生 Pi 程序与用户数据；远程 API 协议升级为 2。",
+    ],
     "1.2.7": [
         "左侧时间线只标记用户发送指令的位置，滚动时高亮对应指令；助手回复和工具内容仍可搜索定位。",
         "修复 Claude Code 新版辅助记录被误报为读取错误的问题，兼容性提醒与致命错误分别显示，安全管理限制继续保留。",
@@ -97,6 +102,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.8":
+        sections = {
+            "版本概览": ["本版改进线程管理与桌面启动体验，修复隐藏清理被单个受保护线程阻断的问题，并完成 Pi 集成退役。"],
+            "功能调整": [
+                "右键线程立即显示操作菜单；保留省略号、触摸和键盘入口，右键未选中线程不切换当前详情。",
+                "Codex 普通与归档线程均可永久删除，支持最多 100 项批量预览与确认。",
+                "隐藏清理只处理本次预览候选，逐项显示删除、跳过、失败和剩余结果。",
+            ],
+            "问题修复": [
+                "修复 Grok 短标题、长标题及运行状态下的卡片背景宽度不一致。",
+                "主窗口隐藏创建后一次填满当前屏幕工作区，避免启动时反复缩放；Dock 重开和机器切换保留窗口尺寸，不切换独立全屏 Space。",
+                "受保护、文件已变化或单项失败的隐藏线程不再阻断其余候选；公共数据库、索引或存储错误会回滚整批。",
+            ],
+            "兼容性与迁移": [
+                "远程 API 协议升级为 2。旧服务不能执行新版隐藏清理，App 会提示更新。",
+                "移除 NexusHub 的 Pi 导航、读取、管理、通知与专属配置；仅清理 NexusHub 自有 Pi 记录，不卸载 Pi，不修改其原生配置、会话或工作目录。",
+                "Codex、Claude Code 与 Grok 的搜索、附件、时间线、Plan 导出、Bark、Keychain 连接和机器隔离继续保留。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "latest.json 仅映射 darwin-aarch64；以上共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
+            ],
+            "升级提示": [
+                "使用远程管理时先升级 API 服务，再安装 1.2.8 App；本机读取不依赖远程升级。",
+                "安装前核对校验和与 updater 签名。永久删除不可撤销，请核对预览目标；运行中、状态未知或关联异常的线程仍受保护。",
+                "部署主机、域名和凭据继续由仓库外提供。发布前检查源码、可达历史与资产；平台保留的不可达对象不属于可达历史审计覆盖范围。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     lines = [f"# NexusHub {version}", "", "## 更新内容", ""]
     lines.extend(f"- {item}" for item in highlights(version))

@@ -1,10 +1,12 @@
 import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
-import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
+import { useSessionSelection } from "../../lib/query/sessions";
+import { SessionBatchControls } from "../common/SessionBatchControls";
 import { TaskMenu } from "../common/TaskMenu";
 import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
@@ -51,6 +53,9 @@ export function Conversation(props: {
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
   const timelineEntries = userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : []));
+  const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
+    if (keys.includes(props.threadId)) props.onSelect(null);
+  });
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const older = useThreadBlockPageMutation({
     onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
@@ -106,16 +111,18 @@ export function Conversation(props: {
           <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1><span className="muted-text">{summary.cwd ?? summary.id}</span></div>
           <div className="conversation-header-actions">
           <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
-          <TaskMenu>
+          <TaskMenu triggerRef={deletion.returnFocus}>
               <button disabled={archived || actions.isPending} title={archived ? sharedDisabledStates.renameArchivedThread : undefined} onClick={() => { setTitle(summary.title); setRenaming(true); }}><Pencil size={15} />改名</button>
               <button disabled={actions.isPending} onClick={() => actions.mutate({ kind: archived ? "restore" : "archive", id: props.threadId })}>{archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}{archived ? "取消归档" : "归档"}</button>
               <button onClick={() => copy(latestAssistantCopyText(blocks))}><Copy size={15} />复制答复</button>
               <button onClick={() => copy(detail.summary.id)}><Copy size={15} />复制 ID</button>
               <button onClick={() => copy(detail.summary.rollout_path)}><Copy size={15} />复制路径</button>
               <button onClick={() => copy(threadResumeCommand(detail.summary.id))}><Copy size={15} />复制恢复命令</button>
+              <button className="danger-menu-item" disabled={actions.isPending || deletion.busy} onClick={() => deletion.prepareSingle(props.threadId, "delete", deletion.returnFocus.current)}><Trash2 size={15} />永久删除</button>
           </TaskMenu>
         </div>
       </header>
+      <SessionBatchControls batch={deletion} operations={[]} showSelection={false} />
       {renaming && !archived && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
         <input aria-label="任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
         <button className="icon-button" title="保存名称" disabled={actions.isPending || !title.trim()}><Check size={17} /></button>

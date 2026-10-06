@@ -2604,6 +2604,29 @@ pub(crate) fn hidden_thread_metadata_category(
     None
 }
 
+/// Destructive management needs explicit native terminal evidence, never file age.
+pub(crate) fn rollout_has_confirmed_inactive_state(path: &Path) -> Result<bool> {
+    let scan = scan_rollout(path, 1)?;
+    if scan.running || scan.active_turn_id.is_some() || scan.reply_needed {
+        return Ok(false);
+    }
+    let text = fs::read_to_string(path)?;
+    let mut terminal = false;
+    let mut turn_context = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let mut value: Value = serde_json::from_str(line).context("线程记录损坏或尚未写入完整")?;
+        normalize_canonical_turn(&mut value, &mut turn_context);
+        let kind = rollout_event_type(&value);
+        if is_turn_terminal_event(kind) || kind == "task_complete" {
+            terminal = true;
+        }
+        if matches!(kind, "task_started" | "turn_started" | "turn/started") {
+            terminal = false;
+        }
+    }
+    Ok(terminal)
+}
+
 pub(crate) fn rollout_has_running_signal(path: &Path) -> Result<bool> {
     let scan = scan_rollout(path, 80)?;
     Ok(scan.running)

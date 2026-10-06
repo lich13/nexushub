@@ -64,6 +64,11 @@ if provider_paths.custom_session_roots({"CLAUDE_CONFIG_DIR": "/srv/example-claud
     raise SystemExit("custom Claude projects whitelist missing")
 if provider_paths.render({"CLAUDE_CONFIG_DIR": "/root/.claude"}):
     raise SystemExit("default Claude root must use optional unit entry")
+if ".pi" in unit or provider_paths.custom_session_roots({"PI_CODING_AGENT_DIR": "/srv/fixture-pi", "PI_CODING_AGENT_SESSION_DIR": "/srv/fixture-pi-sessions"}):
+    raise SystemExit("retired provider must not gain writable session paths")
+for name in ["crates/nexushub-core/src/pi.rs", "crates/nexushub-webd/src/api/pi.rs", "src-tauri/src/commands/pi.rs", "webui/src/components/pi/PiWorkspace.tsx"]:
+    if (root / name).exists():
+        raise SystemExit("retired provider implementation remains")
 if config["bundle"]["targets"] != ["dmg", "app"]:
     raise SystemExit(f"unexpected Tauri bundle targets: {config['bundle']['targets']}")
 
@@ -100,6 +105,15 @@ if any(action.startswith("threads.goal.") for action in active):
 retired = set(contract.get("retiredActions", []))
 if not {"threads.goal.get", "threads.goal.save", "threads.goal.clear", "threads.goal.pause", "threads.goal.resume"} <= retired:
     raise SystemExit("Goal tombstones are incomplete")
+
+if any(action.startswith("pi.") for action in active) or not {"pi.list", "pi.detail", "pi.rename", "pi.deletePreview", "pi.deleteExecute"} <= retired:
+    raise SystemExit("retired provider contract boundary is incomplete")
+if "pub const API_VERSION: u32 = 2;" not in (root / "crates/nexushub-core/src/services/system.rs").read_text():
+    raise SystemExit("preview-bound cleanup requires API protocol 2")
+notes = subprocess.check_output([sys.executable, str(root / "scripts/release-notes.py"), version], text=True)
+for title in ["版本概览", "功能调整", "问题修复", "兼容性与迁移", "支持平台与资产", "升级提示"]:
+    if f"## {title}" not in notes:
+        raise SystemExit("release notes are missing a required Chinese section")
 
 print(f"NexusHub {version} install/release boundary checks: ok")
 PY

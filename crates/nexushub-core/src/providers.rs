@@ -6,7 +6,6 @@ pub enum AgentProviderId {
     Codex,
     ClaudeCode,
     GrokBuild,
-    Pi,
     Cursor,
     Gemini,
 }
@@ -68,21 +67,6 @@ impl Default for ProviderRegistry {
                         "delete_local_session".to_string(),
                     ],
                     safety: "native rename only; deletion is local-session scoped and never touches workspaces or cloud tasks".to_string(),
-                },
-                AgentProviderInfo {
-                    id: AgentProviderId::Pi,
-                    label: "Pi".to_string(),
-                    status: "ready".to_string(),
-                    description: "Read-only native Pi JSONL history with guarded native rename and single-file deletion.".to_string(),
-                    capabilities: vec![
-                        "readonly".to_string(),
-                        "sessions".to_string(),
-                        "messages".to_string(),
-                        "tools".to_string(),
-                        "rename".to_string(),
-                        "delete_local_session".to_string(),
-                    ],
-                    safety: "native RPC must verify the selected on-disk session before and after rename; deletion is single-file scoped; active or uncertain session roots remain read-only".to_string(),
                 },
                 AgentProviderInfo {
                     id: AgentProviderId::Cursor,

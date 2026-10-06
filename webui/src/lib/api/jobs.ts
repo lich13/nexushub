@@ -47,13 +47,15 @@ export async function dryRunHiddenThreadDelete(): Promise<HiddenThreadDeletePlan
 
 export async function startHiddenThreadDelete(request: {
   expectedCount: number;
+  candidates: import("../../types").HiddenThreadSelection[];
 }): Promise<HiddenThreadDeleteResult> {
   if (USE_DEMO) {
     return demoHiddenThreadDeleteResult();
   }
   const confirmation = {
     confirmed: true,
-    expectedCount: request.expectedCount
+    expectedCount: request.expectedCount,
+    candidates: request.candidates
   };
   return callCommand<HiddenThreadDeleteResult>(
     "cleanup.hiddenExecute",

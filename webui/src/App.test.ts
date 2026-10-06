@@ -447,7 +447,7 @@ describe("conversation helpers", () => {
     const searchIndex = source.indexOf('className="search-box"');
     const filtersIndex = source.indexOf('className="segmented"');
     const scrollIndex = source.indexOf('className="thread-scroll"');
-    const scrollEndIndex = source.indexOf("\n      </div>\n    </div>\n  );", scrollIndex);
+    const scrollEndIndex = source.indexOf("\n      </div>", scrollIndex);
     const scrollBody = source.slice(scrollIndex, scrollEndIndex);
 
     expect(source.match(/className="thread-scroll"/g)).toHaveLength(1);
@@ -756,6 +756,7 @@ describe("conversation helpers", () => {
       rollout_files: 2,
       hidden_ids: ["hidden-a"],
       hidden_source_counts: { subagent: 3 },
+      candidates: [{ id: "hidden-a", title: "Fixture", fingerprint: "fixture", allowed: true, reason: null }],
       integrity: "ok"
     })).toBe(true);
   });

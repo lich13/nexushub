@@ -15,6 +15,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "SessionBatchResult",
     "SessionSearchRequest",
     "SessionSearchResponse",
+    "CleanupExecuteRequest",
     "CleanupArchiveDryRunResponse",
     "CleanupArchiveExecuteResponse",
     "CleanupHiddenDryRunResponse",
@@ -27,21 +28,13 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "GrokMutationResponse",
     "GrokRenameRequest",
     "GrokSessionRequest",
-    "PiDeletePreview",
     "ClaudeDeletePreview",
-    "PiDeleteRequest",
     "ClaudeDeleteRequest",
-    "PiDetailResponse",
     "ClaudeDetailResponse",
-    "PiListRequest",
     "ClaudeListRequest",
-    "PiListResponse",
     "ClaudeListResponse",
-    "PiMutationResponse",
     "ClaudeMutationResponse",
-    "PiRenameRequest",
     "ClaudeRenameRequest",
-    "PiSessionRequest",
     "ClaudeSessionRequest",
     "ClaudeDetailRequest",
     "JobsDetailResponse",
@@ -70,6 +63,6 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
 ];
 
 pub const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
-    "remote", "cleanup", "grok", "jobs", "claude", "pi", "plans", "probe", "sessions", "system",
+    "remote", "cleanup", "grok", "jobs", "claude", "plans", "probe", "sessions", "system",
     "threads", "updates",
 ];

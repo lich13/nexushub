@@ -13,11 +13,7 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     db.recover_interrupted_native_deliveries()?;
     db.retry_rejected_claude_deliveries()?;
     let mut snapshots = Vec::new();
-    for provider in [
-        NativeProvider::Grok,
-        NativeProvider::Pi,
-        NativeProvider::Claude,
-    ] {
+    for provider in [NativeProvider::Grok, NativeProvider::Claude] {
         let scan = if provider.enabled(config) {
             match tokio::task::spawn_blocking(move || native_probe::scan(provider)).await? {
                 Ok(scan) => scan,
@@ -231,7 +227,7 @@ mod tests {
         for (provider, kind) in [
             (NativeProvider::Grok, "completion"),
             (NativeProvider::Grok, "failure"),
-            (NativeProvider::Pi, "completion"),
+            (NativeProvider::Grok, "completion"),
         ] {
             let server = crate::tests::TestHttpServer::start_n(1, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}");
             let mut config = Config::default();
@@ -312,10 +308,10 @@ mod tests {
         let db = PanelDb::open(":memory:").unwrap();
         db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-device")
             .unwrap();
-        db.stage_native_notifications(NativeProvider::Pi, &NativeScan::default(), &config)
+        db.stage_native_notifications(NativeProvider::Grok, &NativeScan::default(), &config)
             .unwrap();
         let mut stream = NativeStreamSnapshot {
-            provider: NativeProvider::Pi,
+            provider: NativeProvider::Grok,
             session_key: "p/a.jsonl".into(),
             id: "custom".into(),
             title: "Fixture".into(),
@@ -331,7 +327,7 @@ mod tests {
             }],
         };
         db.stage_native_notifications(
-            NativeProvider::Pi,
+            NativeProvider::Grok,
             &NativeScan {
                 streams: vec![stream.clone()],
                 errors: 0,
@@ -352,7 +348,7 @@ mod tests {
         stream.events[0].position = 3;
         stream.events[0].turn_id = "u:b".into();
         db.stage_native_notifications(
-            NativeProvider::Pi,
+            NativeProvider::Grok,
             &NativeScan {
                 streams: vec![stream],
                 errors: 0,

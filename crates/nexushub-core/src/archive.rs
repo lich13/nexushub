@@ -1,7 +1,4 @@
-use crate::codex::{
-    hidden_thread_metadata_category, rollout_has_running_signal, CodexPaths,
-    ThreadVisibilityMetadata,
-};
+use crate::codex::{hidden_thread_metadata_category, CodexPaths, ThreadVisibilityMetadata};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -9,11 +6,8 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
-
-const STALE_HIDDEN_RUNNING_ROLLOUT_SECONDS: i64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveDeletePlan {
@@ -36,6 +30,28 @@ pub struct ArchiveDeleteResult {
     pub deleted_rollout_files: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HiddenThreadSelection {
+    pub id: String,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HiddenThreadCandidate {
+    pub id: String,
+    pub title: String,
+    pub fingerprint: Option<String>,
+    pub allowed: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HiddenThreadItemResult {
+    pub id: String,
+    pub status: String,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HiddenThreadDeletePlan {
     pub total_threads: u64,
@@ -45,6 +61,7 @@ pub struct HiddenThreadDeletePlan {
     pub session_index_lines: u64,
     pub rollout_files: u64,
     pub hidden_ids: Vec<String>,
+    pub candidates: Vec<HiddenThreadCandidate>,
     #[serde(rename = "hidden_source_counts")]
     pub source_counts: BTreeMap<String, u64>,
     pub integrity: String,
@@ -52,6 +69,9 @@ pub struct HiddenThreadDeletePlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HiddenThreadDeleteResult {
+    pub skipped_threads: u64,
+    pub failed_threads: u64,
+    pub items: Vec<HiddenThreadItemResult>,
     pub before: HiddenThreadDeletePlan,
     pub deleted_threads: u64,
     pub after_total_threads: u64,
@@ -67,7 +87,8 @@ pub struct HiddenThreadDeleteResult {
 
 pub fn plan_delete_archived(paths: &CodexPaths) -> Result<ArchiveDeletePlan> {
     let db = paths.state_db();
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", db.display()))?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
         anyhow::bail!("sqlite integrity check failed: {integrity}");
@@ -142,57 +163,19 @@ pub fn plan_delete_hidden(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> 
     hidden_delete_plan(paths)
 }
 
-pub fn execute_delete_hidden(paths: &CodexPaths) -> Result<HiddenThreadDeleteResult> {
+pub fn execute_delete_hidden(
+    paths: &CodexPaths,
+    candidates: &[HiddenThreadSelection],
+) -> Result<HiddenThreadDeleteResult> {
     let before = plan_delete_hidden(paths)?;
-    if before.hidden_threads == 0 {
-        return Ok(HiddenThreadDeleteResult {
-            deleted_threads: 0,
-            after_total_threads: before.total_threads,
-            after_visible_threads: before.visible_threads,
-            after_hidden_threads: before.hidden_threads,
-            after_archived_threads: before.archived_threads,
-            after_integrity: before.integrity.clone(),
-            visible_threads: before.visible_threads,
-            hidden_threads: before.hidden_threads,
-            integrity: before.integrity.clone(),
-            before,
-            deleted_rollout_files: 0,
-        });
-    }
-
-    let db = paths.state_db();
-    let mut conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
-    prepare_delete_threads(&conn, &before.hidden_ids)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    ensure_hidden_candidates_inactive(paths, &tx)?;
-    cleanup_selected_threads(&tx)?;
-    tx.commit()?;
-    conn.execute_batch("VACUUM")?;
-
-    rewrite_session_index(&paths.session_index(), &before.hidden_ids)?;
-    let deleted_rollout_files = delete_rollouts(&paths.sessions_dir(), &before.hidden_ids)?;
+    let (items, deleted_rollout_files) =
+        crate::selected_codex::execute_hidden_batch(paths, candidates)?;
     let after = plan_delete_hidden(paths)?;
-    if after.integrity != "ok" {
-        anyhow::bail!(
-            "sqlite integrity check failed after hidden deletion: {after_integrity}",
-            after_integrity = after.integrity
-        );
-    }
-    if after.visible_threads != before.visible_threads {
-        anyhow::bail!(
-            "visible thread count changed unexpectedly: before={} after={}",
-            before.visible_threads,
-            after.visible_threads
-        );
-    }
-    if after.hidden_threads != 0 {
-        anyhow::bail!(
-            "hidden threads remain after deletion: {}",
-            after.hidden_threads
-        );
-    }
     Ok(HiddenThreadDeleteResult {
-        deleted_threads: before.hidden_threads.saturating_sub(after.hidden_threads),
+        deleted_threads: items.iter().filter(|i| i.status == "deleted").count() as u64,
+        skipped_threads: items.iter().filter(|i| i.status == "skipped").count() as u64,
+        failed_threads: items.iter().filter(|i| i.status == "failed").count() as u64,
+        items,
         before,
         after_total_threads: after.total_threads,
         after_visible_threads: after.visible_threads,
@@ -220,7 +203,8 @@ fn count_threads(conn: &Connection) -> Result<(u64, u64, u64)> {
 
 fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
     let db = paths.state_db();
-    let conn = Connection::open(&db).with_context(|| format!("open {}", db.display()))?;
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", db.display()))?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
         anyhow::bail!("sqlite integrity check failed: {integrity}");
@@ -229,6 +213,7 @@ fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
     let rows = hidden_visibility_rows(&conn)?;
     let mut visible_threads = 0;
     let mut hidden_ids = Vec::new();
+    let mut candidates = Vec::new();
     let mut source_counts = BTreeMap::new();
     let mut archived_threads = 0;
     for row in &rows {
@@ -236,6 +221,23 @@ fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
             archived_threads += 1;
         } else if let Some(category) = &row.hidden_category {
             hidden_ids.push(row.id.clone());
+            let candidate = match crate::selected_codex::preview_hidden(paths, &row.id) {
+                Ok(preview) => HiddenThreadCandidate {
+                    id: row.id.clone(),
+                    title: preview.title,
+                    fingerprint: Some(preview.fingerprint),
+                    allowed: true,
+                    reason: None,
+                },
+                Err(error) => HiddenThreadCandidate {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    fingerprint: None,
+                    allowed: false,
+                    reason: Some(error.to_string()),
+                },
+            };
+            candidates.push(candidate);
             *source_counts.entry(category.clone()).or_insert(0) += 1;
         } else {
             visible_threads += 1;
@@ -249,6 +251,7 @@ fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
         session_index_lines: count_lines(&paths.session_index())?,
         rollout_files: count_rollout_files(&paths.sessions_dir())?,
         hidden_ids,
+        candidates,
         source_counts,
         integrity,
     })
@@ -257,6 +260,7 @@ fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
 #[derive(Debug)]
 struct HiddenVisibilityRow {
     id: String,
+    title: String,
     archived: bool,
     hidden_category: Option<String>,
 }
@@ -333,6 +337,7 @@ fn hidden_visibility_rows(conn: &Connection) -> Result<Vec<HiddenVisibilityRow>>
             preview: preview.as_deref(),
         });
         Ok(HiddenVisibilityRow {
+            title: title.unwrap_or_else(|| id.clone()),
             id,
             archived: archived != 0,
             hidden_category,
@@ -402,216 +407,12 @@ pub(crate) fn cleanup_selected_threads(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_hidden_candidates_inactive(paths: &CodexPaths, conn: &Connection) -> Result<()> {
-    ensure_no_active_thread_columns(conn)?;
-    ensure_no_running_state_jobs(conn)?;
-    ensure_no_running_agent_job_items(conn)?;
-    ensure_no_running_rollouts(paths, conn)?;
-    Ok(())
-}
-
-fn ensure_no_active_thread_columns(conn: &Connection) -> Result<()> {
-    let columns = table_columns(conn, "threads")?;
-    for column in [
-        "active_turn_id",
-        "activeTurnId",
-        "active_job_id",
-        "activeJobId",
-        "running_job_id",
-        "runningJobId",
-    ] {
-        if !columns.contains(column) {
-            continue;
-        }
-        let sql = format!(
-            "SELECT id FROM threads
-             WHERE id IN (SELECT id FROM delete_threads)
-               AND {column} IS NOT NULL
-               AND trim(CAST({column} AS TEXT)) != ''
-             LIMIT 1"
-        );
-        if let Some(id) = query_optional_id(conn, &sql)? {
-            anyhow::bail!("hidden thread {id} has active DB signal in threads.{column}");
-        }
-    }
-    if let Some(status_column) = first_existing(&columns, &["status", "state"]) {
-        let sql = format!(
-            "SELECT id FROM threads
-             WHERE id IN (SELECT id FROM delete_threads)
-               AND lower(CAST({status_column} AS TEXT)) IN (
-                   'running', 'active', 'in_progress', 'inprogress', 'pending', 'submitting'
-               )
-             LIMIT 1"
-        );
-        if let Some(id) = query_optional_id(conn, &sql)? {
-            anyhow::bail!("hidden thread {id} has active status in threads.{status_column}");
-        }
-    }
-    Ok(())
-}
-
-fn ensure_no_running_state_jobs(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "jobs")? {
-        return Ok(());
-    }
-    let columns = table_columns(conn, "jobs")?;
-    if !columns.contains("thread_id") || !columns.contains("status") {
-        return Ok(());
-    }
-    let sql = "SELECT thread_id FROM jobs
-               WHERE thread_id IN (SELECT id FROM delete_threads)
-                 AND lower(CAST(status AS TEXT)) IN (
-                     'running', 'active', 'in_progress', 'inprogress', 'pending', 'submitting'
-                 )
-               LIMIT 1";
-    if let Some(id) = query_optional_id(conn, sql)? {
-        anyhow::bail!("hidden thread {id} has running job metadata");
-    }
-    Ok(())
-}
-
-fn ensure_no_running_agent_job_items(conn: &Connection) -> Result<()> {
-    if !table_exists(conn, "agent_job_items")? {
-        return Ok(());
-    }
-    let columns = table_columns(conn, "agent_job_items")?;
-    if !columns.contains("assigned_thread_id") || !columns.contains("status") {
-        return Ok(());
-    }
-    let sql = "SELECT assigned_thread_id FROM agent_job_items
-               WHERE assigned_thread_id IN (SELECT id FROM delete_threads)
-                 AND lower(CAST(status AS TEXT)) IN (
-                     'running', 'active', 'in_progress', 'inprogress', 'pending', 'submitting'
-                 )
-               LIMIT 1";
-    if let Some(id) = query_optional_id(conn, sql)? {
-        anyhow::bail!("hidden thread {id} has running agent job item metadata");
-    }
-    Ok(())
-}
-
-fn ensure_no_running_rollouts(paths: &CodexPaths, conn: &Connection) -> Result<()> {
-    let columns = table_columns(conn, "threads")?;
-    let activity_expr = thread_activity_seconds_expr(&columns);
-    let sql = format!(
-        "SELECT t.id, t.rollout_path, {activity_expr}
-         FROM threads t
-         JOIN delete_threads d ON d.id = t.id"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1).ok().flatten(),
-            row.get::<_, Option<i64>>(2).ok().flatten(),
-        ))
-    })?;
-    for row in rows {
-        let (id, rollout_path, activity_seconds) = row?;
-        let Some(path) = rollout_path_for_thread(paths, &id, rollout_path) else {
-            continue;
-        };
-        if path.exists()
-            && rollout_has_running_signal(&path)?
-            && hidden_running_rollout_signal_is_fresh(activity_seconds)
-        {
-            anyhow::bail!("hidden thread {id} has running rollout signal");
-        }
-    }
-    Ok(())
-}
-
-fn thread_activity_seconds_expr(columns: &HashSet<String>) -> String {
-    if columns.contains("updated_at_ms") {
-        "CAST(t.updated_at_ms AS INTEGER) / 1000".to_string()
-    } else if columns.contains("updated_at") {
-        "CAST(t.updated_at AS INTEGER)".to_string()
-    } else if columns.contains("last_activity_at") {
-        "CAST(t.last_activity_at AS INTEGER)".to_string()
-    } else if columns.contains("created_at_ms") {
-        "CAST(t.created_at_ms AS INTEGER) / 1000".to_string()
-    } else if columns.contains("created_at") {
-        "CAST(t.created_at AS INTEGER)".to_string()
-    } else {
-        "NULL".to_string()
-    }
-}
-
-fn hidden_running_rollout_signal_is_fresh(activity_seconds: Option<i64>) -> bool {
-    let Some(activity_seconds) = activity_seconds.map(normalize_activity_seconds) else {
-        return true;
-    };
-    let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-        return true;
-    };
-    let now = duration.as_secs() as i64;
-    activity_seconds >= now.saturating_sub(STALE_HIDDEN_RUNNING_ROLLOUT_SECONDS)
-}
-
-fn normalize_activity_seconds(value: i64) -> i64 {
-    if value > 1_000_000_000_000 {
-        value / 1000
-    } else {
-        value
-    }
-}
-
-fn rollout_path_for_thread(
-    paths: &CodexPaths,
-    id: &str,
-    db_rollout_path: Option<String>,
-) -> Option<PathBuf> {
-    db_rollout_path
-        .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| session_index_path_for_thread(&paths.session_index(), id))
-        .or_else(|| find_rollout_path(&paths.sessions_dir(), id))
-}
-
-fn session_index_path_for_thread(path: &Path, id: &str) -> Option<PathBuf> {
-    let text = fs::read_to_string(path).ok()?;
-    for line in text.lines() {
-        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
-        if value.get("id").and_then(|v| v.as_str()) != Some(id) {
-            continue;
-        }
-        if let Some(path) = value
-            .get("path")
-            .or_else(|| value.get("rollout_path"))
-            .and_then(|v| v.as_str())
-            .filter(|path| !path.trim().is_empty())
-        {
-            return Some(PathBuf::from(path));
-        }
-    }
-    None
-}
-
-fn find_rollout_path(path: &Path, id: &str) -> Option<PathBuf> {
-    if !path.exists() {
-        return None;
-    }
-    WalkDir::new(path)
-        .max_depth(8)
+pub(crate) fn hidden_candidate_ids(conn: &Connection) -> Result<HashSet<String>> {
+    Ok(hidden_visibility_rows(conn)?
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|v| v.to_str())
-                .map(|name| name.contains(id) && name.ends_with(".jsonl"))
-                .unwrap_or(false)
-        })
-}
-
-fn query_optional_id(conn: &Connection, sql: &str) -> Result<Option<String>> {
-    match conn.query_row(sql, [], |row| row.get::<_, Option<String>>(0)) {
-        Ok(Some(id)) if !id.trim().is_empty() => Ok(Some(id)),
-        Ok(_) => Ok(None),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(err) => Err(err.into()),
-    }
+        .filter(|row| !row.archived && row.hidden_category.is_some())
+        .map(|row| row.id)
+        .collect())
 }
 
 fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
@@ -751,7 +552,7 @@ fn tmp_path(path: &Path) -> PathBuf {
 mod tests {
     use super::{
         execute_delete_hidden, plan_delete_hidden, ArchiveDeletePlan, HiddenThreadDeleteResult,
-        STALE_HIDDEN_RUNNING_ROLLOUT_SECONDS,
+        HiddenThreadSelection,
     };
     use crate::codex::CodexPaths;
     use rusqlite::Connection;
@@ -806,8 +607,10 @@ mod tests {
     fn execute_delete_hidden_removes_only_hidden_and_preserves_visible_count() {
         let root = hidden_cleanup_fixture("execute-hidden");
         let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = selections_for_plan(&plan);
 
-        let result = execute_delete_hidden(&paths).unwrap();
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
 
         assert_hidden_result_preserved_visible(&result);
         assert_eq!(result.before.hidden_threads, 2);
@@ -856,12 +659,16 @@ mod tests {
     }
 
     #[test]
-    fn execute_delete_hidden_aborts_when_candidate_is_running() {
+    fn execute_delete_hidden_skips_running_candidate_and_deletes_safe_candidate() {
         let root = hidden_cleanup_fixture("running-hidden");
         fs::write(
             root.join("sessions").join("rollout-hidden-subagent.jsonl"),
-            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}})
-                .to_string(),
+            [
+                json!({"type":"session_meta","payload":{"id":"hidden-subagent"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-live"}})
+                    .to_string(),
+            ]
+            .join("\n"),
         )
         .unwrap();
         let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
@@ -870,10 +677,57 @@ mod tests {
             [current_unix_seconds()],
         )
         .unwrap();
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        assert!(!candidate(&plan, "hidden-subagent").allowed);
+        let candidates = selections_for_plan(&plan);
 
-        let err = execute_delete_hidden(&CodexPaths::new(&root)).unwrap_err();
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
 
-        assert!(err.to_string().contains("running"));
+        assert_eq!(result.deleted_threads, 1);
+        assert_eq!(result.skipped_threads, 1);
+        assert_eq!(result.failed_threads, 0);
+        assert!(thread_exists(&conn, "hidden-subagent"));
+        assert!(!thread_exists(&conn, "hidden-internal"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-subagent.jsonl")
+            .exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn execute_delete_hidden_protects_stale_running_rollout() {
+        let root = hidden_cleanup_fixture("stale-running-hidden");
+        fs::write(
+            root.join("sessions").join("rollout-hidden-subagent.jsonl"),
+            [
+                json!({"type":"session_meta","payload":{"id":"hidden-subagent"}}).to_string(),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-stale"}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"tool_search_call","call_id":"call-stale"}}).to_string(),
+                json!({"type":"response_item","payload":{"type":"tool_search_output","call_id":"call-stale"}}).to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        conn.execute(
+            "UPDATE threads SET updated_at=?1 WHERE id='hidden-subagent'",
+            [1_i64],
+        )
+        .unwrap();
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        assert!(!candidate(&plan, "hidden-subagent").allowed);
+        let candidates = selections_for_plan(&plan);
+
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
+
+        assert_hidden_result_preserved_visible(&result);
+        assert_eq!(result.before.hidden_threads, 2);
+        assert_eq!(result.deleted_threads, 1);
+        assert_eq!(result.skipped_threads, 1);
+        assert_eq!(result.after_hidden_threads, 1);
         assert!(thread_exists(&conn, "hidden-subagent"));
         assert!(root
             .join("sessions")
@@ -882,44 +736,13 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
     }
-
-    #[test]
-    fn execute_delete_hidden_allows_stale_running_rollout_without_active_metadata() {
-        let root = hidden_cleanup_fixture("stale-running-hidden");
-        fs::write(
-            root.join("sessions").join("rollout-hidden-subagent.jsonl"),
-            [
-                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-stale"}}).to_string(),
-                json!({"type":"response_item","payload":{"type":"tool_search_call","call_id":"call-stale"}}).to_string(),
-                json!({"type":"response_item","payload":{"type":"tool_search_output","call_id":"call-stale"}}).to_string(),
-            ]
-            .join("\n"),
-        )
-        .unwrap();
-        let stale_at = current_unix_seconds() - STALE_HIDDEN_RUNNING_ROLLOUT_SECONDS - 60;
-        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
-        conn.execute(
-            "UPDATE threads SET updated_at=?1 WHERE id='hidden-subagent'",
-            [stale_at],
-        )
-        .unwrap();
-
-        let result = execute_delete_hidden(&CodexPaths::new(&root)).unwrap();
-
-        assert_hidden_result_preserved_visible(&result);
-        assert_eq!(result.before.hidden_threads, 2);
-        assert_eq!(result.after_hidden_threads, 0);
-        assert!(!thread_exists(&conn, "hidden-subagent"));
-
-        let _ = fs::remove_dir_all(root);
-    }
-
     #[test]
     fn execute_delete_hidden_allows_aborted_candidate() {
         let root = hidden_cleanup_fixture("aborted-hidden");
         fs::write(
             root.join("sessions").join("rollout-hidden-subagent.jsonl"),
             [
+                json!({"type":"session_meta","payload":{"id":"hidden-subagent"}}).to_string(),
                 json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-abort"}}).to_string(),
                 json!({"type":"turn_started","turn_id":"turn-abort"}).to_string(),
                 json!({"type":"response_item","turn_id":"turn-abort","payload":{"type":"function_call","name":"exec_command","call_id":"call-abort","arguments":{"cmd":"sleep 10"}}}).to_string(),
@@ -928,8 +751,11 @@ mod tests {
             .join("\n"),
         )
         .unwrap();
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = selections_for_plan(&plan);
 
-        let result = execute_delete_hidden(&CodexPaths::new(&root)).unwrap();
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
 
         assert_hidden_result_preserved_visible(&result);
         assert_eq!(result.before.hidden_threads, 2);
@@ -941,6 +767,256 @@ mod tests {
             .join("rollout-hidden-subagent.jsonl")
             .exists());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_rechecks_changed_fingerprint_and_continues_with_other_candidates() {
+        let root = hidden_cleanup_fixture("changed-fingerprint");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = vec![
+            selection(&plan, "hidden-internal"),
+            selection(&plan, "hidden-subagent"),
+        ];
+        fs::write(
+            root.join("sessions").join("rollout-hidden-internal.jsonl"),
+            valid_completed_rollout("hidden-internal") + "\n",
+        )
+        .unwrap();
+
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
+
+        assert_eq!(result.deleted_threads, 1);
+        assert_eq!(result.skipped_threads, 1);
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .find(|item| item.id == "hidden-internal")
+                .unwrap()
+                .status,
+            "skipped"
+        );
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .find(|item| item.id == "hidden-subagent")
+                .unwrap()
+                .status,
+            "deleted"
+        );
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        assert!(thread_exists(&conn, "hidden-internal"));
+        assert!(!thread_exists(&conn, "hidden-subagent"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-internal.jsonl")
+            .exists());
+        assert!(!root
+            .join("sessions")
+            .join("rollout-hidden-subagent.jsonl")
+            .exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_skips_a_candidate_thread_deleted_after_preview() {
+        let root = hidden_cleanup_fixture("missing-candidate-id");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidate = selection(&plan, "hidden-subagent");
+        Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .execute("DELETE FROM threads WHERE id='hidden-subagent'", [])
+            .unwrap();
+
+        let result = execute_delete_hidden(&paths, &[candidate]).unwrap();
+
+        assert_eq!(result.skipped_threads, 1);
+        assert_eq!(result.deleted_threads, 0);
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        assert!(!thread_exists(&conn, "hidden-subagent"));
+        assert!(thread_exists(&conn, "hidden-internal"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-subagent.jsonl")
+            .exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_skips_missing_corrupt_and_shared_rollouts() {
+        for case in ["missing", "corrupt", "shared"] {
+            let root = hidden_cleanup_fixture(case);
+            let paths = CodexPaths::new(&root);
+            let plan = plan_delete_hidden(&paths).unwrap();
+            let candidate = selection(&plan, "hidden-subagent");
+            let rollout = root.join("sessions").join("rollout-hidden-subagent.jsonl");
+            match case {
+                "missing" => fs::remove_file(&rollout).unwrap(),
+                "corrupt" => fs::write(&rollout, "{broken jsonl").unwrap(),
+                "shared" => {
+                    Connection::open(root.join("state_5.sqlite"))
+                        .unwrap()
+                        .execute(
+                            "UPDATE threads SET rollout_path=?1 WHERE id='main-visible'",
+                            [rollout.display().to_string()],
+                        )
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let result = execute_delete_hidden(&paths, &[candidate]).unwrap();
+
+            assert_eq!(result.skipped_threads, 1, "{case}");
+            assert_eq!(result.deleted_threads, 0, "{case}");
+            let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+            assert!(thread_exists(&conn, "hidden-subagent"), "{case}");
+            assert_eq!(rollout.exists(), case != "missing", "{case}");
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_delete_skips_symlink_rollouts_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+        let root = hidden_cleanup_fixture("symlink");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidate = selection(&plan, "hidden-subagent");
+        let rollout = root.join("sessions").join("rollout-hidden-subagent.jsonl");
+        let target = root.join("sessions").join("rollout-main-visible.jsonl");
+        fs::remove_file(&rollout).unwrap();
+        symlink(&target, &rollout).unwrap();
+
+        let result = execute_delete_hidden(&paths, &[candidate]).unwrap();
+
+        assert_eq!(result.skipped_threads, 1);
+        assert!(thread_exists(
+            &Connection::open(root.join("state_5.sqlite")).unwrap(),
+            "hidden-subagent"
+        ));
+        assert!(fs::symlink_metadata(&rollout)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(target.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_does_not_add_threads_created_after_preview_to_candidates() {
+        let root = hidden_cleanup_fixture("late-hidden");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = selections_for_plan(&plan);
+        append_hidden_thread(&root, "late-hidden", 50);
+
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
+
+        assert_eq!(result.deleted_threads, 2);
+        assert_eq!(result.after_hidden_threads, 1);
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        assert!(thread_exists(&conn, "late-hidden"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-late-hidden.jsonl")
+            .exists());
+        assert!(fs::read_to_string(root.join("session_index.jsonl"))
+            .unwrap()
+            .contains("late-hidden"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_accepts_more_than_one_hundred_preview_candidates() {
+        let root = hidden_cleanup_fixture("over-one-hundred");
+        for index in 0..101 {
+            append_hidden_thread(&root, &format!("extra-{index:03}"), 100 + index as i64);
+        }
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = selections_for_plan(&plan);
+        assert!(candidates.len() > 100);
+
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
+
+        assert_eq!(result.deleted_threads as usize, candidates.len());
+        assert_eq!(result.skipped_threads, 0);
+        assert_eq!(result.failed_threads, 0);
+        assert_eq!(result.after_hidden_threads, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_continues_after_a_single_item_database_failure() {
+        let root = hidden_cleanup_fixture("item-database-failure");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = vec![
+            selection(&plan, "hidden-internal"),
+            selection(&plan, "hidden-subagent"),
+        ];
+        Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .execute_batch("CREATE TRIGGER fail_one_hidden BEFORE DELETE ON threads WHEN OLD.id='hidden-internal' BEGIN SELECT RAISE(ABORT,'injected item failure'); END;")
+            .unwrap();
+
+        let result = execute_delete_hidden(&paths, &candidates).unwrap();
+
+        assert_eq!(result.failed_threads, 1);
+        assert_eq!(result.deleted_threads, 1);
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        assert!(thread_exists(&conn, "hidden-internal"));
+        assert!(!thread_exists(&conn, "hidden-subagent"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-internal.jsonl")
+            .exists());
+        assert!(!root
+            .join("sessions")
+            .join("rollout-hidden-subagent.jsonl")
+            .exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_delete_rolls_back_all_candidates_on_a_system_database_failure() {
+        let root = hidden_cleanup_fixture("system-database-failure");
+        let paths = CodexPaths::new(&root);
+        let plan = plan_delete_hidden(&paths).unwrap();
+        let candidates = vec![
+            selection(&plan, "hidden-internal"),
+            selection(&plan, "hidden-subagent"),
+        ];
+        let index_before = fs::read_to_string(paths.session_index()).unwrap();
+        Connection::open(root.join("state_5.sqlite"))
+            .unwrap()
+            .execute_batch("CREATE TRIGGER rollback_hidden_batch BEFORE DELETE ON threads WHEN OLD.id='hidden-subagent' BEGIN SELECT RAISE(ROLLBACK,'injected batch failure'); END;")
+            .unwrap();
+
+        let error = execute_delete_hidden(&paths, &candidates).unwrap_err();
+
+        assert!(error.to_string().contains("回滚"));
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        assert!(thread_exists(&conn, "hidden-internal"));
+        assert!(thread_exists(&conn, "hidden-subagent"));
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-internal.jsonl")
+            .exists());
+        assert!(root
+            .join("sessions")
+            .join("rollout-hidden-subagent.jsonl")
+            .exists());
+        assert_eq!(
+            fs::read_to_string(paths.session_index()).unwrap(),
+            index_before
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -963,8 +1039,7 @@ mod tests {
         ] {
             fs::write(
                 sessions.join(format!("rollout-{id}.jsonl")),
-                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"done"}]}})
-                    .to_string(),
+                valid_completed_rollout(id),
             )
             .unwrap();
         }
@@ -1113,6 +1188,69 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn valid_completed_rollout(id: &str) -> String {
+        [
+            json!({"type":"session_meta","payload":{"id":id}}).to_string(),
+            json!({"type":"turn_started","turn_id":"turn-fixture"}).to_string(),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-fixture"}})
+                .to_string(),
+        ]
+        .join("\n")
+    }
+
+    fn append_hidden_thread(root: &Path, id: &str, updated_at: i64) {
+        let rollout = root.join("sessions").join(format!("rollout-{id}.jsonl"));
+        fs::write(&rollout, valid_completed_rollout(id)).unwrap();
+        let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+        insert_thread(
+            &conn,
+            root,
+            ThreadFixtureRow {
+                id,
+                source: "codex",
+                thread_source: "subagent",
+                parent_thread_id: Some("main-visible"),
+                updated_at,
+                archived: 0,
+            },
+        );
+        let index_path = root.join("session_index.jsonl");
+        let mut index = fs::read_to_string(&index_path).unwrap();
+        if !index.is_empty() {
+            index.push('\n');
+        }
+        index.push_str(&session_index_line(root, id));
+        fs::write(index_path, index).unwrap();
+    }
+
+    fn candidate<'a>(
+        plan: &'a super::HiddenThreadDeletePlan,
+        id: &str,
+    ) -> &'a super::HiddenThreadCandidate {
+        plan.candidates
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .unwrap()
+    }
+
+    fn selection(plan: &super::HiddenThreadDeletePlan, id: &str) -> HiddenThreadSelection {
+        let candidate = candidate(plan, id);
+        HiddenThreadSelection {
+            id: candidate.id.clone(),
+            fingerprint: candidate.fingerprint.clone(),
+        }
+    }
+
+    fn selections_for_plan(plan: &super::HiddenThreadDeletePlan) -> Vec<HiddenThreadSelection> {
+        plan.candidates
+            .iter()
+            .map(|candidate| HiddenThreadSelection {
+                id: candidate.id.clone(),
+                fingerprint: candidate.fingerprint.clone(),
+            })
+            .collect()
     }
 
     fn session_index_line(root: &Path, id: &str) -> String {

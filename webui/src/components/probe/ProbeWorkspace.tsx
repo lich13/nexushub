@@ -318,14 +318,10 @@ function ProbeRuntimeSettingsCard({
         <label className="toggle-row"><span>Claude Code 完成</span><input type="checkbox" checked={draft.notifications.notify_claude_completion} onChange={(event) => setNotifications({ notify_claude_completion: event.target.checked })} /></label>
         <label className="toggle-row"><span>Claude Code 失败</span><input type="checkbox" checked={draft.notifications.notify_claude_failure} onChange={(event) => setNotifications({ notify_claude_failure: event.target.checked })} /></label>
         <label className="toggle-row"><span>Claude Code 回复通知</span><input type="checkbox" checked={draft.notifications.notify_claude_reply_needed} onChange={(event) => setNotifications({ notify_claude_reply_needed: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Pi 通知</span><input type="checkbox" checked={draft.notifications.notify_pi} onChange={(event) => setNotifications({ notify_pi: event.target.checked })} /></label>
-        <label className="toggle-row"><span>Pi 完成</span><input type="checkbox" checked={draft.notifications.notify_pi_completion} onChange={(event) => setNotifications({ notify_pi_completion: event.target.checked })} /></label>
-        <label className="toggle-row" title="原生记录无法确认自动重试结束"><span>Pi 失败（暂不支持）</span><input type="checkbox" checked={false} disabled /></label>
         <label className="toggle-row"><span title="包含 Plan、进行中的同步或异步提问，以及最终回复中明确等待确认或反馈的请求">Codex 回复通知</span><input type="checkbox" checked={draft.notifications.notify_reply_needed} onChange={(event) => setNotifications({ notify_reply_needed: event.target.checked })} /></label>
         <label className="toggle-row"><span>Codex 异常通知</span><input type="checkbox" checked={draft.notifications.notify_recoverable} onChange={(event) => setNotifications({ notify_recoverable: event.target.checked })} /></label>
         <label className="toggle-row"><span>管理 Codex Hook</span><input type="checkbox" checked={draft.hooks.manage_stop_hook} onChange={(event) => setHooks({ manage_stop_hook: event.target.checked })} /></label>
       </div>
-      <p className="muted-row">Pi 未安装状态扩展：仅发送明确完成通知。原生记录无法证明自动重试已终止，最终失败通知暂不支持。</p>
       {status?.provider_notifications?.map((provider) => <div key={provider.provider} className="muted-row">{provider.provider.toUpperCase()} · {provider.enabled ? "监控中" : "已停用"} · {provider.streams} 个会话 · {provider.read_errors} 个读取异常 · {provider.failed_deliveries} 次投递失败</div>)}
       {errors.length > 0 && <div className="form-error">{errors[0]}</div>}
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
