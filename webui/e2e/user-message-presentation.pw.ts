@@ -142,7 +142,7 @@ test("a failed answer copy shows an accessible error without copying the questio
       value: { writeText: async () => { throw new Error("clipboard denied by fixture"); } }
     });
   });
-  await openProvider(page, false, () => [replyEnvelope]);
+  await openProvider(page, "grok", false, () => [replyEnvelope]);
   const reply = page.locator(".user-question-reply").first();
   await reply.getByRole("button", { name: "复制回答", exact: true }).click();
   const error = reply.locator('[aria-live="polite"]');

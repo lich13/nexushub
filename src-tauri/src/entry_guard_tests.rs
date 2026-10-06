@@ -9,14 +9,14 @@ mod tests {
 
     fn registered_invoke_command_paths() -> Vec<String> {
         let production_source = production_lib_source();
-        let marker = ".invoke_handler(tauri::generate_handler![";
+        let marker = "tauri::generate_handler![";
         let start = production_source
             .find(marker)
             .expect("lib source must include tauri generate_handler")
             + marker.len();
         let body = production_source[start..]
-            .split("\n        ])")
-            .next()
+            .split_once(']')
+            .map(|(commands, _)| commands)
             .expect("generate_handler block must close");
         body.lines()
             .map(str::trim)

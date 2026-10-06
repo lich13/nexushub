@@ -124,6 +124,7 @@ test("copy commands use the selected task and long load errors stay readable", a
   await expect(page.getByText("已复制线程 ID", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 320, height: 844 });
   await mockCommand(page, "grok.list", args => Promise.reject(new Error("Fixture load failure: " + "long-path/".repeat(40))));
+  await page.locator(".mobile-tabs").getByRole("button", { name: "Codex", exact: true }).click();
   await page.locator(".mobile-tabs").getByRole("button", { name: "Grok Build", exact: true }).click();
   await expect(page.locator(".form-error").first()).toContainText("Fixture load failure");
   await assertContrast(page, ".form-error");

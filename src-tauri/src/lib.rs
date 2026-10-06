@@ -13,11 +13,59 @@ pub use services::probe::desktop_probe_status_with_state;
 pub use services::updates::desktop_update_status_with_state;
 
 pub fn run() {
+    let active_handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        commands::plans::savePlanMarkdown,
+        remote::remoteGet,
+        remote::remoteVerify,
+        remote::remoteSave,
+        remote::remoteRemove,
+        remote::remoteSelect,
+        remote::remoteInvoke,
+        commands::sessions::readSessionAttachment,
+        commands::sessions::previewSessionBatch,
+        commands::sessions::executeSessionBatch,
+        commands::sessions::searchSessions,
+        commands::system::getSystemCapabilities,
+        commands::system::getSystemVersion,
+        commands::system::listProviders,
+        commands::system::getPlatformOverview,
+        commands::threads::listThreads,
+        commands::threads::getThread,
+        commands::threads::getThreadBlocks,
+        commands::threads::archiveThread,
+        commands::threads::restoreThread,
+        commands::threads::renameThread,
+        commands::probe::getProbeStatus,
+        commands::updates::getUpdateStatus,
+        commands::updates::updatesCheck,
+        commands::updates::updatesInstall,
+        commands::settings::getProbeSettings,
+        commands::settings::saveProbeSettings,
+        commands::settings::getProbeEvents,
+        commands::settings::probeBarkTest,
+        commands::settings::probeInstallHooks,
+        commands::settings::dryRunArchiveDelete,
+        commands::settings::startArchiveDelete,
+        commands::settings::dryRunHiddenThreadDelete,
+        commands::settings::startHiddenThreadDelete,
+        commands::jobs::listJobs,
+        commands::jobs::getJob,
+        commands::grok::listGrokSessions,
+        commands::grok::getGrokSession,
+        commands::grok::renameGrokSession,
+        commands::grok::previewGrokSessionDelete,
+        commands::grok::deleteGrokSession,
+        commands::claude::listClaudeSessions,
+        commands::claude::getClaudeSession,
+        commands::claude::renameClaudeSession,
+        commands::claude::previewClaudeSessionDelete,
+        commands::claude::deleteClaudeSession,
+    ];
     tauri::Builder::default()
         .append_invoke_initialization_script(desktop_boot::DESKTOP_RUNTIME_MARKER_SCRIPT)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(|invoke| {
+        .invoke_handler(move |invoke| {
             if nexushub_core::services::commands::is_retired_command(invoke.message.command())
                 || matches!(
                     invoke.message.command(),
@@ -31,54 +79,7 @@ pub fn run() {
                 invoke.resolver.reject("unavailable: retired command");
                 return true;
             }
-            (tauri::generate_handler![
-                commands::plans::savePlanMarkdown,
-                remote::remoteGet,
-                remote::remoteVerify,
-                remote::remoteSave,
-                remote::remoteRemove,
-                remote::remoteSelect,
-                remote::remoteInvoke,
-                commands::sessions::readSessionAttachment,
-                commands::sessions::previewSessionBatch,
-                commands::sessions::executeSessionBatch,
-                commands::sessions::searchSessions,
-                commands::system::getSystemCapabilities,
-                commands::system::getSystemVersion,
-                commands::system::listProviders,
-                commands::system::getPlatformOverview,
-                commands::threads::listThreads,
-                commands::threads::getThread,
-                commands::threads::getThreadBlocks,
-                commands::threads::archiveThread,
-                commands::threads::restoreThread,
-                commands::threads::renameThread,
-                commands::probe::getProbeStatus,
-                commands::updates::getUpdateStatus,
-                commands::updates::updatesCheck,
-                commands::updates::updatesInstall,
-                commands::settings::getProbeSettings,
-                commands::settings::saveProbeSettings,
-                commands::settings::getProbeEvents,
-                commands::settings::probeBarkTest,
-                commands::settings::probeInstallHooks,
-                commands::settings::dryRunArchiveDelete,
-                commands::settings::startArchiveDelete,
-                commands::settings::dryRunHiddenThreadDelete,
-                commands::settings::startHiddenThreadDelete,
-                commands::jobs::listJobs,
-                commands::jobs::getJob,
-                commands::grok::listGrokSessions,
-                commands::grok::getGrokSession,
-                commands::grok::renameGrokSession,
-                commands::grok::previewGrokSessionDelete,
-                commands::grok::deleteGrokSession,
-                commands::claude::listClaudeSessions,
-                commands::claude::getClaudeSession,
-                commands::claude::renameClaudeSession,
-                commands::claude::previewClaudeSessionDelete,
-                commands::claude::deleteClaudeSession,
-            ])(invoke)
+            active_handler(invoke)
         })
         .setup(|app| {
             if let Err(err) = resources::retire_legacy_desktop_web_service(
