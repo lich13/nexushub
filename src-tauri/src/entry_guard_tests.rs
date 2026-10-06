@@ -991,10 +991,12 @@ mod tests {
             lib_source.contains("RunEvent::Ready"),
             "Tauri must re-show and focus the main window once the event loop is ready"
         );
-        let setup_source = lib_source
-            .split(".setup(|app| {")
-            .nth(1)
-            .and_then(|source| source.split(".run(|app, event| {").next())
+        let (setup_and_run_source, run_source) = lib_source
+            .split_once(".run(|app, event|")
+            .expect("Tauri run loop must own Ready and Reopen window handling");
+        let setup_source = setup_and_run_source
+            .split_once(".setup(|app| {")
+            .map(|(_, source)| source)
             .expect("Tauri setup must build and initialize the main window");
         assert!(
             setup_source.contains("desktop_boot::initialize_main_window(&window)")
@@ -1005,10 +1007,6 @@ mod tests {
             !setup_source.contains("desktop_boot::reveal_main_window(&window)"),
             "setup must not reveal the window before the Ready event"
         );
-        let run_source = lib_source
-            .split(".run(|app, event| {")
-            .nth(1)
-            .expect("Tauri run loop must own Ready and Reopen window handling");
         assert!(
             run_source.contains("RunEvent::Ready") && run_source.contains("RunEvent::Reopen"),
             "Ready and Reopen must both use the main window lifecycle handler"
