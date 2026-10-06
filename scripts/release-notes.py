@@ -9,7 +9,7 @@ import sys
 
 HIGHLIGHTS: dict[str, list[str]] = {
     "1.0.0": [
-        "支持 Codex、Grok 和 Pi 的批量归档、恢复与删除。",
+        "Codex 支持批量归档、恢复与删除，Grok 和 Pi 支持批量删除。",
         "扩展 Bark 完成和失败通知，并移除已退役的日志维护入口。",
         "完成隐私清理和仓库结构整理，远程部署参数继续从仓库外提供。",
     ],
@@ -19,8 +19,8 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "发布资产收敛为 macOS App、updater 和 Linux webd 服务包。",
     ],
     "1.1.1": [
-        "改进会话列表、归档线程操作和桌面交互稳定性。",
-        "统一执行活动状态、键盘操作和移动端显示。",
+        "修复 Grok 原生 Execute 工具未被归入命令执行组的问题。",
+        "连续执行活动可合并查看，保留每项工具结果。",
     ],
     "1.1.2": [
         "改进 Grok 工具活动识别和连续命令分组。",
@@ -59,8 +59,8 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "增加本机与远程机器快速切换，并隔离各机器的查询和操作状态。",
     ],
     "1.2.1": [
-        "改进远程管理连接、服务更新和桌面 App 更新体验。",
-        "加强远程 API 的机器范围和更新状态隔离。",
+        "修复 Plan 在 macOS WebKit 中下载停滞，改用原生文件保存。",
+        "修复 Grok 改名进程在服务只读隔离下无法正常工作的路径。",
     ],
     "1.2.2": [
         "修复 Grok 已结束线程仍显示运行中的问题。",
@@ -75,7 +75,7 @@ HIGHLIGHTS: dict[str, list[str]] = {
         "增加 Codex 风格时间线，可定位消息、Plan、附件和工具组。",
     ],
     "1.2.5": [
-        "增加普通 Codex 提问的 Bark 提醒、文件路径操作和统一设置页面。",
+        "修正桌面安装包的版本信息，使应用显示与发布版本一致。",
         "修复服务器更新在 systemd 只读隔离下无法写入的问题。",
     ],
     "1.2.6": [
@@ -139,25 +139,51 @@ def render(version: str, *, updater: bool = False) -> str:
             lines.append("")
         return "\n".join(lines)
 
-    lines = [f"# NexusHub {version}", "", "## 更新内容", ""]
-    lines.extend(f"- {item}" for item in highlights(version))
-    lines.extend(
-        [
-            "",
-            "## 发布资产",
-            "",
-            "- macOS ARM64：DMG 安装包、校验文件、updater 压缩包和签名。",
-            "- Linux x86_64：`nexushub-webd` 服务包及校验文件。",
-            "- `latest.json` 仅提供 `darwin-aarch64` updater 映射；文件名中的 `darwin-arm64` 表示同一 macOS ARM64 架构。",
-            "",
-            "## 使用说明",
-            "",
-            "- macOS App 用于本机和远程 API 管理；远程地址与管理员 API Key 请在 App 中配置。",
-            "- 服务端不提供网页登录，不在仓库或发布包中保存域名、主机、会话或凭据。",
-            "- 升级前请核对校验文件，远程服务更新使用服务端 API。",
+    version_parts = tuple(int(part) for part in version.split("."))
+    has_remote_api = version_parts >= (1, 2, 0)
+    has_linux_desktop = version_parts < (1, 1, 0)
+    assets = [
+        "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+        "Linux x86_64：nexushub-webd 服务包与 SHA-256 校验文件。",
+    ]
+    if has_linux_desktop:
+        assets.extend([
+            "Linux x86_64 桌面：AppImage、DEB、RPM，附校验文件；AppImage 另附 updater 签名。",
+            "latest.json 同时包含 macOS ARM64 与 Linux x86_64 桌面映射；macOS updater 另附 SHA-256 文件，本版共十五项资产。",
+        ])
+    else:
+        assets.append("latest.json 仅映射 darwin-aarch64；本版共七项资产，不提供 Linux 桌面包。")
+    if has_remote_api:
+        migration = [
+            "macOS App 支持本机与远程管理；远程连接使用独立管理员 API Key，保存在本机 Keychain。",
+            "Linux 服务仅提供管理 API 与健康检查，不提供网页登录。",
         ]
-    )
-    return "\n".join(lines) + "\n"
+        upgrade = [
+            "升级前核对校验文件；远程地址与 API Key 在 App 中配置，部署参数由仓库外提供。",
+            "保留会话、凭据和已有监测配置；连接提示协议不兼容时，先更新远程服务。",
+        ]
+    else:
+        migration = [
+            "本版支持 macOS App 与云端 WebUI；云端使用该版本的网页登录与认证设置。",
+            "升级不改写原生会话；部署地址与认证参数从仓库外提供。",
+        ]
+        upgrade = [
+            "本页描述历史版本的实际能力；管理员 API Key 远程管理从 1.2.0 开始提供。",
+            "新安装建议使用当前稳定版。升级前核对校验文件，并阅读目标版本的迁移说明。",
+        ]
+    sections = {
+        "版本概览": [f"NexusHub {version}，本版主要调整如下。"],
+        "功能调整": highlights(version),
+        "兼容性与迁移": migration,
+        "支持平台与资产": assets,
+        "升级提示": upgrade,
+    }
+    lines = [f"# NexusHub {version}", ""]
+    for heading, paragraphs in sections.items():
+        lines.extend([f"## {heading}", ""])
+        lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+        lines.append("")
+    return "\n".join(lines)
 
 
 def main() -> int:

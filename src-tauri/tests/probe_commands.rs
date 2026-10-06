@@ -16,14 +16,13 @@ fn registered_invoke_command_paths() -> Vec<String> {
         .split("\n#[cfg(test)]")
         .next()
         .expect("lib source must include production section");
-    let marker = ".invoke_handler(tauri::generate_handler![";
+    let marker = "tauri::generate_handler![";
     let start = production_source
         .find(marker)
         .expect("lib source must include tauri generate_handler")
         + marker.len();
-    let body = production_source[start..]
-        .split("\n        ])")
-        .next()
+    let (body, _) = production_source[start..]
+        .split_once(']')
         .expect("generate_handler block must close");
     body.lines()
         .map(str::trim)
