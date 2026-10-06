@@ -109,7 +109,8 @@ test("Codex context menu stays inside the viewport when opened at the lower edge
   expect(bounds).not.toBeNull();
   await target.click({
     button: "right",
-    position: { x: Math.max(1, bounds!.width - 3), y: Math.max(1, bounds!.height - 3) }
+    // Stay clear of the floating search control while still forcing edge clamping.
+    position: { x: Math.max(1, bounds!.width - 80), y: Math.max(1, bounds!.height - 3) }
   });
 
   const menu = page.locator(".context-task-menu");
