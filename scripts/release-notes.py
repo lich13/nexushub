@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.10": [
+        "修复切换远程机器后列表和设置持续加载的问题，钥匙串访问改为后台串行执行。",
+        "增加凭据读取超时反馈，保留连接事务与机器切换保护，已有连接无需重建。",
+    ],
     "1.2.9": [
         "统一 Codex、Claude Code 和 Grok 的紧凑阅读布局，正文与活动摘要对齐，复制按钮不再占据额外一行。",
         "新增 Codex 子智能体活动与右侧只读详情，支持嵌套返回、分页、工具记录和附件。",
@@ -107,6 +111,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.10":
+        sections = {
+            "版本概览": ["本版修复 macOS App 远程连接可能持续加载的问题，延续 1.2.9 的紧凑阅读布局与 Codex 子智能体详情。"],
+            "功能调整": [
+                "钥匙串读取超过 15 秒会显示当前操作的错误，方便判断并重试；不会自动切换目标机器。",
+                "保存和移除连接保持完整事务，等待提交或回滚完成后才允许切换机器。",
+            ],
+            "问题修复": [
+                "钥匙串访问改为后台串行执行，避免多个远程请求同时读取凭据并阻塞异步运行时。",
+                "超时或取消后，仍在执行的原生操作继续持有串行许可；尚未开始的任务可以取消，避免积压。",
+                "读取凭据和验证服务能力后重新核对连接身份，防止旧连接请求继续执行或覆盖新机器结果。",
+            ],
+            "兼容性与迁移": [
+                "远程 API 协议保持 2，不新增 RPC、数据库字段或凭据缓存。现有 API Key、Keychain 连接、会话、Bark 和监测配置继续使用。",
+                "保留三个 Provider 的阅读、搜索、工具折叠、Plan 导出、附件和线程管理，以及 Codex 子智能体只读详情。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
+            ],
+            "升级提示": [
+                "建议使用远程管理的用户升级至 1.2.10。覆盖安装后直接使用已有连接；本机 App 和远程服务分别更新。",
+                "安装前核对校验和与 updater 签名。macOS 包尚无 Developer ID 签名或 Apple 公证；Minisign 验证更新归档来源，不能替代系统代码签名。",
+                "若系统请求钥匙串授权，请在 macOS 对话框完成验证。连接失败时查看当前操作反馈，不需要删除原有凭据或会话。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.9":
         sections = {

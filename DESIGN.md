@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.9 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub 1.2.10 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -67,3 +67,7 @@ Claude Code keeps a fixed navigation entry on both machine targets. Missing nati
 助手正文不重复显示 Provider 标签。桌面复制按钮位于正文侧边，悬停或键盘聚焦时出现，触屏保持可见；成功和失败反馈不撑高消息。线程 ID 保留复制菜单入口。
 
 Codex 子智能体行独立于工具组，显示任务名称和自身回合状态，缺少已验证关联时显示不可用原因。可用阅读区至少 960px 时详情并排显示，宽约 420px；较窄时覆盖显示并约束键盘焦点。支持 Escape、关闭、焦点返回和嵌套返回；主线程保持挂载与滚动位置。面板独立分页、滚动和折叠，机器、Provider 或主线程变化时关闭并丢弃旧响应。面板只读，不提供子智能体执行或管理动作。
+
+## 1.2.10 远程连接反馈
+
+钥匙串读取在后台串行进行，不阻塞界面。超过 15 秒时在当前操作附近显示错误，不能把超时当作成功或自动切换到本机。保存与移除连接等待已开始的事务完成；操作期间保持切换保护。连接身份变化后，旧读取不得发起业务操作或覆盖新机器结果。
