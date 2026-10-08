@@ -443,7 +443,9 @@ fn cancelling_work_queued_in_the_blocking_pool_prevents_it_from_running() {
                 started.send(()).expect("start observer disappeared");
                 wait_for_release(released);
             });
-            bounded(start).await.expect("blocking pool was not occupied");
+            bounded(start)
+                .await
+                .expect("blocking pool was not occupied");
 
             let worker_calls = Arc::clone(&queued_calls);
             let mut caller = Box::pin(async {
