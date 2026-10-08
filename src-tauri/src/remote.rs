@@ -2,7 +2,10 @@
 
 use nexushub_core::services::{
     commands::{is_allowed_rpc_command, is_mutating_rpc_command},
-    remote::*,
+    remote::{
+        credentials::{CredentialAccess, CredentialAccessError},
+        *,
+    },
     system::{HostSurface, SystemCapabilitiesResponse, API_VERSION},
 };
 use reqwest::{header, redirect::Policy, Client, Url};
@@ -12,12 +15,13 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 const KEYCHAIN_SERVICE: &str = "com.lich13.nexushub.remote";
 const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,14 +39,23 @@ struct ConnectionState {
     verified_revision: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct RemoteConnections {
-    state: Mutex<ConnectionState>,
+    state: Arc<Mutex<ConnectionState>>,
     path: PathBuf,
     http: Client,
+    credentials: CredentialAccess,
 }
 
 fn safe_error(message: &'static str) -> String {
     message.into()
+}
+
+fn credential_access_error(error: CredentialAccessError) -> String {
+    safe_error(match error {
+        CredentialAccessError::TimedOut => "钥匙串未及时响应，请检查系统授权后重试",
+        CredentialAccessError::WorkerUnavailable => "钥匙串操作失败，请重试",
+    })
 }
 
 pub fn normalized_base_url(raw: &str) -> Result<String, String> {
@@ -112,12 +125,13 @@ impl RemoteConnections {
             .build()
             .map_err(|_| safe_error("无法初始化远程连接"))?;
         Ok(Self {
-            state: Mutex::new(ConnectionState {
+            state: Arc::new(Mutex::new(ConnectionState {
                 prefs,
                 ..Default::default()
-            }),
+            })),
             path,
             http,
+            credentials: CredentialAccess::default(),
         })
     }
 
@@ -153,7 +167,7 @@ impl RemoteConnections {
         result.map_err(|_| safe_error("保存连接配置失败"))
     }
 
-    fn begin_change(&self, revision: u64) -> Result<ChangeGuard<'_>, String> {
+    fn begin_change(&self, revision: u64) -> Result<ChangeGuard, String> {
         let mut state = self.state.lock().expect("connection state");
         if state.prefs.revision != revision {
             return Err(safe_error("连接已变化，请重试"));
@@ -162,7 +176,19 @@ impl RemoteConnections {
             return Err(safe_error("操作进行中，请稍后切换"));
         }
         state.changing = true;
-        Ok(ChangeGuard(self))
+        Ok(ChangeGuard(self.state.clone()))
+    }
+
+    fn require_current_remote(&self, revision: u64, base: &str) -> Result<(), String> {
+        let current = self.state.lock().expect("connection state");
+        if current.changing
+            || current.prefs.revision != revision
+            || current.prefs.target != MachineTarget::Remote
+            || current.prefs.base_url.as_deref() != Some(base)
+        {
+            return Err(safe_error("连接已变化，操作已取消"));
+        }
+        Ok(())
     }
 
     async fn call(
@@ -254,6 +280,74 @@ impl RemoteConnections {
             .await?;
         compatible_capabilities(value)
     }
+
+    // Both methods run as one serialized blocking transaction. Their caller's
+    // ChangeGuard stays in that worker through commit or rollback, even if the
+    // frontend stops awaiting the command.
+    fn save_connection(
+        &self,
+        request: RemoteConnectionCredentials,
+        base: String,
+    ) -> Result<RemoteConnectionView, String> {
+        let mut next = self.state.lock().expect("connection state").prefs.clone();
+        let entry = credential(&base)?;
+        let old_key = read_credential(&entry)?;
+        let previous_entry = next
+            .base_url
+            .as_deref()
+            .filter(|previous| *previous != base)
+            .map(credential)
+            .transpose()?;
+        let previous_key = previous_entry
+            .as_ref()
+            .map(read_credential)
+            .transpose()?
+            .flatten();
+        entry
+            .set_password(&request.api_key)
+            .map_err(|_| safe_error("无法保存 API Key 到钥匙串"))?;
+        if let Some(previous) = &previous_entry {
+            if let Err(error) = restore_credential(previous, None) {
+                restore_credential(&entry, old_key.as_deref())?;
+                return Err(error);
+            }
+        }
+        next.base_url = Some(base);
+        next.revision = next.revision.wrapping_add(1);
+        if let Err(error) = self.persist(&next) {
+            let restore_new = restore_credential(&entry, old_key.as_deref());
+            let restore_previous = previous_entry
+                .as_ref()
+                .map(|previous| restore_credential(previous, previous_key.as_deref()))
+                .transpose();
+            restore_new?;
+            restore_previous?;
+            return Err(error);
+        }
+        self.state.lock().expect("connection state").prefs = next;
+        Ok(self.view())
+    }
+
+    fn remove_connection(&self) -> Result<RemoteConnectionView, String> {
+        let previous = self.state.lock().expect("connection state").prefs.clone();
+        let entry = previous.base_url.as_deref().map(credential).transpose()?;
+        let old_key = entry.as_ref().map(read_credential).transpose()?.flatten();
+        if let Some(entry) = &entry {
+            restore_credential(entry, None)?;
+        }
+        let next = Preferences {
+            revision: previous.revision.wrapping_add(1),
+            ..Default::default()
+        };
+        if let Err(error) = self.persist(&next) {
+            if let (Some(entry), Some(key)) = (entry, old_key) {
+                restore_credential(&entry, Some(&key))?;
+            }
+            return Err(error);
+        }
+        self.state.lock().expect("connection state").prefs = next;
+        Ok(self.view())
+    }
 }
 
 fn compatible_capabilities(value: Value) -> Result<SystemCapabilitiesResponse, String> {
@@ -267,10 +361,10 @@ fn compatible_capabilities(value: Value) -> Result<SystemCapabilitiesResponse, S
     Ok(capabilities)
 }
 
-struct ChangeGuard<'a>(&'a RemoteConnections);
-impl Drop for ChangeGuard<'_> {
+struct ChangeGuard(Arc<Mutex<ConnectionState>>);
+impl Drop for ChangeGuard {
     fn drop(&mut self) {
-        self.0.state.lock().expect("connection state").changing = false;
+        self.0.lock().expect("connection state").changing = false;
     }
 }
 struct WriteGuard<'a>(&'a RemoteConnections, bool);
@@ -301,88 +395,35 @@ pub async fn remoteSave(
     state: tauri::State<'_, RemoteConnections>,
     request: RemoteConnectionCredentials,
 ) -> Result<RemoteConnectionView, String> {
-    let _guard = state.begin_change(request.revision)?;
+    let guard = state.begin_change(request.revision)?;
     state.verify(&request).await?;
     let base = normalized_base_url(&request.base_url)?;
-    let mut next = state.state.lock().expect("connection state").prefs.clone();
-    let entry = credential(&base)?;
-    let old_key = read_credential(&entry)?;
-    let previous_entry = next
-        .base_url
-        .as_deref()
-        .filter(|previous| *previous != base)
-        .map(credential)
-        .transpose()?;
-    let previous_key = previous_entry
-        .as_ref()
-        .map(read_credential)
-        .transpose()?
-        .flatten();
-    entry
-        .set_password(&request.api_key)
-        .map_err(|_| safe_error("无法保存 API Key 到钥匙串"))?;
-    if let Some(previous) = &previous_entry {
-        if let Err(error) = restore_credential(previous, None) {
-            restore_credential(&entry, old_key.as_deref())?;
-            return Err(error);
-        }
-    }
-    next.base_url = Some(base);
-    next.revision = next.revision.wrapping_add(1);
-    if let Err(error) = state.persist(&next) {
-        let restore_new = restore_credential(&entry, old_key.as_deref());
-        let restore_previous = previous_entry
-            .as_ref()
-            .map(|previous| restore_credential(previous, previous_key.as_deref()))
-            .transpose();
-        restore_new?;
-        restore_previous?;
-        return Err(error);
-    }
-    state.state.lock().expect("connection state").prefs = next;
-    Ok(state.view())
+    let credentials = state.credentials.clone();
+    let connection = state.inner().clone();
+    credentials
+        .transaction(CREDENTIAL_WAIT, move || {
+            let _guard = guard;
+            connection.save_connection(request, base)
+        })
+        .await
+        .map_err(credential_access_error)?
 }
 
 #[tauri::command(rename = "remote.remove")]
-pub fn remoteRemove(
+pub async fn remoteRemove(
     state: tauri::State<'_, RemoteConnections>,
     request: RemoteRevisionRequest,
 ) -> Result<RemoteConnectionView, String> {
-    let _guard = state.begin_change(request.revision)?;
-    let previous = state.state.lock().expect("connection state").prefs.clone();
-    let entry = previous.base_url.as_deref().map(credential).transpose()?;
-    let old_key = match &entry {
-        Some(entry) => match entry.get_password() {
-            Ok(key) => Some(key),
-            Err(keyring::Error::NoEntry) => None,
-            Err(_) => return Err(safe_error("无法读取钥匙串")),
-        },
-        None => None,
-    };
-    if let Some(entry) = &entry {
-        entry
-            .delete_credential()
-            .or_else(|error| {
-                if matches!(error, keyring::Error::NoEntry) {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            })
-            .map_err(|_| safe_error("无法移除钥匙串中的 API Key"))?;
-    }
-    let next = Preferences {
-        revision: previous.revision.wrapping_add(1),
-        ..Default::default()
-    };
-    if let Err(error) = state.persist(&next) {
-        if let (Some(entry), Some(key)) = (entry, old_key) {
-            let _ = entry.set_password(&key);
-        }
-        return Err(error);
-    }
-    state.state.lock().expect("connection state").prefs = next;
-    Ok(state.view())
+    let guard = state.begin_change(request.revision)?;
+    let credentials = state.credentials.clone();
+    let connection = state.inner().clone();
+    credentials
+        .transaction(CREDENTIAL_WAIT, move || {
+            let _guard = guard;
+            connection.remove_connection()
+        })
+        .await
+        .map_err(credential_access_error)?
 }
 
 #[tauri::command(rename = "remote.select")]
@@ -407,6 +448,9 @@ pub async fn remoteInvoke(
     state: tauri::State<'_, RemoteConnections>,
     request: RemoteInvokeRequest,
 ) -> Result<RemoteInvokeResponse, String> {
+    if !is_allowed_rpc_command(&request.command) {
+        return Err(safe_error("不支持的远程操作"));
+    }
     let write = is_mutating_rpc_command(&request.command);
     let base = {
         let mut current = state.state.lock().expect("connection state");
@@ -427,9 +471,17 @@ pub async fn remoteInvoke(
         base
     };
     let _guard = WriteGuard(&state, write);
-    let key = credential(&base)?
-        .get_password()
-        .map_err(|_| safe_error("无法读取 API Key，请重新保存远程连接"))?;
+    let credential_base = base.clone();
+    let key = state
+        .credentials
+        .read(CREDENTIAL_WAIT, move || {
+            credential(&credential_base)?
+                .get_password()
+                .map_err(|_| safe_error("无法读取 API Key，请重新保存远程连接"))
+        })
+        .await
+        .map_err(credential_access_error)??;
+    state.require_current_remote(request.revision, &base)?;
     let needs_validation = state
         .state
         .lock()
@@ -443,24 +495,26 @@ pub async fn remoteInvoke(
                 .await?,
         )?;
     }
+    state.require_current_remote(request.revision, &base)?;
     let value = state
         .call(&base, &key, &request.command, &request.args)
         .await?;
     if request.command == "system.capabilities" {
         compatible_capabilities(value.clone())?;
     }
-    if needs_validation {
-        state
-            .state
-            .lock()
-            .expect("connection state")
-            .verified_revision = Some(request.revision);
-    }
-    if state.state.lock().expect("connection state").prefs.revision != request.revision {
+    let mut current = state.state.lock().expect("connection state");
+    if current.changing || current.prefs.revision != request.revision {
         return Err(safe_error("连接已变化，已丢弃旧响应"));
+    }
+    if needs_validation {
+        current.verified_revision = Some(request.revision);
     }
     Ok(value)
 }
+
+#[cfg(test)]
+#[path = "remote/credential_tests.rs"]
+mod credential_tests;
 
 #[cfg(test)]
 mod tests {

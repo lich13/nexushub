@@ -1,4 +1,6 @@
 //! Desktop connection DTOs. Credentials are input-only and deliberately not Debug/Serialize.
+pub mod credentials;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
