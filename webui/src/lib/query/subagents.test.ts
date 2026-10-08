@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { SubagentDetailResponse } from "../../types";
+import type { SubagentActivity, SubagentDetailResponse } from "../../types";
 import { getSubagentDetail } from "../api/threads";
 import { machineScope } from "./connection";
 import { useSubagentDetail } from "./subagents";
@@ -15,7 +15,7 @@ type QueryOptions = {
   initialPageParam: string | null;
   queryFn: (context: { pageParam: string | null; signal: AbortSignal }) => Promise<SubagentDetailResponse>;
   getNextPageParam: (page: SubagentDetailResponse) => string | null | undefined;
-  refetchInterval: () => number | false;
+  refetchInterval: (query: { state: { data?: { pages: SubagentDetailResponse[] } } }) => number | false;
   retry: boolean;
 };
 
@@ -111,11 +111,61 @@ describe("subagent detail queries", () => {
     expect(getSubagentDetail).toHaveBeenCalledTimes(1);
   });
 
-  test("background tabs stop polling", () => {
+  test.each(["running", "creating"] as const)("a %s child refreshes every two seconds", status => {
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const data = response();
+    data.agent.status = status;
+    expect(options().refetchInterval({ state: { data: { pages: [data] } } })).toBe(2000);
+  });
+
+  test.each(["completed", "failed", "interrupted", "unknown"] as const)("a %s child without active descendants keeps the idle interval", status => {
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const data = response();
+    data.agent.status = status;
+    expect(options().refetchInterval({ state: { data: { pages: [data] } } })).toBe(5000);
+  });
+
+  test.each(["running", "creating"] as const)("a settled child still refreshes quickly while its direct child is %s", status => {
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const data = response();
+    data.agent.status = "completed";
+    data.detail.subagents = {
+      agents: [{ agentId: "nested-fixture", name: "直属示例", status, available: true }],
+      counts: { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0, [status]: 1 },
+      complete: true
+    };
+    expect(options().refetchInterval({ state: { data: { pages: [data] } } })).toBe(2000);
+  });
+
+  test("only the newest page controls the current activity interval", () => {
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const latest = response();
+    latest.agent.status = "completed";
+    latest.detail.subagents = {
+      agents: [], counts: { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0 }, complete: true
+    };
+    const historical = response();
+    expect(options().refetchInterval({ state: { data: { pages: [latest, historical] } } })).toBe(5000);
+  });
+
+  test("an unloaded query and a legacy response without the collection keep a safe idle interval", () => {
     vi.stubGlobal("document", { visibilityState: "visible" });
     const query = options();
-    expect(query.refetchInterval()).toBe(5000);
+    expect(query.refetchInterval({ state: {} })).toBe(5000);
+    const legacy = response();
+    legacy.agent.status = "completed";
+    expect(legacy.detail.subagents).toBeUndefined();
+    expect(query.refetchInterval({ state: { data: { pages: [legacy] } } })).toBe(5000);
+  });
+
+  test.each(["running", "creating", "completed"] satisfies SubagentActivity["status"][])("background tabs stop polling a %s child", status => {
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const query = options();
+    const data = response();
+    data.agent.status = status;
+    const context = { state: { data: { pages: [data] } } };
+    expect(query.refetchInterval(context)).toBe(status === "completed" ? 5000 : 2000);
     vi.stubGlobal("document", { visibilityState: "hidden" });
-    expect(query.refetchInterval()).toBe(false);
+    expect(query.refetchInterval(context)).toBe(false);
   });
 });

@@ -1152,6 +1152,7 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
 #[test]
 fn thread_block_page_returns_latest_window_without_detail_fields() {
     let detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: vec![],
@@ -1212,6 +1213,7 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
 #[test]
 fn thread_block_page_uses_before_cursor() {
     let detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: vec![],
@@ -1306,6 +1308,7 @@ fn app_server_thread_summary_keeps_fallback_title_when_only_preview_exists() {
 #[test]
 fn app_server_thread_detail_does_not_overwrite_title_with_preview() {
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
@@ -1339,6 +1342,7 @@ fn app_server_thread_detail_does_not_overwrite_title_with_preview() {
 #[test]
 fn app_server_thread_detail_does_not_overwrite_title_with_placeholder() {
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
@@ -1367,6 +1371,7 @@ fn app_server_thread_detail_does_not_overwrite_title_with_placeholder() {
 #[test]
 fn app_server_thread_detail_updates_title_with_real_name() {
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
@@ -1950,6 +1955,7 @@ fn app_server_not_loaded_ld_style_completed_rollout_clears_stale_running() {
     assert_eq!(rows[0].active_turn_id, None);
 
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
@@ -2013,6 +2019,7 @@ fn app_server_active_does_not_override_completed_rollout_wait_agent() {
     assert!(running.is_empty());
 
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
@@ -2079,6 +2086,7 @@ fn app_server_not_loaded_running_item_does_not_override_completed_rollout_wait_a
     assert!(running.is_empty());
 
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
@@ -2160,6 +2168,7 @@ fn app_server_thread_detail_not_loaded_clears_stale_local_active_turn() {
     summary.active_turn_id = Some("turn-live".to_string());
     summary.last_event_kind = Some("task_started".to_string());
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary,
         messages: Vec::new(),
@@ -2191,6 +2200,7 @@ fn app_server_thread_detail_not_loaded_clears_stale_local_active_turn() {
 #[test]
 fn app_server_thread_read_turns_provide_running_status_and_active_turn() {
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
@@ -2314,6 +2324,7 @@ fn app_server_thread_detail_clears_stale_reply_needed_when_idle() {
     let mut summary = fallback_summary("thread-a", "example-user");
     summary.status = ThreadStatus::ReplyNeeded;
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary,
         messages: Vec::new(),
@@ -2340,6 +2351,7 @@ fn app_server_thread_detail_clears_stale_reply_needed_when_idle() {
 #[test]
 fn app_server_thread_detail_ignores_historical_pending_blocks_without_active_turn() {
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
@@ -2438,6 +2450,7 @@ fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
     });
     let rows = app_server_thread_summaries(&app_value, &[fallback.clone()]);
     let mut detail = ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),

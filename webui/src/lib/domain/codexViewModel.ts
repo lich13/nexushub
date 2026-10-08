@@ -215,7 +215,7 @@ export function shouldHydrateThreadDetail(threadId: string | null | undefined, d
 }
 
 export function threadDetailRefetchInterval(detail?: ThreadDetail, selectedSummary?: Partial<ThreadSummary> | null): number {
-  if (detail) return isThreadRunning(detail.summary) ? 2000 : 5000;
+  if (detail) return isThreadRunning(detail.summary) || Boolean(detail.subagents?.counts.running || detail.subagents?.counts.creating) ? 2000 : 5000;
   return selectedSummary && isThreadRunning(selectedSummary) ? 2000 : 5000;
 }
 

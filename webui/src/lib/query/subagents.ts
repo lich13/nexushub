@@ -16,7 +16,12 @@ export function useSubagentDetail(rootThreadId: string, agentId?: string | null)
       return response;
     },
     getNextPageParam: page => page.detail.has_more_blocks ? page.detail.before_cursor : undefined,
-    refetchInterval: () => document.visibilityState === "visible" ? 5000 : false,
+    refetchInterval: query => {
+      if (document.visibilityState !== "visible") return false;
+      const latest = query.state.data?.pages[0];
+      return latest && (latest.agent.status === "running" || latest.agent.status === "creating"
+        || latest.detail.subagents?.counts.running || latest.detail.subagents?.counts.creating) ? 2000 : 5000;
+    },
     retry: false
   });
 }

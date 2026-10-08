@@ -30,6 +30,31 @@ describe("visible Markdown", () => {
     expect(visibleMarkdown('Before <oai-mem-citation source="internal"><citation_entries id="x">secret</citation_entries></oai-mem-citation><rollout_ids source="internal">id</rollout_ids> after.')).toBe("Before  after.");
   });
 
+  test("removes complete external page wrappers from mixed and wrapper-only messages", () => {
+    const emptyPage = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+    const namedPage = '<external_codex_apps_open_page>\n{"page_id":"fixture-page"}\n</external_codex_apps_open_page>';
+    expect(visibleMarkdown(`Before ${emptyPage} between\n${namedPage}\nAfter`)).toBe("Before  between\n\nAfter");
+    expect(visibleMarkdown(`${emptyPage}\n${namedPage}`)).toBe("");
+  });
+
+  test("preserves external page wrapper examples and unconfirmed structures", () => {
+    const wrapper = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+    const literalExamples = [
+      `\`\`\`xml\n${wrapper}\n\`\`\``,
+      `Inline \`${wrapper}\` example`,
+      `> ${wrapper}`
+    ];
+    for (const text of literalExamples) expect(visibleMarkdown(text)).toBe(text);
+
+    const unconfirmed = [
+      '<external_codex_apps_open_page>invalid</external_codex_apps_open_page>',
+      '<external_codex_apps_open_page>{"page_id":null,"other":"fixture"}</external_codex_apps_open_page>',
+      '<external_codex_apps_open_page>{"page_id":42}</external_codex_apps_open_page>',
+      '<external_codex_apps_open_page>{"page_id":null}'
+    ];
+    for (const text of unconfirmed) expect(visibleMarkdown(text)).toBe(text);
+  });
+
   test("uses only the cleaned title for plan filenames", () => {
     expect(planFilename("<citation_entries>\n# Internal\n</citation_entries>\n# Visible: /Plan?\nBody", "Fallback")).toBe("Visible Plan.md");
     expect(planFilename("<rollout_ids>id</rollout_ids>", "Thread title")).toBe("Thread title.md");

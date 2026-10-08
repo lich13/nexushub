@@ -143,13 +143,22 @@ export type MessageBlock = {
 };
 
 export type SubagentActivity = {
+  eventKind?: "started" | "completed" | "interrupted" | "interacted" | null;
+  eventId?: string | null;
   agentId?: string | null;
   name: string;
   role?: string | null;
-  status: "running" | "completed" | "failed" | "interrupted" | "unknown";
+  status: "creating" | "running" | "completed" | "failed" | "interrupted" | "unknown";
   available: boolean;
   unavailableReason?: string | null;
   delegation?: string | null;
+};
+
+export type SubagentCollection = {
+  agents: SubagentActivity[];
+  counts: Record<SubagentActivity["status"], number>;
+  complete: boolean;
+  warning?: string | null;
 };
 
 export type SubagentDetailRequest = {
@@ -173,6 +182,7 @@ export type UserInputAnswer = {
 };
 
 export type ThreadDetail = {
+  subagents?: SubagentCollection | null;
   subagent_updates?: Record<string, SubagentActivity>;
   summary: ThreadSummary;
   messages: CodexMessage[];

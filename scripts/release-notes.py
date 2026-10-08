@@ -8,6 +8,11 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.11": [
+        "修复 Codex 子智能体开始活动漏显示及任务名称不一致，开始记录在任务完成后仍保留。",
+        "线程详情新增直属子智能体状态汇总，可从列表进入详情并返回；父线程静止时仍更新数量。",
+        "默认隐藏内部页面标记，显示、复制、导出和搜索同步清理，保留代码与引用示例。",
+    ],
     "1.2.10": [
         "修复切换远程机器后列表和设置持续加载的问题，钥匙串访问改为后台串行执行。",
         "增加凭据读取超时反馈，保留连接事务与机器切换保护，已有连接无需重建。",
@@ -111,6 +116,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.11":
+        sections = {
+            "版本概览": ["本版修复 Codex 子智能体开始活动、任务名称和运行数量的展示，并隐藏会话中的内部页面标记。"],
+            "功能调整": [
+                "线程详情增加直属子智能体汇总，显示运行中、已完成及异常状态数量；主线程列表保持原样。",
+                "点击汇总打开右侧列表，运行中的子智能体优先显示。可进入详情、查看其直属下级并逐级返回，保留阅读位置和焦点。",
+                "活动行、列表与详情统一使用创建任务名；缺少任务名时再回退到已验证路径、线程标题或昵称。",
+            ],
+            "问题修复": [
+                "识别原生“开始工作”“已完成”“已中断”和交互记录，保留发生顺序；完成后不再把历史开始记录改成完成记录。",
+                "子智能体当前状态依据自己的回合判断，父线程没有新消息时仍刷新。按直属原生身份去重，避免重复回合或孙级任务影响数量。",
+                "默认隐藏完整的 external_codex_apps_open_page 内部包装，复制、Plan 导出和搜索同步过滤；纯包装不再留下空消息或时间线短线，代码与引用示例保留。",
+            ],
+            "兼容性与迁移": [
+                "远程 API 协议保持 2，沿用现有详情接口；不新增 RPC、数据库表或原生会话写入。旧服务缺少汇总时保留阅读并提示升级。",
+                "关联缺失、冲突或读取不完整时显示未知或不可用，不推断完成。保留现有线程管理保护、机器隔离、Keychain、Bark 和 monitor。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
+            ],
+            "升级提示": [
+                "先将远程 API 服务升级到 1.2.11，再安装本机 App，即可查看完整的直属汇总；现有连接、凭据、会话和通知设置无需重建。",
+                "安装前核对校验和与 updater 签名。macOS 包尚无 Developer ID 签名或 Apple 公证；Minisign 验证更新归档来源，不能替代系统代码签名。",
+                "覆盖安装若触发钥匙串授权，请在系统对话框完成验证。部署参数继续从仓库外提供。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.10":
         sections = {

@@ -13,7 +13,7 @@ const block = (overrides: Partial<SubagentActivity> = {}): MessageBlock => ({
 
 describe("subagent activity presentation", () => {
   test.each([
-    ["running", "运行中"], ["completed", "已完成"], ["failed", "失败"],
+    ["creating", "正在创建"], ["running", "运行中"], ["completed", "已完成"], ["failed", "失败"],
     ["interrupted", "已中断"], ["unknown", "状态未知"]
   ] as const)("renders the %s state without inferring another outcome", (status, label) => {
     const html = renderToStaticMarkup(<SubagentActivityRow block={block({ status })} onOpen={vi.fn()} />);
@@ -21,8 +21,32 @@ describe("subagent activity presentation", () => {
     expect(html).toContain(label);
     expect(html).toContain('data-timeline-id="activity-fixture"');
     expect(html).toContain('aria-disabled="false"');
-    expect(html.includes("thread-running-indicator")).toBe(status === "running");
+    if (status !== "creating") expect(html.includes("thread-running-indicator")).toBe(status === "running");
     expect(html).not.toContain("execution-group");
+  });
+
+  test.each([
+    ["started", "开始工作", "completed"],
+    ["completed", "已完成", "running"],
+    ["interrupted", "已中断", "completed"],
+    ["interacted", "已交互", "failed"]
+  ] as const)("the %s event keeps its %s label when the current status is %s", (eventKind, label, status) => {
+    const html = renderToStaticMarkup(<SubagentActivityRow block={block({
+      eventKind, eventId: "native-event-fixture", status, name: "规范示例名称"
+    })} onOpen={vi.fn()} />);
+    expect(html).toContain(label);
+    expect(html).toContain("规范示例名称");
+    expect(html).toContain('data-timeline-id="activity-fixture"');
+    expect(html).toContain('aria-disabled="false"');
+  });
+
+  test("a completed child keeps its historical start label through a later refresh", () => {
+    const started = { eventKind: "started", eventId: "start-fixture" } as const;
+    const running = renderToStaticMarkup(<SubagentActivityRow block={block({ ...started, status: "running" })} onOpen={vi.fn()} />);
+    const completed = renderToStaticMarkup(<SubagentActivityRow block={block({ ...started, status: "completed" })} onOpen={vi.fn()} />);
+    expect(running).toContain("开始工作");
+    expect(completed).toContain("开始工作");
+    expect(completed).not.toContain("thread-running-indicator");
   });
 
   test("keeps an unavailable record and its explanation readable", () => {

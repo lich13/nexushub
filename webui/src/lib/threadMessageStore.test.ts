@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { MessageBlock, SubagentActivity, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, SubagentActivity, SubagentCollection, ThreadDetail, ThreadSummary } from "../types";
 import {
   applyRealtimeBlocksToThreadSlot,
   applyThreadBlockPageToSlot,
@@ -8,7 +8,8 @@ import {
   createThreadMessageStoreState,
   setActiveThreadSlot,
   setThreadFeedback,
-  setThreadLastResult
+  setThreadLastResult,
+  threadDetailFromMessageSlot
 } from "./threadMessageStore";
 
 function summary(id: string, title = id): ThreadSummary {
@@ -39,6 +40,14 @@ function detail(id: string, blocks: MessageBlock[], beforeCursor: string | null 
     total_blocks: blocks.length + (beforeCursor ? 10 : 0),
     has_more_blocks: Boolean(beforeCursor),
     before_cursor: beforeCursor
+  };
+}
+
+function subagents(status: SubagentActivity["status"] = "running"): SubagentCollection {
+  return {
+    agents: [{ agentId: "child-fixture", name: "规范示例名称", status, available: true }],
+    counts: { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0, [status]: 1 },
+    complete: true
   };
 }
 
@@ -97,6 +106,72 @@ describe("thread message store", () => {
     expect(slot?.beforeCursor).toBe("b:80");
   });
 
+  test.each([
+    { scenario: "fully overlapping cached blocks", includeHistory: false, includeRealtimeTail: false },
+    { scenario: "loaded pagination history", includeHistory: true, includeRealtimeTail: false },
+    { scenario: "loaded history and a newer SSE tail", includeHistory: true, includeRealtimeTail: true }
+  ])("uses refreshed native activity order with $scenario and leaves identical refreshes stable", ({ includeHistory, includeRealtimeTail }) => {
+    const store = createThreadMessageStoreState();
+    const threadId = "thread-order-fixture";
+    const agent: SubagentActivity = {
+      agentId: "child-order-fixture", name: "顺序示例", status: "running", available: true,
+      delegation: "检查示例顺序。"
+    };
+    const spawn: MessageBlock = {
+      id: "spawn-anchor-fixture", role: "tool", kind: "function_call", tool_name: "spawn_agent",
+      questions: [], subagent: agent
+    };
+    const beforeCursor = includeHistory ? "b:2" : null;
+    const totalBlocks = includeHistory ? 5 : 3;
+    const slot = applyThreadDetailToSlot(store, threadId, {
+      ...detail(threadId, [spawn, block("before-native-fixture"), block("tail-fixture")], beforeCursor),
+      total_blocks: totalBlocks
+    });
+    if (includeHistory) {
+      applyThreadBlockPageToSlot(store, threadId, {
+        thread_id: threadId,
+        blocks: [block("old-before-fixture"), block("old-after-fixture")],
+        total_blocks: totalBlocks, has_more_blocks: false, before_cursor: null
+      }, "b:2");
+    }
+    if (includeRealtimeTail) {
+      applyRealtimeBlocksToThreadSlot(store, threadId, [block("sse-tail-fixture", "新近实时回复示例")]);
+    }
+    const refreshedTail = () => ({
+      ...detail(threadId, [
+        block("before-native-fixture"),
+        {
+          id: spawn.id, role: "tool", kind: "subagent_activity", questions: [],
+          subagent: { ...agent, eventKind: "started", eventId: "native-start-fixture" }
+        },
+        block("tail-fixture")
+      ], beforeCursor),
+      total_blocks: totalBlocks
+    });
+
+    applyThreadDetailToSlot(store, threadId, refreshedTail());
+
+    expect(slot.blocks.map(item => item.id)).toEqual([
+      ...(includeHistory ? ["old-before-fixture", "old-after-fixture"] : []),
+      "before-native-fixture", "spawn-anchor-fixture", "tail-fixture",
+      ...(includeRealtimeTail ? ["sse-tail-fixture"] : [])
+    ]);
+    expect(slot.blocks.find(item => item.id === spawn.id)).toMatchObject({
+      kind: "subagent_activity",
+      subagent: { ...agent, eventKind: "started", eventId: "native-start-fixture" }
+    });
+    if (includeRealtimeTail) {
+      expect(slot.blocks[slot.blocks.length - 1]?.text).toBe("新近实时回复示例");
+    }
+    const stableBlocks = slot.blocks;
+    const stableFollowRevision = slot.bottomFollowRevision;
+
+    applyThreadDetailToSlot(store, threadId, refreshedTail());
+
+    expect(slot.blocks).toBe(stableBlocks);
+    expect(slot.bottomFollowRevision).toBe(stableFollowRevision);
+  });
+
   test.each(["completed", "failed", "interrupted", "unknown"] as const)("a tail-only refresh updates an older child to %s without losing its delegation or position", status => {
     const store = createThreadMessageStoreState();
     const agent: SubagentActivity = {
@@ -138,6 +213,112 @@ describe("thread message store", () => {
     expect(slot.blocks.map(item => item.id)).toEqual(["ordinary", "tail"]);
     expect(slot.blocks[0].subagent).toBeUndefined();
     expect(slot.blocks[0].text).toBe("ordinary");
+  });
+
+  test("direct child collections round-trip with the captured thread and remain isolated from another selection", () => {
+    const store = createThreadMessageStoreState();
+    const collection = subagents("creating");
+    const first = applyThreadDetailToSlot(store, "thread-a", { ...detail("thread-a", [block("a1")]), subagents: collection });
+    setActiveThreadSlot(store, "thread-b");
+    const second = applyThreadDetailToSlot(store, "thread-b", detail("thread-b", [block("b1")]));
+
+    expect(threadDetailFromMessageSlot("thread-a", first).subagents).toEqual(collection);
+    expect(threadDetailFromMessageSlot("thread-b", second).subagents).toBeUndefined();
+    expect(store.activeThreadId).toBe("thread-b");
+  });
+
+  test("a collection-only refresh updates counts without following the message stream to the bottom", () => {
+    const store = createThreadMessageStoreState();
+    const tail = detail("thread-a", [block("unchanged")]);
+    const slot = applyThreadDetailToSlot(store, "thread-a", { ...tail, subagents: subagents() });
+    const followRevision = slot.bottomFollowRevision;
+    const visibleRevision = slot.visibleUpdateRevision;
+    const completed = subagents("completed");
+
+    applyThreadDetailToSlot(store, "thread-a", { ...tail, subagents: completed });
+
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toEqual(completed);
+    expect(slot.visibleUpdateRevision).toBeGreaterThan(visibleRevision);
+    expect(slot.bottomFollowRevision).toBe(followRevision);
+  });
+
+  test("older pages use the latest known child state while keeping native event identity and delegation", () => {
+    const store = createThreadMessageStoreState();
+    const historical: SubagentActivity = {
+      agentId: "child-fixture", name: "旧示例名称", status: "running", available: true,
+      eventKind: "started", eventId: "start-fixture", delegation: "检查示例文件。"
+    };
+    const updated: SubagentActivity = {
+      agentId: "child-fixture", name: "规范示例名称", status: "completed", available: true
+    };
+    const collection = subagents("completed");
+    const tail = {
+      ...detail("thread-a", [block("latest")], "b:2"), total_blocks: 3,
+      subagents: collection, subagent_updates: { "old-start": updated }
+    };
+    applyThreadDetailToSlot(store, "thread-a", tail);
+    const slot = applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a", total_blocks: 3, has_more_blocks: false, before_cursor: null,
+      blocks: [block("before-start"), { id: "old-start", role: "tool", kind: "subagent_activity", questions: [], subagent: historical }]
+    }, "b:2");
+
+    expect(slot.blocks.map(item => item.id)).toEqual(["before-start", "old-start", "latest"]);
+    expect(slot.blocks[1].subagent).toMatchObject({ ...historical, ...updated });
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toEqual(collection);
+    expect(historical.status).toBe("running");
+    expect(historical.name).toBe("旧示例名称");
+  });
+
+  test("each historical event retains its own kind and identity when current child state changes", () => {
+    const store = createThreadMessageStoreState();
+    const kinds = ["started", "interacted", "interrupted", "completed"] as const;
+    const events = kinds.map((eventKind, index): MessageBlock => ({
+      id: `activity-${index}`, role: "tool", kind: "subagent_activity", questions: [],
+      subagent: {
+        agentId: "child-fixture", name: "旧示例名称", status: "running", available: true,
+        eventKind, eventId: `native-${index}`
+      }
+    }));
+    applyThreadDetailToSlot(store, "thread-a", detail("thread-a", events));
+    const update: SubagentActivity = { agentId: "child-fixture", name: "规范示例名称", status: "completed", available: true };
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("tail")]),
+      subagent_updates: Object.fromEntries(events.map(event => [event.id, update]))
+    });
+
+    expect(slot.blocks.slice(0, events.length).map(event => event.subagent?.eventKind)).toEqual(kinds);
+    expect(slot.blocks.slice(0, events.length).map(event => event.subagent?.eventId)).toEqual(kinds.map((_, index) => `native-${index}`));
+    for (const event of slot.blocks.slice(0, events.length)) expect(event.subagent).toMatchObject(update);
+  });
+
+  test("an explicit empty collection replaces previous children and partial results retain their warning", () => {
+    const store = createThreadMessageStoreState();
+    const tail = detail("thread-a", [block("tail")]);
+    const slot = applyThreadDetailToSlot(store, "thread-a", { ...tail, subagents: subagents() });
+    const partial = { ...subagents("unknown"), complete: false, warning: "示例关联记录暂不可读" };
+    applyThreadDetailToSlot(store, "thread-a", { ...tail, subagents: partial });
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toEqual(partial);
+
+    const empty: SubagentCollection = {
+      agents: [], counts: { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0 }, complete: true
+    };
+    applyThreadDetailToSlot(store, "thread-a", { ...tail, subagents: empty });
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toEqual(empty);
+  });
+
+  test("an older service without a collection remains distinguishable from a confirmed empty collection", () => {
+    const store = createThreadMessageStoreState();
+    const slot = applyThreadDetailToSlot(store, "thread-a", detail("thread-a", [block("legacy")]));
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toBeUndefined();
+    expect(slot.blocks.map(item => item.text)).toEqual(["legacy"]);
+  });
+
+  test("a mismatched detail cannot replace the selected thread's collection", () => {
+    const store = createThreadMessageStoreState();
+    const collection = subagents();
+    const slot = applyThreadDetailToSlot(store, "thread-a", { ...detail("thread-a", [block("tail")]), subagents: collection });
+    applyThreadDetailToSlot(store, "thread-a", { ...detail("thread-b", []), subagents: subagents("failed") });
+    expect(threadDetailFromMessageSlot("thread-a", slot).subagents).toEqual(collection);
   });
 
   test("prepends load-more pages only to the captured slot", () => {

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { MessageBlock, SubagentActivity, SubagentDetailResponse } from "../../types";
+import type { MessageBlock, SubagentActivity, SubagentCollection, SubagentDetailResponse } from "../../types";
 import { useSubagentDetail } from "../../lib/query/subagents";
 import { SubagentPanel } from "./SubagentPanel";
 
@@ -29,6 +29,16 @@ function queryState(overrides: Partial<QueryState> = {}) {
 
 function renderPanel(docked = true) {
   return renderToStaticMarkup(<SubagentPanel rootThreadId="root-fixture" initialAgent={agent} onClose={vi.fn()} docked={docked} />);
+}
+
+function collection(agents: SubagentActivity[], overrides: Partial<SubagentCollection> = {}): SubagentCollection {
+  const counts: SubagentCollection["counts"] = { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0 };
+  for (const item of agents) counts[item.status] += 1;
+  return { agents, counts, complete: true, ...overrides };
+}
+
+function renderList(rootSubagents?: SubagentCollection) {
+  return renderToStaticMarkup(<SubagentPanel rootThreadId="root-fixture" rootSubagents={rootSubagents} onClose={vi.fn()} docked />);
 }
 
 beforeEach(() => { vi.clearAllMocks(); queryState(); });
@@ -121,4 +131,77 @@ test.each([true, false])("docked=%s advertises its modal state and close action"
   expect(html).toContain(`aria-modal="${!docked}"`);
   expect(html).toContain('aria-label="关闭子智能体详情"');
   expect(html.includes('class="subagent-backdrop"')).toBe(!docked);
+});
+
+test("the root collection opens as a list without selecting or loading a child", () => {
+  const html = renderList(collection([
+    { ...agent, name: "创建中的示例", status: "creating" },
+    { agentId: "other-fixture", name: "已完成的示例", status: "completed", available: true }
+  ]));
+  expect(html).toContain("创建中的示例");
+  expect(html).toContain("正在创建");
+  expect(html).toContain("已完成的示例");
+  expect(html).toContain("已完成");
+  expect(html).not.toContain("正在读取子智能体");
+  expect(html).not.toContain("暂无子智能体消息");
+  expect(vi.mocked(useSubagentDetail).mock.calls.every(([, id]) => !id)).toBe(true);
+});
+
+test("list entries use current status even if an agent also carries a historical start event", () => {
+  const html = renderList(collection([{ ...agent, status: "completed", eventKind: "started", eventId: "start-fixture" }]));
+  expect(html).toContain(agent.name);
+  expect(html).toContain("已完成");
+  expect(html).not.toContain("开始工作");
+});
+
+test("distinct native identities with the same canonical name both remain in the list", () => {
+  const html = renderList(collection([
+    { ...agent, agentId: "first-fixture", name: "重复显示名称", status: "running" },
+    { ...agent, agentId: "second-fixture", name: "重复显示名称", status: "completed" }
+  ]));
+  expect(html.match(/>重复显示名称</g)).toHaveLength(2);
+  expect(html).toContain("运行中");
+  expect(html).toContain("已完成");
+});
+
+test("an unavailable list entry retains its name and reason with no active detail action", () => {
+  const html = renderList(collection([{ ...agent, available: false, unavailableReason: "示例关联记录不可用", status: "unknown" }]));
+  expect(html).toContain(agent.name);
+  expect(html).toContain("示例关联记录不可用");
+  expect(html).toContain('aria-disabled="true"');
+});
+
+test("a missing collection offers an upgrade instead of claiming a confirmed empty list", () => {
+  const html = renderList();
+  expect(html).toMatch(/更新.*服务|升级/);
+  expect(html).not.toMatch(/暂无(?:直属)?子智能体|子智能体[^<]*0/);
+  expect(html).not.toContain("正在读取子智能体");
+});
+
+test("partial collections keep their warning alongside the readable agents", () => {
+  const html = renderList(collection([agent], { complete: false, warning: "示例关联记录未全部读取" }));
+  expect(html).toContain("示例关联记录未全部读取");
+  expect(html).toContain(agent.name);
+});
+
+test("legacy child details remain readable when their own collection is unavailable", () => {
+  queryState({ data: { pages: [page([message("legacy", "旧服务示例回复")])], pageParams: [null] } });
+  const html = renderPanel();
+  expect(html).toContain("旧服务示例回复");
+  expect(html).toMatch(/更新.*服务|升级/);
+});
+
+test("a child detail exposes only its newest direct collection even when older pages advertise stale children", () => {
+  const latest = page([message("latest", "最新示例回复")]);
+  latest.agent = { ...agent, status: "completed" };
+  latest.detail.subagents = collection([{ agentId: "nested-fixture", name: "当前直属示例", status: "running", available: true }]);
+  const older = page([message("older", "较早示例回复")]);
+  older.detail.subagents = collection([{ agentId: "stale-fixture", name: "已移除的旧直属示例", status: "running", available: true }]);
+  queryState({ data: { pages: [latest, older], pageParams: [null, "block:1"] } });
+  const html = renderPanel();
+  expect(html).toContain("子智能体");
+  expect(html).toContain("1 个运行中");
+  expect(html).not.toContain("已移除的旧直属示例");
+  expect(html).toContain("最新示例回复");
+  expect(html).toContain("较早示例回复");
 });

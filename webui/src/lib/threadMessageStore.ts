@@ -2,6 +2,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
 
 export type ThreadMessageSlot = {
+  subagents?: ThreadDetail["subagents"];
+  subagentUpdates?: ThreadDetail["subagent_updates"];
   summary: ThreadSummary | null;
   blocks: MessageBlock[];
   totalBlocks: number;
@@ -82,6 +84,8 @@ export function threadDetailFromMessageSlot(
     ? fallback ? { ...slot.summary, ...fallback } : slot.summary
     : fallback ?? fallbackThreadSummary(threadId);
   return {
+    subagents: slot.subagents,
+    subagent_updates: slot.subagentUpdates,
     summary,
     messages: [],
     blocks: slot.blocks,
@@ -220,11 +224,14 @@ export function applyThreadDetailToSlot(
   const mergedBlocks = mergeSubagentUpdates(mergeBlocksPreservingHistory(slot.blocks, incomingBlocks), detail.subagent_updates);
   const blocksChanged = mergedBlocks !== slot.blocks;
   const changed = blocksChanged
+    || slot.subagents !== detail.subagents
     || slot.summary !== detail.summary
     || slot.totalBlocks !== (detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length))
     || slot.hasMoreBlocks !== Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
 
   slot.summary = mergeSummary(slot.summary, detail.summary);
+  slot.subagents = detail.subagents;
+  slot.subagentUpdates = detail.subagent_updates;
   slot.blocks = mergedBlocks;
   slot.totalBlocks = detail.total_blocks ?? Math.max(slot.totalBlocks, mergedBlocks.length);
   slot.hasMoreBlocks = Boolean(detail.has_more_blocks ?? slot.hasMoreBlocks);
@@ -258,7 +265,7 @@ export function applyThreadBlockPageToSlot(
   if (expectedCursor && slot.beforeCursor && slot.beforeCursor !== expectedCursor) {
     return slot;
   }
-  const nextBlocks = mergeMessageBlocks(slot.blocks, page.blocks, "prepend");
+  const nextBlocks = mergeSubagentUpdates(mergeMessageBlocks(slot.blocks, page.blocks, "prepend"), slot.subagentUpdates);
   const changed = nextBlocks !== slot.blocks;
   slot.blocks = nextBlocks;
   slot.totalBlocks = page.total_blocks ?? Math.max(slot.totalBlocks, nextBlocks.length);
@@ -417,10 +424,31 @@ function mergeBlocksPreservingHistory(current: MessageBlock[], incoming: Message
   if (!current.length) return incoming;
   if (!incoming.length) return current;
   const incomingIds = new Set(incoming.map((block) => block.id));
-  const retainedHistory = current.filter((block) => !incomingIds.has(block.id));
-  if (!retainedHistory.length) return mergeMessageBlocks(current, incoming);
-  const next = mergeMessageBlocks(retainedHistory, incoming);
-  return next === retainedHistory ? current : next;
+  const firstOverlap = current.findIndex((block) => incomingIds.has(block.id));
+  const previousById = new Map(current.map((block) => [block.id, block]));
+  // The refreshed window owns its native order, including a creation anchor
+  // that moves when its later native start event arrives. Keep loaded history
+  // before that window and newer realtime messages after it.
+  const next = firstOverlap < 0 ? [...current] : current.slice(0, firstOverlap);
+  const beforeAnchor = new Map<string, MessageBlock[]>();
+  let pending: MessageBlock[] = [];
+  if (firstOverlap >= 0) {
+    for (const block of current.slice(firstOverlap)) {
+      if (incomingIds.has(block.id)) {
+        if (pending.length) beforeAnchor.set(block.id, pending);
+        pending = [];
+      } else {
+        pending.push(block);
+      }
+    }
+  }
+  for (const block of incoming) {
+    next.push(...(beforeAnchor.get(block.id) ?? []));
+    const previous = previousById.get(block.id);
+    next.push(previous && messageBlocksEqual(previous, block) ? previous : block);
+  }
+  next.push(...pending);
+  return next.length === current.length && next.every((block, index) => block === current[index]) ? current : next;
 }
 
 export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {

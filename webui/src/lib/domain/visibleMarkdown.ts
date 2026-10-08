@@ -74,8 +74,29 @@ export function memoryMetadataRanges(text: string): Range[] {
   return ranges.sort((a, b) => a.start - b.start || b.end - a.end);
 }
 
+function pageMetadataRanges(text: string): Range[] {
+  if (!text.includes("external_codex_apps_open_page")) return [];
+  const literal = literalMarkdownRanges(text);
+  const ranges: Range[] = [];
+  const envelopes = /<external_codex_apps_open_page>([\s\S]*?)<\/external_codex_apps_open_page>/g;
+  for (const match of text.matchAll(envelopes)) {
+    const start = match.index!;
+    const end = start + match[0].length;
+    if (literal.some(range => range.start < end && start < range.end)) continue;
+    try {
+      const value: unknown = JSON.parse(match[1]);
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const page = value as Record<string, unknown>;
+      if (Object.keys(page).length === 1 && Object.prototype.hasOwnProperty.call(page, "page_id")
+        && (page.page_id === null || typeof page.page_id === "string")) ranges.push({ start, end });
+    } catch { /* Unconfirmed envelopes remain visible, including unfinished input. */ }
+  }
+  return ranges;
+}
+
 export function visibleMarkdown(text: string): string {
-  const ranges = memoryMetadataRanges(text);
+  const ranges = [...memoryMetadataRanges(text), ...pageMetadataRanges(text)]
+    .sort((a, b) => a.start - b.start || b.end - a.end);
   if (!ranges.length) return text;
   let result = "";
   let cursor = 0;

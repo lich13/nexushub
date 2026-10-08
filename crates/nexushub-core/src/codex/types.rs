@@ -31,6 +31,8 @@ pub struct ThreadSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<super::subagents::SubagentCollection>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub subagent_updates: std::collections::BTreeMap<String, super::subagents::SubagentActivity>,
     pub summary: ThreadSummary,

@@ -65,6 +65,7 @@ fn parse_thread_detail(summary: ThreadSummary, compact_history: bool) -> Result<
     }
     let total_blocks = blocks.len();
     Ok(ThreadDetail {
+        subagents: None,
         subagent_updates: Default::default(),
         summary,
         messages,
@@ -1370,6 +1371,10 @@ impl MessageBlockBuilder {
     }
 
     fn push_event_inner(&mut self, value: &Value, raw_index: usize) {
+        if let Some(block) = super::subagents::native_activity_block(value) {
+            self.blocks.push(block);
+            return;
+        }
         if is_internal_agent_message(value) {
             return;
         }
@@ -1631,6 +1636,7 @@ impl MessageBlockBuilder {
                 .copied()
                 .unwrap_or(usize::MAX)
         });
+        super::subagents::merge_creation_events(&mut self.blocks);
         self.blocks
     }
 }
