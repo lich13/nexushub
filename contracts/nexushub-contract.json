@@ -6,6 +6,7 @@
   ],
   "capabilities": [
     "threads",
+    "thread_subagents",
     "jobs",
     "probe",
     "settings",
@@ -20,6 +21,7 @@
   "capabilitiesByHostSurface": {
     "linux_server_api": [
       "threads",
+      "thread_subagents",
       "jobs",
       "probe",
       "settings",
@@ -33,6 +35,7 @@
     ],
     "desktop_embedded_tauri": [
       "threads",
+      "thread_subagents",
       "jobs",
       "probe",
       "settings",
@@ -171,6 +174,18 @@
       "dtoOwner": "threads",
       "requestDto": "NoRequest",
       "responseDto": "ThreadsDetailResponse"
+    },
+    {
+      "id": "threads.subagentDetail",
+      "kind": "rpc",
+      "scope": "shared",
+      "coreUseCase": "threads.subagent_detail",
+      "linuxRpc": "threads.subagentDetail",
+      "tauriCommand": "commands::threads::getSubagentDetail",
+      "webuiWrapper": "getSubagentDetail",
+      "dtoOwner": "threads",
+      "requestDto": "SubagentDetailRequest",
+      "responseDto": "SubagentDetailResponse"
     },
     {
       "id": "threads.blocks",
@@ -914,6 +929,14 @@
     "CleanupExecuteRequest": {
       "core": "CleanupExecuteRequest",
       "webui": "CleanupExecuteRequest"
+    },
+    "SubagentDetailRequest": {
+      "core": "SubagentDetailRequest",
+      "webui": "SubagentDetailRequest"
+    },
+    "SubagentDetailResponse": {
+      "core": "SubagentDetailResponse",
+      "webui": "SubagentDetailResponse"
     }
   },
   "retiredActions": [

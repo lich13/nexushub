@@ -40,7 +40,7 @@ for (const mobile of [false, true]) {
     await expect(page.locator(".provider-events")).not.toContainText("internal marker");
     const group = page.locator(".execution-group");
     await expect(group).not.toHaveAttribute("open", "");
-    await expect(group.locator(":scope > summary")).toContainText("Claude Code");
+    await expect(group.locator(":scope > summary")).toContainText("已读取文件、运行命令");
     await group.locator(":scope > summary").focus(); await page.keyboard.press("Enter");
     await expect(group.locator(".execution-command")).toHaveCount(2);
     const command = group.locator(".execution-command").filter({ hasText: "printf example" });

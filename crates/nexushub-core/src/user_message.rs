@@ -38,6 +38,8 @@ enum AttachmentSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionAttachmentRequest {
+    #[serde(default)]
+    pub root_thread_id: Option<String>,
     pub provider: crate::services::sessions::SessionProvider,
     pub session_key: String,
     pub message_id: String,

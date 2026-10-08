@@ -11,6 +11,7 @@ mod paths;
 mod rollout_accuracy_tests;
 mod rollout_events;
 mod session_index;
+pub mod subagents;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

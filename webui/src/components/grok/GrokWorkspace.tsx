@@ -114,7 +114,7 @@ export function GrokWorkspace({}: { }) {
       {selected && <>
         <header className="conversation-header" data-timeline-id="session">
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /></button>
-          <div className="conversation-title-copy"><h1 className="conversation-title">{grokSessionLabel(selected)}</h1><span className="muted-text">{selected.cwd}</span></div>
+          <div className="conversation-title-copy"><h1 className="conversation-title">{grokSessionLabel(selected)}</h1></div>
           <TaskMenu label="Grok 任务操作" triggerRef={menuTrigger}>
             <button onClick={() => { void copyId(); }}><Copy size={15} />复制线程 ID</button>
             <button onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
@@ -145,11 +145,11 @@ function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: str
   const timelineProps = { "data-timeline-id": key, "data-timeline-aliases": sourceIds.join(" ") || undefined };
   if (event.kind === "user_message_chunk") return <UserMessage key={event.userMessage?.id ?? key} message={event.userMessage} text={event.text ?? ""} activityId={key} timelineId={key} timelineAliases={sourceIds} />;
   if (!visibleMarkdown(event.text ?? "").trim() && event.kind !== "plan") return null;
-  return <article className={`provider-event ${event.kind}`} {...timelineProps} key={key}>
-    <div className={event.kind === "plan" ? "plan-header" : "chat-meta"}>
-      <span className="chat-meta">{event.kind === "user_message_chunk" ? "你" : event.kind === "plan" ? "计划" : "Grok"}</span>
-      {event.kind === "plan" && <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />}
-    </div>
+  return <article className={`provider-event ${event.kind}${event.kind.startsWith("agent_message") ? " assistant-reply" : ""}`} {...timelineProps} key={key}>
+    {event.kind === "plan" && <div className="plan-header">
+      <span className="chat-meta">计划</span>
+      <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />
+    </div>}
     <MarkdownContent text={event.text ?? ""} activityId={key} foldInstructions={event.kind !== "plan"} />
     {event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}
   </article>;

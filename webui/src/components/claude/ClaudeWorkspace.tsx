@@ -138,7 +138,7 @@ export function ClaudeWorkspace() {
       {selected && <>
         <header className="conversation-header" data-timeline-id="session">
           <button className="icon-button mobile-back" title="返回任务列表" onClick={() => setSelectedKey(null)}><ChevronLeft size={18} /></button>
-          <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1><span className="muted-text">{selected.cwd}</span></div>
+          <div className="conversation-title-copy"><h1 className="conversation-title">{claudeSessionLabel(selected)}</h1></div>
           <TaskMenu label="Claude Code 任务操作" triggerRef={menuTrigger}>
             <button onClick={() => { void copyId(); }}><Copy size={15} />复制线程 ID</button>
             <button disabled={!selected.canRename} title={selected.renameBlockReason ?? undefined} onClick={() => { setTitle(selected.title); setRenaming(true); actions.rename.reset(); }}><Pencil size={15} />改名</button>
@@ -177,7 +177,7 @@ function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event
   if (event.kind === "plan") return <article className="provider-event plan" {...timelineProps}><header className="plan-heading"><strong>计划</strong><PlanActions markdown={event.text ?? ""} fallbackTitle={title} /></header><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} /></article>;
   if (event.detail) return <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>{() => <ToolOutput text={event.detail!} />}</ActivityDetails>;
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
-  return <article className={`provider-event ${event.kind}`} {...timelineProps}><div className="chat-meta">{claudeEventLabel(event)}</div><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  return <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>{!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}<MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
 function renderClaudeEvents(entries: ExecutionRenderItem<ClaudeHistoryEvent>[], title: string): ReactNode {

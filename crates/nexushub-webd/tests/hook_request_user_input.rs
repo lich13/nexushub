@@ -63,8 +63,8 @@ fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
     seed_local_thread_title(
         &config,
         "thread-hook",
-        "我想把我本机的 Loon 配置和远程 Mihomo 配置进行逻辑统一，请仔细审计。",
-        "审计并统一Loon配置逻辑",
+        "请为示例图书馆设计一份周末活动安排。",
+        "示例图书馆周末活动安排",
     );
     write_config(&config_path, &config);
     let transcript = write_pending_rollout(&config, "turn-hook", "call-hook");
@@ -85,11 +85,11 @@ fn hook_request_user_input_uses_current_local_thread_title_for_bark() {
     assert!(output.stdout.is_empty());
     let events = wait_for_event_count(&db, 1, Duration::from_secs(4));
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].title.as_deref(), Some("审计并统一Loon配置逻辑"));
-    assert_eq!(events[0].payload["thread_title"], "审计并统一Loon配置逻辑");
+    assert_eq!(events[0].title.as_deref(), Some("示例图书馆周末活动安排"));
+    assert_eq!(events[0].payload["thread_title"], "示例图书馆周末活动安排");
     assert_eq!(
         events[0].payload["bark"]["title"],
-        "等待回复：审计并统一Loon配置逻辑"
+        "等待回复：示例图书馆周末活动安排"
     );
     assert_eq!(events[0].payload["call_id"], "call-hook");
     assert!(events[0].payload["body_summary"]
@@ -522,8 +522,36 @@ fn assert_probe_side_effect_counts(db: &PanelDb, dedupe: i64, marker: i64) {
     assert_eq!(marker_count, marker);
 }
 
+fn cargo_webd_binary() -> PathBuf {
+    let binary = std::env::var_os("CARGO_BIN_EXE_nexushub-webd")
+        .map(PathBuf::from)
+        .or_else(|| option_env!("CARGO_BIN_EXE_nexushub-webd").map(PathBuf::from))
+        .expect("Cargo must provide CARGO_BIN_EXE_nexushub-webd for this integration test");
+    assert!(binary.is_absolute(), "Cargo binary path must be absolute");
+    let binary = binary
+        .canonicalize()
+        .expect("Cargo binary path must resolve to an existing build artifact");
+    assert!(binary.is_file(), "Cargo binary path must point to a file");
+
+    let test_binary = std::env::current_exe()
+        .expect("current integration test executable must be available")
+        .canonicalize()
+        .expect("current integration test executable must exist");
+    let profile_dir = test_binary
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "deps"))
+        .and_then(Path::parent)
+        .expect("integration test executable must be in a Cargo profile's deps directory");
+    let expected_binary = profile_dir.join(format!("nexushub-webd{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        binary == expected_binary,
+        "Cargo binary must belong to the same build directory and profile as this integration test"
+    );
+    binary
+}
+
 fn run_hook(config_path: &Path, stdin: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nexushub-webd"))
+    let mut child = Command::new(cargo_webd_binary())
         .args([
             "--config",
             config_path.to_str().unwrap(),

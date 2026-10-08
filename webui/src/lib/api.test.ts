@@ -949,6 +949,7 @@ describe("archive delete API compatibility", () => {
       "threads.list",
       "threads.rename",
       "threads.restore",
+      "threads.subagentDetail",
       "updates.check",
       "updates.install",
       "updates.prune",

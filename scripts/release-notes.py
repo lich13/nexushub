@@ -8,6 +8,11 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.9": [
+        "统一 Codex、Claude Code 和 Grok 的紧凑阅读布局，正文与活动摘要对齐，复制按钮不再占据额外一行。",
+        "新增 Codex 子智能体活动与右侧只读详情，支持嵌套返回、分页、工具记录和附件。",
+        "修复 Hook 集成测试的 Cargo 二进制路径依赖，保留真实 CLI 和通知去重验证。",
+    ],
     "1.0.0": [
         "Codex 支持批量归档、恢复与删除，Grok 和 Pi 支持批量删除。",
         "扩展 Bark 完成和失败通知，并移除已退役的日志维护入口。",
@@ -102,6 +107,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.9":
+        sections = {
+            "版本概览": ["本版让会话阅读更紧凑，并为 Codex 子智能体提供可点击的活动行与右侧详情。"],
+            "功能调整": [
+                "Codex、Claude Code 和 Grok 统一正文、工具摘要与操作位置；桌面复制按钮在悬停或键盘聚焦时出现，触屏保持可见。",
+                "Codex 子智能体显示任务名称与自身回合状态，可查看委派内容、消息、Plan、工具和附件。支持嵌套返回及独立历史分页。",
+                "宽窗口并排显示详情，窄窗口使用覆盖面板；关闭后恢复父线程位置和焦点，切换机器或主线程会关闭面板。",
+            ],
+            "问题修复": [
+                "减少重复 Provider 标签、活动组间距和复制按钮造成的空白，保留原有阅读列宽度与字号。",
+                "子智能体状态按其自身原生回合判断；关联缺失或有歧义时显示原因，不按名称打开其他线程。",
+                "修复 Hook 集成测试对编译期二进制路径的硬依赖；测试继续启动本次 Cargo 构建的真实 CLI，验证确认等待和通知去重。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增子智能体读取能力。远程旧服务缺少能力时提示升级，现有本机读取不受影响。",
+                "子智能体详情和附件均验证原主线程及父子关系；不新增数据库表，不改写原生会话，不开放执行或管理控制。",
+                "保留搜索、用户指令时间线、工具折叠、AGENTS.md、Plan 导出、线程管理、Bark、Keychain 与机器隔离。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：nexushub-webd API 服务包与 SHA-256 校验文件，不提供网页或 Linux 桌面包。",
+                "latest.json 仅映射 darwin-aarch64；共七项资产，darwin-arm64 文件名对应同一 macOS 架构。",
+            ],
+            "升级提示": [
+                "使用远程子智能体详情前，请先升级 API 服务，再安装 1.2.9 App。保留现有 API Key、Keychain 连接、会话及通知设置。",
+                "安装前核对校验和与 updater 签名。macOS 包尚无 Developer ID 签名或 Apple 公证；Minisign 验证更新归档来源，不能替代系统代码签名。",
+                "覆盖安装若触发钥匙串授权，请在系统对话框完成验证，无需重建远程连接。部署参数继续从仓库外提供。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.8":
         sections = {

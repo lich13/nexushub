@@ -31,6 +31,7 @@ pub fn run() {
         commands::system::getPlatformOverview,
         commands::threads::listThreads,
         commands::threads::getThread,
+        commands::threads::getSubagentDetail,
         commands::threads::getThreadBlocks,
         commands::threads::archiveThread,
         commands::threads::restoreThread,

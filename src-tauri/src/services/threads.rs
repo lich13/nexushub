@@ -160,7 +160,9 @@ fn load_thread_detail_read_model(
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;
     let view = thread_service::thread_detail_read_model(state.platform(), detail, active_job)?;
-    Ok(Some(view.detail))
+    let mut detail = view.detail;
+    nexushub_core::codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
+    Ok(Some(detail))
 }
 
 fn active_job_for_thread(state: &DesktopState, thread_id: &str) -> Result<Option<JobRecord>> {

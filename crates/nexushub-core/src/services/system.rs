@@ -65,6 +65,7 @@ impl FromStr for HostSurface {
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Threads,
+    ThreadSubagents,
     Jobs,
     Probe,
     Settings,
@@ -80,6 +81,7 @@ pub enum Capability {
 impl Capability {
     pub const ALL: &'static [Capability] = &[
         Capability::Threads,
+        Capability::ThreadSubagents,
         Capability::Jobs,
         Capability::Probe,
         Capability::Settings,
@@ -99,6 +101,7 @@ impl Capability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Threads => "threads",
+            Self::ThreadSubagents => "thread_subagents",
             Self::Jobs => "jobs",
             Self::Probe => "probe",
             Self::Settings => "settings",
@@ -123,6 +126,7 @@ impl Capability {
         let desktop_embedded = surface == HostSurface::DesktopEmbeddedTauri && shared_core;
         match self {
             Self::Threads
+            | Self::ThreadSubagents
             | Self::Jobs
             | Self::Probe
             | Self::Settings
@@ -138,6 +142,8 @@ impl Capability {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemCapabilities {
     pub threads: bool,
+    #[serde(default)]
+    pub thread_subagents: bool,
     pub jobs: bool,
     pub probe: bool,
     pub settings: bool,
@@ -231,6 +237,7 @@ pub fn system_capabilities_for_surface(
 ) -> SystemCapabilities {
     SystemCapabilities {
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
+        thread_subagents: Capability::ThreadSubagents.is_supported_on_surface(platform, host_surface),
         jobs: Capability::Jobs.is_supported_on_surface(platform, host_surface),
         probe: Capability::Probe.is_supported_on_surface(platform, host_surface),
         settings: Capability::Settings.is_supported_on_surface(platform, host_surface),

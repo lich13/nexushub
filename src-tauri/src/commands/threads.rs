@@ -27,6 +27,23 @@ fn thread_id_request(thread_id: String) -> DesktopThreadIdRequest {
     DesktopThreadIdRequest { thread_id }
 }
 
+#[tauri::command(rename = "threads.subagentDetail")]
+pub async fn getSubagentDetail(
+    state: tauri::State<'_, DesktopState>,
+    request: nexushub_core::codex::subagents::SubagentDetailRequest,
+) -> Result<nexushub_core::codex::subagents::SubagentDetailResponse, String> {
+    let paths = state.codex_paths();
+    let platform = state.platform().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        nexushub_core::services::use_cases::NexusHubUseCases::new(&platform)
+            .threads()
+            .subagent_detail(&paths, &request)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
 #[tauri::command(rename = "threads.list")]
 pub fn listThreads(
     state: tauri::State<'_, DesktopState>,

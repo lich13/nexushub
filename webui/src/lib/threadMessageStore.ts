@@ -217,7 +217,7 @@ export function applyThreadDetailToSlot(
   }
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;
-  const mergedBlocks = mergeBlocksPreservingHistory(slot.blocks, incomingBlocks);
+  const mergedBlocks = mergeSubagentUpdates(mergeBlocksPreservingHistory(slot.blocks, incomingBlocks), detail.subagent_updates);
   const blocksChanged = mergedBlocks !== slot.blocks;
   const changed = blocksChanged
     || slot.summary !== detail.summary
@@ -465,4 +465,19 @@ function cursorIndex(cursor: string | null | undefined): number {
   if (!cursor) return Number.POSITIVE_INFINITY;
   const parsed = Number(cursor.replace(/^b:/, ""));
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+// Refresh loaded historical activities without inserting off-page messages or moving anchors.
+export function mergeSubagentUpdates(blocks: MessageBlock[], updates: ThreadDetail["subagent_updates"]): MessageBlock[] {
+  if (!updates || !Object.keys(updates).length) return blocks;
+  let changed = false;
+  const result = blocks.map(block => {
+    const update = updates[block.id];
+    if (!block.subagent || !update) return block;
+    const next = { ...block, subagent: { ...block.subagent, ...update, delegation: block.subagent.delegation } };
+    if (messageBlocksEqual(block, next)) return block;
+    changed = true;
+    return next;
+  });
+  return changed ? result : blocks;
 }

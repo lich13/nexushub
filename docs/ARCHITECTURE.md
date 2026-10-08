@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.8
+# NexusHub 架构说明（维护者文档）— 1.2.9
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -97,3 +97,13 @@ Claude notification cursors and atomic delivery claims reuse the provider monito
 `system.capabilities.api_version` 为 2，桌面桥接校验版本后才转发业务请求。旧无候选请求不能进入隐藏清理。Pi 只保留 retired tombstone；迁移在解码待投递 JSON 前清除 NexusHub 自有 Pi 数据，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；其他提供方、密钥和业务记录不变。
 
 窗口生命周期集中于 `desktop_boot`：隐藏创建 → 一次最大化或工作区回退 → Ready 显示。Reopen 只显示、取消最小化和聚焦，不再次设置几何信息。
+
+## 1.2.9：父线程绑定的子智能体读取
+
+`MessageBlock.subagent` 是可选展示信息，原生创建调用与结果通过调用 ID 配对，再由返回的线程 ID 或精确任务路径关联原生父子图。关系有歧义时保持不可用。状态读取子线程回合与未完成工具证据，不由父线程状态或登记存在推断。`ThreadDetail.subagent_updates` 只刷新已加载卡片，避免最新分页遗漏较早委派的状态。
+
+`threads.subagentDetail` 使用主线程 ID、子智能体 ID 和有界历史游标，经共享 use case、Linux RPC 与 Tauri 适配。服务端从当前机器可见主线程验证唯一父链、循环和深度，复核索引、rollout 身份、符号链接与读取前后指纹。子线程保留原始历史，再按页返回；缓存有界且按文件身份失效。客户端不能提交文件路径。
+
+子线程附件通过 `sessions.attachmentRead.rootThreadId` 绑定主线程上下文，复用关系与来源验证、MIME 检查和 20 MiB 限制，不在详情中内嵌图片。能力矩阵新增 `thread_subagents`，缺失视为不支持；API 协议保持 2。主线程列表、通知身份与管理保护不变，无数据库表或原生格式迁移。
+
+React 使用机器、主线程和子线程身份隔离查询、分页及折叠状态；取消或迟到响应不得覆盖新目标。父视图保持挂载，详情面板独立滚动与嵌套返回。共享阅读布局不改变用户纯文本、Plan、路径、记忆过滤和 AGENTS.md 折叠规则。

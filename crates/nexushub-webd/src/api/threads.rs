@@ -25,6 +25,22 @@ pub(crate) struct ThreadBlocksQuery {
     before: Option<String>,
 }
 
+pub(crate) async fn subagent_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<nexushub_core::codex::subagents::SubagentDetailRequest>,
+) -> ApiResponse {
+    require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
+    let result = tokio::task::spawn_blocking(move || {
+        NexusHubUseCases::new(state.platform())
+            .threads()
+            .subagent_detail(&state.codex_paths(), &request)
+    })
+    .await
+    .map_err(anyhow::Error::from)??;
+    ok(result)
+}
+
 pub(crate) async fn list_threads(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { MessageBlock, ThreadDetail, ThreadSummary } from "../types";
+import type { MessageBlock, SubagentActivity, ThreadDetail, ThreadSummary } from "../types";
 import {
   applyRealtimeBlocksToThreadSlot,
   applyThreadBlockPageToSlot,
@@ -95,6 +95,49 @@ describe("thread message store", () => {
     expect(slot?.blocks.map((item) => item.id)).toEqual(["old-1", "old-2", "new-1", "new-2"]);
     expect(slot?.blocks.find((item) => item.id === "new-1")?.text).toBe("new updated");
     expect(slot?.beforeCursor).toBe("b:80");
+  });
+
+  test.each(["completed", "failed", "interrupted", "unknown"] as const)("a tail-only refresh updates an older child to %s without losing its delegation or position", status => {
+    const store = createThreadMessageStoreState();
+    const agent: SubagentActivity = {
+      agentId: "child-fixture", name: "示例子智能体", status: "running", available: true,
+      delegation: "仅检查示例文件并报告结果。"
+    };
+    const spawn: MessageBlock = {
+      id: "old-spawn", role: "tool", kind: "function_call", tool_name: "spawn_agent", questions: [], subagent: agent
+    };
+    const tail = { ...detail("thread-a", [block("tail")], "b:80"), total_blocks: 81 };
+    applyThreadDetailToSlot(store, "thread-a", tail);
+    applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a", blocks: [block("old-before"), spawn, block("old-after")],
+      total_blocks: 81, has_more_blocks: true, before_cursor: "b:77"
+    }, "b:80");
+    applyThreadDetailToSlot(store, "thread-b", detail("thread-b", [spawn]));
+
+    const update: SubagentActivity = { agentId: agent.agentId, name: agent.name, status, available: true };
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...tail, blocks: [block("tail", "更新后的末页回复")], subagent_updates: { "old-spawn": update }
+    });
+
+    expect(slot.blocks.map(item => item.id)).toEqual(["old-before", "old-spawn", "old-after", "tail"]);
+    expect(slot.blocks[1].subagent).toMatchObject({ ...update, delegation: agent.delegation });
+    expect(slot.blocks[3].text).toBe("更新后的末页回复");
+    expect(slot.beforeCursor).toBe("b:77");
+    expect(store.slots.get("thread-b")?.blocks[0].subagent?.status).toBe("running");
+    expect(spawn.subagent?.status).toBe("running");
+  });
+
+  test("lightweight child updates cannot insert an unloaded block or turn ordinary text into activity", () => {
+    const store = createThreadMessageStoreState();
+    const tail = detail("thread-a", [block("ordinary"), block("tail")]);
+    applyThreadDetailToSlot(store, "thread-a", tail);
+    const update: SubagentActivity = { agentId: "child-fixture", name: "示例子智能体", status: "completed", available: true };
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...tail, subagent_updates: { "unloaded-spawn": update, ordinary: update }
+    });
+    expect(slot.blocks.map(item => item.id)).toEqual(["ordinary", "tail"]);
+    expect(slot.blocks[0].subagent).toBeUndefined();
+    expect(slot.blocks[0].text).toBe("ordinary");
   });
 
   test("prepends load-more pages only to the captured slot", () => {

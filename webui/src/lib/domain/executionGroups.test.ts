@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { groupClaudeEvents, groupCodexCommandBlocks, groupGrokCommandEvents } from "./executionGroups";
+import type { MessageBlock } from "../../types";
 
 describe("execution groups", () => {
   test("groups adjacent Codex tools without hiding their rows", () => {
@@ -125,6 +126,32 @@ test("a new turn with a reused call id starts a distinct group", () => {
   expect(result).toHaveLength(2);
   if (result[0].kind !== "group" || result[1].kind !== "group") throw new Error("groups missing");
   expect(result[0].group.id).not.toBe(result[1].group.id);
+});
+
+test("subagent call and result activities retain independent positions between tool groups", () => {
+  const child: MessageBlock = {
+    id: "child-call", role: "tool", kind: "function_call", tool_name: "spawn_agent",
+    call_id: "delegation", questions: [],
+    subagent: { agentId: "child-fixture", name: "示例子智能体", status: "running", available: true }
+  };
+  const completed: MessageBlock = {
+    ...child, id: "child-result", kind: "function_call_output",
+    subagent: { ...child.subagent!, status: "completed" }
+  };
+  const result = groupCodexCommandBlocks([
+    { id: "before-call", role: "tool", kind: "function_call", tool_name: "exec_command", call_id: "shell", status: "running", questions: [] },
+    child,
+    { id: "before-result", role: "tool", kind: "function_call_output", call_id: "shell", text: "fixture output", questions: [] },
+    completed,
+    { id: "after-call", role: "tool", kind: "function_call_output", tool_name: "read_file", text: "fixture file", questions: [] }
+  ]);
+  expect(result.map(entry => entry.kind)).toEqual(["group", "item", "item", "group"]);
+  expect(result.filter(entry => entry.kind === "item").map(entry => entry.item)).toEqual([child, completed]);
+  if (result[0].kind !== "group" || result[3].kind !== "group") throw new Error("expected surrounding tool groups");
+  expect(result[0].group.commands).toHaveLength(1);
+  expect(result[0].group.commands[0]).toMatchObject({ status: "completed", sourceIds: ["before-call", "shell", "before-result"] });
+  expect(result[3].group.commands).toHaveLength(1);
+  expect(result[3].group.commands[0].sourceIds).toEqual(["after-call"]);
 });
 
 

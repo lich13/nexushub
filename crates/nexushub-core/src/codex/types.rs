@@ -31,6 +31,8 @@ pub struct ThreadSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDetail {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub subagent_updates: std::collections::BTreeMap<String, super::subagents::SubagentActivity>,
     pub summary: ThreadSummary,
     pub messages: Vec<CodexMessage>,
     pub blocks: Vec<MessageBlock>,
@@ -88,6 +90,8 @@ pub fn extract_proposed_plan_text(text: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<super::subagents::SubagentActivity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message: Option<crate::user_message::UserMessage>,
     pub id: String,

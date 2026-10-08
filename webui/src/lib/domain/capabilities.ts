@@ -2,6 +2,7 @@ import type { HostSurface, SystemCapabilitiesResponse } from "../../types";
 export type RuntimeContext = { kind: "desktop" };
 export type RuntimeCapabilityMatrix = {
   runtimeKind: "desktop"; hostSurface: HostSurface; codexStatePaths: boolean;
+  threadSubagents?: boolean;
   updatePrune: boolean; threadCleanup: boolean; threadArchiveActions: boolean; updateServiceLabels: boolean;
 };
 export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
@@ -16,6 +17,7 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
   const remote = status.host_surface === "linux_server_api";
   return { runtimeKind: "desktop", hostSurface: status.host_surface ?? fallback.hostSurface,
     codexStatePaths: remote && core.systemd, updatePrune: remote && core.prune_backups,
+    threadSubagents: core.thread_subagents === true,
     threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: remote && core.linux_update_job };
 }

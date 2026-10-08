@@ -128,6 +128,13 @@ impl SessionUseCases {
                 "无效的附件定位键"
             );
         }
+        if request.root_thread_id.is_some() {
+            ensure!(
+                request.provider == SessionProvider::Codex,
+                "子智能体附件仅支持 Codex"
+            );
+            return codex::subagents::read_attachment(&self.codex, &request);
+        }
         let message = match request.provider {
             SessionProvider::Claude => {
                 return crate::claude::read_attachment(&self.claude, &request)

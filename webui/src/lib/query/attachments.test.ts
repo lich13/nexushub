@@ -41,3 +41,20 @@ test("identical attachment identities on local and remote machines never share c
   expect(await readAttachment(request)).toContain("cmVtb3Rl");
   expect(readSessionAttachment).toHaveBeenCalledTimes(2);
 });
+
+test("subagent reads preserve root authorization identity and cannot reuse bytes from another root", async () => {
+  vi.mocked(readSessionAttachment)
+    .mockResolvedValueOnce({ mimeType: "image/png", base64: "cm9vdC1h" })
+    .mockResolvedValueOnce({ mimeType: "image/png", base64: "cm9vdC1i" })
+    .mockResolvedValueOnce({ mimeType: "image/png", base64: "ZGlyZWN0" });
+  const child = { ...request, sessionKey: "child-fixture", rootThreadId: "root-a" };
+  const first = await readAttachment(child);
+  expect(await readAttachment(child)).toBe(first);
+  expect(first).toContain("cm9vdC1h");
+  expect(await readAttachment({ ...child, rootThreadId: "root-b" })).toContain("cm9vdC1i");
+  expect(await readAttachment({ ...request, sessionKey: "child-fixture" })).toContain("ZGlyZWN0");
+  expect(readSessionAttachment).toHaveBeenNthCalledWith(1, child);
+  expect(readSessionAttachment).toHaveBeenNthCalledWith(2, { ...child, rootThreadId: "root-b" });
+  expect(readSessionAttachment).toHaveBeenNthCalledWith(3, { ...request, sessionKey: "child-fixture" });
+  expect(readSessionAttachment).toHaveBeenCalledTimes(3);
+});

@@ -2,6 +2,11 @@ import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from 
 import { callCommand } from "./transport";
 import { USE_DEMO } from "./shared";
 import { demoThreadBlockPage, demoThreadDetail, demoThreads } from "./demo";
+import type { SubagentDetailRequest, SubagentDetailResponse } from "../../types";
+
+export async function getSubagentDetail(request: SubagentDetailRequest): Promise<SubagentDetailResponse> {
+  return callCommand<SubagentDetailResponse>("threads.subagentDetail", { request });
+}
 
 export async function listThreads(status: string, q: string): Promise<ThreadSummary[]> {
   if (USE_DEMO) return demoThreads(status, q);

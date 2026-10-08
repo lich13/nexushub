@@ -63,6 +63,11 @@ pub(super) async fn rpc_dispatch(
         .map_err(|status| api_error(status, "API key authorization failed"))?;
 
     match command.as_str() {
+        rpc_commands::THREADS_SUBAGENT_DETAIL => {
+            super::threads::subagent_detail(
+                State(state), headers, Json(rpc_wrapped_payload(&args, &["request"])?),
+            ).await
+        }
         rpc_commands::SESSIONS_ATTACHMENT_READ => {
             super::sessions::attachment_read(
                 State(state),
