@@ -45,7 +45,7 @@ async function installSubagents(page: Page, blocks: MessageBlock[] = [
 }
 async function openRoot(page: Page) {
   await page.goto("/");
-  await page.locator(".thread-item").filter({ hasText: root.title }).click();
+  await page.locator(".thread-item").and(page.getByTitle(root.title, { exact: true })).click();
   await expect(page.locator(".conversation-title")).toHaveText(root.title);
 }
 const parentStream = (page: Page) => page.locator(".conversation-main .message-stream");
@@ -119,9 +119,9 @@ test("a failed detail read announces loading and supports explicit retry", async
   const requests = await installSubagents(page);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  let reads = 0;
+  let initialReadFailure = true;
   await mockCommand(page, "threads.subagentDetail", async () => {
-    if (++reads === 1) { await gate; throw new Error("示例记录暂时不可读"); }
+    if (initialReadFailure) { await gate; throw new Error("示例记录暂时不可读"); }
     return childPage();
   });
   await openRoot(page);
@@ -130,6 +130,7 @@ test("a failed detail read announces loading and supports explicit retry", async
   await expect(view.getByRole("status")).toContainText("正在读取子智能体");
   release();
   await expect(view.getByRole("alert")).toContainText("示例记录暂时不可读");
+  initialReadFailure = false;
   await view.getByRole("button", { name: "重试", exact: true }).click();
   await expect(view).toContainText("子智能体示例回复");
   await expect(view.getByRole("alert")).toHaveCount(0);
@@ -283,7 +284,7 @@ test("switching the parent thread discards an in-flight child response", async (
   await openRoot(page);
   await trigger(page).click();
   await expect(panel(page).getByRole("status")).toContainText("正在读取子智能体");
-  await page.locator(".thread-item").filter({ hasText: otherRoot.title }).click();
+  await page.locator(".thread-item").and(page.getByTitle(otherRoot.title, { exact: true })).click();
   await expect(page.locator(".conversation-title")).toHaveText(otherRoot.title);
   await expect(panel(page)).toHaveCount(0);
   release();

@@ -7,7 +7,7 @@ import { RunningIndicator } from "./RunningIndicator";
 
 export function executionSummary(group: ExecutionGroup) {
   const kinds = new Set(group.commands.map(command => {
-    const name = command.title.toLowerCase().split(/[.\/:]/).pop() ?? "";
+    const name = command.title.trim().split(/\s+/, 1)[0].toLowerCase().split(/[.\/:]/).pop() ?? "";
     if (/^(read|read_file|list|list_files|ls|cat)$/.test(name)) return "read";
     if (/^(search|search_query|grep|glob|find|web_search|ripgrep)$/.test(name)) return "search";
     if (/^(exec|exec_command|execute|bash|shell|terminal|sleep|js|javascript|python|node)$/.test(name)) return "command";

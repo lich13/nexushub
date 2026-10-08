@@ -266,72 +266,79 @@ fn validate_relation(
 fn native_status(path: &Path) -> Result<SubagentStatus> {
     static CACHE: crate::read_cache::ReadCache<SubagentStatus> =
         crate::read_cache::ReadCache::new(1024 * 1024);
-    CACHE.read(path, |_, _| 256, || {
-        let mut status = SubagentStatus::Unknown;
-        let mut turn = None;
-        let mut pending = HashSet::new();
-        let mut reader = BufReader::new(File::open(path)?);
-        let mut line = String::new();
-        while reader.read_line(&mut line)? > 0 {
-            if !line.ends_with('\n') {
-                return Ok(SubagentStatus::Unknown);
-            }
-            if !line.trim().is_empty() {
-                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+    CACHE.read(
+        path,
+        |_, _| 256,
+        || {
+            let mut status = SubagentStatus::Unknown;
+            let mut turn = None;
+            let mut pending = HashSet::new();
+            let mut reader = BufReader::new(File::open(path)?);
+            let mut line = String::new();
+            while reader.read_line(&mut line)? > 0 {
+                if !line.ends_with('\n') {
                     return Ok(SubagentStatus::Unknown);
-                };
-                let event = value.get("payload").unwrap_or(&value);
-                let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-                let event_turn = field(event, &["turn_id", "turnId"]);
-                match kind {
-                    "task_started" | "turn_started" | "turn/started" => {
-                        turn = event_turn;
-                        pending.clear();
-                        status = SubagentStatus::Running;
-                    }
-                    "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted"
-                    | "turn/aborted" | "turn_error" | "turn_failed"
-                        if event_turn.is_none() || turn.is_none() || event_turn == turn =>
-                    {
-                        let terminal = field(event, &["status", "turn_status"]).unwrap_or_default();
-                        status = if kind.contains("aborted")
-                            || matches!(terminal.as_str(), "cancelled" | "canceled" | "interrupted")
-                        {
-                            SubagentStatus::Interrupted
-                        } else if matches!(kind, "turn_error" | "turn_failed")
-                            || matches!(terminal.as_str(), "failed" | "error")
-                        {
-                            SubagentStatus::Failed
-                        } else if pending.is_empty() {
-                            SubagentStatus::Completed
-                        } else {
-                            SubagentStatus::Unknown
-                        };
-                        pending.clear();
-                    }
-                    "function_call" | "custom_tool_call" => {
-                        if let Some(call) = field(event, &["call_id", "callId"]) {
-                            pending.insert(call);
-                        }
-                    }
-                    "function_call_output" | "custom_tool_call_output" => {
-                        if let Some(call) = field(event, &["call_id", "callId"]) {
-                            pending.remove(&call);
-                        }
-                    }
-                    "message"
-                        if event.get("role").and_then(Value::as_str) == Some("user")
-                            && status != SubagentStatus::Running =>
-                    {
-                        status = SubagentStatus::Unknown;
-                    }
-                    _ => {}
                 }
+                if !line.trim().is_empty() {
+                    let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                        return Ok(SubagentStatus::Unknown);
+                    };
+                    let event = value.get("payload").unwrap_or(&value);
+                    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+                    let event_turn = field(event, &["turn_id", "turnId"]);
+                    match kind {
+                        "task_started" | "turn_started" | "turn/started" => {
+                            turn = event_turn;
+                            pending.clear();
+                            status = SubagentStatus::Running;
+                        }
+                        "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted"
+                        | "turn/aborted" | "turn_error" | "turn_failed"
+                            if event_turn.is_none() || turn.is_none() || event_turn == turn =>
+                        {
+                            let terminal =
+                                field(event, &["status", "turn_status"]).unwrap_or_default();
+                            status = if kind.contains("aborted")
+                                || matches!(
+                                    terminal.as_str(),
+                                    "cancelled" | "canceled" | "interrupted"
+                                ) {
+                                SubagentStatus::Interrupted
+                            } else if matches!(kind, "turn_error" | "turn_failed")
+                                || matches!(terminal.as_str(), "failed" | "error")
+                            {
+                                SubagentStatus::Failed
+                            } else if pending.is_empty() {
+                                SubagentStatus::Completed
+                            } else {
+                                SubagentStatus::Unknown
+                            };
+                            pending.clear();
+                        }
+                        "function_call" | "custom_tool_call" => {
+                            if let Some(call) = field(event, &["call_id", "callId"]) {
+                                pending.insert(call);
+                            }
+                        }
+                        "function_call_output" | "custom_tool_call_output" => {
+                            if let Some(call) = field(event, &["call_id", "callId"]) {
+                                pending.remove(&call);
+                            }
+                        }
+                        "message"
+                            if event.get("role").and_then(Value::as_str) == Some("user")
+                                && status != SubagentStatus::Running =>
+                        {
+                            status = SubagentStatus::Unknown;
+                        }
+                        _ => {}
+                    }
+                }
+                line.clear();
             }
-            line.clear();
-        }
-        Ok(status)
-    })
+            Ok(status)
+        },
+    )
 }
 
 fn activity(
@@ -452,7 +459,11 @@ pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
                 };
                 match validated {
                     Ok(path) => {
-                        view = activity(record, native_status(&path).unwrap_or_default(), view.delegation);
+                        view = activity(
+                            record,
+                            native_status(&path).unwrap_or_default(),
+                            view.delegation,
+                        );
                     }
                     Err(_) => {
                         view.unavailable_reason = Some("子智能体记录缺失或身份无法验证".into());
@@ -474,12 +485,13 @@ pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
         .collect();
 }
 
-fn verified_detail(paths: &CodexPaths, request: &SubagentDetailRequest) -> Result<SubagentDetailResponse> {
+fn verified_detail(
+    paths: &CodexPaths,
+    request: &SubagentDetailRequest,
+) -> Result<SubagentDetailResponse> {
     let graph = read_graph(paths)?;
     validate_relation(paths, &graph, &request.root_thread_id, &request.agent_id)?;
-    let record = graph
-        .get(&request.agent_id)
-        .context("子智能体记录不存在")?;
+    let record = graph.get(&request.agent_id).context("子智能体记录不存在")?;
     let path = validate_rollout(paths, record)?;
     let status = native_status(&path)?;
     let before = fs::metadata(&path)?;
@@ -528,7 +540,12 @@ fn verified_detail(paths: &CodexPaths, request: &SubagentDetailRequest) -> Resul
         );
     }
     let current_graph = read_graph(paths)?;
-    validate_relation(paths, &current_graph, &request.root_thread_id, &request.agent_id)?;
+    validate_relation(
+        paths,
+        &current_graph,
+        &request.root_thread_id,
+        &request.agent_id,
+    )?;
     let current = current_graph
         .get(&request.agent_id)
         .context("子智能体关联已变化")?;
@@ -539,7 +556,12 @@ fn verified_detail(paths: &CodexPaths, request: &SubagentDetailRequest) -> Resul
     enrich_subagent_blocks(paths, &mut detail);
     Ok(SubagentDetailResponse {
         root_thread_id: request.root_thread_id.clone(),
-        parent_thread_id: record.parents.iter().next().expect("verified parent").clone(),
+        parent_thread_id: record
+            .parents
+            .iter()
+            .next()
+            .expect("verified parent")
+            .clone(),
         agent: activity(record, status, None),
         detail,
     })

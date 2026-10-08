@@ -237,7 +237,8 @@ pub fn system_capabilities_for_surface(
 ) -> SystemCapabilities {
     SystemCapabilities {
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
-        thread_subagents: Capability::ThreadSubagents.is_supported_on_surface(platform, host_surface),
+        thread_subagents: Capability::ThreadSubagents
+            .is_supported_on_surface(platform, host_surface),
         jobs: Capability::Jobs.is_supported_on_surface(platform, host_surface),
         probe: Capability::Probe.is_supported_on_surface(platform, host_surface),
         settings: Capability::Settings.is_supported_on_surface(platform, host_surface),
