@@ -85,7 +85,10 @@ impl CredentialAccess {
             .map_err(|_| CredentialAccessError::WorkerUnavailable)
     }
 
-    async fn execute<T, F>(permit: OwnedSemaphorePermit, work: F) -> Result<T, CredentialAccessError>
+    async fn execute<T, F>(
+        permit: OwnedSemaphorePermit,
+        work: F,
+    ) -> Result<T, CredentialAccessError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
