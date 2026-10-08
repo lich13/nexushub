@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { UserMessage } from "./UserMessage";
+import { CopyReplyButton } from "./CopyReplyButton";
 import { MessageBlockView } from "../chat/MessageStream";
 
 test("user content is literal text with line breaks and no Markdown headings", () => {
@@ -16,6 +17,23 @@ test("image-only messages have an attachment area and no empty bubble", () => {
   expect(html).toContain("消息附件");
   expect(html).toContain("sample.png");
   expect(html).not.toContain("user-message-bubble");
+});
+
+test("internal page wrappers are removed from user messages and wrapper-only bubbles", () => {
+  const page = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+  const mixed = renderToStaticMarkup(<MessageBlockView block={{ id: "mixed-page-fixture", role: "user", kind: "message", questions: [], text: `Continue ${page} please` }} />);
+  expect(mixed).toContain("user-message-bubble");
+  expect(mixed).toContain("Continue  please");
+  expect(mixed).toContain('data-timeline-id="mixed-page-fixture"');
+  expect(mixed).not.toContain("external_codex_apps_open_page");
+  expect(mixed).not.toContain("page_id");
+
+  const internalOnly = renderToStaticMarkup(<MessageBlockView block={{ id: "internal-page-fixture", role: "user", kind: "message", questions: [], text: page }} />);
+  expect(internalOnly).toBe("");
+  expect(internalOnly).not.toContain("user-message-bubble");
+  expect(internalOnly).not.toContain("data-timeline-id");
+
+  expect(renderToStaticMarkup(<CopyReplyButton text={page} />)).toBe("");
 });
 
 test("Codex user messages with proposed-plan examples remain user text", () => {

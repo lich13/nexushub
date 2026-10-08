@@ -367,7 +367,8 @@ fn push_warning(warnings: &mut Vec<String>) {
 
 fn strip_memory_metadata(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
-    let mut in_fence = false;
+    let mut fence: Option<(u8, usize)> = None;
+    let mut literal_line = false;
     let mut metadata_depth: Vec<&str> = Vec::new();
     let lower = input.to_ascii_lowercase();
     let mut cursor = 0;
@@ -380,11 +381,26 @@ fn strip_memory_metadata(input: &str) -> String {
                 .map(|offset| cursor + offset + 1)
                 .unwrap_or(input.len());
             let trimmed = input[cursor..line_end].trim_start();
-            let fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-            if in_fence || fence {
+            let line = &input[cursor..line_end];
+            literal_line =
+                trimmed.starts_with('>') || line.starts_with("    ") || line.starts_with('\t');
+            let marker = trimmed.as_bytes().first().copied();
+            let marker_len = trimmed
+                .bytes()
+                .take_while(|byte| Some(*byte) == marker)
+                .count();
+            let is_fence = !literal_line && matches!(marker, Some(b'`' | b'~')) && marker_len >= 3;
+            if fence.is_some() || is_fence {
                 result.push_str(&input[cursor..line_end]);
-                if fence {
-                    in_fence = !in_fence;
+                if let Some((active, length)) = fence {
+                    if marker == Some(active)
+                        && marker_len >= length
+                        && trimmed[marker_len..].trim().is_empty()
+                    {
+                        fence = None;
+                    }
+                } else {
+                    fence = marker.map(|marker| (marker, marker_len));
                 }
                 cursor = line_end;
                 continue;
@@ -436,6 +452,12 @@ fn strip_memory_metadata(input: &str) -> String {
             cursor = end;
             continue;
         }
+        if !literal_line {
+            if let Some(length) = page_metadata_length(&input[cursor..]) {
+                cursor += length;
+                continue;
+            }
+        }
         if let Some((closing, name, end)) = match_metadata_tag(&lower[cursor..]) {
             if !closing {
                 metadata_depth.push(name);
@@ -459,6 +481,20 @@ fn strip_memory_metadata(input: &str) -> String {
             .unwrap_or(1);
     }
     result
+}
+
+// Match only the complete native transport envelope. Examples and incomplete
+// JSON stay readable; this never changes the source transcript.
+fn page_metadata_length(input: &str) -> Option<usize> {
+    const OPEN: &str = "<external_codex_apps_open_page>";
+    const CLOSE: &str = "</external_codex_apps_open_page>";
+    let body = input.strip_prefix(OPEN)?;
+    let end = body.find(CLOSE)?;
+    let value: Value = serde_json::from_str(&body[..end]).ok()?;
+    let object = value.as_object()?;
+    let page_id = object.get("page_id")?;
+    (object.len() == 1 && (page_id.is_null() || page_id.is_string()))
+        .then_some(OPEN.len() + end + CLOSE.len())
 }
 
 fn match_metadata_tag(input: &str) -> Option<(bool, &'static str, usize)> {
@@ -602,6 +638,36 @@ mod tests {
         assert!(!output.contains("secret"));
         assert!(!output.contains("internal"));
         assert!(!output.contains("private"));
+    }
+
+    #[test]
+    fn excludes_native_page_envelopes_from_search_without_losing_adjacent_text() {
+        let empty =
+            "<external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>";
+        let named = "<external_codex_apps_open_page>\n{\"page_id\":\"fixture-page\"}\n</external_codex_apps_open_page>";
+        let output = strip_memory_metadata(&format!("Before {empty}{named} after."));
+        assert_eq!(output, "Before  after.");
+        assert_eq!(strip_memory_metadata(empty), "");
+    }
+
+    #[test]
+    fn page_envelope_examples_and_unconfirmed_content_remain_searchable() {
+        let envelope =
+            "<external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>";
+        for source in [
+            format!("`{envelope}`"),
+            format!("```xml\n{envelope}\n```"),
+            format!("````xml\n```\n{envelope}\n````"),
+            format!("~~~xml\n{envelope}\n~~~"),
+            format!("> {envelope}"),
+            format!("    {envelope}"),
+            "<external_codex_apps_open_page>invalid</external_codex_apps_open_page>".into(),
+            "<external_codex_apps_open_page>{\"page_id\":null}".into(),
+            "<external_codex_apps_open_page>{\"request\":\"keep\"}</external_codex_apps_open_page>"
+                .into(),
+        ] {
+            assert_eq!(strip_memory_metadata(&source), source);
+        }
     }
 
     #[test]

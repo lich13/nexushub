@@ -937,6 +937,14 @@
     "SubagentDetailResponse": {
       "core": "SubagentDetailResponse",
       "webui": "SubagentDetailResponse"
+    },
+    "SubagentActivity": {
+      "core": "SubagentActivity",
+      "webui": "SubagentActivity"
+    },
+    "SubagentCollection": {
+      "core": "SubagentCollection",
+      "webui": "SubagentCollection"
     }
   },
   "retiredActions": [

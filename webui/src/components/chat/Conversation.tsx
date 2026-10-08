@@ -19,6 +19,7 @@ import { TimelineRail } from "../common/TimelineRail";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
 import { SubagentPanel } from "./SubagentPanel";
+import { SubagentSummary } from "./SubagentSummary";
 import { machineScope } from "../../lib/query/connection";
 
 
@@ -50,7 +51,7 @@ export function Conversation(props: {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const stream = useRef<HTMLDivElement>(null);
   const shell = useRef<HTMLDivElement>(null);
-  const [agentSelection, setAgentSelection] = useState<{ root: string; machine: string; agent: SubagentActivity; trigger: HTMLButtonElement } | null>(null);
+  const [agentSelection, setAgentSelection] = useState<{ root: string; machine: string; agent?: SubagentActivity; trigger: HTMLButtonElement } | null>(null);
   const [docked, setDocked] = useState(false);
   const machine = machineScope();
   const selectedAgent = agentSelection?.root === props.threadId && agentSelection.machine === machine ? agentSelection : null;
@@ -169,6 +170,10 @@ export function Conversation(props: {
           </TaskMenu>
         </div>
       </header>
+      {props.capabilities.threadSubagents === true && <SubagentSummary collection={slot.subagents ?? detail.subagents} onOpen={trigger => {
+        captureViewport();
+        setAgentSelection({ root: props.threadId, machine: machineScope(), trigger });
+      }} />}
       <SessionBatchControls batch={deletion} operations={[]} showSelection={false} />
       {renaming && !archived && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.mutate({ kind: "rename", id: props.threadId, title }); }}>
         <input aria-label="任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
@@ -188,6 +193,6 @@ export function Conversation(props: {
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
     </main>
-    {selectedAgent && <SubagentPanel key={`${selectedAgent.machine}:${props.threadId}:${selectedAgent.agent.agentId}`} rootThreadId={props.threadId} initialAgent={selectedAgent.agent} docked={docked} onClose={closeAgent} />}
+    {selectedAgent && <SubagentPanel key={`${selectedAgent.machine}:${props.threadId}:${selectedAgent.agent?.agentId ?? "list"}`} rootThreadId={props.threadId} initialAgent={selectedAgent.agent} rootSubagents={slot.subagents ?? detail.subagents} docked={docked} onClose={closeAgent} />}
   </div>;
 }

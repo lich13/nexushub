@@ -4,8 +4,9 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 
 export const subagentStatusLabel: Record<Agent["status"], string> = {
-  running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", unknown: "状态未知"
+  creating: "正在创建", running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", unknown: "状态未知"
 };
+const eventLabel = { started: "开始工作", completed: "已完成", interrupted: "已中断", interacted: "已交互" };
 export type OpenSubagent = (agent: Agent, trigger: HTMLButtonElement) => void;
 
 export function SubagentActivityRow({ block, onOpen, supported = true }: { block: MessageBlock; onOpen?: OpenSubagent; supported?: boolean }) {
@@ -17,8 +18,8 @@ export function SubagentActivityRow({ block, onOpen, supported = true }: { block
       onClick={event => { if (available) onOpen?.(agent, event.currentTarget); }}>
       <Bot size={17} aria-hidden="true" />
       <span className="subagent-name">{visibleMarkdown(agent.name)}</span>
-      {agent.status === "running" && <RunningIndicator />}
-      <span className={`subagent-state ${agent.status}`}>{subagentStatusLabel[agent.status]}</span>
+      {agent.status === "running" && (!agent.eventKind || agent.eventKind === "started") && <RunningIndicator />}
+      <span className={`subagent-state ${agent.status}`}>{agent.eventKind ? eventLabel[agent.eventKind] : subagentStatusLabel[agent.status]}</span>
       {available && <ChevronRight size={15} aria-hidden="true" />}
     </button>
     {!available && reason && <small className="subagent-unavailable">{reason}</small>}

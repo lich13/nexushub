@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.10 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub 1.2.11 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -71,3 +71,11 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 ## 1.2.10 远程连接反馈
 
 钥匙串读取在后台串行进行，不阻塞界面。超过 15 秒时在当前操作附近显示错误，不能把超时当作成功或自动切换到本机。保存与移除连接等待已开始的事务完成；操作期间保持切换保护。连接身份变化后，旧读取不得发起业务操作或覆盖新机器结果。
+
+## 1.2.11 原生活动与直属汇总
+
+子智能体历史活动显示“开始工作”“已完成”“已中断”或“已交互”，与当前运行状态分离，刷新不改写过去的文案。任务名优先于随机昵称，活动行、列表和详情标题保持一致。
+
+只在线程详情标题栏下显示紧凑“子智能体”汇总：运行中、已完成及非零异常数量。无直属子智能体时不占位；记录不完整时明确提示。点击汇总打开右侧列表，运行中的排在前面，点击进入详情并可返回列表；子线程详情使用自己的直属集合。列表、详情、嵌套返回与 Escape 关闭保留阅读位置和焦点。
+
+完整内部页面包装默认不显示，也不进入复制、导出和搜索；纯包装消息不留空气泡或用户指令短线。普通正文、代码与引用示例保留，未确认结构不误删。

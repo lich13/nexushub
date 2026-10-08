@@ -56,6 +56,8 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "ThreadsDetailResponse",
     "SubagentDetailRequest",
     "SubagentDetailResponse",
+    "SubagentActivity",
+    "SubagentCollection",
     "ThreadsListResponse",
     "ThreadsRenameResponse",
     "ThreadsRestoreResponse",

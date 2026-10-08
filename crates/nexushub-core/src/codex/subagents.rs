@@ -15,9 +15,13 @@ use super::{CodexPaths, ThreadDetail, ThreadStatus, ThreadSummary};
 const MAX_DEPTH: usize = 32;
 const MAX_RECORDS: usize = 20_000;
 
+mod lifecycle;
+pub(super) use lifecycle::{merge_creation_events, native_activity_block};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentStatus {
+    Creating,
     Running,
     Completed,
     Failed,
@@ -26,9 +30,42 @@ pub enum SubagentStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentEventKind {
+    Started,
+    Completed,
+    Interrupted,
+    Interacted,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCounts {
+    pub creating: usize,
+    pub running: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub interrupted: usize,
+    pub unknown: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCollection {
+    pub agents: Vec<SubagentActivity>,
+    pub counts: SubagentCounts,
+    pub complete: bool,
+    pub warning: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentActivity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<SubagentEventKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
     pub agent_id: Option<String>,
     pub name: String,
     pub role: Option<String>,
@@ -63,6 +100,7 @@ struct AgentRecord {
     parents: HashSet<String>,
     path: Option<String>,
     title: String,
+    nickname: Option<String>,
     role: Option<String>,
     rollout: PathBuf,
     cwd: Option<String>,
@@ -141,9 +179,10 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
                 title: row
                     .get::<_, Option<String>>(5)?
                     .filter(|title| !title.trim().is_empty())
-                    .or(row.get::<_, Option<String>>(6)?)
-                    .or_else(|| field(source, &["agent_nickname"]))
-                    .unwrap_or_else(|| "子智能体".into()),
+                    .unwrap_or_default(),
+                nickname: row
+                    .get::<_, Option<String>>(6)?
+                    .or_else(|| field(source, &["agent_nickname"])),
                 role: row
                     .get::<_, Option<String>>(7)?
                     .or_else(|| field(source, &["agent_role"])),
@@ -347,8 +386,10 @@ fn activity(
     delegation: Option<String>,
 ) -> SubagentActivity {
     SubagentActivity {
+        event_kind: None,
+        event_id: None,
         agent_id: Some(record.id.clone()),
-        name: record.title.clone(),
+        name: display_name(None, record),
         role: record.role.clone(),
         status,
         available: true,
@@ -378,101 +419,226 @@ pub(super) fn creation_activity(name: &str, payload: &Value) -> Option<SubagentA
         raw
     };
     Some(SubagentActivity {
+        event_kind: None,
+        event_id: None,
         agent_id: None,
-        name: field(input, &["task_name", "name"]).unwrap_or_else(|| "子智能体".into()),
+        name: field(input, &["task_name", "name"])
+            .map(|name| humanize_task(&name))
+            .unwrap_or_else(|| "子智能体".into()),
         role: field(input, &["agent_type"]),
-        status: SubagentStatus::Unknown,
+        status: SubagentStatus::Creating,
         available: false,
         unavailable_reason: Some("子智能体关联尚未确认或记录已清理".into()),
         delegation: field(input, &["message", "prompt"]),
     })
 }
 
-/// Enrich only structural tool calls. Quoted tool names and user prose never create agents.
-pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
-    if !detail.blocks.iter().any(|b| {
-        b.tool_name
-            .as_deref()
-            .is_some_and(|n| tool_leaf(n) == "spawn_agent")
-    }) {
-        return;
+fn humanize_task(task: &str) -> String {
+    let name = task.trim().replace('_', " ");
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
-    let graph = read_graph(paths);
-    let mut seen = HashSet::new();
-    for block in &mut detail.blocks {
-        if block.role != "tool"
-            || block
-                .tool_name
-                .as_deref()
-                .is_none_or(|n| tool_leaf(n) != "spawn_agent")
+}
+
+fn display_name(task: Option<&str>, record: &AgentRecord) -> String {
+    if let Some(task) = task.filter(|name| !name.trim().is_empty() && *name != "子智能体") {
+        return humanize_task(task);
+    }
+    if let Some(path) = record
+        .path
+        .as_deref()
+        .and_then(|path| path.rsplit('/').find(|s| !s.is_empty()))
+    {
+        return humanize_task(path);
+    }
+    if !record.title.trim().is_empty() {
+        return record.title.trim().to_owned();
+    }
+    record
+        .nickname
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "子智能体".into())
+}
+
+fn record_activity(
+    paths: &CodexPaths,
+    record: &AgentRecord,
+    task: Option<&str>,
+) -> SubagentActivity {
+    let mut agent = activity(record, SubagentStatus::Unknown, None);
+    agent.name = display_name(task, record);
+    let verified = (|| -> Result<SubagentStatus> {
+        ensure!(record.parents.len() == 1, "子智能体父线程关联不明确");
+        let path = validate_rollout(paths, record)?;
+        let before = fs::metadata(&path)?;
+        let status = native_status(&path)?;
+        let after = fs::metadata(validate_rollout(paths, record)?)?;
+        ensure!(
+            before.len() == after.len() && before.modified()? == after.modified()?,
+            "子智能体正在更新"
+        );
+        #[cfg(unix)]
         {
-            continue;
+            use std::os::unix::fs::MetadataExt;
+            ensure!(
+                (
+                    before.dev(),
+                    before.ino(),
+                    before.ctime(),
+                    before.ctime_nsec()
+                ) == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec()),
+                "子智能体身份已变化"
+            );
         }
-        if !seen.insert(block.call_id.clone().unwrap_or_else(|| block.id.clone())) {
-            continue;
+        Ok(status)
+    })();
+    match verified {
+        Ok(status) => agent.status = status,
+        Err(_) => {
+            agent.available = false;
+            agent.unavailable_reason = Some("子智能体记录缺失、正在更新或身份无法验证".into());
         }
-        let input: Value = block
-            .input
+    }
+    agent
+}
+
+/// Recompute direct children independently of the parent's message window or stamp.
+/// Lifecycle fields belong to an event; status belongs to the current child turn.
+pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
+    let graph = read_graph(paths);
+    let mut collection = SubagentCollection {
+        agents: Vec::new(),
+        counts: SubagentCounts::default(),
+        complete: graph.is_ok(),
+        warning: None,
+    };
+    let names = lifecycle::CreationNames::from_blocks(&detail.blocks);
+    let mut current = HashMap::new();
+    if let Ok(graph) = &graph {
+        let mut records: Vec<_> = graph
+            .values()
+            .filter(|r| r.parents.contains(&detail.summary.id))
+            .collect();
+        records.sort_by(|a, b| a.id.cmp(&b.id));
+        for record in records {
+            if record.parents.len() != 1 {
+                collection.complete = false;
+                continue;
+            }
+            let agent = record_activity(paths, record, names.for_record(record));
+            collection.complete &= agent.available && agent.status != SubagentStatus::Unknown;
+            current.insert(record.id.clone(), agent.clone());
+            collection.agents.push(agent);
+        }
+    }
+    let mut pending_calls = HashSet::new();
+    for block in &mut detail.blocks {
+        let Some(mut view) = block.subagent.clone() else {
+            continue;
+        };
+        let native = view.event_kind.is_some();
+        let (explicit, task_path) = if native {
+            (
+                block
+                    .payload
+                    .as_ref()
+                    .and_then(|p| field(p, &["agent_thread_id"]))
+                    .or_else(|| view.agent_id.clone()),
+                block
+                    .payload
+                    .as_ref()
+                    .and_then(|p| field(p, &["agent_path"])),
+            )
+        } else {
+            lifecycle::output_identity(block)
+        };
+        let source_parent = block
+            .payload
+            .as_ref()
+            .and_then(|p| field(p, &["parent_thread_id"]));
+        let mut matched = None;
+        if source_parent
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(Value::Null);
-        let output: Value = block
-            .text
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(Value::Null);
-        let mut view = block.subagent.clone().unwrap_or_else(|| SubagentActivity {
-            agent_id: None,
-            name: field(&input, &["task_name", "name"]).unwrap_or_else(|| "子智能体".into()),
-            role: field(&input, &["agent_type"]),
-            status: SubagentStatus::Unknown,
-            available: false,
-            unavailable_reason: Some("子智能体关联尚未确认或记录已清理".into()),
-            delegation: field(&input, &["message", "prompt"]),
-        });
-        view.agent_id = None;
-        view.status = SubagentStatus::Unknown;
-        view.available = false;
-        view.unavailable_reason = Some("子智能体关联尚未确认或记录已清理".into());
-        if let Ok(graph) = &graph {
-            let explicit = field(&output, &["agent_id", "thread_id", "id"]);
-            let task_path = field(&output, &["task_name", "agent_path"]);
-            let matches: Vec<_> = graph
-                .values()
-                .filter(|record| {
-                    record.parents.contains(&detail.summary.id)
-                        && if let Some(id) = &explicit {
-                            record.id == *id
-                        } else {
-                            task_path
-                                .as_ref()
-                                .is_some_and(|path| record.path.as_ref() == Some(path))
-                        }
-                })
-                .collect();
-            if matches.len() == 1 {
-                let record = matches[0];
-                let validated = if record.parents.len() == 1 {
-                    validate_rollout(paths, record)
-                } else {
-                    Err(anyhow::anyhow!("子智能体父线程关联不明确"))
-                };
-                match validated {
-                    Ok(path) => {
-                        view = activity(
-                            record,
-                            native_status(&path).unwrap_or_default(),
-                            view.delegation,
-                        );
-                    }
-                    Err(_) => {
-                        view.unavailable_reason = Some("子智能体记录缺失或身份无法验证".into());
+            .is_none_or(|id| id == detail.summary.id)
+        {
+            if let Ok(graph) = &graph {
+                let records: Vec<_> = graph
+                    .values()
+                    .filter(|record| {
+                        record.parents.contains(&detail.summary.id)
+                            && record.parents.len() == 1
+                            && if let Some(id) = &explicit {
+                                record.id == *id
+                            } else {
+                                task_path
+                                    .as_ref()
+                                    .is_some_and(|path| record.path.as_ref() == Some(path))
+                            }
+                    })
+                    .collect();
+                if records.len() == 1 {
+                    let record = records[0];
+                    // An explicit ID wins resolution, but contradictory path evidence
+                    // must not silently bind a different child.
+                    if task_path.is_none() || record.path == task_path {
+                        matched = current.get(&record.id).cloned();
                     }
                 }
             }
         }
+        if let Some(mut agent) = matched {
+            if !agent.available {
+                agent.agent_id = None;
+            }
+            agent.event_kind = view.event_kind;
+            agent.event_id = view.event_id;
+            agent.delegation = view.delegation;
+            view = agent;
+        } else {
+            view.agent_id = None;
+            view.available = false;
+            view.status =
+                if !native && block.text.is_none() && block.status.as_deref() == Some("running") {
+                    SubagentStatus::Creating
+                } else {
+                    SubagentStatus::Unknown
+                };
+            view.name = humanize_task(&view.name);
+            view.unavailable_reason = Some(if view.status == SubagentStatus::Creating {
+                "子智能体记录尚未就绪".into()
+            } else {
+                "子智能体记录缺失或关联无法确认".into()
+            });
+            if view.status == SubagentStatus::Creating {
+                let key = block.call_id.clone().unwrap_or_else(|| block.id.clone());
+                if pending_calls.insert(key.clone()) {
+                    let mut pending = view.clone();
+                    pending.event_id = Some(key);
+                    collection.agents.push(pending);
+                }
+            } else {
+                collection.complete = false;
+            }
+        }
         block.subagent = Some(view);
     }
+    for agent in &collection.agents {
+        match agent.status {
+            SubagentStatus::Creating => collection.counts.creating += 1,
+            SubagentStatus::Running => collection.counts.running += 1,
+            SubagentStatus::Completed => collection.counts.completed += 1,
+            SubagentStatus::Failed => collection.counts.failed += 1,
+            SubagentStatus::Interrupted => collection.counts.interrupted += 1,
+            SubagentStatus::Unknown => collection.counts.unknown += 1,
+        }
+    }
+    if !collection.complete {
+        collection.warning = Some("部分子智能体记录无法确认，统计可能不完整".into());
+    }
+    detail.subagents = Some(collection);
     detail.subagent_updates = detail
         .blocks
         .iter()
@@ -494,10 +660,18 @@ fn verified_detail(
     let record = graph.get(&request.agent_id).context("子智能体记录不存在")?;
     let path = validate_rollout(paths, record)?;
     let status = native_status(&path)?;
+    let parent = record.parents.iter().next().expect("verified parent");
+    let names = graph
+        .get(parent)
+        .and_then(|parent| validate_rollout(paths, parent).ok())
+        .and_then(|path| lifecycle::creation_names(&path).ok())
+        .unwrap_or_default();
+    let mut current_agent = activity(record, status, None);
+    current_agent.name = display_name(names.for_record(record), record);
     let before = fs::metadata(&path)?;
     let summary = ThreadSummary {
         id: record.id.clone(),
-        title: record.title.clone(),
+        title: current_agent.name.clone(),
         status: if status == SubagentStatus::Running {
             ThreadStatus::Running
         } else {
@@ -562,7 +736,7 @@ fn verified_detail(
             .next()
             .expect("verified parent")
             .clone(),
-        agent: activity(record, status, None),
+        agent: current_agent,
         detail,
     })
 }

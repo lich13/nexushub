@@ -2,7 +2,7 @@ use nexushub_core::codex::{
     hidden_thread_ids, list_threads,
     subagents::{
         enrich_subagent_blocks, read_subagent_detail, SubagentActivity, SubagentDetailRequest,
-        SubagentDetailResponse, SubagentStatus,
+        SubagentDetailResponse, SubagentEventKind, SubagentStatus,
     },
     thread_detail, window_thread_detail, CodexPaths, ThreadDetail, ThreadStatus,
 };
@@ -244,6 +244,26 @@ fn event(kind: &str, turn: &str) -> Value {
     json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn}})
 }
 
+fn subagent_event(id: &str, kind: &str, agent_id: &str, agent_path: &str) -> Value {
+    json!({"type":"event_msg","payload":{
+        "type":"item_completed",
+        "item":{
+            "type":"SubAgentActivity",
+            "id":id,
+            "kind":kind,
+            "agent_thread_id":agent_id,
+            "agent_path":agent_path
+        }
+    }})
+}
+
+fn append_jsonl(path: &Path, events: &[Value]) {
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    for event in events {
+        writeln!(file, "{event}").unwrap();
+    }
+}
+
 fn tool(call_id: &str, name: &str, input: Value, output: Value) -> Vec<Value> {
     vec![
         json!({"type":"response_item","payload":{
@@ -284,6 +304,36 @@ fn cards(detail: &ThreadDetail) -> Vec<&SubagentActivity> {
         .iter()
         .filter_map(|block| block.subagent.as_ref())
         .collect()
+}
+
+fn lifecycle_cards(detail: &ThreadDetail) -> Vec<&SubagentActivity> {
+    cards(detail)
+        .into_iter()
+        .filter(|card| card.event_kind.is_some())
+        .collect()
+}
+
+fn enriched_root(fixture: &NativeFixture) -> ThreadDetail {
+    let mut detail = fixture.root_detail();
+    enrich_subagent_blocks(&fixture.paths, &mut detail);
+    detail
+}
+
+fn assert_counts(detail: &ThreadDetail, expected: [usize; 6]) {
+    let collection = detail.subagents.as_ref().expect("subagent collection");
+    let counts = &collection.counts;
+    assert_eq!(
+        [
+            counts.creating,
+            counts.running,
+            counts.completed,
+            counts.failed,
+            counts.interrupted,
+            counts.unknown,
+        ],
+        expected
+    );
+    assert_eq!(collection.agents.len(), expected.into_iter().sum::<usize>());
 }
 
 fn assert_unavailable(fixture: &NativeFixture) {
@@ -331,7 +381,7 @@ fn returned_agent_id_binds_native_identity_at_the_original_tool_position() {
     assert_eq!(detail.blocks[1].call_id.as_deref(), Some("spawn-review"));
     let card = detail.blocks[1].subagent.as_ref().unwrap();
     assert_eq!(card.agent_id.as_deref(), Some(CHILD));
-    assert_eq!(card.name, "Reviewer");
+    assert_eq!(card.name, "Review");
     assert_eq!(card.role.as_deref(), Some("explorer"));
     assert_eq!(card.status, SubagentStatus::Completed);
     assert!(card.available);
@@ -513,12 +563,13 @@ fn user_prose_code_examples_and_other_tools_do_not_create_subagent_cards() {
     let fixture = NativeFixture::new(&events);
     fixture.child(CHILD, ROOT, "/root/review", &[]);
     let mut detail = fixture.root_detail();
-    let original = serde_json::to_value(&detail).unwrap();
+    let original = serde_json::to_value(&detail.blocks).unwrap();
 
     enrich_subagent_blocks(&fixture.paths, &mut detail);
 
     assert!(cards(&detail).is_empty());
-    assert_eq!(serde_json::to_value(detail).unwrap(), original);
+    assert_eq!(serde_json::to_value(&detail.blocks).unwrap(), original);
+    assert_counts(&detail, [0, 0, 0, 0, 0, 1]);
 }
 
 #[test]
@@ -595,6 +646,17 @@ fn status_uses_native_turn_evidence_instead_of_spawn_tool_completion() {
         enrich_subagent_blocks(&fixture.paths, &mut detail);
         assert_eq!(cards(&detail)[0].status, expected, "{case}");
         assert!(cards(&detail)[0].available, "{case}");
+        assert_counts(
+            &detail,
+            match expected {
+                SubagentStatus::Creating => [1, 0, 0, 0, 0, 0],
+                SubagentStatus::Running => [0, 1, 0, 0, 0, 0],
+                SubagentStatus::Completed => [0, 0, 1, 0, 0, 0],
+                SubagentStatus::Failed => [0, 0, 0, 1, 0, 0],
+                SubagentStatus::Interrupted => [0, 0, 0, 0, 1, 0],
+                SubagentStatus::Unknown => [0, 0, 0, 0, 0, 1],
+            },
+        );
         let child = fixture.read(CHILD).unwrap();
         assert_eq!(child.agent.status, expected, "{case}");
         assert_eq!(
@@ -1263,7 +1325,7 @@ fn long_delegations_survive_pending_and_completed_tool_input_previews() {
         assert!(serde_json::from_str::<Value>(preview).is_err());
         assert!(!preview.contains("Final instruction: preserve this ending."));
         let card = block.subagent.as_ref().unwrap();
-        assert_eq!(card.name, "long-review");
+        assert_eq!(card.name, "Long-review");
         assert_eq!(card.role.as_deref(), Some("explorer"));
         assert_eq!(card.delegation.as_deref(), Some(delegation.as_str()));
         assert!(!card.available);
@@ -1282,7 +1344,7 @@ fn long_delegations_survive_pending_and_completed_tool_input_previews() {
             if resolved {
                 SubagentStatus::Completed
             } else {
-                SubagentStatus::Unknown
+                SubagentStatus::Creating
             }
         );
         assert_eq!(fixture.snapshot(), before);
@@ -1371,5 +1433,580 @@ fn repeated_enrichment_revokes_stale_availability_after_native_association_chang
         }
         assert!(fixture.read(CHILD).is_err(), "{case}");
         assert_eq!(fixture.snapshot(), after_change, "{case}");
+    }
+}
+
+#[test]
+fn native_started_activity_remains_at_its_anchor_after_completion() {
+    let fixture = NativeFixture::new(&[
+        message("user", "Review the example."),
+        subagent_event("review-started", "started", CHILD, "/root/review"),
+    ]);
+    let child_rollout = fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[event("task_started", "review-turn")],
+    );
+    let running = enriched_root(&fixture);
+    let started_block = running
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .subagent
+                .as_ref()
+                .is_some_and(|card| card.event_id.as_deref() == Some("review-started"))
+        })
+        .unwrap();
+    let started_anchor = started_block.id.clone();
+    assert_eq!(lifecycle_cards(&running).len(), 1);
+    assert_eq!(lifecycle_cards(&running)[0].status, SubagentStatus::Running);
+    assert_counts(&running, [0, 1, 0, 0, 0, 0]);
+
+    append_jsonl(&child_rollout, &[event("task_complete", "review-turn")]);
+    append_jsonl(
+        running.summary.rollout_path.as_ref().unwrap(),
+        &[
+            subagent_event("review-completed", "completed", CHILD, "/root/review"),
+            message("assistant", "The review is complete."),
+        ],
+    );
+    let before = fixture.snapshot();
+    let completed = enriched_root(&fixture);
+    let cards = lifecycle_cards(&completed);
+
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[0].event_kind, Some(SubagentEventKind::Started));
+    assert_eq!(cards[0].event_id.as_deref(), Some("review-started"));
+    assert_eq!(cards[1].event_kind, Some(SubagentEventKind::Completed));
+    assert_eq!(cards[1].event_id.as_deref(), Some("review-completed"));
+    assert!(cards.iter().all(|card| {
+        card.available
+            && card.agent_id.as_deref() == Some(CHILD)
+            && card.status == SubagentStatus::Completed
+    }));
+    assert!(completed.blocks.iter().any(|block| {
+        block.id == started_anchor
+            && block
+                .subagent
+                .as_ref()
+                .is_some_and(|card| card.event_kind == Some(SubagentEventKind::Started))
+    }));
+    assert_counts(&completed, [0, 0, 1, 0, 0, 0]);
+    let collection = completed.subagents.as_ref().unwrap();
+    assert!(collection.complete);
+    assert!(collection.warning.is_none());
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn native_started_activity_merges_creation_call_and_result_at_the_native_position() {
+    let mut events = vec![message("user", "Delegate the example review.")];
+    events.extend(spawn("create-review", "review", json!({"agent_id": CHILD})));
+    events.push(message("assistant", "Waiting for the reviewer to start."));
+    let fixture = NativeFixture::new(&events);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[event("task_started", "review-turn")],
+    );
+    let creation = fixture.root_detail();
+    let creation_anchor = creation
+        .blocks
+        .iter()
+        .find(|block| block.call_id.as_deref() == Some("create-review"))
+        .unwrap()
+        .id
+        .clone();
+    append_jsonl(
+        creation.summary.rollout_path.as_ref().unwrap(),
+        &[
+            subagent_event("native-review-start", "started", CHILD, "/root/review"),
+            message("assistant", "The reviewer has started."),
+        ],
+    );
+    let before = fixture.snapshot();
+    let parsed = fixture.root_detail();
+
+    assert_eq!(cards(&parsed).len(), 1);
+    let activity_position = parsed
+        .blocks
+        .iter()
+        .position(|block| block.subagent.is_some())
+        .unwrap();
+    let activity = &parsed.blocks[activity_position];
+    assert_eq!(activity.id, creation_anchor);
+    assert_eq!(
+        activity.subagent.as_ref().unwrap().event_id.as_deref(),
+        Some("native-review-start")
+    );
+    assert_eq!(
+        activity.subagent.as_ref().unwrap().event_kind,
+        Some(SubagentEventKind::Started)
+    );
+    assert_eq!(
+        parsed.blocks[activity_position - 1].text.as_deref(),
+        Some("Waiting for the reviewer to start.")
+    );
+    assert_eq!(
+        parsed.blocks[activity_position + 1].text.as_deref(),
+        Some("The reviewer has started.")
+    );
+    let mut detail = parsed;
+    enrich_subagent_blocks(&fixture.paths, &mut detail);
+    assert_eq!(cards(&detail).len(), 1);
+    assert_eq!(
+        cards(&detail)[0].delegation.as_deref(),
+        Some("Inspect the example fixture.")
+    );
+    assert_counts(&detail, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn resumed_native_started_events_remain_distinct_from_the_initial_creation() {
+    let mut events = spawn("create-review", "review", json!({"agent_id": CHILD}));
+    events.extend([
+        subagent_event("review-start-one", "started", CHILD, "/root/review"),
+        subagent_event("review-complete-one", "completed", CHILD, "/root/review"),
+        subagent_event("review-start-two", "started", CHILD, "/root/review"),
+    ]);
+    let fixture = NativeFixture::new(&events);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[
+            event("task_started", "review-one"),
+            event("task_complete", "review-one"),
+            event("task_started", "review-two"),
+        ],
+    );
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+    let cards = lifecycle_cards(&detail);
+
+    assert_eq!(cards.len(), 3);
+    assert_eq!(
+        cards
+            .iter()
+            .map(|card| card.event_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("review-start-one"),
+            Some("review-complete-one"),
+            Some("review-start-two")
+        ]
+    );
+    assert_eq!(cards[0].event_kind, Some(SubagentEventKind::Started));
+    assert_eq!(cards[1].event_kind, Some(SubagentEventKind::Completed));
+    assert_eq!(cards[2].event_kind, Some(SubagentEventKind::Started));
+    assert!(cards
+        .iter()
+        .all(|card| card.status == SubagentStatus::Running));
+    let anchors = detail
+        .blocks
+        .iter()
+        .filter(|block| block.subagent.is_some())
+        .map(|block| block.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(anchors.len(), 3);
+    assert_counts(&detail, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn native_activity_kinds_keep_their_event_identity_and_use_current_child_status() {
+    let kinds = [
+        ("started", SubagentEventKind::Started),
+        ("completed", SubagentEventKind::Completed),
+        ("interrupted", SubagentEventKind::Interrupted),
+        ("interacted", SubagentEventKind::Interacted),
+    ];
+    let events = kinds
+        .iter()
+        .map(|(kind, _)| subagent_event(&format!("review-{kind}"), kind, CHILD, "/root/review"))
+        .collect::<Vec<_>>();
+    let fixture = NativeFixture::new(&events);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[event("task_started", "current-review")],
+    );
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+    let cards = lifecycle_cards(&detail);
+
+    assert_eq!(cards.len(), kinds.len());
+    for (card, (kind, expected)) in cards.iter().zip(kinds) {
+        assert_eq!(card.event_kind, Some(expected));
+        assert_eq!(card.event_id, Some(format!("review-{kind}")));
+        assert_eq!(card.agent_id.as_deref(), Some(CHILD));
+        assert!(card.available);
+        assert_eq!(card.status, SubagentStatus::Running);
+        let wire = serde_json::to_value(card).unwrap();
+        assert_eq!(wire["eventKind"], kind);
+        assert_eq!(wire["eventId"], format!("review-{kind}"));
+    }
+    assert_counts(&detail, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn pending_creation_is_counted_before_a_child_identity_is_returned() {
+    let mut events = spawn("pending-create", "review", json!({"agent_id": CHILD}));
+    events.pop();
+    let fixture = NativeFixture::new(&events);
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+    let cards = cards(&detail);
+
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "Review");
+    assert_eq!(cards[0].status, SubagentStatus::Creating);
+    assert_eq!(cards[0].agent_id, None);
+    assert!(!cards[0].available);
+    assert_counts(&detail, [1, 0, 0, 0, 0, 0]);
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn direct_collection_refreshes_two_children_without_parent_changes_or_grandchildren() {
+    let fixture = NativeFixture::new(&[
+        subagent_event("review-start", "started", CHILD, "/root/review"),
+        subagent_event("check-start", "started", "second-child", "/root/check"),
+    ]);
+    let first_rollout = fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[event("task_started", "review-one")],
+    );
+    fixture.child(
+        "second-child",
+        ROOT,
+        "/root/check",
+        &[event("task_started", "check-one")],
+    );
+    fixture.child(
+        "grandchild",
+        CHILD,
+        "/root/review/nested",
+        &[event("task_started", "nested-one")],
+    );
+    let mut detail = enriched_root(&fixture);
+    let root_rollout = detail.summary.rollout_path.as_ref().unwrap().clone();
+    let parent_bytes = fs::read(&root_rollout).unwrap();
+    let block_ids = detail
+        .blocks
+        .iter()
+        .map(|block| block.id.clone())
+        .collect::<Vec<_>>();
+    let collection = detail.subagents.as_ref().unwrap();
+    assert_eq!(
+        collection
+            .agents
+            .iter()
+            .filter_map(|agent| agent.agent_id.as_deref())
+            .collect::<std::collections::BTreeSet<_>>(),
+        [CHILD, "second-child"].into_iter().collect()
+    );
+    assert_counts(&detail, [0, 2, 0, 0, 0, 0]);
+
+    append_jsonl(&first_rollout, &[event("task_complete", "review-one")]);
+    enrich_subagent_blocks(&fixture.paths, &mut detail);
+    assert_counts(&detail, [0, 1, 1, 0, 0, 0]);
+    assert_eq!(
+        lifecycle_cards(&detail)
+            .iter()
+            .find(|card| card.agent_id.as_deref() == Some(CHILD))
+            .unwrap()
+            .status,
+        SubagentStatus::Completed
+    );
+    assert_eq!(fs::read(&root_rollout).unwrap(), parent_bytes);
+
+    append_jsonl(&first_rollout, &[event("task_started", "review-two")]);
+    let before = fixture.snapshot();
+    enrich_subagent_blocks(&fixture.paths, &mut detail);
+    assert_counts(&detail, [0, 2, 0, 0, 0, 0]);
+    assert_eq!(
+        detail
+            .blocks
+            .iter()
+            .map(|block| block.id.clone())
+            .collect::<Vec<_>>(),
+        block_ids
+    );
+    assert!(lifecycle_cards(&detail)
+        .iter()
+        .all(|card| card.status == SubagentStatus::Running));
+    assert_eq!(fs::read(&root_rollout).unwrap(), parent_bytes);
+    let child_detail = fixture.read(CHILD).unwrap().detail;
+    assert_counts(&child_detail, [0, 1, 0, 0, 0, 0]);
+    assert_eq!(
+        child_detail.subagents.as_ref().unwrap().agents[0]
+            .agent_id
+            .as_deref(),
+        Some("grandchild")
+    );
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn direct_collection_and_counts_survive_pages_without_any_activity_blocks() {
+    let mut events = vec![
+        subagent_event("review-start", "started", CHILD, "/root/review"),
+        subagent_event("review-complete", "completed", CHILD, "/root/review"),
+    ];
+    for index in 0..8 {
+        events.extend(tool(
+            &format!("later-tool-{index}"),
+            "functions.exec_command",
+            json!({"cmd":"print example"}),
+            json!({"sequence":index}),
+        ));
+    }
+    let fixture = NativeFixture::new(&events);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[
+            event("task_started", "review"),
+            event("task_complete", "review"),
+        ],
+    );
+    fixture.child(
+        "second-child",
+        ROOT,
+        "/root/check",
+        &[event("task_started", "check")],
+    );
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+    let expected_collection = serde_json::to_value(detail.subagents.as_ref().unwrap()).unwrap();
+    assert_counts(&detail, [0, 1, 1, 0, 0, 0]);
+
+    let latest = window_thread_detail(detail.clone(), Some(2), None);
+    assert_eq!(latest.blocks.len(), 2);
+    assert!(latest.has_more_blocks);
+    assert!(cards(&latest).is_empty());
+    assert_eq!(
+        serde_json::to_value(latest.subagents.as_ref().unwrap()).unwrap(),
+        expected_collection
+    );
+    assert_counts(&latest, [0, 1, 1, 0, 0, 0]);
+    let older = window_thread_detail(detail.clone(), Some(2), latest.before_cursor.as_deref());
+    assert!(cards(&older).is_empty());
+    assert_eq!(
+        serde_json::to_value(older.subagents.as_ref().unwrap()).unwrap(),
+        expected_collection
+    );
+    let first = window_thread_detail(detail, Some(2), Some("b:2"));
+    assert_eq!(lifecycle_cards(&first).len(), 2);
+    assert!(!first.has_more_blocks);
+    assert_eq!(
+        serde_json::to_value(first.subagents.as_ref().unwrap()).unwrap(),
+        expected_collection
+    );
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn task_name_precedes_distinct_native_path_title_and_nickname() {
+    let mut events = spawn(
+        "create-summary",
+        "summary_review",
+        json!({"agent_id": CHILD}),
+    );
+    events.push(subagent_event(
+        "summary-start",
+        "started",
+        CHILD,
+        "/root/path_identity",
+    ));
+    let fixture = NativeFixture::new(&events);
+    fixture.add_thread(
+        CHILD,
+        Some(ROOT),
+        Some("/root/path_identity"),
+        "Transcript title",
+        &[event("task_started", "summary-turn")],
+    );
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET agent_nickname = 'Atlas' WHERE id = ?1",
+            [CHILD],
+        )
+        .unwrap();
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+    let cards = lifecycle_cards(&detail);
+
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "Summary review");
+    assert_eq!(cards[0].agent_id.as_deref(), Some(CHILD));
+    assert!(cards[0].available);
+    assert_eq!(
+        detail.subagents.as_ref().unwrap().agents[0].name,
+        "Summary review"
+    );
+    assert_eq!(fixture.read(CHILD).unwrap().agent.name, "Summary review");
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn native_task_path_leaf_supplies_a_name_without_using_title_or_nickname() {
+    let fixture = NativeFixture::new(&[subagent_event(
+        "path-review-start",
+        "started",
+        CHILD,
+        "/root/path_review",
+    )]);
+    fixture.add_thread(
+        CHILD,
+        Some(ROOT),
+        Some("/root/path_review"),
+        "Unrelated title",
+        &[],
+    );
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET agent_nickname = 'Atlas' WHERE id = ?1",
+            [CHILD],
+        )
+        .unwrap();
+    let before = fixture.snapshot();
+    let detail = enriched_root(&fixture);
+
+    assert_eq!(lifecycle_cards(&detail)[0].name, "Path review");
+    assert_eq!(
+        detail.subagents.as_ref().unwrap().agents[0].name,
+        "Path review"
+    );
+    assert_eq!(fixture.read(CHILD).unwrap().agent.name, "Path review");
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn lifecycle_identity_rejects_foreign_parents_and_conflicting_paths() {
+    for case in [
+        "foreign-parent",
+        "conflicting-path",
+        "conflicting-parent",
+        "changed-file-id",
+    ] {
+        let fixture = NativeFixture::new(&[subagent_event(
+            "unverified-start",
+            "started",
+            CHILD,
+            "/root/review",
+        )]);
+        fixture.add_thread("other-root", None, None, "Other task", &[]);
+        let rollout = fixture.child(
+            CHILD,
+            if case == "foreign-parent" {
+                "other-root"
+            } else {
+                ROOT
+            },
+            if case == "conflicting-path" {
+                "/root/different"
+            } else {
+                "/root/review"
+            },
+            &[event("task_started", "review-turn")],
+        );
+        if case == "conflicting-parent" {
+            fixture
+                .connection()
+                .execute(
+                    "INSERT INTO thread_spawn_edges VALUES ('other-root', ?1)",
+                    [CHILD],
+                )
+                .unwrap();
+        }
+        if case == "changed-file-id" {
+            write_jsonl(
+                &rollout,
+                &[json!({"type":"session_meta","payload":{
+                    "id":"replacement-thread","parent_thread_id":ROOT
+                }})],
+            );
+        }
+        let before = fixture.snapshot();
+        let detail = enriched_root(&fixture);
+        let cards = lifecycle_cards(&detail);
+
+        assert_eq!(cards.len(), 1, "{case}");
+        assert_eq!(
+            cards[0].event_id.as_deref(),
+            Some("unverified-start"),
+            "{case}"
+        );
+        assert_eq!(
+            cards[0].event_kind,
+            Some(SubagentEventKind::Started),
+            "{case}"
+        );
+        assert!(!cards[0].available, "{case}");
+        assert_eq!(cards[0].agent_id, None, "{case}");
+        assert_eq!(cards[0].status, SubagentStatus::Unknown, "{case}");
+        assert!(cards[0].unavailable_reason.is_some(), "{case}");
+        if case != "conflicting-path" {
+            assert!(fixture.read(CHILD).is_err(), "{case}");
+        }
+        assert_eq!(fixture.snapshot(), before, "{case}");
+    }
+}
+
+#[test]
+fn partial_child_records_keep_lifecycle_history_readable_and_status_unknown() {
+    for tail in ["{\"type\":\"event_msg\",\"payload\":", "{not-json}\n"] {
+        let fixture = NativeFixture::new(&[
+            subagent_event("review-start", "started", CHILD, "/root/review"),
+            subagent_event("review-complete", "completed", CHILD, "/root/review"),
+        ]);
+        let rollout = fixture.child(
+            CHILD,
+            ROOT,
+            "/root/review",
+            &[
+                event("task_started", "review"),
+                message("assistant", "Earlier readable result."),
+                event("task_complete", "review"),
+            ],
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout)
+            .unwrap()
+            .write_all(tail.as_bytes())
+            .unwrap();
+        let before = fixture.snapshot();
+        let detail = enriched_root(&fixture);
+        let cards = lifecycle_cards(&detail);
+
+        assert_eq!(cards.len(), 2);
+        assert!(cards
+            .iter()
+            .all(|card| card.available && card.status == SubagentStatus::Unknown));
+        assert_eq!(cards[0].event_kind, Some(SubagentEventKind::Started));
+        assert_eq!(cards[1].event_kind, Some(SubagentEventKind::Completed));
+        assert_counts(&detail, [0, 0, 0, 0, 0, 1]);
+        assert!(fixture
+            .read(CHILD)
+            .unwrap()
+            .detail
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("Earlier readable result.")));
+        assert_eq!(fixture.snapshot(), before);
     }
 }

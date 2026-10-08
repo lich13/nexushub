@@ -503,6 +503,17 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .execution-group > summary > small { font-size: 12px; }
 .execution-command > summary > svg:first-child { width: 18px; }
 .subagent-activity { min-width: 0; }
+.subagent-summary { flex: none; border-bottom: 1px solid var(--hairline); padding: 6px 16px; }
+.subagent-summary > button { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; min-height: 28px; border: 0; padding: 0; background: transparent; color: var(--muted); text-align: left; font-size: 12px; }
+.subagent-summary > button:hover { color: var(--text); }
+.subagent-summary-running { display: inline-flex; align-items: center; gap: 5px; color: var(--text); }
+.subagent-summary-error { color: var(--danger); }
+.subagent-summary-note { flex: none; color: var(--muted); padding: 4px 16px; font-size: 12px; }
+.subagent-summary .subagent-summary-note { padding: 4px 0 0; }
+.subagent-list-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 4px 0; border: 0; border-bottom: 1px solid var(--hairline); background: transparent; color: var(--text); text-align: left; }
+.subagent-list-item > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.subagent-list-item > svg, .subagent-list-item > small { flex: none; color: var(--muted); }
+.subagent-list-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
 .subagent-activity > button { position: relative; display: flex; align-items: center; gap: 8px; min-height: 30px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--muted); text-align: left; font-size: 13px; }
 .subagent-activity > button > svg:first-child { position: absolute; left: -26px; width: 18px; color: var(--primary); }
 .subagent-activity > button:hover:not([aria-disabled="true"]) { color: var(--text); }

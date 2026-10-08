@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, mockCommand, observeCommands } from "./fixtures";
-import type { MessageBlock, SubagentActivity, SubagentDetailRequest, SubagentDetailResponse, SystemCapabilitiesResponse, ThreadDetail, ThreadSummary } from "../src/types";
+import type { MessageBlock, SubagentActivity, SubagentCollection, SubagentDetailRequest, SubagentDetailResponse, SystemCapabilitiesResponse, ThreadDetail, ThreadSummary } from "../src/types";
 
 const root: ThreadSummary = { id: "root-fixture", title: "父线程示例", status: "Recent", message_count: 3, cwd: "/fixture" };
 const child: SubagentActivity = { agentId: "child-fixture", name: "示例子智能体", status: "running", available: true, delegation: "检查示例文件并报告结果。" };
@@ -24,6 +24,11 @@ function childPage(agent = child, blocks = [message("child-reply", "子智能体
     rootThreadId: rootId, parentThreadId: agent.agentId === nested.agentId ? child.agentId! : rootId, agent,
     detail: detail({ ...root, id: agent.agentId!, title: agent.name }, blocks)
   };
+}
+function collection(agents: SubagentActivity[], overrides: Partial<SubagentCollection> = {}): SubagentCollection {
+  const counts: SubagentCollection["counts"] = { creating: 0, running: 0, completed: 0, failed: 0, interrupted: 0, unknown: 0 };
+  for (const agent of agents) counts[agent.status] += 1;
+  return { agents, counts, complete: true, ...overrides };
 }
 async function installSubagents(page: Page, blocks: MessageBlock[] = [
   message("root-request", "检查示例工作区", "user"), command("before-child"), activity(), command("after-child"), message("root-reply", "父线程示例回复")
@@ -293,4 +298,142 @@ test("switching the parent thread discards an in-flight child response", async (
   await expect(panel(page)).toContainText("新父线程子智能体内容");
   await expect(panel(page)).not.toContainText("旧父线程迟到内容");
   expect(requests).toContainEqual({ rootThreadId: otherRoot.id, agentId: child.agentId, before: null, limit: 120 });
+});
+
+test("native historical event labels stay distinct from the latest child status", async ({ page }) => {
+  const settled = { ...child, name: "规范示例名称", status: "completed" as const };
+  const events = [
+    ["started", "开始工作"], ["interacted", "已交互"], ["interrupted", "已中断"], ["completed", "已完成"]
+  ] as const;
+  await installSubagents(page, events.map(([eventKind]) => ({
+    ...activity({ ...settled, eventKind, eventId: `native-${eventKind}` }, `event-${eventKind}`),
+    kind: "subagent_activity", tool_name: undefined
+  })));
+  const response = childPage(settled);
+  response.detail.subagents = collection([]);
+  await mockCommand(page, "threads.subagentDetail", () => response);
+  await openRoot(page);
+
+  for (const [kind, label] of events) {
+    const row = parentStream(page).locator(`[data-timeline-id="event-${kind}"]`);
+    await expect(row).toContainText(settled.name);
+    await expect(row).toContainText(label);
+  }
+  await parentStream(page).locator('[data-timeline-id="event-started"]').getByRole("button").click();
+  await expect(panel(page).locator(".subagent-panel-header")).toContainText("已完成");
+  await expect(parentStream(page).locator('[data-timeline-id="event-started"]')).toContainText("开始工作");
+});
+
+test("a parent refresh updates canonical child names without rewriting the start event", async ({ page }) => {
+  await page.clock.install();
+  await installSubagents(page);
+  const starting: SubagentActivity = { ...child, name: "待更新示例名称", eventKind: "started", eventId: "native-start" };
+  const settled: SubagentActivity = { ...child, name: "规范示例名称", status: "completed" };
+  let completed = false;
+  await mockCommand(page, "threads.detail", () => ({
+    ...detail(root, [activity(starting)]),
+    subagents: collection([completed ? settled : starting]),
+    subagent_updates: completed ? { "child-activity": settled } : {}
+  }));
+  await mockCommand(page, "threads.subagentDetail", () => childPage(settled));
+  await openRoot(page);
+  const row = parentStream(page).locator('[data-timeline-id="child-activity"]');
+  await expect(row).toContainText("待更新示例名称");
+  await expect(row).toContainText("开始工作");
+  completed = true;
+  await page.clock.runFor(2100);
+  await expect(row).toContainText("规范示例名称");
+  await expect(row).not.toContainText("待更新示例名称");
+  await expect(row).toContainText("开始工作");
+  await row.getByRole("button").click();
+  await expect(panel(page).locator(".subagent-panel-header strong")).toHaveText("规范示例名称");
+  await expect(panel(page).locator(".subagent-panel-header")).toContainText("已完成");
+});
+
+test("direct collections navigate list to child to nested list and back inside one panel", async ({ page }) => {
+  await page.setViewportSize({ width: 1700, height: 950 });
+  const requests = await installSubagents(page, [message("root-reply", "父线程示例回复")]);
+  const unavailable: SubagentActivity = {
+    agentId: "unavailable-fixture", name: "不可读取的直属示例", status: "failed", available: false,
+    unavailableReason: "示例关联记录不可用"
+  };
+  await mockCommand(page, "threads.detail", () => ({
+    ...detail(root, [message("root-reply", "父线程示例回复")]), subagents: collection([child, unavailable])
+  }));
+  await mockCommand(page, "threads.subagentDetail", args => {
+    const response = args.request.agentId === nested.agentId
+      ? childPage(nested, [message("nested-reply", "嵌套示例回复")])
+      : childPage(child, [message("child-reply", "子智能体示例回复")]);
+    response.detail.subagents = collection(args.request.agentId === nested.agentId ? [] : [nested]);
+    return response;
+  });
+  await openRoot(page);
+  const summary = page.locator(".conversation-main").getByRole("button", { name: "查看直属子智能体", exact: true });
+  await expect(summary).toContainText("1 个运行中");
+  await expect(summary).toContainText("1 失败");
+  await expect(page.locator(".thread-item").getByRole("button", { name: "查看直属子智能体", exact: true })).toHaveCount(0);
+  await summary.click();
+
+  const view = panel(page);
+  await expect(view).toHaveCount(1);
+  await expect(view).toContainText(child.name);
+  await expect(view).toContainText(unavailable.name);
+  await expect(view).not.toContainText(nested.name);
+  expect(requests).toEqual([]);
+  const unreadable = view.getByRole("button", { name: new RegExp(unavailable.name) });
+  await expect(unreadable).toHaveAttribute("aria-disabled", "true");
+  await expect(unreadable).toHaveAttribute("title", unavailable.unavailableReason!);
+  await unreadable.focus();
+  await page.keyboard.press("Enter");
+  expect(requests).toEqual([]);
+
+  await view.getByRole("button", { name: /示例子智能体/ }).click();
+  await expect(view).toContainText("子智能体示例回复");
+  await view.getByRole("button", { name: "查看直属子智能体", exact: true }).click();
+  await expect(view.getByRole("button", { name: /嵌套示例/ })).toBeVisible();
+  await expect(view).not.toContainText(unavailable.name);
+  await view.getByRole("button", { name: /嵌套示例/ }).click();
+  await expect(view.locator(".subagent-panel-header strong")).toHaveText(nested.name);
+  await expect(view).toContainText("嵌套示例回复");
+  await expect(view.getByRole("button", { name: "查看直属子智能体", exact: true })).toHaveCount(0);
+  expect(requests.every(request => request.rootThreadId === root.id)).toBe(true);
+  expect(new Set(requests.map(request => request.agentId))).toEqual(new Set([child.agentId, nested.agentId]));
+
+  await view.getByRole("button", { name: /返回/ }).click();
+  await expect(view.getByRole("button", { name: /嵌套示例/ })).toBeVisible();
+  await expect(view).not.toContainText("嵌套示例回复");
+  await view.getByRole("button", { name: /返回/ }).click();
+  await expect(view).toContainText("子智能体示例回复");
+  await view.getByRole("button", { name: /返回/ }).click();
+  await expect(view.getByRole("button", { name: /示例子智能体/ })).toBeVisible();
+  await expect(view).toContainText(unavailable.name);
+  await expect(view.getByRole("button", { name: /返回/ })).toHaveCount(0);
+  await view.getByRole("button", { name: "关闭子智能体详情", exact: true }).click();
+  await expect(view).toHaveCount(0);
+  await expect(summary).toBeFocused();
+});
+
+test("a missing collection offers an upgrade while historical child entries stay readable", async ({ page }) => {
+  await installSubagents(page);
+  await openRoot(page);
+  const main = page.locator(".conversation-main");
+  await expect(main).toContainText("更新当前机器服务后可查看子智能体汇总");
+  await expect(main.getByRole("button", { name: "查看直属子智能体", exact: true })).toHaveCount(0);
+  await expect(trigger(page)).toHaveAttribute("aria-disabled", "false");
+  await trigger(page).click();
+  await expect(panel(page)).toContainText("子智能体示例回复");
+  await expect(panel(page)).toContainText("更新当前机器服务后可查看子智能体汇总");
+});
+
+test("a partial empty collection keeps its warning visible without claiming zero active children", async ({ page }) => {
+  await installSubagents(page, [message("root-reply", "父线程示例回复")]);
+  await mockCommand(page, "threads.detail", () => ({
+    ...detail(root, [message("root-reply", "父线程示例回复")]),
+    subagents: collection([], { complete: false, warning: "示例直属记录未全部读取" })
+  }));
+  await openRoot(page);
+  const main = page.locator(".conversation-main");
+  await expect(main).toContainText("示例直属记录未全部读取");
+  await expect(main).not.toContainText("0 个运行中");
+  await expect(main).not.toContainText("更新当前机器服务后可查看子智能体汇总");
 });

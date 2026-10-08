@@ -29,6 +29,13 @@ describe("user instruction timeline", () => {
     ]);
     expect(entries).toEqual([{ id: "reply", title: "Ready", preview: undefined }, { id: "request", title: "Request", preview: undefined }]);
   });
+  it("does not create user anchors from internal page wrappers", () => {
+    const page = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+    expect(userTimelineEntries("codex", [
+      { id: "internal-page", role: "user", text: page },
+      { id: "mixed-request", role: "user", text: `Continue ${page} please` }
+    ])).toEqual([{ id: "mixed-request", title: "Continue please", preview: undefined }]);
+  });
   it("tracks the preceding instruction in long replies and on backward scroll", () => {
     const anchors = [{ id: "first", top: -900 }, { id: "second", top: 500 }, { id: "third", top: 1500 }];
     expect(activeUserTimelineId(anchors, 100)).toBe("first");
