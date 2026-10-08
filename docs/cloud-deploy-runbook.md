@@ -1,4 +1,4 @@
-# Linux API 部署手册（1.2.8）
+# Linux API 部署手册（1.2.9）
 
 NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网页、登录页或静态资源，也不会安装 Claude Code 或 Linux 桌面 App。
 
@@ -79,3 +79,9 @@ Claude Code 从 `CLAUDE_CONFIG_DIR/projects` 或用户配置目录读取已有 J
 `system.providers` 只报告 Codex、Claude Code 和 Grok；`pi.*` 返回不可用。检查生成的 systemd 会话写入白名单不再包含 Pi，保留现有隔离参数与其他项目配置。不得删除 Pi 原生会话、程序或工作目录。
 
 用专用数据验证普通/归档 Codex 删除及隐藏候选混合清理，确认执行只覆盖预览 ID 和指纹。用户数据不用于破坏性验收。核对 API Key、Keychain 连接和其他 Provider Bark 设置仍可用。恢复材料仅保留到正式验收完成，之后精确删除本轮暂存。
+
+## 1.2.9 子智能体验收
+
+API 协议保持 2；先升级服务，再安装 App。已认证的 `system.capabilities` 应包含 `thread_subagents: true`。`threads.subagentDetail` 只接受主线程与子线程身份和分页参数，不接受路径；子线程附件必须同时提供原主线程上下文。API Key、Keychain、Bark、通知游标及隔离配置沿用现有值。
+
+正式 App 在当前机器的 Codex 父线程中打开子智能体活动，验证详情、嵌套返回、较早消息、附件与切换机器后的隔离。无真实父子记录时只验证空状态、拒绝路径和隔离夹具，并明确记录此边界；不能把夹具成功当作真实会话验收。关闭 App 后既有后台监测仍须运行。

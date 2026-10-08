@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.8 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer, permanent inspector or duplicate status card.
+NexusHub 1.2.9 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -59,3 +59,11 @@ Claude Code keeps a fixed navigation entry on both machine targets. Missing nati
 永久删除先显示候选范围与保护原因。隐藏清理呈现本次候选的允许状态，结束后显示删除、跳过、失败、剩余数量和逐项原因；全部受保护时显示“无可清理项目”。失败重试需重新预览。
 
 主窗口隐藏创建，初始化时一次最大化，必要时一次工作区回退，然后显示。Dock 重开、最小化恢复和机器切换不重新调整尺寸或位置；不切换 macOS 独立全屏 Space。Pi 不再显示导航或设置项。
+
+## 1.2.9 紧凑阅读与子智能体
+
+保留 780px 阅读列上限，标题栏约 56px，正文 15px、行高 1.65，普通块间距 12px。用户新指令保留额外分隔。正文、工具摘要和子智能体活动文字共用左侧基线，图标使用固定侧栏位置。工具摘要约 30px 高，按读取、搜索、命令和集成生成中文文案；长名称单行省略，展开内容独立滚动。
+
+助手正文不重复显示 Provider 标签。桌面复制按钮位于正文侧边，悬停或键盘聚焦时出现，触屏保持可见；成功和失败反馈不撑高消息。线程 ID 保留复制菜单入口。
+
+Codex 子智能体行独立于工具组，显示任务名称和自身回合状态，缺少已验证关联时显示不可用原因。可用阅读区至少 960px 时详情并排显示，宽约 420px；较窄时覆盖显示并约束键盘焦点。支持 Escape、关闭、焦点返回和嵌套返回；主线程保持挂载与滚动位置。面板独立分页、滚动和折叠，机器、Provider 或主线程变化时关闭并丢弃旧响应。面板只读，不提供子智能体执行或管理动作。

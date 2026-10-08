@@ -27,18 +27,24 @@ import {
 } from "../../lib/domain/conversationViewModel";
 import { extractPlanText } from "../../lib/domain/codexViewModel";
 import type { MessageBlock } from "../../types";
+import { SubagentActivityRow, type OpenSubagent } from "./SubagentActivity";
 
 export function MessageBlockView({
   block,
   onShowHistory,
   historyExpanded = false,
-  planFallbackTitle = ""
+  planFallbackTitle = "",
+  onOpenSubagent,
+  subagentsSupported = true
 }: {
   block: MessageBlock;
   onShowHistory?: () => void;
   historyExpanded?: boolean;
   planFallbackTitle?: string;
+  onOpenSubagent?: OpenSubagent;
+  subagentsSupported?: boolean;
 }) {
+  if (block.subagent) return <SubagentActivityRow block={block} onOpen={onOpenSubagent} supported={subagentsSupported} />;
   if (isHistoryCollapsedBlock(block)) {
     return <HistoryCollapseCell block={block} onShowHistory={onShowHistory} expanded={historyExpanded} />;
   }
@@ -61,10 +67,10 @@ export function MessageBlockView({
   const presentation = conversationMessagePresentation(block);
   return (
       <article className={presentation.rowClassName} data-timeline-id={block.id}>
-      <div className="chat-meta">
+      {block.role !== "assistant" && <div className="chat-meta">
         <span>{roleLabel(block.role)}</span>
         <small>{blockKindLabel(block.kind)}{block.created_at ? ` · ${formatTime(block.created_at)}` : ""}</small>
-      </div>
+      </div>}
       <div className={presentation.bodyClassName}>
         <MarkdownContent text={messageBlockText(block)} activityId={block.id} foldInstructions />
         {block.role === "assistant" && <CopyReplyButton text={messageBlockText(block)} />}

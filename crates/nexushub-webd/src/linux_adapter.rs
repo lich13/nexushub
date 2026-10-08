@@ -166,7 +166,9 @@ pub fn load_thread_detail_read_model(
             detail,
             active_job,
         )?;
-        return Ok(Some(view.detail));
+        let mut detail = view.detail;
+        codex::subagents::enrich_subagent_blocks(&paths, &mut detail);
+        return Ok(Some(detail));
     }
     Ok(None)
 }

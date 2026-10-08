@@ -29,6 +29,7 @@ pub const SYSTEM_PERMISSION_PROFILES: &str = "system.permissionProfiles";
 pub const SYSTEM_CODEX_CONFIG: &str = "system.codexConfig";
 pub const SYSTEM_CLAUDE_CODE_OVERVIEW: &str = "system.claudeCodeOverview";
 pub const THREADS_LIST: &str = "threads.list";
+pub const THREADS_SUBAGENT_DETAIL: &str = "threads.subagentDetail";
 pub const THREADS_DETAIL: &str = "threads.detail";
 pub const THREADS_BLOCKS: &str = "threads.blocks";
 pub const THREADS_CREATE: &str = "threads.create";
@@ -77,6 +78,7 @@ pub const ALLOWED_RPC_COMMANDS: &[&str] = &[
     SYSTEM_PROVIDERS,
     THREADS_LIST,
     THREADS_DETAIL,
+    THREADS_SUBAGENT_DETAIL,
     THREADS_BLOCKS,
     THREADS_ARCHIVE,
     THREADS_RESTORE,
@@ -123,6 +125,7 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | SYSTEM_PROVIDERS
             | THREADS_LIST
             | THREADS_DETAIL
+            | THREADS_SUBAGENT_DETAIL
             | THREADS_BLOCKS
             | JOBS_LIST
             | JOBS_DETAIL
@@ -179,6 +182,7 @@ pub const DECLARED_COMMANDS: &[&str] = &[
     SYSTEM_CLAUDE_CODE_OVERVIEW,
     THREADS_LIST,
     THREADS_DETAIL,
+    THREADS_SUBAGENT_DETAIL,
     THREADS_BLOCKS,
     THREADS_CREATE,
     THREADS_SEND,

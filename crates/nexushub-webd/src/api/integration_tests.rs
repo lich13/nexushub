@@ -1152,10 +1152,12 @@ async fn probe_settings_patch_refreshes_runtime_config_snapshots() {
 #[test]
 fn thread_block_page_returns_latest_window_without_detail_fields() {
     let detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: vec![],
         blocks: (0..6)
             .map(|index| MessageBlock {
+                subagent: None,
                 user_message: None,
                 id: format!("block-{index}"),
                 role: "assistant".to_string(),
@@ -1210,10 +1212,12 @@ fn thread_block_page_returns_latest_window_without_detail_fields() {
 #[test]
 fn thread_block_page_uses_before_cursor() {
     let detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: vec![],
         blocks: (0..6)
             .map(|index| MessageBlock {
+                subagent: None,
                 user_message: None,
                 id: format!("block-{index}"),
                 role: "assistant".to_string(),
@@ -1302,6 +1306,7 @@ fn app_server_thread_summary_keeps_fallback_title_when_only_preview_exists() {
 #[test]
 fn app_server_thread_detail_does_not_overwrite_title_with_preview() {
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -1334,6 +1339,7 @@ fn app_server_thread_detail_does_not_overwrite_title_with_preview() {
 #[test]
 fn app_server_thread_detail_does_not_overwrite_title_with_placeholder() {
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -1361,6 +1367,7 @@ fn app_server_thread_detail_does_not_overwrite_title_with_placeholder() {
 #[test]
 fn app_server_thread_detail_updates_title_with_real_name() {
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -1943,6 +1950,7 @@ fn app_server_not_loaded_ld_style_completed_rollout_clears_stale_running() {
     assert_eq!(rows[0].active_turn_id, None);
 
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2005,6 +2013,7 @@ fn app_server_active_does_not_override_completed_rollout_wait_agent() {
     assert!(running.is_empty());
 
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2070,6 +2079,7 @@ fn app_server_not_loaded_running_item_does_not_override_completed_rollout_wait_a
     assert!(running.is_empty());
 
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2150,6 +2160,7 @@ fn app_server_thread_detail_not_loaded_clears_stale_local_active_turn() {
     summary.active_turn_id = Some("turn-live".to_string());
     summary.last_event_kind = Some("task_started".to_string());
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2180,6 +2191,7 @@ fn app_server_thread_detail_not_loaded_clears_stale_local_active_turn() {
 #[test]
 fn app_server_thread_read_turns_provide_running_status_and_active_turn() {
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2302,6 +2314,7 @@ fn app_server_thread_detail_clears_stale_reply_needed_when_idle() {
     let mut summary = fallback_summary("thread-a", "example-user");
     summary.status = ThreadStatus::ReplyNeeded;
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2327,10 +2340,12 @@ fn app_server_thread_detail_clears_stale_reply_needed_when_idle() {
 #[test]
 fn app_server_thread_detail_ignores_historical_pending_blocks_without_active_turn() {
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback_summary("thread-a", "example-user"),
         messages: Vec::new(),
         blocks: vec![
             MessageBlock {
+                subagent: None,
                 user_message: None,
                 id: "choice-old".to_string(),
                 role: "assistant".to_string(),
@@ -2359,6 +2374,7 @@ fn app_server_thread_detail_ignores_historical_pending_blocks_without_active_tur
                 payload: None,
             },
             MessageBlock {
+                subagent: None,
                 user_message: None,
                 id: "assistant-later".to_string(),
                 role: "assistant".to_string(),
@@ -2422,6 +2438,7 @@ fn app_server_status_derivation_is_shared_for_list_detail_and_probe_buckets() {
     });
     let rows = app_server_thread_summaries(&app_value, &[fallback.clone()]);
     let mut detail = ThreadDetail {
+        subagent_updates: Default::default(),
         summary: fallback,
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -2854,4 +2871,257 @@ async fn claude_rpc_auth_identity_paging_rename_and_delete_are_scoped() {
     assert_eq!(deleted["deleted"], true);
     assert!(!file.exists());
     fs::remove_dir_all(root).unwrap();
+}
+
+const SUBAGENT_RPC_PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=";
+
+struct SubagentRpcFixture {
+    home: PathBuf,
+    state: crate::state::AppState,
+    api_key: String,
+}
+
+impl SubagentRpcFixture {
+    fn new() -> Self {
+        let home = temp_test_dir("nexushub-subagent-rpc");
+        fs::create_dir(&home).unwrap();
+        let home = fs::canonicalize(home).unwrap();
+        mark_codex_home(&home);
+        let conn = Connection::open(home.join("state_5.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                thread_source TEXT NOT NULL,
+                parent_thread_id TEXT,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 1
+            );",
+        )
+        .unwrap();
+        for (id, parent) in [
+            ("rpc-root", None),
+            ("rpc-child", Some("rpc-root")),
+            ("rpc-other-root", None),
+        ] {
+            let source = parent.map_or_else(
+                || json!("cli"),
+                |parent| json!({"subagent":{"thread_spawn":{"parent_thread_id":parent}}}),
+            );
+            let rollout = home.join("sessions").join(format!("{id}.jsonl"));
+            let events = [
+                json!({"type":"session_meta","payload":{
+                    "id":id,"source":source,"cwd":"/workspace/example"
+                }}),
+                json!({"type":"response_item","payload":{
+                    "id":format!("{id}-image"),"type":"message","role":"user","content":[
+                        {"type":"input_text","text":"Inspect the example image."},
+                        {"type":"input_image","image_url":format!("data:image/png;base64,{SUBAGENT_RPC_PNG}")}
+                    ]
+                }}),
+                json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"fixture-turn"}}),
+            ];
+            let mut text = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            text.push('\n');
+            fs::write(&rollout, text).unwrap();
+            conn.execute(
+                "INSERT INTO threads (
+                    id, rollout_path, created_at, updated_at, source, thread_source,
+                    parent_thread_id, cwd, title
+                ) VALUES (?1, ?2, 1, 2, ?3, ?4, ?5, '/workspace/example', 'RPC fixture')",
+                params![
+                    id,
+                    rollout.to_str().unwrap(),
+                    source.to_string(),
+                    if parent.is_some() { "subagent" } else { "user" },
+                    parent,
+                ],
+            )
+            .unwrap();
+        }
+        let (state, api_key) = authenticated_test_state();
+        let mut config = state.config();
+        config.codex.home = home.clone();
+        config.codex.workspace = home.clone();
+        state.replace_config(config);
+        Self {
+            home,
+            state,
+            api_key,
+        }
+    }
+
+    async fn attachment_request(&self, app: axum::Router) -> serde_json::Value {
+        let detail = request_rpc_json(
+            app,
+            "threads.subagentDetail",
+            r#"{"rootThreadId":"rpc-root","agentId":"rpc-child"}"#,
+            &self.api_key,
+        )
+        .await;
+        assert_eq!(detail["rootThreadId"], "rpc-root");
+        assert_eq!(detail["parentThreadId"], "rpc-root");
+        assert_eq!(detail["detail"]["summary"]["id"], "rpc-child");
+        assert!(!detail.to_string().contains(SUBAGENT_RPC_PNG));
+        let message = detail["detail"]["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block.get("user_message"))
+            .find(|message| {
+                message["attachments"]
+                    .as_array()
+                    .is_some_and(|attachments| !attachments.is_empty())
+            })
+            .unwrap();
+        json!({
+            "rootThreadId":"rpc-root",
+            "provider":"codex",
+            "sessionKey":"rpc-child",
+            "messageId":message["id"],
+            "attachmentId":message["attachments"][0]["id"]
+        })
+    }
+}
+
+impl Drop for SubagentRpcFixture {
+    fn drop(&mut self) {
+        // This unique directory contains only this test's native fixtures.
+        let _ = fs::remove_dir_all(&self.home);
+    }
+}
+
+#[tokio::test]
+async fn subagent_detail_and_attachment_rpc_require_api_key_for_valid_native_reads() {
+    let fixture = SubagentRpcFixture::new();
+    let app = router(fixture.state.clone());
+    let attachment = fixture.attachment_request(app.clone()).await;
+    let detail = json!({"rootThreadId":"rpc-root","agentId":"rpc-child"});
+
+    for (command, payload) in [
+        ("threads.subagentDetail", detail),
+        ("sessions.attachmentRead", attachment.clone()),
+    ] {
+        let payload = json!({"request":payload}).to_string();
+        for key in [None, Some("nhk_invalid_fixture")] {
+            assert_eq!(
+                request_rpc_status(app.clone(), command, &payload, key).await,
+                StatusCode::UNAUTHORIZED,
+                "{command} must authenticate a valid request"
+            );
+        }
+        let response = request_rpc_json(app.clone(), command, &payload, &fixture.api_key).await;
+        if command == "sessions.attachmentRead" {
+            assert_eq!(response["mimeType"], "image/png");
+            assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
+        } else {
+            assert_eq!(response["detail"]["summary"]["id"], "rpc-child");
+        }
+    }
+    let response = request_rpc_json(
+        app,
+        "sessions.attachmentRead",
+        &attachment.to_string(),
+        &fixture.api_key,
+    )
+    .await;
+    assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
+}
+
+#[tokio::test]
+async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
+    let fixture = SubagentRpcFixture::new();
+    let app = router(fixture.state.clone());
+    let attachment = fixture.attachment_request(app.clone()).await;
+    let response = request_rpc_json(
+        app.clone(),
+        "sessions.attachmentRead",
+        &attachment.to_string(),
+        &fixture.api_key,
+    )
+    .await;
+    assert_eq!(response["base64"], SUBAGENT_RPC_PNG);
+    let native_path = fixture.home.join("sessions/rpc-child.jsonl");
+
+    for (command, payload) in [
+        (
+            "threads.subagentDetail",
+            json!({"rootThreadId":"rpc-root","agentId":"rpc-child"}),
+        ),
+        ("sessions.attachmentRead", attachment.clone()),
+    ] {
+        for field in ["path", "filePath", "rolloutPath", "cwd", "url"] {
+            let mut invalid = payload.clone();
+            invalid[field] = json!(native_path);
+            for wrapped in [false, true] {
+                let body = if wrapped {
+                    json!({"request":invalid})
+                } else {
+                    invalid.clone()
+                };
+                assert_eq!(
+                    request_rpc_status(
+                        app.clone(),
+                        command,
+                        &body.to_string(),
+                        Some(&fixture.api_key),
+                    )
+                    .await,
+                    StatusCode::BAD_REQUEST,
+                    "{command} must reject caller field {field}"
+                );
+            }
+        }
+    }
+
+    for field in ["rootThreadId", "agentId"] {
+        let mut invalid = json!({"rootThreadId":"rpc-root","agentId":"rpc-child"});
+        invalid[field] = json!(native_path);
+        assert_eq!(
+            request_rpc_status(
+                app.clone(),
+                "threads.subagentDetail",
+                &invalid.to_string(),
+                Some(&fixture.api_key),
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+    for field in ["rootThreadId", "sessionKey", "messageId", "attachmentId"] {
+        let mut invalid = attachment.clone();
+        invalid[field] = json!(native_path);
+        assert_eq!(
+            request_rpc_status(
+                app.clone(),
+                "sessions.attachmentRead",
+                &invalid.to_string(),
+                Some(&fixture.api_key),
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+    let mut wrong_root = attachment;
+    wrong_root["rootThreadId"] = json!("rpc-other-root");
+    assert_eq!(
+        request_rpc_status(
+            app,
+            "sessions.attachmentRead",
+            &wrong_root.to_string(),
+            Some(&fixture.api_key),
+        )
+        .await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
 }

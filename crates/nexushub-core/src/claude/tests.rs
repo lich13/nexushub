@@ -375,6 +375,7 @@ fn embedded_images_load_lazily_and_invalid_ids_are_rejected() {
     assert_eq!(user.attachments.len(), 1);
     assert!(!serde_json::to_string(&detail).unwrap().contains(data));
     let mut request = crate::user_message::SessionAttachmentRequest {
+        root_thread_id: None,
         provider: crate::services::sessions::SessionProvider::Claude,
         session_key: f.key(),
         message_id: user.id.clone(),

@@ -9,7 +9,7 @@ export function CopyReplyButton({ text, label = "复制回复", copiedLabel = "�
   useEffect(() => () => { clearTimeout(timer.current); attempt.current++; }, []);
   text = visibleMarkdown(text);
   if (!text.trim()) return null;
-  return <div className="reply-actions">
+  return <div className="reply-actions" data-feedback={state === "idle" ? undefined : state}>
     <button type="button" className="icon-button copy-reply" aria-label={state === "copied" ? copiedLabel : label} title={state === "copied" ? "已复制" : label} onClick={async () => {
       const current = ++attempt.current;
       clearTimeout(timer.current);

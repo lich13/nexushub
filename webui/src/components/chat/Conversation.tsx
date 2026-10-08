@@ -13,11 +13,13 @@ import { threadStatusLabel, type SelectedThread, type View } from "../../lib/dom
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
-import type { SessionSearchResult, ThreadDetail, ThreadSummary } from "../../types";
+import type { SessionSearchResult, SubagentActivity, ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
 import { TimelineRail } from "../common/TimelineRail";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
+import { SubagentPanel } from "./SubagentPanel";
+import { machineScope } from "../../lib/query/connection";
 
 
 
@@ -47,10 +49,38 @@ export function Conversation(props: {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const stream = useRef<HTMLDivElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
+  const [agentSelection, setAgentSelection] = useState<{ root: string; machine: string; agent: SubagentActivity; trigger: HTMLButtonElement } | null>(null);
+  const [docked, setDocked] = useState(false);
+  const machine = machineScope();
+  const selectedAgent = agentSelection?.root === props.threadId && agentSelection.machine === machine ? agentSelection : null;
+  useEffect(() => { setAgentSelection(null); }, [props.threadId, machine]);
+  const viewportAnchor = useRef<{ element: HTMLElement; offset: number } | null>(null);
+  const captureViewport = () => {
+    const element = stream.current;
+    if (!element) return;
+    const top = element.getBoundingClientRect().top;
+    const anchor = Array.from(element.querySelectorAll<HTMLElement>("[data-timeline-id]"))
+      .find(item => item.getBoundingClientRect().bottom > top);
+    viewportAnchor.current = anchor ? { element: anchor, offset: anchor.getBoundingClientRect().top - top } : null;
+  };
+  const openAgent = (agent: SubagentActivity, trigger: HTMLButtonElement) => {
+    captureViewport();
+    setAgentSelection({ root: props.threadId, machine: machineScope(), agent, trigger });
+  };
+  const closeAgent = () => {
+    captureViewport();
+    const trigger = selectedAgent?.trigger;
+    setAgentSelection(null);
+    requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }); });
+  };
   const scrollState = useRef({ threadId: "", follow: true, prepend: null as number | null });
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
+  const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
+    && props.capabilities.threadSubagents !== true
+    && visibleBlocks.some(block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent");
   const timelineEntries = userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : []));
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
@@ -84,6 +114,23 @@ export function Conversation(props: {
       element.scrollTop = element.scrollHeight;
     }
   }, [props.threadId, blocks, historyExpanded]);
+  useLayoutEffect(() => {
+    const anchor = viewportAnchor.current;
+    const element = stream.current;
+    if (element && anchor?.element.isConnected) {
+      element.scrollTop += anchor.element.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.offset;
+    }
+    viewportAnchor.current = null;
+  }, [selectedAgent, docked]);
+  useEffect(() => {
+    if (!shell.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(entries => {
+      captureViewport();
+      setDocked(entries[0].contentRect.width >= 960);
+    });
+    observer.observe(shell.current);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.sessionKey !== props.threadId || !props.searchReady || older.isPending) return;
@@ -104,11 +151,11 @@ export function Conversation(props: {
     catch { setFeedback("复制失败"); }
   };
   const archived = Boolean(props.archivedView) || summary.status === "Archived";
-  return <div className="conversation-shell compact-readonly-conversation">
+  return <div ref={shell} className="conversation-shell compact-readonly-conversation">
     <main className="conversation-main">
       <header className="conversation-header" data-timeline-id="session">
         <button className="icon-button mobile-back" title="返回任务列表" onClick={props.onBack}><ChevronLeft size={18} /></button>
-          <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1><span className="muted-text">{summary.cwd ?? summary.id}</span></div>
+          <div className="conversation-title-copy"><h1 className="conversation-title">{summary.title}</h1></div>
           <div className="conversation-header-actions">
           <span className={`status-chip ${summary.status}`}>{threadStatusLabel(summary.status)}</span>
           <TaskMenu triggerRef={deletion.returnFocus}>
@@ -131,14 +178,16 @@ export function Conversation(props: {
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
       <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
+        {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
         {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
         {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
-        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
+        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
           if (stream.current) scrollState.current.prepend = stream.current.scrollHeight - stream.current.scrollTop;
           setHistoryExpanded(true);
         }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
     </main>
+    {selectedAgent && <SubagentPanel key={`${selectedAgent.machine}:${props.threadId}:${selectedAgent.agent.agentId}`} rootThreadId={props.threadId} initialAgent={selectedAgent.agent} docked={docked} onClose={closeAgent} />}
   </div>;
 }

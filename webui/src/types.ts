@@ -118,6 +118,7 @@ export type PendingElicitation = {
 };
 
 export type MessageBlock = {
+  subagent?: SubagentActivity | null;
   user_message?: UserMessageContent | null;
   id: string;
   role: string;
@@ -141,6 +142,30 @@ export type MessageBlock = {
   payload?: unknown;
 };
 
+export type SubagentActivity = {
+  agentId?: string | null;
+  name: string;
+  role?: string | null;
+  status: "running" | "completed" | "failed" | "interrupted" | "unknown";
+  available: boolean;
+  unavailableReason?: string | null;
+  delegation?: string | null;
+};
+
+export type SubagentDetailRequest = {
+  rootThreadId: string;
+  agentId: string;
+  limit?: number;
+  before?: string | null;
+};
+
+export type SubagentDetailResponse = {
+  rootThreadId: string;
+  parentThreadId: string;
+  agent: SubagentActivity;
+  detail: ThreadDetail;
+};
+
 export type UserInputAnswer = {
   question_id: string;
   answers: string[];
@@ -148,6 +173,7 @@ export type UserInputAnswer = {
 };
 
 export type ThreadDetail = {
+  subagent_updates?: Record<string, SubagentActivity>;
   summary: ThreadSummary;
   messages: CodexMessage[];
   blocks: MessageBlock[];
@@ -214,6 +240,7 @@ export type SystemCapabilities = {
   prune_backups: boolean;
   thread_cleanup?: boolean;
   thread_archive_actions?: boolean;
+  thread_subagents?: boolean;
 };
 
 export type SystemCapabilitiesResponse = {

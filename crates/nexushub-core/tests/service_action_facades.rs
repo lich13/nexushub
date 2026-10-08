@@ -621,6 +621,7 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
 fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetail {
     let blocks = (0..block_count)
         .map(|idx| MessageBlock {
+            subagent: None,
             user_message: None,
             id: format!("b:{idx}"),
             role: "assistant".to_string(),
@@ -646,6 +647,7 @@ fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetai
         .collect::<Vec<_>>();
 
     ThreadDetail {
+        subagent_updates: Default::default(),
         summary: ThreadSummary {
             id: thread_id.to_string(),
             title: format!("Thread {thread_id}"),

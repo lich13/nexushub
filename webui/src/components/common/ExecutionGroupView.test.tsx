@@ -1,7 +1,50 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { groupCodexCommandBlocks, groupGrokCommandEvents } from "../../lib/domain/executionGroups";
-import { ExecutionGroupView } from "./ExecutionGroupView";
+import type { ExecutionGroup } from "../../lib/domain/executionGroups";
+import { executionSummary, ExecutionGroupView } from "./ExecutionGroupView";
+
+function summaryGroup(titles: string[], overrides: Partial<ExecutionGroup> = {}): ExecutionGroup {
+  return {
+    id: "summary-fixture", kind: "tool", provider: "Codex", running: false, failedCount: 0,
+    commands: titles.map((title, index) => ({
+      id: `command-${index}`, sourceIds: [`source-${index}`], title,
+      status: "completed", sections: []
+    })),
+    ...overrides
+  };
+}
+
+test.each([
+  ["read_file", "已读取文件"], ["Read", "已读取文件"], ["functions.list_files", "已读取文件"],
+  ["search_query", "已搜索内容"], ["Grep", "已搜索内容"], ["web.search", "已搜索内容"],
+  ["exec_command", "已运行命令"], ["Bash", "已运行命令"], ["functions.js", "已运行命令"]
+])("tool %s has a compact Chinese activity summary", (title, expected) => {
+  expect(executionSummary(summaryGroup([title])).label).toBe(expected);
+});
+
+test("mixed activities list each operation once in a stable order", () => {
+  const group = summaryGroup(["exec_command", "search", "Read", "read_file", "bash"]);
+  expect(executionSummary(group).label).toBe("已读取文件、搜索内容、运行命令");
+  expect(executionSummary({ ...group, running: true }).label).toBe("正在读取文件、搜索内容、运行命令");
+});
+
+test.each(["Codex", "Claude Code", "Grok"] as const)("unknown %s tools retain their integration identity", provider => {
+  const group = summaryGroup(["mcp__fixture__inspect"], { provider, running: true });
+  expect(executionSummary(group).label).toContain(`正在使用 ${provider} 集成`);
+  expect(executionSummary(group).label).toContain("调用工具");
+  expect(executionSummary({ ...group, running: false }).label).toContain(`已使用 ${provider} 集成`);
+});
+
+test("tool output text cannot change the operation named in the group summary", () => {
+  const group = summaryGroup(["read_file"]);
+  group.commands[0].sections = [{ label: "结果", text: "bash search mcp__fixture__inspect" }];
+  const html = renderToStaticMarkup(<ExecutionGroupView group={group} />);
+  expect(html).toContain("已读取文件");
+  expect(html).toContain("1 项工具");
+  expect(html).not.toContain("已运行命令");
+  expect(html).not.toContain("已搜索内容");
+});
 
 test("all instruction tools stay closed even when running or failed", () => {
   const [entry] = groupGrokCommandEvents([

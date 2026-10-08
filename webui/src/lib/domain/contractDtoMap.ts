@@ -55,6 +55,8 @@ export const contractDtoNames = [
   "ThreadsArchiveResponse",
   "ThreadsBlocksResponse",
   "ThreadsDetailResponse",
+  "SubagentDetailRequest",
+  "SubagentDetailResponse",
   "ThreadsListResponse",
   "ThreadsRenameResponse",
   "ThreadsRestoreResponse",

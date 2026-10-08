@@ -31,6 +31,7 @@ export type { UnifiedUpdateAction, UpdateActionResult } from "./api/updates";
 export {
   listThreads,
   getThread,
+  getSubagentDetail,
   getThreadBlocks,
   archiveThread,
   restoreThread,

@@ -9,6 +9,6 @@ export type SessionBatchResult = { items: Array<{ sessionKey: string; status: "s
 export function previewSessionBatch(request: SessionBatchRequest): Promise<SessionBatchPreview> { return callCommand("sessions.bulkPreview", { request }); }
 export function executeSessionBatch(request: SessionBatchExecuteRequest): Promise<SessionBatchResult> { return callCommand("sessions.bulkExecute", { request }); }
 
-export type SessionAttachmentRequest = { provider: SessionProvider; sessionKey: string; messageId: string; attachmentId: string };
+export type SessionAttachmentRequest = { rootThreadId?: string; provider: SessionProvider; sessionKey: string; messageId: string; attachmentId: string };
 export type SessionAttachmentResponse = { mimeType: string; base64: string };
 export function readSessionAttachment(request: SessionAttachmentRequest): Promise<SessionAttachmentResponse> { return callCommand("sessions.attachmentRead", { request }); }

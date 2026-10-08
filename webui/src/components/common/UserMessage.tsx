@@ -8,7 +8,7 @@ import { ActivityDetails } from "./ActivityDetails";
 import { CopyReplyButton } from "./CopyReplyButton";
 import { FilePathLink } from "./FilePathLink";
 
-export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string } | null>(null);
+export const UserMessageScope = createContext<{ provider: SessionProvider; sessionKey: string; rootThreadId?: string } | null>(null);
 
 export function UserMessage({ message, text = "", activityId = "user-message", timelineId, timelineAliases = [] }: { message?: UserMessageContent | null; text?: string; activityId?: string; timelineId?: string; timelineAliases?: string[] }) {
   const body = message?.text ?? text;
@@ -43,7 +43,7 @@ function Attachment({ attachment, messageId }: { attachment: UserAttachment; mes
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const { provider, sessionKey } = scope ?? {};
+  const { provider, sessionKey, rootThreadId } = scope ?? {};
   useEffect(() => {
     if (!container.current || attachment.kind !== "image" || attachment.reason) return;
     if (typeof IntersectionObserver === "undefined") { setVisible(true); return; }
@@ -55,11 +55,11 @@ function Attachment({ attachment, messageId }: { attachment: UserAttachment; mes
     if ((!visible && !preview) || !provider || !sessionKey || attachment.reason || attachment.kind !== "image") { setUrl(""); return; }
     let cancelled = false;
     setError("");
-    readAttachment({ provider, sessionKey, messageId, attachmentId: attachment.id }).then(data => {
+    readAttachment({ provider, sessionKey, messageId, attachmentId: attachment.id, ...(rootThreadId ? { rootThreadId } : {}) }).then(data => {
       if (!cancelled) setUrl(data);
     }, reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : "图片暂时无法读取"); });
     return () => { cancelled = true; };
-  }, [visible, preview, provider, sessionKey, messageId, attachment.id, attachment.kind, attachment.reason, attempt]);
+  }, [visible, preview, provider, sessionKey, rootThreadId, messageId, attachment.id, attachment.kind, attachment.reason, attempt]);
   useEffect(() => {
     if (preview) dialog.current?.showModal();
     else if (dialog.current?.open) dialog.current.close();

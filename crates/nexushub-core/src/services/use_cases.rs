@@ -212,6 +212,15 @@ pub struct ThreadUseCases<'a> {
 }
 
 impl<'a> ThreadUseCases<'a> {
+    pub fn subagent_detail(
+        self,
+        paths: &crate::codex::CodexPaths,
+        request: &crate::codex::subagents::SubagentDetailRequest,
+    ) -> Result<crate::codex::subagents::SubagentDetailResponse> {
+        system::require_capability(self.platform, Capability::ThreadSubagents)?;
+        crate::codex::subagents::read_subagent_detail(paths, request)
+    }
+
     pub fn list(self, query: ThreadsQuery) -> Result<ThreadListPlan> {
         threads::plan_threads_list_request(self.platform, query)
     }

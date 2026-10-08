@@ -160,7 +160,7 @@ function groupActivities<T>(activities: Activity<T>[], provider: ExecutionGroup[
 export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRenderItem<MessageBlock>[] {
   return groupActivities(blocks.map(block => {
     const result = /output|result/i.test(block.kind);
-    const tool = isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isPlanBlock(block) && !isQuestionBlock(block) && !isQuestionResultBlock(block);
+    const tool = !block.subagent && isToolBlock(block) && !isHistoryCollapsedBlock(block) && !isPlanBlock(block) && !isQuestionBlock(block) && !isQuestionResultBlock(block);
     return {
       item: block,
       key: `codex:${block.turn_id ?? ""}:${block.call_id ?? block.item_id ?? "event"}:${block.id}`,
