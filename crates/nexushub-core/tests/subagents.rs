@@ -33,10 +33,8 @@ struct NativeFixture {
 
 impl NativeFixture {
     fn new(root_events: &[Value]) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "nexushub-subagents-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("nexushub-subagents-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let directory = fs::canonicalize(directory).unwrap();
         let paths = CodexPaths::new(directory.join("codex"));
@@ -322,7 +320,11 @@ fn returned_agent_id_binds_native_identity_at_the_original_tool_position() {
     enrich_subagent_blocks(&fixture.paths, &mut detail);
 
     assert_eq!(
-        detail.blocks.iter().map(|block| block.id.clone()).collect::<Vec<_>>(),
+        detail
+            .blocks
+            .iter()
+            .map(|block| block.id.clone())
+            .collect::<Vec<_>>(),
         block_ids
     );
     assert_eq!(detail.blocks.len(), 3);
@@ -334,27 +336,50 @@ fn returned_agent_id_binds_native_identity_at_the_original_tool_position() {
     assert_eq!(card.status, SubagentStatus::Completed);
     assert!(card.available);
     assert_eq!(card.unavailable_reason, None);
-    assert_eq!(card.delegation.as_deref(), Some("Inspect the example fixture."));
+    assert_eq!(
+        card.delegation.as_deref(),
+        Some("Inspect the example fixture.")
+    );
     let child = fixture.read(CHILD).unwrap();
     assert_eq!(child.root_thread_id, ROOT);
     assert_eq!(child.parent_thread_id, ROOT);
     assert_eq!(child.detail.summary.id, CHILD);
-    assert_eq!(child.detail.blocks[0].text.as_deref(), Some("Example reviewed."));
+    assert_eq!(
+        child.detail.blocks[0].text.as_deref(),
+        Some("Example reviewed.")
+    );
     assert_eq!(fixture.snapshot(), before);
 }
 
 #[test]
 fn returned_task_paths_resolve_distinct_agents_with_the_same_display_name() {
     let mut events = spawn("spawn-first", "review", json!({"task_name":"/root/review"}));
-    events.extend(spawn("spawn-second", "review", json!({"task_name":"/root/review_again"})));
+    events.extend(spawn(
+        "spawn-second",
+        "review",
+        json!({"task_name":"/root/review_again"}),
+    ));
     let fixture = NativeFixture::new(&events);
-    fixture.child(CHILD, ROOT, "/root/review", &[message("assistant", "First result.")]);
-    fixture.child("second-child", ROOT, "/root/review_again", &[message("assistant", "Second result.")]);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[message("assistant", "First result.")],
+    );
+    fixture.child(
+        "second-child",
+        ROOT,
+        "/root/review_again",
+        &[message("assistant", "Second result.")],
+    );
     // Exercise the native structured source when dedicated association columns are absent.
-    fixture.connection().execute(
-        "UPDATE threads SET parent_thread_id = NULL, agent_path = NULL WHERE id != ?1",
-        [ROOT],
-    ).unwrap();
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET parent_thread_id = NULL, agent_path = NULL WHERE id != ?1",
+            [ROOT],
+        )
+        .unwrap();
     let before = fixture.snapshot();
     let mut detail = fixture.root_detail();
 
@@ -366,8 +391,18 @@ fn returned_task_paths_resolve_distinct_agents_with_the_same_display_name() {
     assert_eq!(cards[1].agent_id.as_deref(), Some("second-child"));
     assert_eq!(cards[0].name, cards[1].name);
     assert!(cards.iter().all(|card| card.available));
-    assert_eq!(fixture.read(CHILD).unwrap().detail.blocks[0].text.as_deref(), Some("First result."));
-    assert_eq!(fixture.read("second-child").unwrap().detail.blocks[0].text.as_deref(), Some("Second result."));
+    assert_eq!(
+        fixture.read(CHILD).unwrap().detail.blocks[0]
+            .text
+            .as_deref(),
+        Some("First result.")
+    );
+    assert_eq!(
+        fixture.read("second-child").unwrap().detail.blocks[0]
+            .text
+            .as_deref(),
+        Some("Second result.")
+    );
     assert_eq!(fixture.snapshot(), before);
 }
 
@@ -375,7 +410,11 @@ fn returned_task_paths_resolve_distinct_agents_with_the_same_display_name() {
 fn identical_names_or_paths_do_not_bind_another_parent_or_guess_an_identity() {
     let mut events = spawn("foreign-id", "review", json!({"agent_id":"foreign-child"}));
     events.extend(spawn("name-only", "Reviewer", json!({"name":"Reviewer"})));
-    events.extend(spawn("valid-path", "review", json!({"task_name":"/root/review"})));
+    events.extend(spawn(
+        "valid-path",
+        "review",
+        json!({"task_name":"/root/review"}),
+    ));
     let fixture = NativeFixture::new(&events);
     fixture.child(CHILD, ROOT, "/root/review", &[]);
     fixture.add_thread("other-root", None, None, "Other task", &[]);
@@ -395,7 +434,11 @@ fn identical_names_or_paths_do_not_bind_another_parent_or_guess_an_identity() {
 
 #[test]
 fn duplicate_native_paths_are_unavailable_until_the_returned_id_disambiguates() {
-    let mut events = spawn("ambiguous-path", "review", json!({"task_name":"/root/review"}));
+    let mut events = spawn(
+        "ambiguous-path",
+        "review",
+        json!({"task_name":"/root/review"}),
+    );
     events.extend(spawn("explicit-id", "review", json!({"agent_id":CHILD})));
     let fixture = NativeFixture::new(&events);
     fixture.child(CHILD, ROOT, "/root/review", &[]);
@@ -414,22 +457,44 @@ fn duplicate_native_paths_are_unavailable_until_the_returned_id_disambiguates() 
 #[test]
 fn nested_children_keep_the_original_root_and_their_immediate_parent() {
     let fixture = NativeFixture::new(&spawn("spawn-parent", "review", json!({"agent_id":CHILD})));
-    fixture.child(CHILD, ROOT, "/root/review", &spawn(
-        "spawn-grandchild", "details", json!({"task_name":"/root/review/details"}),
-    ));
-    fixture.child("grandchild", CHILD, "/root/review/details", &[message("assistant", "Nested result.")]);
+    fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &spawn(
+            "spawn-grandchild",
+            "details",
+            json!({"task_name":"/root/review/details"}),
+        ),
+    );
+    fixture.child(
+        "grandchild",
+        CHILD,
+        "/root/review/details",
+        &[message("assistant", "Nested result.")],
+    );
     fixture.add_thread("other-root", None, None, "Other task", &[]);
     let before = fixture.snapshot();
 
     let child = fixture.read(CHILD).unwrap();
     let grandchild = fixture.read("grandchild").unwrap();
 
-    assert_eq!(cards(&child.detail)[0].agent_id.as_deref(), Some("grandchild"));
+    assert_eq!(
+        cards(&child.detail)[0].agent_id.as_deref(),
+        Some("grandchild")
+    );
     assert!(cards(&child.detail)[0].available);
     assert_eq!(grandchild.root_thread_id, ROOT);
     assert_eq!(grandchild.parent_thread_id, CHILD);
-    assert_eq!(grandchild.detail.blocks[0].text.as_deref(), Some("Nested result."));
-    assert!(read_subagent_detail(&fixture.paths, &request("other-root", "grandchild", None, None)).is_err());
+    assert_eq!(
+        grandchild.detail.blocks[0].text.as_deref(),
+        Some("Nested result.")
+    );
+    assert!(read_subagent_detail(
+        &fixture.paths,
+        &request("other-root", "grandchild", None, None)
+    )
+    .is_err());
     assert_eq!(fixture.snapshot(), before);
 }
 
@@ -439,7 +504,12 @@ fn user_prose_code_examples_and_other_tools_do_not_create_subagent_cards() {
         message("user", "Please explain collaboration.spawn_agent({\"task_name\":\"review\"})."),
         message("assistant", "```json\n{\"type\":\"function_call\",\"name\":\"spawn_agent\",\"agent_id\":\"child-thread\"}\n```"),
     ];
-    events.extend(tool("regular-tool", "functions.exec_command", json!({"cmd":"print example"}), json!({"agent_id":CHILD})));
+    events.extend(tool(
+        "regular-tool",
+        "functions.exec_command",
+        json!({"cmd":"print example"}),
+        json!({"agent_id":CHILD}),
+    ));
     let fixture = NativeFixture::new(&events);
     fixture.child(CHILD, ROOT, "/root/review", &[]);
     let mut detail = fixture.root_detail();
@@ -454,18 +524,71 @@ fn user_prose_code_examples_and_other_tools_do_not_create_subagent_cards() {
 #[test]
 fn status_uses_native_turn_evidence_instead_of_spawn_tool_completion() {
     let cases = [
-        ("running", vec![event("task_started", "turn")], SubagentStatus::Running),
-        ("completed", vec![event("task_started", "turn"), event("task_complete", "turn")], SubagentStatus::Completed),
-        ("failed", vec![event("task_started", "turn"), event("turn_error", "turn")], SubagentStatus::Failed),
-        ("interrupted", vec![event("task_started", "turn"), event("turn_aborted", "turn")], SubagentStatus::Interrupted),
-        ("unknown", vec![message("assistant", "An answer without terminal evidence.")], SubagentStatus::Unknown),
-        ("other-turn", vec![event("task_started", "current"), event("task_complete", "previous")], SubagentStatus::Running),
-        ("new-turn", vec![event("task_started", "old"), event("task_complete", "old"), event("task_started", "new")], SubagentStatus::Running),
-        ("failed-status", vec![event("task_started", "turn"), json!({"type":"event_msg","payload":{"type":"turn_completed","turn_id":"turn","status":"failed"}})], SubagentStatus::Failed),
-        ("cancelled-status", vec![event("task_started", "turn"), json!({"type":"event_msg","payload":{"type":"turn_completed","turn_id":"turn","status":"cancelled"}})], SubagentStatus::Interrupted),
+        (
+            "running",
+            vec![event("task_started", "turn")],
+            SubagentStatus::Running,
+        ),
+        (
+            "completed",
+            vec![
+                event("task_started", "turn"),
+                event("task_complete", "turn"),
+            ],
+            SubagentStatus::Completed,
+        ),
+        (
+            "failed",
+            vec![event("task_started", "turn"), event("turn_error", "turn")],
+            SubagentStatus::Failed,
+        ),
+        (
+            "interrupted",
+            vec![event("task_started", "turn"), event("turn_aborted", "turn")],
+            SubagentStatus::Interrupted,
+        ),
+        (
+            "unknown",
+            vec![message("assistant", "An answer without terminal evidence.")],
+            SubagentStatus::Unknown,
+        ),
+        (
+            "other-turn",
+            vec![
+                event("task_started", "current"),
+                event("task_complete", "previous"),
+            ],
+            SubagentStatus::Running,
+        ),
+        (
+            "new-turn",
+            vec![
+                event("task_started", "old"),
+                event("task_complete", "old"),
+                event("task_started", "new"),
+            ],
+            SubagentStatus::Running,
+        ),
+        (
+            "failed-status",
+            vec![
+                event("task_started", "turn"),
+                json!({"type":"event_msg","payload":{"type":"turn_completed","turn_id":"turn","status":"failed"}}),
+            ],
+            SubagentStatus::Failed,
+        ),
+        (
+            "cancelled-status",
+            vec![
+                event("task_started", "turn"),
+                json!({"type":"event_msg","payload":{"type":"turn_completed","turn_id":"turn","status":"cancelled"}}),
+            ],
+            SubagentStatus::Interrupted,
+        ),
     ];
     for (case, events, expected) in cases {
-        let fixture = NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
+        let fixture =
+            NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
         fixture.child(CHILD, ROOT, "/root/review", &events);
         let before = fixture.snapshot();
         let mut detail = fixture.root_detail();
@@ -474,7 +597,11 @@ fn status_uses_native_turn_evidence_instead_of_spawn_tool_completion() {
         assert!(cards(&detail)[0].available, "{case}");
         let child = fixture.read(CHILD).unwrap();
         assert_eq!(child.agent.status, expected, "{case}");
-        assert_eq!(child.detail.summary.status == ThreadStatus::Running, expected == SubagentStatus::Running, "{case}");
+        assert_eq!(
+            child.detail.summary.status == ThreadStatus::Running,
+            expected == SubagentStatus::Running,
+            "{case}"
+        );
         assert_eq!(fixture.snapshot(), before, "{case}");
     }
 }
@@ -483,34 +610,68 @@ fn status_uses_native_turn_evidence_instead_of_spawn_tool_completion() {
 fn unresolved_tools_prevent_completed_status_and_matched_results_allow_it() {
     for resolved in [false, true] {
         let mut events = vec![event("task_started", "turn")];
-        let tool_events = tool("native-tool", "functions.exec_command", json!({"cmd":"print example"}), json!("Example output."));
+        let tool_events = tool(
+            "native-tool",
+            "functions.exec_command",
+            json!({"cmd":"print example"}),
+            json!("Example output."),
+        );
         events.push(tool_events[0].clone());
         if resolved {
             events.push(tool_events[1].clone());
         }
         events.push(event("task_complete", "turn"));
-        let fixture = NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
+        let fixture =
+            NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
         fixture.child(CHILD, ROOT, "/root/review", &events);
         let child = fixture.read(CHILD).unwrap();
-        assert_eq!(child.agent.status, if resolved { SubagentStatus::Completed } else { SubagentStatus::Unknown });
+        assert_eq!(
+            child.agent.status,
+            if resolved {
+                SubagentStatus::Completed
+            } else {
+                SubagentStatus::Unknown
+            }
+        );
     }
 }
 
 #[test]
 fn a_partial_or_malformed_trailing_record_keeps_readable_history_with_unknown_status() {
-    for tail in ["{\"type\":\"event_msg\",\"payload\":", "{not-json}\n", "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn\"}}"] {
-        let fixture = NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
-        let rollout = fixture.child(CHILD, ROOT, "/root/review", &[
-            event("task_started", "turn"), message("assistant", "A readable earlier result."), event("task_complete", "turn"),
-        ]);
-        fs::OpenOptions::new().append(true).open(rollout).unwrap().write_all(tail.as_bytes()).unwrap();
+    for tail in [
+        "{\"type\":\"event_msg\",\"payload\":",
+        "{not-json}\n",
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn\"}}",
+    ] {
+        let fixture =
+            NativeFixture::new(&spawn("spawn-status", "review", json!({"agent_id":CHILD})));
+        let rollout = fixture.child(
+            CHILD,
+            ROOT,
+            "/root/review",
+            &[
+                event("task_started", "turn"),
+                message("assistant", "A readable earlier result."),
+                event("task_complete", "turn"),
+            ],
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(rollout)
+            .unwrap()
+            .write_all(tail.as_bytes())
+            .unwrap();
         let before = fixture.snapshot();
 
         let child = fixture.read(CHILD).unwrap();
 
         assert_eq!(child.agent.status, SubagentStatus::Unknown);
         assert!(child.agent.available);
-        assert!(child.detail.blocks.iter().any(|block| block.text.as_deref() == Some("A readable earlier result.")));
+        assert!(child
+            .detail
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("A readable earlier result.")));
         assert_eq!(fixture.snapshot(), before);
     }
 }
@@ -533,15 +694,37 @@ fn missing_native_index_does_not_get_recreated_by_subagent_reads() {
 
 #[test]
 fn missing_child_index_or_rollout_and_unverifiable_file_identity_are_unavailable() {
-    for case in ["missing-row", "missing-file", "missing-meta", "different-id", "different-parent"] {
-        let fixture = NativeFixture::new(&spawn("spawn-missing", "review", json!({"agent_id":CHILD})));
+    for case in [
+        "missing-row",
+        "missing-file",
+        "missing-meta",
+        "different-id",
+        "different-parent",
+    ] {
+        let fixture =
+            NativeFixture::new(&spawn("spawn-missing", "review", json!({"agent_id":CHILD})));
         let rollout = fixture.child(CHILD, ROOT, "/root/review", &[]);
         match case {
-            "missing-row" => { fixture.connection().execute("DELETE FROM threads WHERE id = ?1", [CHILD]).unwrap(); }
+            "missing-row" => {
+                fixture
+                    .connection()
+                    .execute("DELETE FROM threads WHERE id = ?1", [CHILD])
+                    .unwrap();
+            }
             "missing-file" => fs::remove_file(rollout).unwrap(),
             "missing-meta" => write_jsonl(&rollout, &[message("assistant", "No native identity.")]),
-            "different-id" => write_jsonl(&rollout, &[json!({"type":"session_meta","payload":{"id":"replacement-thread","parent_thread_id":ROOT}})]),
-            "different-parent" => write_jsonl(&rollout, &[json!({"type":"session_meta","payload":{"id":CHILD,"parent_thread_id":"other-root"}})]),
+            "different-id" => write_jsonl(
+                &rollout,
+                &[
+                    json!({"type":"session_meta","payload":{"id":"replacement-thread","parent_thread_id":ROOT}}),
+                ],
+            ),
+            "different-parent" => write_jsonl(
+                &rollout,
+                &[
+                    json!({"type":"session_meta","payload":{"id":CHILD,"parent_thread_id":"other-root"}}),
+                ],
+            ),
             _ => unreachable!(),
         }
         let before = fixture.snapshot();
@@ -553,12 +736,28 @@ fn missing_child_index_or_rollout_and_unverifiable_file_identity_are_unavailable
 #[test]
 fn contradictory_native_parent_columns_and_edges_are_rejected() {
     for via_edge in [false, true] {
-        let fixture = NativeFixture::new(&spawn("spawn-conflict", "review", json!({"agent_id":CHILD})));
+        let fixture = NativeFixture::new(&spawn(
+            "spawn-conflict",
+            "review",
+            json!({"agent_id":CHILD}),
+        ));
         fixture.child(CHILD, ROOT, "/root/review", &[]);
         if via_edge {
-            fixture.connection().execute("INSERT INTO thread_spawn_edges VALUES ('other-root', ?1)", [CHILD]).unwrap();
+            fixture
+                .connection()
+                .execute(
+                    "INSERT INTO thread_spawn_edges VALUES ('other-root', ?1)",
+                    [CHILD],
+                )
+                .unwrap();
         } else {
-            fixture.connection().execute("UPDATE threads SET parent_thread_id = 'other-root' WHERE id = ?1", [CHILD]).unwrap();
+            fixture
+                .connection()
+                .execute(
+                    "UPDATE threads SET parent_thread_id = 'other-root' WHERE id = ?1",
+                    [CHILD],
+                )
+                .unwrap();
         }
         let before = fixture.snapshot();
         assert_unavailable(&fixture);
@@ -570,8 +769,20 @@ fn contradictory_native_parent_columns_and_edges_are_rejected() {
 fn native_spawn_edge_can_supply_the_only_parent_association() {
     let fixture = NativeFixture::new(&spawn("spawn-edge", "review", json!({"agent_id":CHILD})));
     fixture.child(CHILD, ROOT, "/root/review", &[]);
-    fixture.connection().execute("UPDATE threads SET parent_thread_id = NULL, source = 'cli' WHERE id = ?1", [CHILD]).unwrap();
-    fixture.connection().execute("INSERT INTO thread_spawn_edges VALUES (?1, ?2)", [ROOT, CHILD]).unwrap();
+    fixture
+        .connection()
+        .execute(
+            "UPDATE threads SET parent_thread_id = NULL, source = 'cli' WHERE id = ?1",
+            [CHILD],
+        )
+        .unwrap();
+    fixture
+        .connection()
+        .execute(
+            "INSERT INTO thread_spawn_edges VALUES (?1, ?2)",
+            [ROOT, CHILD],
+        )
+        .unwrap();
     let before = fixture.snapshot();
     let mut detail = fixture.root_detail();
 
@@ -630,7 +841,8 @@ fn symlinked_files_and_intermediate_directories_are_rejected() {
     use std::os::unix::fs::symlink;
 
     for directory_link in [false, true] {
-        let fixture = NativeFixture::new(&spawn("spawn-symlink", "review", json!({"agent_id":CHILD})));
+        let fixture =
+            NativeFixture::new(&spawn("spawn-symlink", "review", json!({"agent_id":CHILD})));
         let original = fixture.child(CHILD, ROOT, "/root/review", &[]);
         let indexed = if directory_link {
             let actual = fixture.paths.sessions_dir().join("actual");
@@ -654,17 +866,32 @@ fn symlinked_files_and_intermediate_directories_are_rejected() {
 
 #[test]
 fn archived_child_rollouts_remain_readable_through_their_verified_parent() {
-    let fixture = NativeFixture::new(&spawn("spawn-archived", "review", json!({"agent_id":CHILD})));
-    let original = fixture.child(CHILD, ROOT, "/root/review", &[message("assistant", "Archived result.")]);
+    let fixture = NativeFixture::new(&spawn(
+        "spawn-archived",
+        "review",
+        json!({"agent_id":CHILD}),
+    ));
+    let original = fixture.child(
+        CHILD,
+        ROOT,
+        "/root/review",
+        &[message("assistant", "Archived result.")],
+    );
     let archived = fixture.paths.home.join("archived_sessions/child.jsonl");
     fs::rename(original, &archived).unwrap();
     fixture.set_rollout(CHILD, &archived);
-    fixture.connection().execute("UPDATE threads SET archived = 1 WHERE id = ?1", [CHILD]).unwrap();
+    fixture
+        .connection()
+        .execute("UPDATE threads SET archived = 1 WHERE id = ?1", [CHILD])
+        .unwrap();
     let before = fixture.snapshot();
 
     let child = fixture.read(CHILD).unwrap();
 
-    assert_eq!(child.detail.blocks[0].text.as_deref(), Some("Archived result."));
+    assert_eq!(
+        child.detail.blocks[0].text.as_deref(),
+        Some("Archived result.")
+    );
     assert!(child.agent.available);
     assert_eq!(fixture.snapshot(), before);
 }
@@ -678,7 +905,10 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
 
     for status in [None, Some("all")] {
         let rows = list_threads(&fixture.paths, status, None, 100).unwrap();
-        assert_eq!(rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec![ROOT]);
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec![ROOT]
+        );
     }
     let hidden = hidden_thread_ids(&fixture.paths).unwrap();
     assert!(hidden.contains(CHILD));
@@ -704,7 +934,11 @@ fn detail_pagination_preserves_order_cursors_and_bounded_limits() {
     events.push(event("task_complete", "paged-turn"));
     fixture.child(CHILD, ROOT, "/root/review", &events);
     let before = fixture.snapshot();
-    let read_page = |limit, before| read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, limit, before)).unwrap().detail;
+    let read_page = |limit, before| {
+        read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, limit, before))
+            .unwrap()
+            .detail
+    };
 
     let latest = read_page(Some(5), None);
     assert_eq!(latest.total_blocks, 505);
@@ -735,14 +969,25 @@ fn invalid_thread_keys_and_history_cursors_are_rejected() {
     let fixture = NativeFixture::new(&[]);
     fixture.child(CHILD, ROOT, "/root/review", &[]);
     let before = fixture.snapshot();
-    for invalid in ["", "../child", "child/other", "child\\other", "child\nother"] {
+    for invalid in [
+        "",
+        "../child",
+        "child/other",
+        "child\\other",
+        "child\nother",
+    ] {
         assert!(read_subagent_detail(&fixture.paths, &request(ROOT, invalid, None, None)).is_err());
-        assert!(read_subagent_detail(&fixture.paths, &request(invalid, CHILD, None, None)).is_err());
+        assert!(
+            read_subagent_detail(&fixture.paths, &request(invalid, CHILD, None, None)).is_err()
+        );
     }
     assert!(fixture.read(&"a".repeat(257)).is_err());
     assert!(fixture.read(ROOT).is_err());
     for cursor in ["", "500", "b:-1", "b:invalid", "b:1suffix"] {
-        assert!(read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, Some(5), Some(cursor))).is_err());
+        assert!(
+            read_subagent_detail(&fixture.paths, &request(ROOT, CHILD, Some(5), Some(cursor)))
+                .is_err()
+        );
     }
     assert_eq!(fixture.snapshot(), before);
 }
@@ -764,7 +1009,9 @@ fn parent_context_reads_direct_and_nested_child_attachments_without_polling_byte
         let wire = serde_json::to_string(&detail).unwrap();
         assert!(!wire.contains(PNG));
         assert!(!wire.contains("data:image/"));
-        let response = fixture.read_attachment(attachment_request(&detail)).unwrap();
+        let response = fixture
+            .read_attachment(attachment_request(&detail))
+            .unwrap();
         assert_eq!(response.mime_type, "image/png");
         assert_eq!(response.base64, PNG);
     }
@@ -811,12 +1058,7 @@ fn parent_context_is_rejected_for_non_codex_attachment_providers() {
 #[test]
 fn child_attachment_identity_rejects_paths_unknown_ids_and_malformed_keys() {
     let fixture = NativeFixture::new(&[]);
-    let rollout = fixture.child(
-        CHILD,
-        ROOT,
-        "/root/review",
-        &[image_message("child-image")],
-    );
+    let rollout = fixture.child(CHILD, ROOT, "/root/review", &[image_message("child-image")]);
     let valid = attachment_request(&fixture.read(CHILD).unwrap().detail);
     assert!(fixture.read_attachment(valid.clone()).is_ok());
     let before = fixture.snapshot();
@@ -879,7 +1121,10 @@ fn child_attachments_from_older_detail_pages_remain_readable() {
     let latest = fixture.read(CHILD).unwrap().detail;
     assert_eq!(latest.blocks.len(), 120);
     assert!(latest.has_more_blocks);
-    assert!(latest.blocks.iter().all(|block| block.user_message.is_none()));
+    assert!(latest
+        .blocks
+        .iter()
+        .all(|block| block.user_message.is_none()));
     let older = read_subagent_detail(
         &fixture.paths,
         &request(ROOT, CHILD, None, latest.before_cursor.as_deref()),
@@ -949,8 +1194,16 @@ fn older_spawn_status_updates_survive_latest_page_without_reintroducing_blocks()
     let completed = window_thread_detail(detail, Some(2), None);
 
     assert_eq!(
-        completed.blocks.iter().map(|block| &block.id).collect::<Vec<_>>(),
-        running.blocks.iter().map(|block| &block.id).collect::<Vec<_>>()
+        completed
+            .blocks
+            .iter()
+            .map(|block| &block.id)
+            .collect::<Vec<_>>(),
+        running
+            .blocks
+            .iter()
+            .map(|block| &block.id)
+            .collect::<Vec<_>>()
     );
     assert_eq!(completed.total_blocks, running.total_blocks);
     assert_eq!(completed.before_cursor, running.before_cursor);

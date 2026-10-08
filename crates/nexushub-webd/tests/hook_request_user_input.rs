@@ -542,7 +542,8 @@ fn cargo_webd_binary() -> PathBuf {
         .filter(|dir| dir.file_name().is_some_and(|name| name == "deps"))
         .and_then(Path::parent)
         .expect("integration test executable must be in a Cargo profile's deps directory");
-    let expected_binary = profile_dir.join(format!("nexushub-webd{}", std::env::consts::EXE_SUFFIX));
+    let expected_binary =
+        profile_dir.join(format!("nexushub-webd{}", std::env::consts::EXE_SUFFIX));
     assert!(
         binary == expected_binary,
         "Cargo binary must belong to the same build directory and profile as this integration test"

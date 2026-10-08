@@ -64,7 +64,7 @@ test("long mixed Grok tool runs fold together without creating an outer page scr
   await page.locator(".side-nav").getByRole("button", { name: "Grok Build", exact: true }).click();
   const group = page.locator(".provider-events details.execution-group");
   await expect(group).toHaveCount(1);
-  await expect(group).toContainText("已使用 Grok 运行工具");
+  await expect(group).toContainText("已读取文件、搜索内容、运行命令");
   await expect(group).toContainText("24 项工具");
   await expect(group).not.toHaveAttribute("open", "");
   await group.locator("summary").first().click();

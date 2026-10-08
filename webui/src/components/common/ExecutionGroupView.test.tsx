@@ -29,6 +29,17 @@ test("mixed activities list each operation once in a stable order", () => {
   expect(executionSummary({ ...group, running: true }).label).toBe("正在读取文件、搜索内容、运行命令");
 });
 
+test("Grok tool titles with arguments retain their operation summaries", () => {
+  const [entry] = groupGrokCommandEvents([
+    { kind: "tool_call", callId: "read", text: "Read fixture.txt", status: "completed" },
+    { kind: "tool_call", callId: "list", text: "List fixture-directory", status: "completed" },
+    { kind: "tool_call", callId: "search", text: "Search fixture-query", status: "completed" },
+    { kind: "tool_call", callId: "execute", text: "Execute fixture-command", status: "completed" }
+  ]);
+  if (entry.kind !== "group") throw new Error("expected group");
+  expect(executionSummary(entry.group).label).toBe("已读取文件、搜索内容、运行命令");
+});
+
 test.each(["Codex", "Claude Code", "Grok"] as const)("unknown %s tools retain their integration identity", provider => {
   const group = summaryGroup(["mcp__fixture__inspect"], { provider, running: true });
   expect(executionSummary(group).label).toContain(`正在使用 ${provider} 集成`);
