@@ -86,7 +86,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
       return buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey);
     },
     onJobSuccess: (action) => {
-      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
+      setActionStatus(action === "bark-test" ? null : { tone: "success", message: `${probeJobActionLabel(action)} 已开始` });
     },
     onJobError: (err, action) => {
       setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
@@ -161,7 +161,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
               <ProbeHookCard status={data} draft={draft} busy={jobBusy} onInstall={() => probeJobMutation.mutate("hooks-install")} />
             </Panel>
             <Panel title="Bark" icon={<Cloud size={18} />}>
-              {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={saveSettings} onTest={() => probeJobMutation.mutate("bark-test")} />}
+              {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} testStatus={probeJobMutation.variables === "bark-test" ? (jobBusy ? "正在发送，遇到临时故障将自动重试…" : startedJob.data?.status === "succeeded" ? "Bark 已受理" : startedJob.data?.status === "failed" ? "发送失败，请查看执行记录" : probeJobMutation.error?.message ?? null) : null} onSave={saveSettings} onTest={() => probeJobMutation.mutate("bark-test")} />}
             </Panel>
             <details className="execution-history" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
           </>
@@ -221,6 +221,7 @@ function ProbeBarkCard({
   saveStatus,
   saving,
   testing,
+  testStatus,
   onSave,
   onTest
 }: {
@@ -230,6 +231,7 @@ function ProbeBarkCard({
   saveStatus: ProbeSaveStatus;
   saving: boolean;
   testing: boolean;
+  testStatus: string | null;
   onSave: (deviceKey?: string) => void;
   onTest: () => void;
 }) {
@@ -253,6 +255,7 @@ function ProbeBarkCard({
         <button className="primary-button" disabled={saving} onClick={handleSave}><CheckCircle2 size={17} />保存</button>
         <button className="secondary-button" disabled={!configuredDeviceKey || testing} onClick={onTest}><Cloud size={17} />测试推送</button>
       </div>
+      {testStatus && <div role="status" className="muted-row">{testStatus}</div>}
       {saveStatus && <div className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
     </fieldset>
   );

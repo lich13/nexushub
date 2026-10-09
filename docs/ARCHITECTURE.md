@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.14
+# NexusHub 架构说明（维护者文档）— 1.2.15
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -86,7 +86,7 @@ Opening only the NexusHub database drops administrators, web sessions and Turnst
 
 Known 2.x records include user/assistant blocks, title records, tools, queue/history/usage metadata and compaction. Unknown records remain readable; malformed records, incomplete tails or unverified formats disable mutation. Claude running state needs a live identified process, matching start time/session/project and an unfinished turn. Management separately refuses any potentially owning process. Rename appends `custom-title` and verifies persistence; deletion isolates and rechecks one JSONL without changing native indexes, configuration or the workspace.
 
-Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable and the compatible-reader upgrade establish a baseline without replaying history. New user requests supersede undelivered prior events. Explicit transient Bark HTTP rejections retry after 60 seconds, up to three total attempts; uncertain transport outcomes remain failed without automatic replay. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.
+Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable and the compatible-reader upgrade establish a baseline without replaying history. New user requests supersede undelivered prior events. Bark transport follows the shared bounded retry policy below, including uncertain network outcomes; previously terminal delivery records are never replayed. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.
 
 ## 1.2.8：定向删除与退役迁移
 
@@ -132,6 +132,16 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 共享 `instructionSegments` 在代码和引用保护范围外识别完整原生 INSTRUCTIONS 标签，结束标签无需独占一行；整个包装成为单一片段，内部标题不改变边界。三个 Provider 的 UserMessage 共用解析和稳定 disclosure 身份。
 
-事件识别继续由现有 Hook、monitor 和原生读取器负责。`notification_delivery` 只投递 Bark，保留已有持久化认领、加密待投递记录、启用基线和结果。只有明确临时 HTTP 拒绝进入 60 秒间隔、最多三次的重试；每次复核来源与开关，未知结果不自动重发。
+事件识别继续由现有 Hook、monitor 和原生读取器负责。`notification_delivery` 只投递 Bark，保留已有持久化认领、加密待投递记录、启用基线和结果。投递采用下述有限重试策略，事件识别与 HTTP 投递分离；旧的终态未知或失败记录不回放。
 
 迁移精确删除 Gotify 配置、加密 Token、通道行、队列行、Probe 结果字段与专属测试任务，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；中断标记保证清理可接续。Bark、API Key、其他设置、任务和原生会话不受影响。`probe.gotifyTest` 仅为不可执行 tombstone；能力、DTO、Tauri、Linux RPC、CLI 与 WebUI 均无执行入口。API 协议仍为 2。
+
+## 1.2.15：安全诊断与持久化重试
+
+`bark` 复用支持 HTTP/2 的连接池并禁止重定向，区分 DNS、连接、TLS、超时、响应读取、HTTP 拒绝和 Bark 业务拒绝。已知永久 APNs 错误优先于外层 HTTP 状态。原始异常只用于进程内分类，输出仅保留安全分类、状态码、耗时、次数与匿名关联标识。
+
+`notification_delivery` 将不可变请求与分段加密入队。现有投递表扩展分段进度、尝试次数、首次时间、下次时间及租约归属，不新增表或公共命令。每分段最多 3 次，等待 15/60 秒（±20%），整体期限 10 分钟；Retry-After 超出剩余期限时终止。认领、确认与事件状态回写使用事务；只有有效租约持有者可确认，过期租约仅恢复未确认分段。
+
+稳定通知 ID 由机器实例、事件与分段生成。Hook 保持短等待，后台每轮最多领取 10 项；重试在来源核验前后读取当前配置，检查事件仍有效、身份未变、开关与目标未变。会话正常追加使用原始前缀与文件身份复核，不因长度变化取消有效事件。成功分段不再投递，结束清除队列正文，界面同步更新同一事件。
+
+迁移保留成功、去重和首次基线，旧失败与终态未知不入新队列。新未知结果允许有限重试，仍可能重复提醒。主动测试使用独立身份和同一队列，最终未受理以失败退出；旧配置导入实现已删除，退休入口明确拒绝。API 协议保持 2。

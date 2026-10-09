@@ -440,7 +440,7 @@ export function isProbeJob(job: JobRecord): boolean {
 export function probeJobActionLabel(action: ProbeJobAction | undefined): string {
   switch (action) {
     case "bark-test":
-      return "Bark 测试";
+      return "NexusHub 推送测试";
     case "hooks-install":
       return "Hook 安装";
     default:

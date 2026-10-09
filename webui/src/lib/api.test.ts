@@ -252,7 +252,7 @@ describe("archive delete API compatibility", () => {
     const result = await getProbeEvents(10);
 
     expect(result.available).toBe(true);
-    expect(result.data?.events).toHaveLength(3);
+    expect(result.data?.events).toHaveLength(7);
     expect(result.data?.events[0]).toMatchObject({
       payload: expect.objectContaining({
         event_type: "reply-needed",
@@ -289,7 +289,7 @@ describe("archive delete API compatibility", () => {
     const retiredClaudeJobTitle = ["Claude Code", "update"].join(" ");
 
     expect(jobs.some((job) => job.kind.startsWith("probe_"))).toBe(true);
-    expect(jobs.some((job) => job.title.includes("Bark"))).toBe(true);
+    expect(jobs.some((job) => job.title.includes("NexusHub 推送测试"))).toBe(true);
     expect(serialized).not.toContain(retiredCodexJobTitle);
     expect(serialized).not.toContain(retiredClaudeJobTitle);
   });

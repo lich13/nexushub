@@ -314,9 +314,14 @@ function probeEventBarkDetail(bark: Record<string, unknown> | null): string {
   const title = cleanProbeEventText(stringFromRecord(bark, "title"));
   const chunkCount = numberFromRecord(bark, "chunk_count");
   const requestCount = numberFromRecord(bark, "request_count");
+  const confirmed = numberFromRecord(bark, "confirmed_chunks");
+  const attempt = numberFromRecord(bark, "attempts");
+  const next = numberFromRecord(bark, "next_retry_ms");
   return [
     title,
-    chunkCount !== null && chunkCount > 1 ? `${chunkCount} 段` : "",
+    chunkCount !== null && chunkCount > 1 ? (confirmed !== null ? `${confirmed}/${chunkCount} 段已受理` : `${chunkCount} 段`) : "",
+    attempt !== null && attempt > 1 ? `第 ${attempt} 次尝试` : "",
+    next !== null ? `下次重试 ${new Date(next).toLocaleTimeString()}` : "",
     requestCount !== null && requestCount > 1 ? `${requestCount} 请求` : ""
   ].filter(Boolean).join(" · ");
 }
@@ -355,14 +360,22 @@ export function probeEventBarkStatus(event: ProbeEvent): string {
 export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {
   const bark = recordFromRecord(probeEventPayload(event), "bark");
   if (!bark) return { label: "Bark 未记录", tone: "muted" };
-  if (bark.sent === true) {
-    const status = typeof bark.http_status === "number" ? ` HTTP ${bark.http_status}` : "";
-    return { label: `Bark 已发送${status}`, tone: "success" };
-  }
-  const reason = cleanProbeEventText(stringFromRecord(bark, "reason"));
-  const dedupeHit = bark.dedupe_hit === true ? " · 去重命中" : "";
-  if (bark.skipped === true) return { label: `Bark 跳过${reason ? `: ${reason}` : ""}${dedupeHit}`, tone: "warning" };
-  return { label: `Bark 未发送${reason ? `: ${reason}` : ""}${dedupeHit}`, tone: reason ? "warning" : "muted" };
+  const status = stringFromRecord(bark, "status");
+  if (status === "waiting_retry") return { label: "Bark 等待重试", tone: "warning" };
+  if (status === "retrying") return { label: "Bark 重试中", tone: "warning" };
+  if (bark.sent === true || status === "sent") return { label: "Bark 已受理", tone: "success" };
+  if (bark.skipped === true || status === "skipped") return { label: "Bark 已跳过", tone: "muted" };
+  const reason = stringFromRecord(bark, "reason") ?? "";
+  const unknown = status === "unknown" || (!status && ["request_error", "network_unknown", "timeout", "response_decode", "response_read", "delivery_interrupted_outcome_unknown"].includes(reason));
+  const categories: Record<string, string> = {
+    dns: "域名解析失败", connection: "连接失败", tls: "TLS 连接失败", certificate_validation: "证书验证失败",
+    timeout: "请求超时", response_decode: "响应无法确认", response_read: "响应读取失败", redirect_rejected: "重定向已拒绝",
+    http_status: "HTTP 拒绝", bark_response_code: "服务拒绝", apns_permanent_rejection: "推送服务永久拒绝",
+    invalid_server_url: "地址无效", network_unknown: "网络错误", request_error: "网络错误"
+  };
+  const detail = categories[reason];
+  return { label: `Bark ${unknown ? "结果未确认" : "发送失败"}${detail ? ` · ${detail}` : ""}`, tone: "warning" };
+
 }
 
 export function probeEventDedupeStatus(event: ProbeEvent): string {

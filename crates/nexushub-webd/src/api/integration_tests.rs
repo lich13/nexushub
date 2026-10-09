@@ -1050,7 +1050,7 @@ async fn probe_alignment_routes_require_auth_and_expose_safe_probe_surfaces() {
         (
             "probe.barkTest",
             "probe_bark_test",
-            "探针 Bark 测试",
+            "NexusHub 推送测试",
             "device_key",
         ),
     ] as [(&str, &str, &str, &str); 2]

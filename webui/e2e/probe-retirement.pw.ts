@@ -46,7 +46,7 @@ async function openBarkSettings(page: Page, mobile: boolean) {
     ...demo.demoJob(args.id),
     id: args.id,
     kind: "probe_bark_test",
-    title: "Bark fixture test",
+    title: "NexusHub 推送测试",
     status: "succeeded",
     output: "HTTP 200",
     error: undefined
@@ -88,7 +88,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(saved[1].probe.notifications.enabled).toBe(true);
     await panel.getByRole("button", { name: "测试推送", exact: true }).click();
     await expect.poll(() => calls.filter(command => command === "probe.barkTest").length).toBe(1);
-    await expect(page.getByText("Bark fixture test", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("NexusHub 推送测试", { exact: true }).first()).toBeVisible();
     expect(calls.filter(command => /gotify/i.test(command))).toEqual([]);
     await assertContrast(page, ".probe-card-stack .field-label");
     await assertNoOverflow(page);
@@ -108,4 +108,69 @@ test("Bark save failure retains the draft without restoring retired settings", a
   expect(calls.filter(command => /gotify/i.test(command))).toEqual([]);
   await assertContrast(page, ".form-error");
   await assertNoOverflow(page);
+});
+
+test("Probe event cards expose the Bark retry lifecycle and safe delivery metadata", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await mockApi(page);
+  await page.goto("/");
+  await page.locator(".side-nav").getByRole("button", { name: "Probe", exact: true }).click();
+
+  const cards = page.locator(".probe-event-card");
+  const waiting = cards.filter({ hasText: "等待网络恢复" });
+  const retrying = cards.filter({ hasText: "继续投递通知" });
+  const failed = cards.filter({ hasText: "服务拒绝通知" });
+  const unknown = cards.filter({ hasText: "投递结果待确认" });
+
+  await expect(waiting).toContainText("Bark 等待重试");
+  await expect(waiting).toContainText("1/3 段已受理");
+  await expect(waiting).toContainText("下次重试");
+  await expect(waiting).toContainText("4 请求");
+  await expect(retrying).toContainText("Bark 重试中");
+  await expect(retrying).toContainText("第 2 次尝试");
+  await expect(failed).toContainText("Bark 发送失败");
+  await expect(failed).toContainText("推送服务永久拒绝");
+  await expect(failed).toContainText("第 3 次尝试");
+  await expect(unknown).toContainText("Bark 结果未确认");
+  await expect(unknown).toContainText("响应读取失败");
+  await expect(unknown).toContainText("第 3 次尝试");
+  await assertContrast(page, ".probe-event-card .status-chip");
+  await assertNoOverflow(page);
+});
+
+test("Bark test status separates retrying, failed, and accepted job states", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  const { panel } = await openBarkSettings(page, false);
+  let currentJob = "fixture-bark-failed";
+  const reads = new Map<string, number>();
+  await mockCommand(page, "probe.barkTest", () => ({ job_id: currentJob }));
+  await mockCommand(page, "jobs.detail", args => {
+    const id = String(args.id);
+    const read = reads.get(id) ?? 0;
+    reads.set(id, read + 1);
+    const failed = id === "fixture-bark-failed";
+    const status = failed ? (read === 0 ? "running" : "failed") : "succeeded";
+    return {
+      ...demo.demoJob(id),
+      id,
+      kind: "probe_bark_test",
+      title: "NexusHub 推送测试",
+      status,
+      output: status === "failed" ? "NexusHub 推送测试\n发送失败" : "",
+      error: status === "failed" ? "fixture delivery failed" : undefined
+    };
+  });
+
+  await panel.getByRole("button", { name: "测试推送", exact: true }).click();
+  await expect(panel.getByRole("status")).toHaveText("正在发送，遇到临时故障将自动重试…");
+  await expect.poll(() => reads.get("fixture-bark-failed") ?? 0).toBeGreaterThan(1);
+  await expect(panel.getByRole("status")).toHaveText("发送失败，请查看执行记录");
+  await expect(panel.getByRole("status")).not.toContainText("Bark 已受理");
+
+  currentJob = "fixture-bark-success";
+  await panel.getByRole("button", { name: "测试推送", exact: true }).click();
+  await expect.poll(() => reads.get("fixture-bark-success") ?? 0).toBeGreaterThan(0);
+  await expect(panel.getByRole("status")).toHaveText("Bark 已受理");
 });

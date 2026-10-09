@@ -915,7 +915,7 @@ fn probe_fixed_job_spec(
     let (kind, title, args, exclusive_group) = match action {
         ProbeAction::BarkTest => (
             "probe_bark_test",
-            "探针 Bark 测试",
+            "NexusHub 推送测试",
             vec!["probe", "bark-test"],
             "probe_bark",
         ),
