@@ -215,9 +215,6 @@ pub(super) async fn rpc_dispatch(
             )
             .await
         }
-        rpc_commands::PROBE_GOTIFY_TEST => {
-            start_probe_action(state, headers, probe_service::ProbeAction::GotifyTest).await
-        }
         rpc_commands::PROBE_BARK_TEST => {
             start_probe_action(state, headers, probe_service::ProbeAction::BarkTest).await
         }

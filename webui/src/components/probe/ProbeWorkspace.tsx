@@ -86,7 +86,7 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
       return buildProbeSettingsPayload(draft, currentSettings, submittedDeviceKey);
     },
     onJobSuccess: (action) => {
-      setActionStatus(action === "gotify-test" ? null : { tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
+      setActionStatus({ tone: "success", message: `${probeJobActionLabel(action)} 已加入 Job History` });
     },
     onJobError: (err, action) => {
       setActionStatus({ tone: "error", message: `${probeJobActionLabel(action)} 失败: ${err.message}` });
@@ -162,15 +162,6 @@ export function ProbeWorkspace({ capabilities }: { capabilities: RuntimeCapabili
             </Panel>
             <Panel title="Bark" icon={<Cloud size={18} />}>
               {draft && <ProbeBarkCard draft={draft} setDraft={setDraft} configuredDeviceKey={probeView.barkConfigured} saveStatus={saveStatus} saving={saveMutation.isPending} testing={pendingProbeAction === "bark-test"} onSave={saveSettings} onTest={() => probeJobMutation.mutate("bark-test")} />}
-            </Panel>
-            <Panel title="Gotify" icon={<Cloud size={18} />}>
-              {capabilities.gotify ? draft && <ProbeGotifyCard draft={draft} setDraft={setDraft} saving={saveMutation.isPending} busy={jobBusy}
-                configured={currentSettings?.gotify?.token_configured === true} enabled={currentSettings?.gotify?.enabled === true}
-                saveStatus={saveStatus} onSave={() => saveSettings()} onTest={() => probeJobMutation.mutate("gotify-test")} />
-                : <div className="muted-row">请升级当前机器后使用 Gotify</div>}
-              {probeJobMutation.variables === "gotify-test" && startedJob.data?.status === "succeeded" && <div role="status" className="form-success">服务器已接收测试通知，请确认安卓设备收到。</div>}
-              {pendingProbeAction === "gotify-test" && <div role="status">正在发送测试通知…</div>}
-              {probeJobMutation.variables === "gotify-test" && startedJob.data?.status === "failed" && <div role="alert" className="form-error">测试推送失败，请检查地址、Token 与执行记录。</div>}
             </Panel>
             <details className="execution-history" open={historyOpen} onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>执行记录</summary><JobList jobs={probeView.probeJobs} capabilities={capabilities} /></details>
           </>
@@ -267,27 +258,6 @@ function ProbeBarkCard({
   );
 }
 
-export function ProbeGotifyCard({ draft, setDraft, configured, enabled, saving, busy, saveStatus, onSave, onTest }: {
-  draft: ProbeSettingsDraft; setDraft: (draft: ProbeSettingsDraft) => void;
-  configured: boolean; enabled: boolean; saving: boolean; busy: boolean; saveStatus: ProbeSaveStatus;
-  onSave: () => void; onTest: () => void;
-}) {
-  const update = (patch: Partial<ProbeSettingsDraft["gotify"]>) => setDraft({ ...draft, gotify: { ...draft.gotify, ...patch } });
-  return <fieldset className="probe-card-stack" disabled={saving || busy}>
-    <label className="toggle-row"><span>启用 Gotify</span><input type="checkbox" checked={draft.gotify.enabled} onChange={event => update({ enabled: event.target.checked })} /></label>
-    <label className="field-label">HTTPS 地址<input type="url" value={draft.gotify.server_url} placeholder="https://example.invalid/gotify/" onChange={event => update({ server_url: event.target.value })} /></label>
-    <label className="field-label">Application Token<input type="password" autoComplete="new-password" value={draft.gotify.token} disabled={draft.gotify.clear_token}
-      placeholder={configured ? "已配置，留空保持不变" : "粘贴 Gotify Application Token"} onChange={event => update({ token: event.target.value })} /></label>
-    <label className="field-label">优先级<input type="number" min={0} max={10} value={draft.gotify.priority} onChange={event => update({ priority: probeNumberInputDraftValue(event.target.value) })} /></label>
-    {configured && <label className="toggle-row"><span>保存时移除 Token</span><input type="checkbox" checked={draft.gotify.clear_token} onChange={event => update({ clear_token: event.target.checked, token: "", enabled: event.target.checked ? false : draft.gotify.enabled })} /></label>}
-    <div className="button-row">
-      <button className="primary-button" onClick={onSave}><CheckCircle2 size={17} />保存</button>
-      <button className="secondary-button" disabled={!configured || !enabled || draft.gotify.clear_token} onClick={onTest}><Cloud size={17} />测试推送</button>
-    </div>
-    {saveStatus && <div role={saveStatus.tone === "error" ? "alert" : "status"} className={saveStatus.tone === "success" ? "form-success" : "form-error"}>{saveStatus.message}</div>}
-  </fieldset>;
-}
-
 function ProbeRuntimeSettingsCard({
   draft,
   setDraft,
@@ -317,7 +287,7 @@ function ProbeRuntimeSettingsCard({
   return (
     <fieldset className="probe-card-stack" disabled={saving}>
       <div className="settings-meta-grid">
-        <Metric label="通知" value={draft.notifications.enabled || draft.gotify.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled || draft.gotify.enabled ? "success" : "warning"} />
+        <Metric label="通知" value={draft.notifications.enabled ? "已启用" : "已停用"} tone={draft.notifications.enabled ? "success" : "warning"} />
         <Metric label="Hook" value={probeStateLabel(status?.hook_status)} tone={status?.hook_status === "managed" ? "success" : "warning"} />
         <Metric label="错误监控" value={probeStateLabel(status?.error_monitor_status ?? (draft.probe.error_monitor.enabled ? "enabled" : "disabled"))} tone={draft.probe.error_monitor.enabled ? "success" : "warning"} />
         <Metric label="错误事件" value={String(status?.error_monitor_incident_count ?? 0)} />
@@ -426,7 +396,6 @@ function ProbeEventRow({ event }: { event: ProbeEvent }) {
       {card.reason && <small>{card.reason}</small>}
       <div className="probe-event-detail-row">
         <span className={`status-chip tone-${card.bark.tone}`}>{card.bark.label}</span>
-        {card.gotify && <span className={`status-chip tone-${card.gotify.tone}`}>{card.gotify.label}</span>}
         <span className={`status-chip tone-${card.dedupe.tone}`}>{card.dedupe.label}</span>
         {card.details.map((detail) => (
           <span key={`${detail.label}:${detail.value}`}>{detail.label}: {detail.value}</span>

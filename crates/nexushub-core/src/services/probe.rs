@@ -78,8 +78,6 @@ impl<'a> ProbeUseCases<'a> {
 pub enum ProbeAction {
     #[serde(rename = "barkTest", alias = "bark-test")]
     BarkTest,
-    #[serde(rename = "gotifyTest", alias = "gotify-test")]
-    GotifyTest,
     #[serde(rename = "installHooks", alias = "hooks-install")]
     InstallHooks,
 }
@@ -266,7 +264,6 @@ pub fn plan_probe_action_with_device_key_and_config_path(
     let runtime = probe_core::ProbeRuntime::new(config.clone(), platform.clone());
     let diagnostic_plan = match action {
         ProbeAction::BarkTest => Some(runtime.bark_test_plan(device_key_configured)),
-        ProbeAction::GotifyTest => Some(runtime.gotify_test_plan(device_key_configured)),
         ProbeAction::InstallHooks => {
             Some(runtime.plan_action(probe_core::ProbeActionPlanKind::InstallHooks)?)
         }
@@ -561,7 +558,6 @@ impl ProbeAction {
     pub fn as_rpc_action(self) -> &'static str {
         match self {
             Self::BarkTest => commands::PROBE_BARK_TEST,
-            Self::GotifyTest => commands::PROBE_GOTIFY_TEST,
             Self::InstallHooks => commands::PROBE_INSTALL_HOOKS,
         }
     }
@@ -577,7 +573,6 @@ impl FromStr for ProbeAction {
     fn from_str(value: &str) -> Result<Self> {
         match value.trim() {
             "barkTest" | "bark-test" => Ok(Self::BarkTest),
-            "gotifyTest" | "gotify-test" => Ok(Self::GotifyTest),
             "installHooks" | "hooks-install" => Ok(Self::InstallHooks),
             action => Err(anyhow!("unknown probe action: {action}")),
         }
@@ -587,7 +582,6 @@ impl FromStr for ProbeAction {
 fn probe_action_capability(action: ProbeAction) -> Capability {
     match action {
         ProbeAction::BarkTest | ProbeAction::InstallHooks => Capability::Probe,
-        ProbeAction::GotifyTest => Capability::Gotify,
     }
 }
 
@@ -919,12 +913,6 @@ fn probe_fixed_job_spec(
     config_path: &Path,
 ) -> Result<ProbeFixedJobSpec> {
     let (kind, title, args, exclusive_group) = match action {
-        ProbeAction::GotifyTest => (
-            "probe_gotify_test",
-            "Gotify 测试",
-            vec!["probe", "gotify-test"],
-            "probe_gotify",
-        ),
         ProbeAction::BarkTest => (
             "probe_bark_test",
             "探针 Bark 测试",

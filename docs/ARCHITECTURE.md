@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.13
+# NexusHub 架构说明（维护者文档）— 1.2.14
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | Codex | Official state/index/rollout/log reads, identity, native rename, archive/restore and preview-bound normal/archived deletion |
 | Grok | Native session discovery, branch-aware history, identity, activity checks, rename and scoped deletion |
-| Probe | Error detection, provider terminal evidence, cursors, dedupe, redaction, retention and independent Bark/Gotify delivery |
+| Probe | Error detection, provider terminal evidence, cursors, dedupe, redaction, retention and durable Bark delivery |
 | Database/config | NexusHub settings, events, deliveries and migration; Codex native data stays outside this schema |
 | WebUI | Shared visual contract, provider queries, pure execution-group view models and Plan filename/content preparation |
 | Packaging | macOS ARM64 Tauri app/updater and Linux x86_64 headless webd |
@@ -128,12 +128,10 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 只移除共享子智能体组件的通用完整性说明，以及清理工作区的两段重复描述。DTO 的 complete/warning、关联校验、未知状态、逐项跳过及错误结果均保持原有语义；不新增接口或存储变化。
 
-## 1.2.13：完整指令与独立通知通道
+## 1.2.14：完整指令与通知退役迁移
 
-共享 `instructionSegments` 在代码和引用保护范围外识别完整原生 INSTRUCTIONS 标签，结束标签无需独占一行；整个包装成为单一片段，内部标题不改变边界。Codex、Claude Code、Grok 的 UserMessage 共用解析和稳定 disclosure 身份。
+共享 `instructionSegments` 在代码和引用保护范围外识别完整原生 INSTRUCTIONS 标签，结束标签无需独占一行；整个包装成为单一片段，内部标题不改变边界。三个 Provider 的 UserMessage 共用解析和稳定 disclosure 身份。
 
-事件识别规则继续由现有 Hook、monitor 和原生读取器负责。`notification_delivery` 将同一事件分别交给 Bark、Gotify；NexusHub 自有数据库增加通道基线与加密待投递表，使用事件身份加通道的唯一键原子认领。迁移保留已有 Bark 成功/占用记录；新通道只处理启用后的事件。完成通道不受另一通道失败或重启影响。
+事件识别继续由现有 Hook、monitor 和原生读取器负责。`notification_delivery` 只投递 Bark，保留已有持久化认领、加密待投递记录、启用基线和结果。只有明确临时 HTTP 拒绝进入 60 秒间隔、最多三次的重试；每次复核来源与开关，未知结果不自动重发。
 
-只有明确的临时 HTTP 拒绝进入 60 秒间隔、最多三次的重试，每次复核来源与开关；超时、异常回包和进程中断等未知结果不自动重发。待投递正文加密，终态清除正文，保留结果和去重身份。Token 单独加密存储，不进入队列、配置或日志。
-
-`probe.gotifyTest` 通过契约、core use case、Linux RPC、Tauri 和 WebUI query 接入。能力矩阵增加 Gotify，协议保持 2；旧服务未提供能力时禁用入口并提示升级。两台机器分别保存设置、基线和投递结果。Gotify 服务由运维仓库部署，NexusHub 仍只提供 macOS UI 和 Linux 管理 API。
+迁移精确删除 Gotify 配置、加密 Token、通道行、队列行、Probe 结果字段与专属测试任务，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；中断标记保证清理可接续。Bark、API Key、其他设置、任务和原生会话不受影响。`probe.gotifyTest` 仅为不可执行 tombstone；能力、DTO、Tauri、Linux RPC、CLI 与 WebUI 均无执行入口。API 协议仍为 2。

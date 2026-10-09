@@ -15,7 +15,7 @@
 - Settings use one `更新与维护` surface and the retired `system.status` action cannot execute; capability bootstrap uses `system.capabilities`. File-path Markdown actions must preserve the source path and never invent a web origin.
 
 - The macOS App is the sole UI. Remote management uses an independent `x-api-key` stored in Keychain and a fixed allowlisted Rust HTTP bridge; never send keys from browser fetch, log them or permit redirects. API protocol and connection revisions gate requests. Switching machines cannot reuse previews, selection or cached responses; mutations are never replayed automatically.
-- Old web authentication, static assets and EventSource are retired. Preserve API authentication throttling, business audit, Bark encryption and notification state. Database erasure is limited to NexusHub's own retired web credentials and Pi integration records; never migrate native provider databases.
+- Old web authentication, static assets and EventSource are retired. Preserve API authentication throttling, business audit, Bark encryption and notification state. Database erasure is limited to NexusHub's own retired web credentials, Pi integration and Gotify records; never migrate native provider databases.
 
 Grok display activity and deletion protection are separate: use one native-process snapshot per list, validate PID identity/start time and read primary-turn events through the bounded incremental cache. Ended turns do not spin, but native ownership still blocks deletion. Never fix stale registration by editing native files or terminating user processes.
 
@@ -39,7 +39,7 @@ Grok display activity and deletion protection are separate: use one native-proce
 
 ## Required gates
 
-Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits after this 1.2.13 change.
+Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits after this 1.2.14 change.
 
 ## 1.2.8 管理边界
 
@@ -76,10 +76,9 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；文案精简不能改变底层完整性判断或管理保护。
 
-## 1.2.13 指令与推送边界
+## 1.2.14 指令与通知边界
 
 - 完整原生 INSTRUCTIONS 包装允许结束标签与后续环境标签同行；内部标题不能截断折叠。代码、引用示例与不完整结构保持保守处理，原生会话不写回。
-- Bark 和 Gotify 独立启用，共用 Provider/事件筛选，以稳定事件身份和通道分别持久化认领与结果。旧记录按 Bark 迁移；新通道建立基线，不补发历史。
-- Gotify Application Token 使用现有加密存储，读取只返回配置状态；使用 X-Gotify-Key 请求头、保留 HTTPS 子路径且禁止重定向。明确临时 HTTP 拒绝最多三次，未知结果不自动重发。
-- probe.gotifyTest 走共享契约与两端适配器，能力缺失提示升级，API 协议仍为 2。HTTP 接收与安卓设备实收必须分别验收。
-- Gotify 反代和部署脚本归运维仓库；只新增指定路由与独立数据、账户和容器，不替换共用 Nginx/TLS 或现有服务。
+- Gotify 已退役；只允许迁移代码和不可执行契约 tombstone 引用旧标识。移除其配置、Token、队列、测试任务和投递字段时，必须保留 Bark 凭据、基线、成功/未知记录及待投递状态。
+- Bark 明确临时 HTTP 拒绝最多尝试三次，未知结果不自动重发。接口协议保持 2，不改变 Provider 或事件识别规则。
+- 外部通知服务卸载归运维仓库，须明确配置与数据归属；不改共用 Nginx/TLS、其他服务或用户原生会话。

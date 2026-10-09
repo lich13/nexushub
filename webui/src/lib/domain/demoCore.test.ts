@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildDemoFixture, buildDemoPlatformOverview, buildDemoSystemCapabilities, type DemoFixtureKey } from "./demoCore";
 
 const fixtureKeys: DemoFixtureKey[] = ["linux-api", "macos-tauri"];
-const sharedKeys = ["app_updater", "gotify", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
+const sharedKeys = ["app_updater", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
 const retiredKeys = ["admin_password", "csrf", "nginx", "public_endpoint", "security_settings", "turnstile", "web_auth"];
 
 describe("machine demo fixtures", () => {

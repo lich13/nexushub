@@ -8,9 +8,12 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.14": [
+        "移除 Gotify 设置和推送能力，通知统一使用 Bark。",
+        "升级清理旧通道配置与投递数据，保留 Bark 去重状态和 AGENTS.md 完整折叠修复。",
+    ],
     "1.2.13": [
         "修复 AGENTS.md 原生指令只折叠开头的问题，完整正文默认收起，保留手动展开选择。",
-        "新增 Gotify 安卓推送，与 Bark 独立启用、投递和去重，共用现有通知事件筛选。",
     ],
     "1.2.12": [
         "精简子智能体汇总和清理面板，移除三处重复说明，保留状态数量与实际操作结果。",
@@ -125,32 +128,30 @@ def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
 
-    if version == "1.2.13":
+    if version == "1.2.14":
         sections = {
-            "版本概览": ["本版修复 AGENTS.md 指令正文漏出，并为安卓用户增加 Gotify 推送通道。"],
+            "版本概览": ["本版下线 Gotify 通道，通知继续使用 Bark，并保留完整 AGENTS.md 折叠修复。"],
             "功能调整": [
-                "Probe 新增 Gotify 开关、HTTPS 地址、Application Token、优先级和测试按钮；默认优先级为 5。安卓使用官方 Gotify 客户端接收。",
-                "Bark 与 Gotify 可单独开启或同时使用，共用 Provider、完成、失败及需要回复等事件筛选；两台机器各自保存配置和投递状态。",
-                "两种通道独立去重，一侧失败不会重复发送另一侧已成功的通知。明确临时拒绝最多尝试三次，超时或中断等未知结果不自动重发。",
+                "移除 Gotify 设置卡片、测试按钮、发送器和本机及远程执行入口。",
+                "保留 Codex、Claude Code、Grok 的完成、失败及需要回复通知，现有事件识别规则不变。",
             ],
             "问题修复": [
-                "原生指令结束标签与后续环境标签同行时，完整 AGENTS.md 内容仍归入一个折叠区，内部标题不再提前截断。",
-                "折叠摘要按完整内容计算行数和字节数，展开保留原文与内部滚动；普通请求、代码和引用示例保持原有顺序。",
+                "升级清理旧通道残留，避免已下线服务继续出现在设置和投递结果中。",
+                "保留 AGENTS.md 结束标签与环境标签同行时的完整折叠，内部标题不再把正文拆到用户气泡。",
             ],
             "兼容性与迁移": [
-                "API 协议保持 2，新增 probe.gotifyTest 和 Gotify 能力；旧远程服务缺少能力时提示升级。",
-                "NexusHub 数据库保留旧 Bark 投递记录，为 Gotify 建立独立基线；首次启用不补发历史。原生会话、API Key、Keychain 和现有 Bark 配置不改写。",
-                "Token 使用现有加密存储，读取仅返回是否已配置；请求使用 X-Gotify-Key，保留 HTTPS 子路径且不跟随重定向。",
+                "自动清理 NexusHub 自有的旧通道配置、加密 Token、待投递记录及专属测试任务，并清理 SQLite 遗留页。",
+                "保留 Bark 凭据、成功记录、去重状态和启用基线，不补发历史通知；未知投递结果不自动重发。",
+                "API 协议保持 2，原有会话、Keychain 连接、管理员 API Key 与后台 monitor 继续使用。旧测试 RPC 不再执行。",
             ],
             "支持平台与资产": [
                 "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
                 "Linux x86_64：API 服务包与 SHA-256 校验文件；latest.json 仅映射 darwin-aarch64，共七项资产。",
-                "Gotify 由用户自己的服务提供，安卓接收端为官方客户端；NexusHub 不提供安卓安装包，也不恢复网页版。",
+                "不提供 Linux 桌面包、网页版或安卓安装包。",
             ],
             "升级提示": [
-                "先升级远程 API，再安装本机 App。普通升级默认关闭 Gotify，在需要的机器上保存 HTTPS 地址和 Application Token 后开启；Bark 可继续使用。",
-                "测试成功仅表示 Gotify 服务器接收，请在安卓设备上确认通知，并检查后台、锁屏和断线重连。",
-                "安装前核对校验和与 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 验证更新归档来源，不能替代系统代码签名。",
+                "先升级远程 API，再安装本机 App。单独部署的 Gotify 服务需由管理员卸载；NexusHub 不自动删除外部服务数据。",
+                "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 不能替代系统代码签名。",
             ],
         }
         lines = [f"# NexusHub {version}", ""]

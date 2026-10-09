@@ -31,30 +31,17 @@ pub fn apply_probe_settings_save_plan(
     config_path: &Path,
     plan: settings_service::ProbeSettingsSavePlan,
 ) -> Result<Config> {
-    settings_service::validate_gotify_settings_save(
-        &state.config(),
-        &plan,
-        state
-            .db
-            .get_secret_setting_bytes(settings_service::PROBE_GOTIFY_TOKEN_SETTING)?
-            .is_some_and(|key| !key.is_empty()),
-    )?;
     let text = fs::read_to_string(config_path)?;
     let updated = patch_probe_config_toml(&text, &plan.config_patch)?;
     fs::write(config_path, updated)?;
     let response_config = Config::load(config_path)?;
 
     for write in &plan.secret_writes {
-        if write.secret_value.is_empty() {
-            state.db.remove_secret_setting(&write.setting_key)?;
-            continue;
-        }
         state
             .db
             .set_secret_setting_bytes(&write.setting_key, write.secret_value.as_bytes())?;
     }
 
-    state.db.sync_notification_channels(&response_config)?;
     state.replace_config(response_config.clone());
     state.db.record_audit(
         Some(&auth.admin_id),
@@ -447,11 +434,7 @@ pub fn linux_probe_action_plan(
 ) -> Result<probe_service::ProbeActionPlan> {
     let device_key_configured = state
         .db
-        .get_secret_setting_bytes(if action == probe_service::ProbeAction::GotifyTest {
-            settings_service::PROBE_GOTIFY_TOKEN_SETTING
-        } else {
-            settings_service::PROBE_BARK_DEVICE_KEY_SETTING
-        })?
+        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
         .is_some_and(|value| !value.is_empty());
     let config = state.config();
     probe_service::ProbeUseCases::new(&config, platform).action_with_device_key_and_config_path(

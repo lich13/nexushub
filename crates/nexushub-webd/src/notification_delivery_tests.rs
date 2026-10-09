@@ -2,7 +2,7 @@ use super::*;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
-    http::{HeaderMap, Method, Request, StatusCode},
+    http::{Method, Request, StatusCode},
     response::Response,
     Router,
 };
@@ -12,6 +12,7 @@ use nexushub_core::{
     platform::PlatformKind,
 };
 use rusqlite::{params, Connection};
+use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
@@ -19,7 +20,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const TOKEN: &str = "fixture-gotify-application-token";
+const TOKEN: &str = "fixture-bark-device-key";
 const BODY: &str = "这是虚构完成正文。\n中文、换行与标点应完整到达。";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -27,7 +28,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 struct Reply {
     status: StatusCode,
     body: Vec<u8>,
-    location: Option<String>,
     delay: Duration,
 }
 
@@ -36,7 +36,6 @@ impl Reply {
         Self {
             status,
             body: serde_json::to_vec(&value).unwrap(),
-            location: None,
             delay: Duration::ZERO,
         }
     }
@@ -44,17 +43,12 @@ impl Reply {
     fn bark() -> Self {
         Self::json(StatusCode::OK, json!({"code":200}))
     }
-
-    fn gotify() -> Self {
-        Self::json(StatusCode::OK, json!({"id":17}))
-    }
 }
 
 #[derive(Clone)]
 struct CapturedRequest {
     method: Method,
     uri: String,
-    headers: HeaderMap,
     body: Value,
 }
 
@@ -78,19 +72,15 @@ async fn capture_request(
     state.requests.lock().unwrap().push(CapturedRequest {
         method: parts.method,
         uri: parts.uri.to_string(),
-        headers: parts.headers,
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     });
     let reply = state.reply.lock().unwrap().clone();
     if !reply.delay.is_zero() {
         tokio::time::sleep(reply.delay).await;
     }
-    let mut response = Response::builder()
+    let response = Response::builder()
         .status(reply.status)
         .header("Content-Type", "application/json");
-    if let Some(location) = reply.location {
-        response = response.header("Location", location);
-    }
     response.body(Body::from(reply.body)).unwrap()
 }
 
@@ -136,13 +126,11 @@ struct Fixture {
     config: Config,
     db: PanelDb,
     bark: LoopbackServer,
-    gotify: LoopbackServer,
 }
 
 impl Fixture {
     async fn new() -> Self {
         let bark = LoopbackServer::new(Reply::bark()).await;
-        let gotify = LoopbackServer::new(Reply::gotify()).await;
         let root = std::env::temp_dir().join(format!(
             "nexushub-channel-delivery-{}",
             uuid::Uuid::new_v4()
@@ -190,13 +178,8 @@ impl Fixture {
         config.probe.notifications.notify_claude = true;
         config.probe.notifications.notify_claude_reply_needed = true;
         config.probe.notifications.server_url = bark.url.clone();
-        config.probe.notifications.gotify.enabled = true;
-        config.probe.notifications.gotify.server_url = format!("{}/gotify", gotify.url);
-        config.probe.notifications.gotify.priority = 7;
         let db = PanelDb::open(root.join("panel.sqlite")).unwrap();
-        db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, b"fixture-bark-key")
-            .unwrap();
-        db.set_secret_setting_bytes(PROBE_GOTIFY_TOKEN_SETTING, TOKEN.as_bytes())
+        db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, TOKEN.as_bytes())
             .unwrap();
         db.sync_notification_channels(&config).unwrap();
         Self {
@@ -205,7 +188,6 @@ impl Fixture {
             config,
             db,
             bark,
-            gotify,
         }
     }
 
@@ -216,7 +198,7 @@ impl Fixture {
     fn event_ms(&self) -> i64 {
         self.connection()
             .query_row(
-                "SELECT activated_ms + 1 FROM probe_notification_channels WHERE channel='gotify'",
+                "SELECT activated_ms + 1 FROM probe_notification_channels WHERE channel='bark'",
                 [],
                 |row| row.get(0),
             )
@@ -301,366 +283,208 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
-async fn gotify_posts_the_header_subpath_and_complete_chinese_body_with_priority() {
+async fn bark_posts_the_complete_chinese_body_without_exposing_the_key_in_outcomes() {
     let fixture = Fixture::new().await;
-    fixture.gotify.reply(Reply::json(
-        StatusCode::OK,
-        json!({"id":17,"message":BODY,"echoed_token":TOKEN}),
-    ));
     let request = fixture.request();
-    let outcome = send_gotify(&fixture.config, TOKEN.as_bytes(), &request, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
-    assert!(outcome.sent);
-    assert!(!outcome.skipped);
+    let outcome =
+        send_bark_notification(&fixture.config, TOKEN.as_bytes(), &request, REQUEST_TIMEOUT)
+            .await
+            .unwrap();
+    assert!(outcome.sent && !outcome.skipped);
     assert_eq!(outcome.http_status, Some(200));
     assert_eq!(outcome.request_count, 1);
-    assert_eq!(outcome.dedupe_key.as_deref(), Some("fixture-event"));
-    let requests = fixture.gotify.requests();
+    let requests = fixture.bark.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method, Method::POST);
-    assert_eq!(requests[0].uri, "/gotify/message");
-    assert_eq!(requests[0].headers["x-gotify-key"].to_str().unwrap(), TOKEN);
-    assert!(!requests[0].headers.contains_key("authorization"));
-    assert_eq!(requests[0].body["message"], BODY);
-    assert_eq!(requests[0].body["priority"], 7);
-    assert!(requests[0].body["title"]
-        .as_str()
-        .unwrap()
-        .ends_with(&request.title));
-    assert_eq!(requests[0].body.as_object().unwrap().len(), 3);
-    assert!(!requests[0].uri.contains(TOKEN));
-    assert!(!requests[0].body.to_string().contains(TOKEN));
+    assert_eq!(requests[0].uri, "/push");
+    assert_eq!(requests[0].body["device_key"], TOKEN);
+    assert_eq!(requests[0].body["body"], BODY);
+    assert_eq!(requests[0].body["title"], request.title);
     let serialized = serde_json::to_string(&outcome).unwrap();
     assert!(!serialized.contains(TOKEN));
     assert!(!serialized.contains(BODY));
 }
 
 #[tokio::test]
-async fn gotify_never_follows_redirects_or_sends_the_key_to_the_redirect_target() {
-    let fixture = Fixture::new().await;
-    let target = LoopbackServer::new(Reply::gotify()).await;
-    let mut redirect = Reply::json(StatusCode::TEMPORARY_REDIRECT, json!({"id":17}));
-    redirect.location = Some(format!("{}/redirected-message", target.url));
-    fixture.gotify.reply(redirect);
-    let outcome = send_gotify(
-        &fixture.config,
-        TOKEN.as_bytes(),
-        &fixture.request(),
-        REQUEST_TIMEOUT,
-    )
-    .await
-    .unwrap();
-    assert!(!outcome.sent && !outcome.skipped);
-    assert_eq!(outcome.http_status, Some(307));
-    assert_eq!(outcome.request_count, 1);
-    assert_eq!(fixture.gotify.count(), 1);
-    assert_eq!(target.count(), 0);
-    assert!(!serde_json::to_string(&outcome).unwrap().contains(TOKEN));
-}
-
-#[tokio::test]
-async fn gotify_rejects_invalid_or_oversized_acknowledgements_instead_of_claiming_success() {
-    let fixture = Fixture::new().await;
-    for body in [
-        b"not-json".to_vec(),
-        b"{}".to_vec(),
-        br#"{"id":"17"}"#.to_vec(),
-        br#"{"id":-1}"#.to_vec(),
-        serde_json::to_vec(&json!({"id":17,"padding":"x".repeat(65_536)})).unwrap(),
-    ] {
-        let mut reply = Reply::gotify();
-        reply.body = body;
-        fixture.gotify.reply(reply);
-        let outcome = send_gotify(
-            &fixture.config,
-            TOKEN.as_bytes(),
-            &fixture.request(),
-            REQUEST_TIMEOUT,
-        )
-        .await
-        .unwrap();
-        assert!(!outcome.sent && !outcome.skipped);
-        assert_eq!(outcome.reason.as_deref(), Some("response_invalid"));
-        assert_eq!(outcome.request_count, 1);
-    }
-    assert_eq!(fixture.gotify.count(), 5);
-}
-
-#[tokio::test]
-async fn gotify_http_failures_never_become_success_even_with_a_success_shaped_body() {
-    let fixture = Fixture::new().await;
-    for status in [401, 429, 500, 501, 503, 599] {
-        fixture.gotify.reply(Reply::json(
-            StatusCode::from_u16(status).unwrap(),
-            json!({"id":17,"error":TOKEN}),
-        ));
-        let outcome = send_gotify(
-            &fixture.config,
-            TOKEN.as_bytes(),
-            &fixture.request(),
-            REQUEST_TIMEOUT,
-        )
-        .await
-        .unwrap();
-        assert!(!outcome.sent && !outcome.skipped);
-        assert_eq!(outcome.http_status, Some(status));
-        assert_eq!(outcome.request_count, 1);
-        assert!(!serde_json::to_string(&outcome).unwrap().contains(TOKEN));
-    }
-    assert_eq!(fixture.gotify.count(), 6);
-}
-
-#[tokio::test]
-async fn invalid_gotify_configuration_and_token_encoding_fail_before_any_request() {
-    let mut fixture = Fixture::new().await;
-    for url in [
-        "http://notify.example.invalid/gotify".to_string(),
-        format!("{}/gotify?token=fixture", fixture.gotify.url),
-        format!("{}/gotify#fragment", fixture.gotify.url),
-        fixture
-            .gotify
-            .url
-            .replace("http://", "http://test:fixture-password@"),
-    ] {
-        fixture.config.probe.notifications.gotify.server_url = url;
-        let outcome = send_gotify(
-            &fixture.config,
-            TOKEN.as_bytes(),
-            &fixture.request(),
-            REQUEST_TIMEOUT,
-        )
-        .await
-        .unwrap();
-        assert!(!outcome.sent && !outcome.skipped);
-        assert_eq!(outcome.reason.as_deref(), Some("invalid_server_url"));
-        assert_eq!(outcome.request_count, 0);
-    }
-    fixture.config.probe.notifications.gotify.server_url = format!("{}/gotify", fixture.gotify.url);
-    let outcome = send_gotify(
-        &fixture.config,
-        &[0xff],
-        &fixture.request(),
-        REQUEST_TIMEOUT,
-    )
-    .await
-    .unwrap();
-    assert!(!outcome.sent);
-    assert_eq!(outcome.reason.as_deref(), Some("invalid_token"));
-    assert_eq!(outcome.request_count, 0);
-    assert_eq!(fixture.gotify.count(), 0);
-}
-
-#[tokio::test]
-async fn gotify_test_requires_enabled_channel_and_an_existing_token() {
-    let mut fixture = Fixture::new().await;
-    fixture.config.probe.notifications.gotify.enabled = false;
-    let disabled = gotify_test(&fixture.config, &fixture.db).await.unwrap();
-    assert!(disabled.skipped && !disabled.sent);
-    assert_eq!(disabled.reason.as_deref(), Some("notifications_disabled"));
-    fixture.config.probe.notifications.gotify.enabled = true;
-    fixture
-        .db
-        .remove_secret_setting(PROBE_GOTIFY_TOKEN_SETTING)
-        .unwrap();
-    let missing = gotify_test(&fixture.config, &fixture.db).await.unwrap();
-    assert!(missing.skipped && !missing.sent);
-    assert!(!missing.device_key_configured);
-    assert_eq!(fixture.gotify.count(), 0);
-    fixture
-        .db
-        .set_secret_setting_bytes(PROBE_GOTIFY_TOKEN_SETTING, TOKEN.as_bytes())
-        .unwrap();
-    let sent = gotify_test(&fixture.config, &fixture.db).await.unwrap();
-    assert!(sent.sent);
-    assert_eq!(fixture.gotify.count(), 1);
-    assert_eq!(fixture.bark.count(), 0);
-}
-
-#[tokio::test]
-async fn gotify_delivers_codex_events_when_bark_is_disabled_or_legacy_bark_dedupe_hits() {
-    for bark_enabled in [false, true] {
+async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
+    for suppression in ["disabled", "missing-secret", "legacy-dedupe"] {
         let mut fixture = Fixture::new().await;
-        fixture.config.probe.notifications.enabled = bark_enabled;
-        let event = fixture.event();
-        let (bark, gotify) = codex(&fixture.config, &fixture.db, &event, false, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
-        assert!(bark.skipped && !bark.sent);
-        assert!(gotify.sent);
-        assert_eq!(fixture.bark.count(), 0);
-        assert_eq!(fixture.gotify.count(), 1);
-        assert_eq!(
-            fixture.status(NotificationChannel::Gotify, &codex_key(&event)),
-            "sent"
-        );
-    }
-}
-
-#[tokio::test]
-async fn a_failure_in_either_channel_does_not_prevent_the_other_from_delivering() {
-    for failed_channel in NotificationChannel::ALL {
-        let fixture = Fixture::new().await;
-        let failure = Reply::json(
-            StatusCode::UNAUTHORIZED,
-            json!({"error":"fixture rejection"}),
-        );
-        match failed_channel {
-            NotificationChannel::Bark => fixture.bark.reply(failure),
-            NotificationChannel::Gotify => fixture.gotify.reply(failure),
+        if suppression == "disabled" {
+            fixture.config.probe.notifications.enabled = false;
         }
-        let event = fixture.event();
-        let (bark, gotify) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
-        assert_eq!(bark.sent, failed_channel != NotificationChannel::Bark);
-        assert_eq!(gotify.sent, failed_channel != NotificationChannel::Gotify);
-        assert!(!bark.skipped && !gotify.skipped);
-        assert_eq!(fixture.bark.count(), 1);
-        assert_eq!(fixture.gotify.count(), 1);
-        assert_eq!(fixture.status(failed_channel, &codex_key(&event)), "failed");
+        if suppression == "missing-secret" {
+            fixture
+                .db
+                .remove_secret_setting(PROBE_BARK_DEVICE_KEY_SETTING)
+                .unwrap();
+        }
+        let bark = codex(
+            &fixture.config,
+            &fixture.db,
+            &fixture.event(),
+            suppression != "legacy-dedupe",
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert!(bark.skipped && !bark.sent, "{suppression}");
+        assert_eq!(fixture.bark.count(), 0, "{suppression}");
     }
 }
 
 #[tokio::test]
-async fn concurrent_codex_entrances_send_once_per_channel_and_reopening_does_not_replay() {
+async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay() {
     let fixture = Fixture::new().await;
     let event = fixture.event();
     let (first, second) = tokio::join!(
         codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
         codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
     );
-    let (first_bark, first_gotify) = first.unwrap();
-    let (second_bark, second_gotify) = second.unwrap();
     assert_eq!(
-        usize::from(first_bark.sent) + usize::from(second_bark.sent),
-        1
-    );
-    assert_eq!(
-        usize::from(first_gotify.sent) + usize::from(second_gotify.sent),
+        usize::from(first.unwrap().sent) + usize::from(second.unwrap().sent),
         1
     );
     assert_eq!(fixture.bark.count(), 1);
-    assert_eq!(fixture.gotify.count(), 1);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
-    let (bark, gotify) = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
+    let duplicate = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(bark.skipped && gotify.skipped);
+    assert!(duplicate.skipped && !duplicate.sent);
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 1);
-    assert_eq!(fixture.gotify.count(), 1);
 }
 
 #[tokio::test]
-async fn gotify_baselines_old_codex_and_native_events_without_suppressing_bark() {
-    let fixture = Fixture::new().await;
-    let old_ms = fixture.event_ms() - 60_000;
+async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
+    let mut fixture = Fixture::new().await;
+    fixture.config.probe.notifications.enabled = false;
+    fixture
+        .db
+        .sync_notification_channels(&fixture.config)
+        .unwrap();
+    fixture.config.probe.notifications.enabled = true;
+    fixture
+        .db
+        .sync_notification_channels(&fixture.config)
+        .unwrap();
     let mut event = fixture.event();
-    event.payload["feedback_completed_at_ms"] = json!(old_ms);
-    let (bark, gotify) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+    event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);
+    let bark = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(bark.sent);
-    assert!(gotify.skipped && !gotify.sent);
+    assert!(bark.skipped && !bark.sent);
     let mut delivery = fixture.native_delivery(NativeProvider::Grok, "completion");
-    delivery.event.timestamp_ms = old_ms;
-    let (bark, gotify) = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
+    delivery.event.timestamp_ms = fixture.event_ms() - 60_000;
+    let bark = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(bark.sent);
-    assert!(gotify.skipped && !gotify.sent);
-    assert_eq!(fixture.bark.count(), 2);
-    assert_eq!(fixture.gotify.count(), 0);
+    assert!(bark.skipped && !bark.sent);
+    assert_eq!(fixture.bark.count(), 0);
 }
 
 #[tokio::test]
-async fn gotify_receives_grok_and_claude_events_with_bark_disabled_and_dedupes_native_replay() {
+async fn bark_delivers_native_grok_and_claude_events_without_replaying_them() {
     for (provider, kind) in [
         (NativeProvider::Grok, "completion"),
         (NativeProvider::Claude, "reply_needed"),
     ] {
-        let mut fixture = Fixture::new().await;
-        fixture.config.probe.notifications.enabled = false;
+        let fixture = Fixture::new().await;
         let delivery = fixture.native_delivery(provider, kind);
-        // Direct delivery only: native retry scanning is not invoked, so the test never discovers user sessions.
-        let (bark, gotify) = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
+        // Direct delivery only; do not scan or discover any real native sessions.
+        let bark = native(&fixture.config, &fixture.db, &delivery, REQUEST_TIMEOUT)
             .await
             .unwrap();
-        assert!(bark.skipped && !bark.sent);
-        assert!(gotify.sent);
-        let requests = fixture.gotify.requests();
+        assert!(bark.sent);
+        let requests = fixture.bark.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(
-            requests[0].body["message"],
+            requests[0].body["body"],
             format!("{BODY}\n\n线程 ID：fixture-native-thread\n回合：fixture-native-turn")
         );
         assert!(requests[0].body["title"]
             .as_str()
             .unwrap()
             .contains(provider.as_str()));
-        assert_eq!(fixture.bark.count(), 0);
         let reopened = PanelDb::open(fixture.db.path()).unwrap();
-        let (_, duplicate) = native(&fixture.config, &reopened, &delivery, REQUEST_TIMEOUT)
+        let duplicate = native(&fixture.config, &reopened, &delivery, REQUEST_TIMEOUT)
             .await
             .unwrap();
         assert!(duplicate.skipped && !duplicate.sent);
-        assert_eq!(fixture.gotify.count(), 1);
+        assert_eq!(fixture.bark.count(), 1);
     }
+}
+
+#[tokio::test]
+async fn invalid_bark_acknowledgement_is_unknown_and_never_retried() {
+    let fixture = Fixture::new().await;
+    let mut invalid = Reply::bark();
+    invalid.body = b"fixture-invalid-json".to_vec();
+    fixture.bark.reply(invalid);
+    let event = fixture.event();
+    let key = codex_key(&event);
+    let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert!(!outcome.sent && !outcome.skipped);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "unknown");
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    fixture.bark.reply(Reply::bark());
+    fixture.due_now(&key);
+    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    retry_pending(&fixture.config, &reopened).await.unwrap();
+    assert_eq!(fixture.bark.count(), 1);
 }
 
 #[tokio::test]
 async fn explicit_transient_failures_are_retried_at_most_three_times_across_restart() {
     for status in [429, 500, 502, 503, 504] {
-        let mut fixture = Fixture::new().await;
-        fixture.config.probe.notifications.enabled = false;
-        fixture.gotify.reply(Reply::json(
+        let fixture = Fixture::new().await;
+        fixture.bark.reply(Reply::json(
             StatusCode::from_u16(status).unwrap(),
             json!({"error":"fixture temporary rejection"}),
         ));
         let event = fixture.event();
         assert!(codex_fingerprint(&fixture.config, &event).is_some());
         let key = codex_key(&event);
-        let (_, first) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        let first = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
             .await
             .unwrap();
         assert!(!first.sent && !first.skipped);
         assert_eq!(first.http_status, Some(status));
-        assert_eq!(fixture.status(NotificationChannel::Gotify, &key), "pending");
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
-        assert_eq!(fixture.gotify.count(), 1);
+        assert_eq!(fixture.bark.count(), 1);
         for attempt in 2..=3 {
             fixture.due_now(&key);
             let reopened = PanelDb::open(fixture.db.path()).unwrap();
             retry_pending(&fixture.config, &reopened).await.unwrap();
-            assert_eq!(fixture.gotify.count(), attempt);
+            assert_eq!(fixture.bark.count(), attempt);
         }
-        assert_eq!(fixture.status(NotificationChannel::Gotify, &key), "failed");
-        fixture.assert_payload_cleared(NotificationChannel::Gotify, &key);
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "failed");
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
         fixture.due_now(&key);
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
-        let (_, duplicate) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        let duplicate = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
             .await
             .unwrap();
         assert!(duplicate.skipped);
-        assert_eq!(fixture.gotify.count(), 3);
-        assert_eq!(fixture.bark.count(), 0);
+        assert_eq!(fixture.bark.count(), 3);
     }
 }
 
 #[tokio::test]
-async fn retry_sends_only_the_failed_channel_and_updates_one_existing_business_event() {
+async fn a_successful_bark_retry_updates_the_existing_business_event() {
     let fixture = Fixture::new().await;
-    fixture.gotify.reply(Reply::json(
+    fixture.bark.reply(Reply::json(
         StatusCode::SERVICE_UNAVAILABLE,
         json!({"error":"fixture rejection"}),
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let (bark, gotify) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+    let bark = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(bark.sent && !gotify.sent);
+    assert!(!bark.sent && !bark.skipped);
     fixture
         .db
         .record_probe_event(NewProbeEvent {
@@ -670,16 +494,16 @@ async fn retry_sends_only_the_failed_channel_and_updates_one_existing_business_e
             message: Some("Fixture completion"),
             dedupe_key: Some("fixture-event"),
             source: "fixture-hook",
-            payload: json!({"notification_event_key":key,"bark":bark,"gotify":gotify}),
+            payload: json!({"notification_event_key":key,"bark":bark}),
         })
         .unwrap();
-    fixture.gotify.reply(Reply::gotify());
+    fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    assert_eq!(fixture.bark.count(), 1);
-    assert_eq!(fixture.gotify.count(), 2);
-    assert_eq!(fixture.status(NotificationChannel::Gotify, &key), "sent");
+    assert_eq!(fixture.bark.count(), 2);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
     let (count, payload) = fixture
         .connection()
         .query_row(
@@ -691,7 +515,7 @@ async fn retry_sends_only_the_failed_channel_and_updates_one_existing_business_e
     assert_eq!(count, 1);
     let payload: Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(payload["bark"]["sent"], true);
-    assert_eq!(payload["gotify"]["sent"], true);
+    assert!(payload.get("gotify").is_none());
     assert!(!payload.to_string().contains(TOKEN));
 }
 
@@ -699,14 +523,13 @@ async fn retry_sends_only_the_failed_channel_and_updates_one_existing_business_e
 async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_switches() {
     for change in ["transcript", "identity", "provider", "event", "channel"] {
         let mut fixture = Fixture::new().await;
-        fixture.config.probe.notifications.enabled = false;
-        fixture.gotify.reply(Reply::json(
+        fixture.bark.reply(Reply::json(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"fixture rejection"}),
         ));
         let event = fixture.event();
         let key = codex_key(&event);
-        let (_, outcome) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
             .await
             .unwrap();
         assert!(!outcome.sent);
@@ -718,31 +541,30 @@ async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_s
             }
             "provider" => fixture.config.probe.notifications.notify_codex = false,
             "event" => fixture.config.probe.notifications.notify_completion = false,
-            "channel" => fixture.config.probe.notifications.gotify.enabled = false,
+            "channel" => fixture.config.probe.notifications.enabled = false,
             _ => unreachable!(),
         }
-        fixture.gotify.reply(Reply::gotify());
+        fixture.bark.reply(Reply::bark());
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
-        assert_eq!(fixture.gotify.count(), 1, "{change}");
+        assert_eq!(fixture.bark.count(), 1, "{change}");
         assert_eq!(
-            fixture.status(NotificationChannel::Gotify, &key),
+            fixture.status(NotificationChannel::Bark, &key),
             "skipped",
             "{change}"
         );
-        fixture.assert_payload_cleared(NotificationChannel::Gotify, &key);
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
     }
 }
 
 #[tokio::test]
 async fn timeout_keeps_unknown_outcome_and_never_resends_after_restart() {
-    let mut fixture = Fixture::new().await;
-    fixture.config.probe.notifications.enabled = false;
-    let mut delayed = Reply::gotify();
+    let fixture = Fixture::new().await;
+    let mut delayed = Reply::bark();
     delayed.delay = Duration::from_secs(1);
-    fixture.gotify.reply(delayed);
+    fixture.bark.reply(delayed);
     let event = fixture.event();
     let key = codex_key(&event);
-    let (_, outcome) = codex(
+    let outcome = codex(
         &fixture.config,
         &fixture.db,
         &event,
@@ -754,31 +576,30 @@ async fn timeout_keeps_unknown_outcome_and_never_resends_after_restart() {
     assert!(!outcome.sent && !outcome.skipped);
     assert!(outcome.http_status.is_none());
     assert_eq!(outcome.request_count, 1);
-    assert_eq!(fixture.gotify.count(), 1);
-    assert_eq!(fixture.status(NotificationChannel::Gotify, &key), "unknown");
-    fixture.assert_payload_cleared(NotificationChannel::Gotify, &key);
-    fixture.gotify.reply(Reply::gotify());
+    assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "unknown");
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    let (_, duplicate) = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
+    let duplicate = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
     assert!(duplicate.skipped && !duplicate.sent);
-    assert_eq!(fixture.gotify.count(), 1);
+    assert_eq!(fixture.bark.count(), 1);
 }
 
 #[tokio::test]
 async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_database() {
-    let mut fixture = Fixture::new().await;
-    fixture.config.probe.notifications.enabled = false;
-    fixture.gotify.reply(Reply::json(
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
         StatusCode::TOO_MANY_REQUESTS,
         json!({"error":TOKEN}),
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let (_, outcome) = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+    let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
     assert!(!serde_json::to_string(&outcome).unwrap().contains(TOKEN));
@@ -805,4 +626,49 @@ async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_data
                 .any(|window| window == secret.as_bytes()));
         }
     }
+}
+
+#[tokio::test]
+async fn retired_gotify_rpc_is_unavailable_even_with_valid_auth_and_cannot_enqueue() {
+    use tower::ServiceExt;
+
+    let fixture = Fixture::new().await;
+    let api_key = fixture.db.rotate_admin_api_key().unwrap();
+    let state = crate::state::AppState::new(fixture.config.clone(), fixture.db.clone());
+    for authenticated in [false, true] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/rpc/probe.gotifyTest")
+            .header("content-type", "application/json");
+        if authenticated {
+            request = request.header("x-api-key", &api_key);
+        }
+        let response = crate::api::router(state.clone())
+            .oneshot(request.body(Body::from("{}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains("unavailable: retired rpc command"));
+    }
+    assert_eq!(fixture.bark.count(), 0);
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row("SELECT count(*) FROM jobs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM probe_notification_deliveries",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
 }

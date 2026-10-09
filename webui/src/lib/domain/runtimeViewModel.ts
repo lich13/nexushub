@@ -439,8 +439,6 @@ export function isProbeJob(job: JobRecord): boolean {
 
 export function probeJobActionLabel(action: ProbeJobAction | undefined): string {
   switch (action) {
-    case "gotify-test":
-      return "Gotify 测试";
     case "bark-test":
       return "Bark 测试";
     case "hooks-install":
