@@ -115,21 +115,9 @@ impl PanelDb {
     }
     /// Delivery confirmation and the visible Probe event commit atomically.
     pub fn finish_native_delivery(&self, delivery: &NativeDelivery, bark: Value) -> Result<()> {
-        self.finish_native_delivery_channels(delivery, bark, Value::Null)
-    }
-    pub fn finish_native_delivery_channels(
-        &self,
-        delivery: &NativeDelivery,
-        bark: Value,
-        gotify: Value,
-    ) -> Result<()> {
-        let status = if bark.get("sent").and_then(Value::as_bool) == Some(true)
-            || gotify.get("sent").and_then(Value::as_bool) == Some(true)
-        {
+        let status = if bark.get("sent").and_then(Value::as_bool) == Some(true) {
             "sent"
-        } else if bark.get("skipped").and_then(Value::as_bool) == Some(true)
-            && (gotify.is_null() || gotify.get("skipped").and_then(Value::as_bool) == Some(true))
-        {
+        } else if bark.get("skipped").and_then(Value::as_bool) == Some(true) {
             "skipped"
         } else {
             "failed"
@@ -139,7 +127,7 @@ impl PanelDb {
         let changed=tx.execute("UPDATE native_probe_deliveries SET status=?2,updated_at=?3 WHERE event_key=?1 AND status='delivering'",params![delivery.event_key,status,Self::now()])?;
         if changed > 0 {
             let summary = delivery.event.body.chars().take(240).collect::<String>();
-            let payload = json!({"provider":delivery.provider,"session_key":delivery.session_key,"thread_id":delivery.thread_id,"turn_id":delivery.event.turn_id,"thread_title":delivery.title,"event_type":delivery.event.kind,"body_summary":summary,"body_source":"native_terminal_turn","bark_status":if bark["sent"]==true {"sent"} else if bark["skipped"]==true {"skipped"} else {"failed"},"bark":bark,"gotify":gotify,"notification_event_key":format!("native:{}",delivery.event_key)});
+            let payload = json!({"provider":delivery.provider,"session_key":delivery.session_key,"thread_id":delivery.thread_id,"turn_id":delivery.event.turn_id,"thread_title":delivery.title,"event_type":delivery.event.kind,"body_summary":summary,"body_source":"native_terminal_turn","bark":bark,"bark_status":status,"notification_event_key":format!("native:{}",delivery.event_key)});
             tx.execute("INSERT INTO probe_events(id,kind,thread_id,title,message,dedupe_key,source,payload_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,'native_provider_monitor',?7,?8)",params![uuid::Uuid::new_v4().to_string(),delivery.event.kind,delivery.thread_id,delivery.title,summary,delivery.event_key,payload.to_string(),Self::now()])?;
         }
         tx.commit()?;

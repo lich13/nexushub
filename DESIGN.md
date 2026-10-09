@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.13 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub 1.2.14 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -84,8 +84,8 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 
 子智能体汇总和列表移除通用完整性说明。清理面板移除标题下的重复描述，状态标记保持右对齐；具体错误和逐项处理结果仍就地展示。
 
-## 1.2.13 完整指令与 Gotify
+## 1.2.14 完整指令与通知
 
-AGENTS.md 摘要按完整原生指令计算行数和字节数。结束标签与下一段环境标签同行时仍完整收起，内部标题不另生成用户气泡。展开保留原文与内部滚动；尾随普通请求留在原位置，轮询和主题变化不重置手动选择。
+完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
-Probe 的 Bark 与 Gotify 各有独立开关，Provider 和事件类型共用。Gotify 卡片只展示 HTTPS 地址、Application Token、优先级、保存和测试；已保存 Token 不回显，留空保留，移除需显式选择。优先级默认 5，范围 0–10。测试结果区分正在发送、服务器已接收和失败，不能把服务器确认写成安卓已收到。
+Probe 仅展示 Bark 设置与既有 Provider、事件筛选。移除退休通道的卡片、测试按钮、加载状态与结果字段，不保留空白占位或额外说明。

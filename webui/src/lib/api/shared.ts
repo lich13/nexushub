@@ -58,7 +58,6 @@ export function normalizeProbeRuntimePayload(value: unknown): Record<string, unk
       observability: nestedObservability,
     },
     notifications,
-    ...(raw.gotify ? { gotify: snakeCaseKeys(objectValue(raw.gotify)) } : {}),
   };
 }
 

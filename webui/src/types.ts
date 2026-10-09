@@ -251,7 +251,6 @@ export type SystemCapabilities = {
   thread_cleanup?: boolean;
   thread_archive_actions?: boolean;
   thread_subagents?: boolean;
-  gotify?: boolean;
 };
 
 export type SystemCapabilitiesResponse = {
@@ -399,7 +398,6 @@ export type PluginInfo = {
 };
 
 export type ProbeStatus = {
-  notification_channels?: Record<"bark" | "gotify", Record<string, number>>;
   provider_notifications?: { provider: "grok" | "claude_code"; enabled: boolean; last_scan_at: number; streams: number; read_errors: number; failed_deliveries: number; pending_deliveries: number; failure_supported: boolean }[];
   label?: string | null;
   enabled: boolean;
@@ -460,19 +458,9 @@ export type ProbeEventsResponse = {
   limit?: number | null;
 };
 
-export type ProbeJobAction = "bark-test" | "gotify-test" | "hooks-install";
-
-export type GotifySettings = {
-  enabled: boolean;
-  server_url: string;
-  priority: number;
-  token_configured?: boolean;
-  token?: string;
-  clear_token?: boolean;
-};
+export type ProbeJobAction = "bark-test" | "hooks-install";
 
 export type ProbeSettings = {
-  gotify?: GotifySettings;
   codex: {
     home?: string | null;
     configured_codex_home?: string | null;

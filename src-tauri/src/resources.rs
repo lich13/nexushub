@@ -30,8 +30,7 @@ pub(crate) fn repair_probe_error_monitor_launch_agent(
     nexushub_core::probe_error_monitor::ensure_probe_error_monitor_launch_agent(
         platform,
         config.probe.enabled
-            && (config.probe.error_monitor.enabled
-                || config.probe.notifications.any_channel_enabled()),
+            && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
     )
     .map_err(|err| err.to_string())
 }

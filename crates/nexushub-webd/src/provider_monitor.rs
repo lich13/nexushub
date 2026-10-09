@@ -83,22 +83,17 @@ where
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let (outcome, gotify) = if !still_current || !enabled {
-            let skipped = ProbeBarkOutcome::skipped(
+        let outcome = if !still_current || !enabled {
+            ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
-                config.probe.notifications.any_channel_enabled(),
+                config.probe.notifications.enabled,
                 enabled,
                 false,
-            );
-            (skipped.clone(), skipped)
+            )
         } else {
             notification_delivery::native(config, db, &delivery, Duration::from_secs(8)).await?
         };
-        db.finish_native_delivery_channels(
-            &delivery,
-            serde_json::to_value(outcome)?,
-            serde_json::to_value(gotify)?,
-        )?;
+        db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
     }
     Ok(())
 }

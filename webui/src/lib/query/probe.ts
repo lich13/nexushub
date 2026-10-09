@@ -6,7 +6,6 @@ import {
   listJobs,
   saveProbeSettings,
   runProbeBarkTest,
-  runProbeGotifyTest,
   runProbeHooksInstall,
 } from "../api";
 import type { ProbeJobAction, ProbeSettings } from "../../types";
@@ -72,10 +71,6 @@ export function useProbeActions(input: {
 
   const runProbeCommand = (action: ProbeJobAction) => {
     if (action === "bark-test") return runProbeBarkTest();
-    if (action === "gotify-test") {
-      if (!input.capabilities.gotify) throw new Error("请升级当前机器后使用 Gotify");
-      return runProbeGotifyTest();
-    }
     return runProbeHooksInstall();
   };
 

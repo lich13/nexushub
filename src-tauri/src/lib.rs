@@ -44,7 +44,6 @@ pub fn run() {
         commands::settings::saveProbeSettings,
         commands::settings::getProbeEvents,
         commands::settings::probeBarkTest,
-        commands::settings::probeGotifyTest,
         commands::settings::probeInstallHooks,
         commands::settings::dryRunArchiveDelete,
         commands::settings::startArchiveDelete,

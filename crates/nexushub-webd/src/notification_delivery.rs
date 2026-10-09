@@ -1,4 +1,4 @@
-//! One event, independent durable channel deliveries. No secrets enter queue payloads.
+//! Durable Bark delivery claims and bounded retries; credentials stay outside the queue.
 use super::{
     async_question_monitor, question_monitor, send_bark_notification,
     task_notification_suppression_reason, ProbeBarkOutcome, ProbeBarkRequest,
@@ -7,17 +7,13 @@ use anyhow::Result;
 use chrono::Utc;
 use nexushub_core::{
     codex,
-    config::{valid_gotify_server_url, Config},
+    config::Config,
     db::{NativeDelivery, NotificationChannel, PanelDb},
     native_probe,
     probe::ProbeBuiltEvent,
-    services::{
-        probe as probe_service,
-        settings::{PROBE_BARK_DEVICE_KEY_SETTING, PROBE_GOTIFY_TOKEN_SETTING},
-    },
+    services::{probe as probe_service, settings::PROBE_BARK_DEVICE_KEY_SETTING},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::time::{Duration, UNIX_EPOCH};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,7 +69,7 @@ pub async fn codex(
     event: &ProbeBuiltEvent,
     bark_allowed: bool,
     timeout: Duration,
-) -> Result<(ProbeBarkOutcome, ProbeBarkOutcome)> {
+) -> Result<ProbeBarkOutcome> {
     db.sync_notification_channels(config)?;
     let key = codex_key(event);
     let origin_ms = event.payload["question_created_at_ms"]
@@ -105,17 +101,7 @@ pub async fn codex(
         timeout,
     )
     .await?;
-    let gotify = deliver(
-        config,
-        db,
-        &key,
-        NotificationChannel::Gotify,
-        &candidate,
-        true,
-        timeout,
-    )
-    .await?;
-    Ok((bark, gotify))
+    Ok(bark)
 }
 
 pub async fn native(
@@ -123,7 +109,7 @@ pub async fn native(
     db: &PanelDb,
     delivery: &NativeDelivery,
     timeout: Duration,
-) -> Result<(ProbeBarkOutcome, ProbeBarkOutcome)> {
+) -> Result<ProbeBarkOutcome> {
     db.sync_notification_channels(config)?;
     let label = match delivery.event.kind.as_str() {
         "reply_needed" => "需要回复",
@@ -160,17 +146,7 @@ pub async fn native(
         timeout,
     )
     .await?;
-    let gotify = deliver(
-        config,
-        db,
-        &key,
-        NotificationChannel::Gotify,
-        &candidate,
-        true,
-        timeout,
-    )
-    .await?;
-    Ok((bark, gotify))
+    Ok(bark)
 }
 
 fn event_enabled(config: &Config, candidate: &Candidate) -> bool {
@@ -236,7 +212,6 @@ async fn send(
 ) -> Result<ProbeBarkOutcome> {
     let secret = db.get_secret_setting_bytes(match channel {
         NotificationChannel::Bark => PROBE_BARK_DEVICE_KEY_SETTING,
-        NotificationChannel::Gotify => PROBE_GOTIFY_TOKEN_SETTING,
     })?;
     let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
         return Ok(ProbeBarkOutcome::skipped(
@@ -250,141 +225,7 @@ async fn send(
         NotificationChannel::Bark => {
             send_bark_notification(config, &secret, request, timeout).await
         }
-        NotificationChannel::Gotify => send_gotify(config, &secret, request, timeout).await,
     }
-}
-
-pub async fn gotify_test(config: &Config, db: &PanelDb) -> Result<ProbeBarkOutcome> {
-    if !config.probe.notifications.gotify.enabled {
-        return Ok(ProbeBarkOutcome::skipped(
-            "notifications_disabled",
-            false,
-            true,
-            false,
-        ));
-    }
-    send(
-        config,
-        db,
-        NotificationChannel::Gotify,
-        &ProbeBarkRequest {
-            title: "NexusHub · Gotify 测试".into(),
-            body: "Gotify 推送通道测试。".into(),
-            dedupe_key: uuid::Uuid::new_v4().to_string(),
-        },
-        Duration::from_secs(8),
-    )
-    .await
-}
-
-async fn send_gotify(
-    config: &Config,
-    secret: &[u8],
-    request: &ProbeBarkRequest,
-    timeout: Duration,
-) -> Result<ProbeBarkOutcome> {
-    let fail = |reason: &str| {
-        ProbeBarkOutcome::failed_request(reason, true, true, true, Some(request.dedupe_key.clone()))
-    };
-    let Ok(token) = std::str::from_utf8(secret) else {
-        return Ok(fail("invalid_token"));
-    };
-    let Ok(mut key) = reqwest::header::HeaderValue::from_bytes(token.trim().as_bytes()) else {
-        return Ok(fail("invalid_token"));
-    };
-    key.set_sensitive(true);
-    let server = config.probe.notifications.gotify.server_url.trim();
-    if !valid_gotify_server_url(server) {
-        return Ok(fail("invalid_server_url"));
-    }
-    let Ok(base) = reqwest::Url::parse(&format!("{}/", server.trim_end_matches('/'))) else {
-        return Ok(fail("invalid_server_url"));
-    };
-    if !base.username().is_empty()
-        || base.password().is_some()
-        || base.query().is_some()
-        || base.fragment().is_some()
-    {
-        return Ok(fail("invalid_server_url"));
-    }
-    let Ok(url) = base.join("message") else {
-        return Ok(fail("invalid_server_url"));
-    };
-    let Ok(client) = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .build()
-    else {
-        return Ok(fail("client_build_error"));
-    };
-    let machine = if cfg!(target_os = "macos") {
-        "本机"
-    } else {
-        "腾讯云"
-    };
-    let attempted = |mut outcome: ProbeBarkOutcome| {
-        outcome.request_count = 1;
-        outcome.chunk_count = 1;
-        outcome
-    };
-    let response = client
-        .post(url)
-        .header("X-Gotify-Key", key)
-        .json(&json!({
-            "title":format!("{} · {}",machine,request.title),"message":request.body,
-            "priority":config.probe.notifications.gotify.priority.min(10)
-        }))
-        .send()
-        .await;
-    let Ok(response) = response else {
-        return Ok(attempted(fail("delivery_outcome_unknown")));
-    };
-    let status = response.status().as_u16();
-    if !response.status().is_success() {
-        return Ok(attempted(ProbeBarkOutcome::failed_status(
-            status,
-            true,
-            true,
-            true,
-            Some(request.dedupe_key.clone()),
-        )));
-    }
-    // Read a bounded acknowledgement. Never retain echoed notification content or tokens.
-    let max_response_bytes = request
-        .body
-        .len()
-        .saturating_add(request.title.len())
-        .saturating_mul(6)
-        .saturating_add(16 * 1024)
-        .min(20 * 1024 * 1024);
-    if response
-        .content_length()
-        .is_some_and(|size| size > max_response_bytes as u64)
-    {
-        return Ok(attempted(fail("response_invalid")));
-    }
-    let mut response = response;
-    let mut bytes = Vec::new();
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) if bytes.len() + chunk.len() <= max_response_bytes => {
-                bytes.extend_from_slice(&chunk)
-            }
-            Ok(None) => break,
-            _ => return Ok(attempted(fail("response_invalid"))),
-        }
-    }
-    let value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
-    if value["id"].as_u64().is_none() {
-        return Ok(attempted(fail("response_invalid")));
-    }
-    Ok(attempted(ProbeBarkOutcome::sent(
-        status,
-        true,
-        true,
-        true,
-        Some(request.dedupe_key.clone()),
-    )))
 }
 
 #[cfg(test)]

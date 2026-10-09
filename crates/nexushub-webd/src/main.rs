@@ -150,7 +150,6 @@ enum ProbeCommand {
         turn_id: Option<String>,
     },
     BarkTest,
-    GotifyTest,
     LifecycleRepair,
     ServiceRestart,
     LegacyImport,
@@ -343,13 +342,6 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                     "bark": bark,
                 }))?
             );
-        }
-        ProbeCommand::GotifyTest => {
-            let gotify = notification_delivery::gotify_test(config, &db).await?;
-            println!("{}", serde_json::to_string(&json!({"gotify":gotify}))?);
-            if !gotify.sent {
-                anyhow::bail!("Gotify test notification was not accepted by the server");
-            }
         }
         ProbeCommand::BarkTest => {
             let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
@@ -1218,8 +1210,7 @@ async fn install_probe_hooks_with_repair(
         repair_error_monitor(
             &platform,
             config.probe.enabled
-                && (config.probe.error_monitor.enabled
-                    || config.probe.notifications.any_channel_enabled()),
+                && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
         )?
     };
     let launch_agent_changed = error_monitor_launch_agent
@@ -1778,7 +1769,7 @@ async fn record_probe_event_with_bark_timeout(
         &event.dedupe_key,
         event.ttl_seconds,
     )?;
-    let (mut bark, gotify) = notification_delivery::codex(
+    let mut bark = notification_delivery::codex(
         config,
         db,
         &event,
@@ -1802,7 +1793,6 @@ async fn record_probe_event_with_bark_timeout(
         probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref()),
     )?;
     if let Some(mut record) = write_plan.record {
-        record.payload["gotify"] = serde_json::to_value(&gotify)?;
         record.payload["notification_event_key"] = json!(notification_delivery::codex_key(&event));
         db.record_probe_event(NewProbeEvent {
             kind: &record.kind,
@@ -2525,7 +2515,7 @@ fn spawn_probe_thread_scan(state: AppState) {
 async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let _guard = PROBE_THREAD_SCAN_LOCK.lock().await;
     let config = state.config();
-    if !config.probe.enabled || !config.probe.notifications.any_channel_enabled() {
+    if !config.probe.enabled || !config.probe.notifications.enabled {
         return Ok(0);
     }
     let mut recorded = 0usize;

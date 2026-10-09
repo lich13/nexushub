@@ -11,21 +11,18 @@ use serde_json::{json, Value};
 #[serde(rename_all = "snake_case")]
 pub enum NotificationChannel {
     Bark,
-    Gotify,
 }
 
 impl NotificationChannel {
-    pub const ALL: [Self; 2] = [Self::Bark, Self::Gotify];
+    pub const ALL: [Self; 1] = [Self::Bark];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Bark => "bark",
-            Self::Gotify => "gotify",
         }
     }
     pub fn enabled(self, config: &Config) -> bool {
         match self {
             Self::Bark => config.probe.notifications.enabled,
-            Self::Gotify => config.probe.notifications.gotify.enabled,
         }
     }
 }
@@ -72,6 +69,45 @@ impl PanelDb {
              INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES('probe_channel_migration_v1','1',unixepoch());"
         )?;
         tx.commit()?;
+        drop(conn);
+        self.retire_removed_push_channel()?;
+        Ok(())
+    }
+
+    /// Only the retired channel is erased. Bark claims, baselines and retry state remain intact.
+    fn retire_removed_push_channel(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("db mutex");
+        let retired: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key IN ('probe_gotify_token','gotify_retirement_pending'))
+             OR EXISTS(SELECT 1 FROM probe_notification_channels WHERE channel='gotify')
+             OR EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel='gotify')
+             OR EXISTS(SELECT 1 FROM probe_events WHERE json_valid(payload_json) AND json_type(payload_json,'$.gotify') IS NOT NULL)
+             OR EXISTS(SELECT 1 FROM jobs WHERE kind='probe_gotify_test')
+             OR EXISTS(SELECT 1 FROM audit_log WHERE action GLOB 'probe_gotify_*' OR action='probe.gotifyTest')",
+            [], |row| row.get(0),
+        )?;
+        if !retired {
+            return Ok(());
+        }
+        // The marker survives interruption until freelist pages and WAL have also been cleaned.
+        conn.execute_batch("PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
+            INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('gotify_retirement_pending','true',unixepoch());
+            DELETE FROM settings WHERE key='probe_gotify_token';
+            DELETE FROM probe_notification_deliveries WHERE channel='gotify';
+            DELETE FROM probe_notification_channels WHERE channel='gotify';
+            UPDATE probe_events SET payload_json=json_remove(payload_json,'$.gotify')
+                WHERE json_valid(payload_json) AND json_type(payload_json,'$.gotify') IS NOT NULL;
+            DELETE FROM jobs WHERE kind='probe_gotify_test';
+            DELETE FROM audit_log WHERE action GLOB 'probe_gotify_*' OR action='probe.gotifyTest';
+            COMMIT; VACUUM;")?;
+        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        if busy != 0 {
+            anyhow::bail!("retired notification cleanup is waiting for NexusHub database readers");
+        }
+        conn.execute(
+            "DELETE FROM settings WHERE key='gotify_retirement_pending'",
+            [],
+        )?;
         Ok(())
     }
 
@@ -91,8 +127,7 @@ impl PanelDb {
             let activated = match prior {
                 Some((false, _)) if enabled => now,
                 Some((_, activated)) => activated,
-                None if channel == NotificationChannel::Bark => 0, // Preserve the existing Bark baseline.
-                None => now,
+                None => 0, // Preserve the existing Bark baseline.
             };
             tx.execute("INSERT INTO probe_notification_channels(channel,enabled,activated_ms) VALUES(?1,?2,?3) ON CONFLICT(channel) DO UPDATE SET enabled=excluded.enabled,activated_ms=excluded.activated_ms", params![channel.as_str(),enabled,activated])?;
             if !enabled {
@@ -166,7 +201,7 @@ impl PanelDb {
         let now = Utc::now().timestamp_millis();
         let conn = self.conn.lock().expect("db mutex");
         conn.execute("UPDATE probe_notification_deliveries SET status='unknown',ciphertext=NULL,nonce=NULL,outcome_json=?1 WHERE status='delivering' AND updated_ms<?2",params![json!({"sent":false,"skipped":false,"reason":"delivery_interrupted_outcome_unknown"}).to_string(),now-120_000])?;
-        let mut stmt=conn.prepare("SELECT event_key,channel,ciphertext,nonce FROM probe_notification_deliveries WHERE status='pending' AND next_ms<=?1 AND attempts<3 AND ciphertext IS NOT NULL ORDER BY created_ms,event_key,channel LIMIT ?2")?;
+        let mut stmt=conn.prepare("SELECT event_key,channel,ciphertext,nonce FROM probe_notification_deliveries WHERE channel='bark' AND status='pending' AND next_ms<=?1 AND attempts<3 AND ciphertext IS NOT NULL ORDER BY created_ms,event_key,channel LIMIT ?2")?;
         let rows = stmt
             .query_map(params![now, limit.min(100)], |r| {
                 Ok((
@@ -178,14 +213,10 @@ impl PanelDb {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(event_key, channel, ciphertext, nonce)| {
+            .map(|(event_key, _channel, ciphertext, nonce)| {
                 Ok(NotificationDelivery {
                     event_key,
-                    channel: if channel == "bark" {
-                        NotificationChannel::Bark
-                    } else {
-                        NotificationChannel::Gotify
-                    },
+                    channel: NotificationChannel::Bark,
                     payload: serde_json::from_slice(&self.crypto.decrypt(&ciphertext, &nonce)?)?,
                 })
             })

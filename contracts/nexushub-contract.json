@@ -7,7 +7,6 @@
   "capabilities": [
     "threads",
     "thread_subagents",
-    "gotify",
     "jobs",
     "probe",
     "settings",
@@ -23,7 +22,6 @@
     "linux_server_api": [
       "threads",
       "thread_subagents",
-      "gotify",
       "jobs",
       "probe",
       "settings",
@@ -38,7 +36,6 @@
     "desktop_embedded_tauri": [
       "threads",
       "thread_subagents",
-      "gotify",
       "jobs",
       "probe",
       "settings",
@@ -321,18 +318,6 @@
       "dtoOwner": "probe",
       "requestDto": "NoRequest",
       "responseDto": "ProbeBarkTestResponse"
-    },
-    {
-      "id": "probe.gotifyTest",
-      "kind": "rpc",
-      "scope": "shared",
-      "coreUseCase": "probe.gotifyTest",
-      "linuxRpc": "probe.gotifyTest",
-      "tauriCommand": "commands::settings::probeGotifyTest",
-      "webuiWrapper": "runProbeGotifyTest",
-      "dtoOwner": "probe",
-      "requestDto": "NoRequest",
-      "responseDto": "ProbeGotifyTestResponse"
     },
     {
       "id": "probe.installHooks",
@@ -960,13 +945,10 @@
     "SubagentCollection": {
       "core": "SubagentCollection",
       "webui": "SubagentCollection"
-    },
-    "ProbeGotifyTestResponse": {
-      "core": "ProbeGotifyTestResponse",
-      "webui": "ProbeGotifyTestResponse"
     }
   },
   "retiredActions": [
+    "probe.gotifyTest",
     "system.plugins",
     "system.models",
     "system.permissionProfiles",
