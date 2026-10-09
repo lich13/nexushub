@@ -110,7 +110,6 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
         {agent && query.error && <div className="form-error" role="alert">{query.error.message}<button className="file-path-label" onClick={() => void query.refetch()}>重试</button></div>}
         {frame.kind === "list" ? <>
           {!collection && !query.isLoading && <div className="muted-row">更新当前机器服务后可查看子智能体汇总。</div>}
-          {collection && !collection.complete && <div className="muted-row" role="status">{collection.warning || "部分记录无法确认，统计可能不完整"}</div>}
           {[...(collection?.agents ?? [])].sort((a, b) => priority[a.status] - priority[b.status]).map(child => <button
             type="button" className="subagent-list-item" key={child.agentId ?? child.eventId} data-agent-key={child.agentId ?? child.eventId}
             aria-disabled={!child.available} title={child.unavailableReason ?? undefined} onClick={event => openAgent(child, event.currentTarget)}>

@@ -98,7 +98,6 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
       />
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.archivedCleanup} icon={<Archive size={18} />}>
         <div className="cleanup-panel-head">
-          <span>删除 archived 线程与 rollout</span>
           <span className={`status-chip ${opsView.archivedCleanupStage.tone ? `tone-${opsView.archivedCleanupStage.tone}` : "tone-muted"}`}>{opsView.archivedCleanupStage.label}</span>
         </div>
         <div className="archive-plan">
@@ -123,7 +122,6 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
       </Panel>}
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
-          <span>逐项清理隐藏线程，受保护项目自动跳过</span>
           <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
         </div>
         <div className="archive-plan">

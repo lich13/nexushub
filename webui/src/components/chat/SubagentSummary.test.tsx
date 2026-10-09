@@ -38,12 +38,12 @@ describe("direct subagent summary", () => {
     expect(html).toBe("");
   });
 
-  test("partial counts retain their warning even when no child was readable", () => {
+  test("a partial empty collection retains list access without claiming zero active children", () => {
     const html = renderToStaticMarkup(<SubagentSummary
       collection={collection([], { complete: false, warning: "示例直属记录暂不可读" })} onOpen={vi.fn()}
     />);
-    expect(html).toContain("示例直属记录暂不可读");
-    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-label="查看直属子智能体"');
+    expect(html).not.toContain("0 个运行中");
     expect(html).not.toContain("更新当前机器服务");
   });
 

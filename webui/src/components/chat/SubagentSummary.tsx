@@ -20,6 +20,5 @@ export function SubagentSummary({ collection, onOpen }: {
       {counts.unknown > 0 && <span>{counts.unknown} 状态未知</span>}
       <ChevronRight size={14} aria-hidden="true" />
     </button>
-    {!collection.complete && <div className="subagent-summary-note" role="status">{collection.warning || "部分记录无法确认，统计可能不完整"}</div>}
   </div>;
 }
