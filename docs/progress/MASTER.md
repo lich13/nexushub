@@ -2,7 +2,9 @@
 
 ## 版本与交付阶段
 
-**1.2.15 核心实现已完成，正在收尾验收。** 本版增加 Bark 安全诊断、持久化有限重试和分段恢复，统一测试文案并退役旧配置导入。采用普通增量提交，API 协议保持 **2**。正式安装与远程服务仍待本轮发布更新。
+**1.2.15 已发布，两端已更新，正在完成真实入口验收。** 本版增加 Bark 安全诊断、持久化有限重试和分段恢复，统一测试文案并退役旧配置导入。采用普通增量提交，API 协议保持 **2**。
+
+发布实现为 `a15599961f3d0a70c6c423da2077ec3fc3723570`，标签为 [`v1.2.15`](https://github.com/lich13/nexushub/releases/tag/v1.2.15)。
 
 ## 当前实现
 
@@ -16,16 +18,21 @@
 ## 已验证
 
 - 冻结核心实现的受管完整 Rust 测试通过，其中 Web 服务测试 **193 项**；包含等待期间配置变更、分段恢复、租约竞争、未知结果、永久拒绝、事件失效与加密存储回归。
-- 收尾快照的受管前端 **416 项**单元测试、类型检查与构建通过；原核心快照 Clippy 通过。后续仅版本、文档与前端验收夹具变化，提交后的三项 CI 继续验证最终快照。
-- 安装脚本、契约边界、隐私扫描和 diff 检查通过；核心快照扫描 **1,937 项**、无隐私命中。
-- IAB 真实预览确认重试状态、分段进度、尝试次数、失败原因与键盘操作；任务预览和转发已关闭。浅色、窄窗口及 Chromium/WebKit 完整回归待对应 CI；正式 App、远程 API 与设备实收尚待发布后验收。
+- 收尾快照的受管前端 **416 项**单元测试、类型检查与构建通过。实现 SHA 的 [frontend、backend、macOS Tauri 三项 CI](https://github.com/lich13/nexushub/actions/runs/37955289188) 全部通过，包含 Chromium/WebKit 与原生 Tauri 检查。
+- 安装脚本、契约边界和 diff 检查通过；发布资产解包与所有可达 Git 对象的隐私检查共 **1,995 项**，无命中。
+- IAB 真实预览确认重试状态、分段进度、尝试次数、失败原因与键盘操作；任务预览和转发已关闭。
+- [Release 工作流](https://github.com/lich13/nexushub/actions/runs/37956100545) 通过；七项资产的 SHA-256 与 GitHub digest 一致，两份 checksum、Minisign updater 签名和唯一的 `darwin-aarch64` 映射均通过。Linux 包不含网页资源。
+- 正式 macOS App 与通知助手均为 **1.2.15**，二进制与发布包一致。本机测试只点击一次，作业终态成功并显示“Bark 已受理”；旧导入与 Gotify 控件均不存在。配置、Bark 密钥摘要和旧投递终态保留，数据库完整性正常。
+- 腾讯云 API 已更新为 **1.2.15**，二进制哈希与正式资产一致，健康检查正常；旧网页返回 404，未认证 RPC 返回 401。systemd 隔离保留，日志目标 `nexushub_webd=info` 已生效，受保护设置摘要和数据库完整性检查通过。
+- 本机测试的持久化结果为单段、一次尝试、已受理，终态密文已清除。远端投递表升级前后均为空，旧记录迁移的非空样本验证来自本机与自动化测试。
+- 已删除本轮前端构建输出和过期临时摘要，逻辑大小 **611,315 字节**、删除前分配块合计 **626,688 字节**。正式程序、共享依赖及必要恢复材料保留；分配块合计不代表文件系统可用空间的净增量。
 
 ## 待完成
 
-完成最终门禁与界面验收，提交并等待对应 SHA 的 frontend、backend、macOS Tauri 三项 CI；发布七项正式资产，核对 SHA-256、updater 签名和 darwin-aarch64 映射。先更新远程 API，再安装正式 App，确认两端新测试通知实收及关闭 App 后 monitor 持续运行，随后清理本轮暂存。
+App 切换腾讯云时遇到系统钥匙串读取超时，当前界面复核仍显示相同错误，远程测试尚未发送；等待系统授权处理后重试实际入口。两端设备实收、关闭 App 后 monitor 检查及剩余暂存清理尚待完成。升级后的 monitor 日志尚无新投递，不能将未观察到事件写成诊断日志实测通过。状态文档提交继续通过三项 CI。
 
 ## 保留边界
 
 Codex、Claude Code、Grok 的事件识别、会话、搜索、用户指令时间线、工具折叠、Plan、附件、路径和子智能体详情继续使用。Pi、Gotify 与 NexusHub 网页保持退役，保留现有用户会话、连接、API Key、Bark 凭据与通知状态。
 
-发布资产为 macOS ARM64 DMG/checksum、updater archive/signature、latest.json，以及 Linux x86_64 API tarball/checksum，共七项；updater 仅映射 darwin-aarch64。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。网络结果未知时有限重试可能重复提醒；HTTP 成功只记为服务端受理。
+发布资产为 macOS ARM64 DMG/checksum、updater archive/signature、latest.json，以及 Linux x86_64 API tarball/checksum，共七项；updater 仅映射 darwin-aarch64。macOS 包没有 Developer ID 签名或 Apple 公证，系统深层签名校验未通过；Minisign 验签通过不能替代系统代码签名。网络结果未知时有限重试可能重复提醒；HTTP 成功只记为服务端受理。
