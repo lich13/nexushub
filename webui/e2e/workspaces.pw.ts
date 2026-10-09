@@ -226,10 +226,11 @@ test("hidden histories stop polling while started jobs continue to terminal", as
   expect(calls.slice(maintenance).filter(name => ["probe.events", "probe.settings.get", "jobs.list", "system.status"].includes(name))).toEqual([]);
   await nav.getByRole("button", { name: "Probe", exact: true }).click();
   await page.locator(".probe-layout .segmented").getByRole("button", { name: "通知配置" }).click();
-  await page.getByLabel("Device Key", { exact: true }).fill("isolated-fixture-key");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByRole("button", { name: "测试推送", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "测试推送", exact: true }).click();
+  const barkPanel = page.locator(".panel").filter({ has: page.getByLabel("Device Key", { exact: true }) });
+  await barkPanel.getByLabel("Device Key", { exact: true }).fill("isolated-fixture-key");
+  await barkPanel.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(barkPanel.getByRole("button", { name: "测试推送", exact: true })).toBeEnabled();
+  await barkPanel.getByRole("button", { name: "测试推送", exact: true }).click();
   await expect.poll(() => calls.filter(name => name === "jobs.detail").length).toBe(1);
   await nav.getByRole("button", { name: "Codex", exact: true }).click();
   for (let i = 2; i <= 3; i++) {
