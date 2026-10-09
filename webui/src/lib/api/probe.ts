@@ -74,6 +74,10 @@ export async function runProbeBarkTest(): Promise<{ job_id: string }> {
   return startProbeCommand("probe.barkTest", "probe-bark-test");
 }
 
+export async function runProbeGotifyTest(): Promise<{ job_id: string }> {
+  return startProbeCommand("probe.gotifyTest", "probe-gotify-test");
+}
+
 export async function runProbeHooksInstall(): Promise<{ job_id: string }> {
   return startProbeCommand("probe.installHooks", "probe-hooks-install");
 }
@@ -81,7 +85,7 @@ export async function runProbeHooksInstall(): Promise<{ job_id: string }> {
 
 
 async function startProbeCommand(
-  command: "probe.barkTest" | "probe.installHooks",
+  command: "probe.barkTest" | "probe.gotifyTest" | "probe.installHooks",
   fallback: string,
   ): Promise<{ job_id: string }> {
   if (USE_DEMO) return demoJobId(fallback);

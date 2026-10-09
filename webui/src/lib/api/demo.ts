@@ -182,6 +182,7 @@ export function demoProbeSettings(fixture: DemoFixtureKey = "linux-api"): ProbeS
       poll_seconds: 15,
       recent_limit: 50
     },
+    gotify: { enabled: false, server_url: "https://example.invalid/gotify/", priority: 5, token_configured: false },
     notifications: {
       enabled: false,
       device_key_configured: false,

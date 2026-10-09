@@ -14,7 +14,9 @@ use std::{
 use uuid::Uuid;
 
 mod native_probe;
+mod notification_channels;
 pub use native_probe::NativeDelivery;
+pub use notification_channels::{NotificationChannel, NotificationDelivery};
 
 #[derive(Clone)]
 pub struct PanelDb {
@@ -325,6 +327,8 @@ impl PanelDb {
                 [],
             )?;
         }
+        drop(conn);
+        self.migrate_notification_channels()?;
         Ok(())
     }
 
@@ -454,6 +458,14 @@ impl PanelDb {
         })
         .to_string();
         self.set_setting(key, &value)
+    }
+
+    pub fn remove_secret_setting(&self, key: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .expect("db mutex")
+            .execute("DELETE FROM settings WHERE key=?1", [key])?;
+        Ok(())
     }
 
     pub fn get_secret_setting_bytes(&self, key: &str) -> Result<Option<Vec<u8>>> {

@@ -41,6 +41,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "JobsListResponse",
     "NoRequest",
     "ProbeBarkTestResponse",
+    "ProbeGotifyTestResponse",
     "ProbeEventsResponse",
     "ProbeInstallHooksResponse",
     "ProbeSettingsGetResponse",

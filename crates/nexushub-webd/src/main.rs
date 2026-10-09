@@ -2,6 +2,7 @@ mod api;
 mod async_question_monitor;
 mod auth;
 mod linux_adapter;
+mod notification_delivery;
 mod provider_monitor;
 mod question_monitor;
 mod rpc_payload;
@@ -149,6 +150,7 @@ enum ProbeCommand {
         turn_id: Option<String>,
     },
     BarkTest,
+    GotifyTest,
     LifecycleRepair,
     ServiceRestart,
     LegacyImport,
@@ -341,6 +343,13 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
                     "bark": bark,
                 }))?
             );
+        }
+        ProbeCommand::GotifyTest => {
+            let gotify = notification_delivery::gotify_test(config, &db).await?;
+            println!("{}", serde_json::to_string(&json!({"gotify":gotify}))?);
+            if !gotify.sent {
+                anyhow::bail!("Gotify test notification was not accepted by the server");
+            }
         }
         ProbeCommand::BarkTest => {
             let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
@@ -1209,7 +1218,8 @@ async fn install_probe_hooks_with_repair(
         repair_error_monitor(
             &platform,
             config.probe.enabled
-                && (config.probe.error_monitor.enabled || config.probe.notifications.enabled),
+                && (config.probe.error_monitor.enabled
+                    || config.probe.notifications.any_channel_enabled()),
         )?
     };
     let launch_agent_changed = error_monitor_launch_agent
@@ -1544,7 +1554,7 @@ struct HookStopResult {
     bark: ProbeBarkOutcome,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProbeBarkRequest {
     title: String,
     body: String,
@@ -1755,47 +1765,45 @@ async fn record_probe_event_with_bark_timeout(
     }
     let feedback_key = async_question_monitor::delivery_key(&event)
         .or_else(|| question_monitor::delivery_key(&event));
-    if let Some(key) = feedback_key.as_deref() {
-        if !db.claim_feedback_delivery(key)? {
-            return Ok((
-                ProbeEventOutcome::from_claim(&event, false),
-                ProbeBarkOutcome::skipped("feedback_already_claimed", true, true, true),
-            ));
-        }
-    }
+    let feedback_claimed = match feedback_key.as_deref() {
+        Some(key) => db.claim_feedback_delivery(key)?,
+        None => true,
+    };
     let record_plan = probe_service::probe_event_record_plan(event);
     let event = record_plan.event;
-    if passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())? {
-        let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
-        let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
-        let decision =
-            probe_service::probe_bark_delivery_decision(config, &event.kind, configured, true);
-        return Ok((
-            record_plan.duplicate_outcome,
-            ProbeBarkOutcome::skipped(
-                "sent_marker",
-                decision.notifications_enabled,
-                decision.relevant_switch_enabled,
-                decision.device_key_configured,
-            ),
-        ));
-    }
+    let passive_sent =
+        passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())?;
     let claimed = db.claim_probe_dedupe(
         &event.dedupe_namespace,
         &event.dedupe_key,
         event.ttl_seconds,
     )?;
-    let bark = handle_probe_event_bark(config, db, &event, claimed, bark_timeout).await?;
-    if let Some(key) = feedback_key.as_deref() {
-        db.set_setting(key, &serde_json::to_string(&bark)?)?;
+    let (mut bark, gotify) = notification_delivery::codex(
+        config,
+        db,
+        &event,
+        claimed && feedback_claimed && !passive_sent,
+        bark_timeout,
+    )
+    .await?;
+    if passive_sent {
+        bark.reason = Some("sent_marker".into());
+        bark.dedupe_hit = false;
+    }
+    if feedback_claimed {
+        if let Some(key) = feedback_key.as_deref() {
+            db.set_setting(key, &serde_json::to_string(&bark)?)?;
+        }
     }
     let write_plan = probe_service::probe_event_record_write_plan(
         &event,
-        claimed,
+        claimed && feedback_claimed && !passive_sent,
         &bark,
         probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref()),
     )?;
-    if let Some(record) = write_plan.record {
+    if let Some(mut record) = write_plan.record {
+        record.payload["gotify"] = serde_json::to_value(&gotify)?;
+        record.payload["notification_event_key"] = json!(notification_delivery::codex_key(&event));
         db.record_probe_event(NewProbeEvent {
             kind: &record.kind,
             thread_id: record.thread_id.as_deref(),
@@ -1825,38 +1833,6 @@ fn mark_passive_unresolved_action_sent(
     marker: probe_service::ProbePassiveMarkerWrite,
 ) -> Result<()> {
     db.set_setting(&marker.key, &serde_json::to_string(&marker.value)?)
-}
-
-async fn handle_probe_event_bark(
-    config: &Config,
-    db: &PanelDb,
-    event: &nexushub_core::probe::ProbeBuiltEvent,
-    claimed: bool,
-    timeout: std::time::Duration,
-) -> Result<ProbeBarkOutcome> {
-    let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
-    let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
-    let decision =
-        probe_service::probe_bark_delivery_decision(config, &event.kind, configured, claimed);
-    if !decision.should_send {
-        return Ok(ProbeBarkOutcome::skipped(
-            decision.skip_reason.as_deref().unwrap_or("skipped"),
-            decision.notifications_enabled,
-            decision.relevant_switch_enabled,
-            decision.device_key_configured,
-        ));
-    }
-    send_bark_notification(
-        config,
-        device_key.as_deref().unwrap_or_default(),
-        &ProbeBarkRequest {
-            title: event.bark_title.clone(),
-            body: event.bark_body.clone(),
-            dedupe_key: event.dedupe_key.clone(),
-        },
-        timeout,
-    )
-    .await
 }
 
 fn codex_stop_continue_output() -> Value {
@@ -2316,6 +2292,8 @@ async fn run_probe_error_monitor_once(
     db: &PanelDb,
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
+    db.sync_notification_channels(config)?;
+    notification_delivery::retry_pending(config, db).await?;
     if let Err(error) = async_question_monitor::run(config, db).await {
         tracing::warn!(
             "Codex structured question monitor failed: {}",
@@ -2547,7 +2525,7 @@ fn spawn_probe_thread_scan(state: AppState) {
 async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
     let _guard = PROBE_THREAD_SCAN_LOCK.lock().await;
     let config = state.config();
-    if !config.probe.enabled || !config.probe.notifications.enabled {
+    if !config.probe.enabled || !config.probe.notifications.any_channel_enabled() {
         return Ok(0);
     }
     let mut recorded = 0usize;
@@ -2578,6 +2556,12 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
                 .with_body_source(plan.body_source.as_deref())
                 .with_passive_scan_source(),
             );
+            event.payload["notification_source_ms"] = json!(thread
+                .updated_at
+                .as_deref()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .map(|time| time.timestamp_millis())
+                .unwrap_or(0));
             event.payload["thread_title"] = json!(thread.title.clone());
             event.payload["thread_id"] = json!(thread.id.clone());
             if let Some(active_turn_id) = thread.active_turn_id.as_deref() {

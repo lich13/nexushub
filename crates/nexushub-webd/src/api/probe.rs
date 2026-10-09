@@ -187,6 +187,9 @@ fn enrich_probe_error_monitor_status(state: &AppState, mut value: Value) -> Valu
     if let Ok(status) = state.db.native_notification_status() {
         object.insert("provider_notifications".into(), status);
     }
+    if let Ok(status) = state.db.notification_channel_status() {
+        object.insert("notification_channels".into(), status);
+    }
     let runtime = state
         .db
         .get_setting("probe_error_monitor_status")
@@ -261,9 +264,13 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
             .as_deref(),
     );
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
-    let plan = NexusHubUseCases::with_config(config, &platform)
+    let mut plan = NexusHubUseCases::with_config(config, &platform)
         .settings()?
         .probe_settings_view(secret_state)?;
+    plan.settings.gotify.token_configured = state
+        .db
+        .get_secret_setting_bytes(settings_service::PROBE_GOTIFY_TOKEN_SETTING)?
+        .is_some_and(|key| !key.is_empty());
     serde_json::to_value(plan.settings).map_err(anyhow::Error::from)
 }
 

@@ -42,6 +42,7 @@ export const contractDtoNames = [
   "JobsListResponse",
   "NoRequest",
   "ProbeBarkTestResponse",
+  "ProbeGotifyTestResponse",
   "ProbeEventsResponse",
   "ProbeInstallHooksResponse",
   "ProbeSettingsGetResponse",

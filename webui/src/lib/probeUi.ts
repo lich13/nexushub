@@ -10,6 +10,10 @@ export const probeSections = [
 export type ProbeSectionId = typeof probeSections[number]["id"];
 
 export type ProbeSettingsDraft = {
+  gotify: {
+    supported: boolean; enabled: boolean; server_url: string; priority: ProbeNumericDraftValue;
+    token: string; token_configured: boolean; clear_token: boolean;
+  };
   codex: {
     home: string;
     workspace: string;
@@ -72,6 +76,9 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
   const probe = settings.probe ?? {};
   const notifications = settings.notifications ?? {};
   return {
+    gotify: { supported: settings.gotify !== undefined, enabled: settings.gotify?.enabled ?? false,
+      server_url: settings.gotify?.server_url ?? "", priority: settings.gotify?.priority ?? 5,
+      token: "", token_configured: settings.gotify?.token_configured ?? false, clear_token: false },
     codex: {
       home: configuredCodexHomeDraftValue(settings),
       workspace: stringOrEmpty(codex.workspace),
@@ -118,6 +125,7 @@ export function buildProbeSettingsDraft(settings: ProbeSettings): ProbeSettingsD
 }
 
 export type ProbeSettingsPayload = {
+  gotify?: ProbeSettings["gotify"];
   codex: ProbeSettings["codex"];
   probe: Pick<ProbeSettings["probe"], "enabled" | "poll_seconds" | "recent_limit" | "hooks" | "error_monitor" | "notifications" | "observability">;
   notifications?: Pick<ProbeSettings["notifications"], "device_key">;
@@ -183,6 +191,13 @@ export function buildProbeSettingsPayload(
   if (deviceKey) {
     payload.notifications = { device_key: deviceKey };
   }
+  if (draft.gotify.supported) {
+    payload.gotify = {
+      enabled: draft.gotify.enabled && !draft.gotify.clear_token,
+      server_url: draft.gotify.server_url.trim(), priority: requiredDraftNumber(draft.gotify.priority),
+      ...(draft.gotify.clear_token ? { clear_token: true } : draft.gotify.token.trim() ? { token: draft.gotify.token.trim() } : {})
+    };
+  }
   return payload;
 }
 
@@ -206,6 +221,17 @@ export function probeSettingsValidation(draft: ProbeSettingsDraft): string[] {
   }
   if (!isIntegerInRange(draft.observability.event_retention_days, 1, 3650)) errors.push("通知事件保留天数必须在 1 到 3650 天之间");
   if (!draft.notifications.server_url.trim()) errors.push("Bark 服务 URL 不能为空");
+  if (draft.gotify.supported) {
+    if (!isIntegerInRange(draft.gotify.priority, 0, 10)) errors.push("Gotify 优先级必须在 0 到 10 之间");
+    if (draft.gotify.enabled && !draft.gotify.clear_token && !draft.gotify.token_configured && !draft.gotify.token.trim()) errors.push("请先填写 Gotify Application Token");
+    if (draft.gotify.enabled || draft.gotify.server_url.trim()) {
+      try {
+        const url = new URL(draft.gotify.server_url.trim());
+        const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+        if (!(url.protocol === "https:" || url.protocol === "http:" && loopback) || url.username || url.password || url.search || url.hash) throw new Error();
+      } catch { errors.push("Gotify 地址必须使用 HTTPS，且不能包含凭据或查询参数"); }
+    }
+  }
   return errors;
 }
 
@@ -240,6 +266,7 @@ export type ProbeEventCard = {
   source: string;
   time: string;
   bark: { label: string; tone: ProbeEventCardTone };
+  gotify?: { label: string; tone: ProbeEventCardTone };
   dedupe: { label: string; tone: ProbeEventCardTone };
   details: Array<{ label: string; value: string }>;
 };
@@ -304,6 +331,7 @@ export function probeEventCard(event: ProbeEvent): ProbeEventCard {
     source,
     time: cleanProbeEventText(stringFromRecord(payload, "beijing_time")) || probeEventTimeLabel(event.created_at),
     bark: probeEventBarkBadge(event),
+    gotify: probeEventGotifyBadge(event),
     dedupe: probeEventDedupeBadge(event),
     details
   };
@@ -352,6 +380,15 @@ export function probeEventBarkStatus(event: ProbeEvent): string {
   return probeEventBarkBadge(event).label;
 }
 
+export function probeEventGotifyBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } | undefined {
+  const delivery = recordFromRecord(probeEventPayload(event), "gotify");
+  if (!delivery || delivery.reason === "notifications_disabled") return undefined;
+  if (delivery.sent === true) return { label: "Gotify 已送达服务器", tone: "success" };
+  if (delivery.skipped === true) return { label: "Gotify 已跳过", tone: "muted" };
+  const uncertain = ["delivery_outcome_unknown", "delivery_interrupted_outcome_unknown", "response_invalid"].includes(String(delivery.reason));
+  return { label: uncertain ? "Gotify 投递结果未知" : "Gotify 投递失败", tone: "warning" };
+}
+
 export function probeEventBarkBadge(event: ProbeEvent): { label: string; tone: ProbeEventCardTone } {
   const bark = recordFromRecord(probeEventPayload(event), "bark");
   if (!bark) return { label: "Bark 未记录", tone: "muted" };
@@ -394,7 +431,8 @@ export function probeEventKindLabel(kind?: string | null): string {
     reply_needed: "需回复",
     recoverable: "异常/可恢复",
     running: "运行中",
-    "bark-test": "Bark 测试"
+    "bark-test": "Bark 测试",
+    "gotify-test": "Gotify 测试"
   };
   return normalized ? labels[normalized] ?? normalized : "Probe 事件";
 }

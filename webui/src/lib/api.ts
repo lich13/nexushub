@@ -23,6 +23,7 @@ export {
   saveProbeSettings,
   getProbeEvents,
   runProbeBarkTest,
+  runProbeGotifyTest,
   runProbeHooksInstall,
 } from "./api/probe";
 export { getUpdateStatus, updates } from "./api/updates";

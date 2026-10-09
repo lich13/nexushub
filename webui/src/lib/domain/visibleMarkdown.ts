@@ -148,13 +148,14 @@ export function instructionSegments(text: string): InstructionSegment[] {
     const next = lines.find(line => line.index! > start && !code.some(range => range.start <= line.index! && line.index! < range.end)
       && ((line[0].match(/^ {0,3}(#{1,6})\s/)?.[1].length ?? 7) <= depth || instructionLabel(line[0])));
     let end = next?.index ?? text.length;
-    // Native envelopes may contain their own top-level headings and literal
-    // closing-tag examples. Only a standalone, unquoted closing line ends them.
+    // Native closing tags can be adjacent to the next metadata envelope. Match
+    // the token itself, while keeping literal code and quoted examples intact.
     const bodyStart = start + marker[0].length;
     if (/^\s*<INSTRUCTIONS>[ \t]*(?:\r?\n|$)/i.test(text.slice(bodyStart))) {
-      const close = lines.find(line => line.index! >= bodyStart && /^\s*<\/INSTRUCTIONS>\s*$/i.test(line[0])
-        && !code.some(range => range.start <= line.index! && line.index! < range.end));
-      if (close) end = close.index! + close[0].trimEnd().length;
+      const literal = literalMarkdownRanges(text);
+      const close = Array.from(text.matchAll(/<\/INSTRUCTIONS\s*>/gi)).find(match => match.index! >= bodyStart
+        && !literal.some(range => range.start <= match.index! && match.index! < range.end));
+      if (close) end = close.index! + close[0].length;
     }
     add("instructions", start, end);
     cursor = end;

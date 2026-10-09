@@ -27,6 +27,7 @@ pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<Pro
         }
     }
     status.provider_notifications = state.db.native_notification_status()?;
+    status.notification_channels = state.db.notification_channel_status()?;
     let recent_event_count = state
         .db
         .list_probe_events(limit as u32)

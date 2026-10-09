@@ -1,4 +1,4 @@
-# NexusHub 1.2.12
+# NexusHub 1.2.13
 
 NexusHub 是一个只读优先的会话管理工具，用于在 macOS App 中查看 Codex、Claude Code 和 Grok Build 的本机会话，也可以通过受保护的 API 管理一台远程机器。
 
@@ -8,9 +8,18 @@ NexusHub 是一个只读优先的会话管理工具，用于在 macOS App 中查
 - 保留文本与工具的原始顺序；连续工具活动可以展开查看，AGENTS.md 和记忆元数据按安全规则处理。
 - 复制线程 ID、回复和 Plan；Plan 可保存为 Markdown，文件路径可以复制，macOS 本地路径可以在 Finder 中定位。
 - 在 Provider 允许时双击线程标题改名，并对 Codex、Grok 和 Claude Code 提供受保护的归档、删除或恢复操作；Claude Code 兼容常见记录读取，未知或不完整记录保持只读。
-- 通过 Bark 接收明确的完成、失败和需要回复通知；Claude 的空结果可回退到当前回合最后一段回复，工具执行中和取消状态不误报完成。
+- 通过 Bark 或 Gotify 接收明确的完成、失败和需要回复通知；Claude 的空结果可回退到当前回合最后一段回复，工具执行中和取消状态不误报完成。
 
 NexusHub 不发送消息、不接管进程、不执行用户命令，也不会安装或配置 Claude Code 或其他 Provider。阅读和展示不会改写原生会话；改名、归档、恢复及删除只在用户确认的范围内执行。
+
+## 1.2.13 完整指令折叠与安卓推送
+
+- 修复原生 `</INSTRUCTIONS><environment_context>` 同行时只折叠开头的问题；完整指令中的各级标题都留在 AGENTS.md 折叠区，包装外的请求保持原顺序。
+- Probe 新增独立 Gotify 通道，可与 Bark 同时开启。填写 HTTPS 地址、Application Token 和优先级（默认 5），安卓使用官方 Gotify 客户端接收。
+- 两种通道共用 Provider 和事件筛选，独立保存投递结果及去重状态。首次开启不补发历史，单个通道失败不会重复发送另一个已成功的通道。
+- Gotify Token 加密保存，读取接口仅显示是否已配置；推送保留服务子路径，禁止向重定向地址转发 Token。测试成功表示服务器接收，设备收到需另外确认。
+
+普通升级默认关闭 Gotify，原有 Bark 设置继续保留。先升级远程 API 服务，再在所需机器的 Probe 页面保存 Gotify 配置；旧服务未提供该能力时会提示升级。API 协议仍为 **2**，NexusHub 不提供安卓应用，也不恢复网页版。
 
 ## 1.2.12 界面精简
 
@@ -80,9 +89,9 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 - 服务保持 systemd 文件隔离；只为已配置的 Provider 会话根开放精确写入路径。
 - 文件路径、附件和搜索结果都在当前机器范围内解析，客户端不能提交任意文件路径。
 
-## 1.2.12 发布资产
+## 1.2.13 发布资产
 
-[查看 v1.2.12 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.12)。发布页包含七项资产：
+[查看 v1.2.13 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.13)。发布页包含七项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；
