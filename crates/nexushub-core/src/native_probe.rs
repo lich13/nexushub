@@ -108,6 +108,13 @@ pub fn file_identity(path: &Path) -> Result<String> {
     Ok(hex::encode(digest.finalize()))
 }
 
+pub fn retry_event_is_current(provider: NativeProvider, id: &str, event: &NativeTurnEvent) -> bool {
+    match provider {
+        NativeProvider::Grok => crate::grok::notification_event_current(id, event.position),
+        NativeProvider::Claude => true, // Claude snapshots retain only the current native turn.
+    }
+}
+
 pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
     match provider {
         NativeProvider::Claude => {

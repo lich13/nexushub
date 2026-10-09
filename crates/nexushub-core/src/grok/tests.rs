@@ -91,7 +91,7 @@ async fn grok_native_rename_timeout_reaps_the_child() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("result unknown"));
+    assert!(error.to_string().contains("result unknown"), "{error:#}");
     let pid = fs::read_to_string(paths.home.join("pid")).unwrap();
     let status = std::process::Command::new("kill")
         .args(["-0", pid.trim()])

@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.14 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub 1.2.15 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -89,3 +89,9 @@ Codex 子智能体行独立于工具组，显示任务名称和自身回合状�
 完整原生 AGENTS.md 包装默认关闭，包括结束标签与后续环境标签同行的记录。摘要按完整片段计算行数和字节数，展开使用受限高度的原文区域，普通请求独立显示。
 
 Probe 仅展示 Bark 设置与既有 Provider、事件筛选。移除退休通道的卡片、测试按钮、加载状态与结果字段，不保留空白占位或额外说明。
+
+## 1.2.15 Bark 状态与测试反馈
+
+同一事件卡片显示最新投递结果，重试成功不新建卡片。“等待重试”显示下次时间；“重试中”显示当前次数；确认成功显示“Bark 已受理”；最终拒绝、结果不明和停止投递分别显示“发送失败”“结果未确认”“已跳过”。错误仅使用安全中文分类，分段通知显示已确认进度。
+
+测试标题统一为“NexusHub 推送测试”，正文分别为“来自本机的测试通知。”或“来自腾讯云的测试通知。”。任务入队不显示发送成功，等待期间保留运行状态；受理和失败结果就地呈现。旧程序名称、配置导入入口和无用诊断字段不进入产品输出。

@@ -177,6 +177,26 @@ pub(crate) fn notification_snapshots(paths: &GrokPaths) -> Result<crate::native_
     Ok(scan)
 }
 
+/// Retry validation only; historic terminal events still feed the initial scan unchanged.
+pub(crate) fn notification_event_current(id: &str, position: u64) -> bool {
+    let paths = GrokPaths::default_for_user();
+    let Ok(summary) =
+        resolve_session_with_activity(&paths, id, &activity::Snapshot::capture(&paths))
+    else {
+        return false;
+    };
+    let path = summary.path.join("events.jsonl");
+    let Ok(events) = crate::native_probe::read_jsonl(&path) else {
+        return false;
+    };
+    if position as usize > events.len() {
+        return false;
+    }
+    !events[position as usize..]
+        .iter()
+        .any(|r| matches!(r["type"].as_str(), Some("turn_started" | "turn_ended")))
+}
+
 pub(crate) fn grok_session_summary(paths: &GrokPaths, id: &str) -> Result<GrokSessionSummary> {
     resolve_session(paths, id)
 }

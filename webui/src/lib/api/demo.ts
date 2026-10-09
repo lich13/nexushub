@@ -197,6 +197,32 @@ export function demoSavedProbeSettings(settings: Partial<ProbeSettings>, fixture
 
 
 export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse> {
+  const retryEvents = [
+    { status: "waiting_retry", reason: "connection", title: "等待网络恢复" },
+    { status: "retrying", reason: "timeout", title: "继续投递通知" },
+    { status: "failed", reason: "apns_permanent_rejection", title: "服务拒绝通知" },
+    { status: "unknown", reason: "response_read", title: "投递结果待确认" }
+  ].map(({ status, reason, title }, index) => ({
+    id: `probe-retry-${status}-demo`,
+    kind: "completion",
+    thread_id: "fixture-notification-thread",
+    title,
+    message: "示例任务已经完成。",
+    dedupe_key: `fixture-notification-${status}`,
+    source: "fixture-monitor",
+    payload: {
+      thread_title: title,
+      body_summary: "示例任务已经完成。",
+      bark: {
+        sent: false, skipped: false, status, reason,
+        attempts: status === "waiting_retry" ? 1 : status === "retrying" ? 2 : 3,
+        request_count: 4, chunk_count: 3, confirmed_chunks: 1,
+        next_retry_ms: status === "waiting_retry" ? Date.now() + 60000 : null
+      }
+    },
+    created_at: new Date(Date.now() - (index + 3) * 300000).toISOString(),
+    handled_at: null
+  }));
   return {
     available: true,
     data: {
@@ -280,7 +306,8 @@ export function demoProbeEvents(limit = 10): OptionalResult<ProbeEventsResponse>
           },
           created_at: new Date(Date.now() - 600000).toISOString(),
           handled_at: null
-        }
+        },
+        ...retryEvents
       ]
     }
   };
@@ -416,7 +443,7 @@ export function demoHiddenThreadDeleteResult(): HiddenThreadDeleteResult {
 
 export function demoJobs(): JobRecord[] {
   return [
-    { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "Probe Bark 测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "POST https://api.day.app\nHTTP 200\nBark push accepted" },
+    { id: "probe-bark-demo", kind: "probe_bark_test", status: "succeeded", title: "NexusHub 推送测试", started_at: 1780731706, finished_at: 1780731710, exit_code: 0, output: "NexusHub 推送测试\n来自本机的测试通知。\nBark 已受理" },
     { id: "job-demo", kind: "nexushub_update_check", status: "succeeded", title: "NexusHub update precheck", started_at: 1780731606, output: "version check\nintegrity_check: ok" },
     { id: "job-failed-demo", kind: "panel_update", status: "failed", title: "Panel update", started_at: 1780731206, finished_at: 1780731252, exit_code: 1, output: "download release asset\nverify checksum", error: "release asset checksum mismatch", analysis: "Downloaded asset digest did not match release metadata.", explanation: "Retry after confirming the release asset has finished publishing." }
   ];

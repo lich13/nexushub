@@ -293,7 +293,7 @@ mod tests {
         assert!(server.request().contains("POST"));
         assert_eq!(
             db.list_probe_events(10).unwrap()[0].payload["bark_status"],
-            "failed"
+            "queued"
         );
         stream.record_count = 3;
         stream.settled_count = 3;

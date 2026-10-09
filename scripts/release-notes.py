@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.15": [
+        "Bark 网络异常后有限重试，重启继续未确认分段，减少漏推。",
+        "细分安全错误与中文投递状态，统一 NexusHub 测试文案并移除旧配置导入。",
+    ],
     "1.2.14": [
         "移除 Gotify 设置和推送能力，通知统一使用 Bark。",
         "升级清理旧通道配置与投递数据，保留 Bark 去重状态和 AGENTS.md 完整折叠修复。",
@@ -127,6 +131,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.15":
+        sections = {
+            "版本概览": ["本版改善 Bark 在网络波动后的投递，增加持久化有限重试、分段恢复和明确的中文反馈。"],
+            "功能调整": [
+                "每个分段最多尝试 3 次，两次重试通常等待 15 秒、60 秒并加入 ±20% 抖动；从首次投递起最长保留 10 分钟，尊重服务端 Retry-After。",
+                "重启后继续未确认的分段，已成功分段不重发；Hook 保持短等待，重试由后台 monitor 处理。",
+                "界面区分等待重试、重试中、Bark 已受理、发送失败、结果未确认和已跳过，并显示次数及分段进度。",
+            ],
+            "问题修复": [
+                "网络故障不再统一折叠为 request_error；按 DNS、连接、TLS、超时、响应读取、HTTP 或 Bark 拒绝分类，诊断不记录地址、Key 或通知正文。",
+                "每次重试重新核对事件、开关与投递目标，等待期间修改配置也会停止失效通知；恢复成功更新原事件。",
+                "测试统一使用“NexusHub 推送测试”和本机／腾讯云来源正文，等待真实受理结果；移除旧程序配置导入实现与旧产品文案。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，不新增公共命令或数据库表；保留现有会话、Keychain 连接、管理员 API Key、Bark 凭据及通知基线。",
+                "升级不补发历史失败或终态未知结果。新队列加密保存正文，完成或停止后清除；凭据错误、证书验证失败、重定向及已知永久 APNs 错误不重试。",
+                "本版优先减少漏推，结果不明时也有限重试，可能产生重复提醒。稳定通知 ID 仅辅助去重，不能保证客户端不再次响铃。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：API 服务包与 SHA-256 校验文件；latest.json 仅映射 darwin-aarch64，共七项资产。",
+                "不提供 Linux 桌面包、网页版或安卓安装包。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App；分别发送一次推送测试，在设备上确认收到。Bark 已受理只表示服务端确认。",
+                "沿用现有通知设置；自有 monitor 日志过滤目标应为 nexushub_webd。旧配置导入入口不再执行。",
+                "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.14":
         sections = {

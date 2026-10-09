@@ -364,10 +364,6 @@ fn probe_diagnostics_lifecycle_and_hook_status_expose_builtin_runtime_boundaries
         .iter()
         .any(|boundary| boundary.contains("不执行自动回复")));
     assert_eq!(
-        diagnostics.effective_constants["legacy_sentinel_cli_runtime"],
-        false
-    );
-    assert_eq!(
         diagnostics.effective_constants["hidden_desktop_control"],
         false
     );
@@ -484,8 +480,11 @@ fn probe_bark_test_plan_redacts_device_key_and_keeps_payload_minimal() {
     assert_eq!(plan.kind, "bark-test");
     assert_eq!(plan.payload["configured"], true);
     assert_eq!(plan.payload["device_key"], "[configured]");
-    assert_eq!(plan.payload["bark_payload"]["title"], "Codex Sentinel Lite");
-    assert_eq!(plan.payload["bark_payload"]["body"], "Bark 推送通道正常。");
+    assert_eq!(plan.payload["bark_payload"]["title"], "NexusHub 推送测试");
+    assert_eq!(
+        plan.payload["bark_payload"]["body"],
+        nexushub_core::probe::bark_test_body()
+    );
     assert!(plan.payload["bark_payload"].get("device_key").is_none());
     assert!(plan.payload["bark_payload"].get("sound").is_none());
     assert!(plan.payload["bark_payload"].get("group").is_none());

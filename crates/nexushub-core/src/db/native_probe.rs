@@ -115,15 +115,27 @@ impl PanelDb {
     }
     /// Delivery confirmation and the visible Probe event commit atomically.
     pub fn finish_native_delivery(&self, delivery: &NativeDelivery, bark: Value) -> Result<()> {
-        let status = if bark.get("sent").and_then(Value::as_bool) == Some(true) {
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let saved: Option<String> = tx.query_row(
+            "SELECT outcome_json FROM probe_notification_deliveries WHERE event_key=?1 AND channel='bark'",
+            [format!("native:{}", delivery.event_key)], |r| r.get(0)).optional()?.flatten();
+        // Another sender may have advanced the durable queue while this caller was suspended.
+        let bark = saved
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?
+            .unwrap_or(bark);
+        let status = if matches!(bark["status"].as_str(), Some("waiting_retry" | "retrying")) {
+            "queued"
+        } else if bark["status"] == "unknown" {
+            "unknown"
+        } else if bark.get("sent").and_then(Value::as_bool) == Some(true) {
             "sent"
         } else if bark.get("skipped").and_then(Value::as_bool) == Some(true) {
             "skipped"
         } else {
             "failed"
         };
-        let mut conn = self.conn.lock().expect("db mutex");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed=tx.execute("UPDATE native_probe_deliveries SET status=?2,updated_at=?3 WHERE event_key=?1 AND status='delivering'",params![delivery.event_key,status,Self::now()])?;
         if changed > 0 {
             let summary = delivery.event.body.chars().take(240).collect::<String>();
@@ -145,24 +157,11 @@ impl PanelDb {
                 .collect::<Result<Vec<_>>>()?
         };
         for delivery in deliveries {
-            // Bark has no transport-level idempotency guarantee. A crashed
-            // in-flight delivery is explicitly uncertain and is not replayed.
-            self.finish_native_delivery(&delivery,json!({"sent":false,"skipped":false,"reason":"delivery_interrupted_outcome_unknown"}))?;
+            // The channel ledger owns recovery. Never create a second delivery here.
+            let outcome=self.notification_delivery_outcome(super::NotificationChannel::Bark,&format!("native:{}",delivery.event_key))?
+                .unwrap_or_else(||json!({"sent":false,"skipped":false,"status":"unknown","reason":"delivery_interrupted_outcome_unknown"}));
+            self.finish_native_delivery(&delivery, outcome)?;
         }
-        Ok(())
-    }
-    /// Only retry explicit transient server rejections. A lost response has an
-    /// unknown delivery outcome, so it must not be replayed automatically.
-    pub fn retry_rejected_claude_deliveries(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
-            "UPDATE native_probe_deliveries SET status='pending',updated_at=?1
-             WHERE provider='claude_code' AND status='failed' AND updated_at < ?1-60
-             AND (SELECT count(*) FROM probe_events e WHERE e.dedupe_key=native_probe_deliveries.event_key) < 3
-             AND (SELECT json_extract(e.payload_json,'$.bark.http_status') FROM probe_events e
-                  WHERE e.dedupe_key=native_probe_deliveries.event_key ORDER BY e.created_at DESC LIMIT 1) IN (429,500,502,503,504)",
-            [Self::now()],
-        )?;
         Ok(())
     }
     pub fn native_notification_status(&self) -> Result<Value> {
@@ -172,7 +171,7 @@ impl PanelDb {
             let row=conn.query_row("SELECT enabled,scanned_at,stream_count,error_count FROM native_probe_providers WHERE provider=?1",[provider.as_str()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,i64>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?))).optional()?;
             let (enabled, last_scan, streams, errors) = row.unwrap_or((false, 0, 0, 0));
             let failed:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status='failed'",[provider.as_str()],|r|r.get(0))?;
-            let pending:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status IN ('pending','delivering')",[provider.as_str()],|r|r.get(0))?;
+            let pending:u64=conn.query_row("SELECT count(*) FROM native_probe_deliveries WHERE provider=?1 AND status IN ('pending','delivering','queued')",[provider.as_str()],|r|r.get(0))?;
             statuses.push(json!({"provider":provider,"enabled":enabled,"last_scan_at":last_scan,"streams":streams,"read_errors":errors,"failed_deliveries":failed,"pending_deliveries":pending,"failure_supported":true}));
         }
         Ok(Value::Array(statuses))
@@ -199,7 +198,7 @@ mod tests {
     use super::*;
     use crate::native_probe::{NativeStreamSnapshot, NativeTurnEvent};
     #[test]
-    fn claude_upgrade_baselines_old_streams_and_confirmed_rejections_retry_boundedly() {
+    fn claude_upgrade_baselines_old_streams_and_keeps_channel_delivery_ownership() {
         let db = PanelDb::open(":memory:").unwrap();
         let config = config();
         let now = chrono::Utc::now().timestamp_millis() + 1000;
@@ -227,27 +226,14 @@ mod tests {
             1
         );
         let delivery = db.pending_native_deliveries(10).unwrap().pop().unwrap();
-        for attempt in 1..=3 {
-            assert!(db.claim_native_delivery(&delivery.event_key).unwrap());
-            assert!(!db.claim_native_delivery(&delivery.event_key).unwrap());
-            db.finish_native_delivery(
-                &delivery,
-                json!({"sent":false,"skipped":false,"http_status":503}),
-            )
-            .unwrap();
-            db.retry_rejected_claude_deliveries().unwrap();
-            assert!(db.pending_native_deliveries(10).unwrap().is_empty());
-            db.conn
-                .lock()
-                .unwrap()
-                .execute("UPDATE native_probe_deliveries SET updated_at=0", [])
-                .unwrap();
-            db.retry_rejected_claude_deliveries().unwrap();
-            assert_eq!(
-                db.pending_native_deliveries(10).unwrap().len(),
-                usize::from(attempt < 3)
-            );
-        }
+        assert!(db.claim_native_delivery(&delivery.event_key).unwrap());
+        db.finish_native_delivery(
+            &delivery,
+            json!({"sent":false,"skipped":false,"http_status":503}),
+        )
+        .unwrap();
+        assert!(!db.claim_native_delivery(&delivery.event_key).unwrap());
+        assert!(db.pending_native_deliveries(10).unwrap().is_empty());
         let conn = db.conn.lock().unwrap();
         assert_eq!(
             conn.query_row("SELECT status FROM native_probe_deliveries", [], |r| r

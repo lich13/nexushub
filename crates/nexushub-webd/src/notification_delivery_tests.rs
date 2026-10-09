@@ -1,4 +1,5 @@
 use super::*;
+use crate::send_bark_notification;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
@@ -14,6 +15,7 @@ use nexushub_core::{
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
     fs,
     io::Write,
     path::PathBuf,
@@ -29,6 +31,7 @@ struct Reply {
     status: StatusCode,
     body: Vec<u8>,
     delay: Duration,
+    headers: Vec<(String, String)>,
 }
 
 impl Reply {
@@ -37,11 +40,17 @@ impl Reply {
             status,
             body: serde_json::to_vec(&value).unwrap(),
             delay: Duration::ZERO,
+            headers: Vec::new(),
         }
     }
 
     fn bark() -> Self {
         Self::json(StatusCode::OK, json!({"code":200}))
+    }
+
+    fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 
@@ -52,9 +61,17 @@ struct CapturedRequest {
     body: Value,
 }
 
+#[derive(Default)]
+struct RequestGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
 struct ServerState {
     reply: Mutex<Reply>,
+    replies: Mutex<VecDeque<Reply>>,
     requests: Mutex<Vec<CapturedRequest>>,
+    request_gate: Mutex<Option<Arc<RequestGate>>>,
 }
 
 struct LoopbackServer {
@@ -74,13 +91,26 @@ async fn capture_request(
         uri: parts.uri.to_string(),
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     });
-    let reply = state.reply.lock().unwrap().clone();
+    let request_gate = state.request_gate.lock().unwrap().take();
+    if let Some(gate) = request_gate {
+        gate.entered.notify_one();
+        gate.release.notified().await;
+    }
+    let reply = state
+        .replies
+        .lock()
+        .unwrap()
+        .pop_front()
+        .unwrap_or_else(|| state.reply.lock().unwrap().clone());
     if !reply.delay.is_zero() {
         tokio::time::sleep(reply.delay).await;
     }
-    let response = Response::builder()
+    let mut response = Response::builder()
         .status(reply.status)
         .header("Content-Type", "application/json");
+    for (name, value) in reply.headers {
+        response = response.header(name, value);
+    }
     response.body(Body::from(reply.body)).unwrap()
 }
 
@@ -88,7 +118,9 @@ impl LoopbackServer {
     async fn new(reply: Reply) -> Self {
         let state = Arc::new(ServerState {
             reply: Mutex::new(reply),
+            replies: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
+            request_gate: Mutex::new(None),
         });
         let router = Router::new()
             .fallback(capture_request)
@@ -103,6 +135,16 @@ impl LoopbackServer {
 
     fn reply(&self, reply: Reply) {
         *self.state.reply.lock().unwrap() = reply;
+    }
+
+    fn replies(&self, replies: Vec<Reply>) {
+        *self.state.replies.lock().unwrap() = replies.into();
+    }
+
+    fn gate_next_request(&self) -> Arc<RequestGate> {
+        let gate = Arc::new(RequestGate::default());
+        *self.state.request_gate.lock().unwrap() = Some(gate.clone());
+        gate
     }
 
     fn requests(&self) -> Vec<CapturedRequest> {
@@ -340,18 +382,87 @@ async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay
         codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
         codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT),
     );
-    assert_eq!(
-        usize::from(first.unwrap().sent) + usize::from(second.unwrap().sent),
-        1
-    );
+    let outcomes = [first.unwrap(), second.unwrap()];
+    assert!(outcomes.iter().any(|outcome| outcome.sent));
+    assert!(outcomes.iter().all(|outcome| outcome.sent
+        || (!outcome.skipped && outcome.status.as_deref() == Some("retrying"))));
     assert_eq!(fixture.bark.count(), 1);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     let duplicate = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(duplicate.skipped && !duplicate.sent);
+    assert!(duplicate.sent || duplicate.skipped);
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 1);
+}
+
+#[tokio::test]
+async fn an_initial_lease_claimed_elsewhere_stays_retrying_at_repeated_entrances() {
+    let fixture = Fixture::new().await;
+    let event = fixture.event();
+    let key = codex_key(&event);
+    let candidate = queued_candidate(
+        &fixture.config,
+        &fixture.db,
+        Source::Codex {
+            event: Box::new(event.clone()),
+            fingerprint: codex_fingerprint(&fixture.config, &event),
+        },
+        fixture.request(),
+        fixture.event_ms(),
+    )
+    .unwrap();
+    assert!(fixture
+        .db
+        .stage_notification_delivery(
+            NotificationChannel::Bark,
+            &key,
+            candidate.event_ms,
+            &serde_json::to_value(&candidate).unwrap(),
+        )
+        .unwrap());
+    let other_entrance = PanelDb::open(fixture.db.path()).unwrap();
+    let lease = other_entrance
+        .claim_notification_delivery(NotificationChannel::Bark, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!((lease.chunk_index, lease.chunk_attempts), (0, 1));
+    let stored = fixture
+        .db
+        .notification_delivery_outcome(NotificationChannel::Bark, &key)
+        .unwrap()
+        .expect("the first in-flight attempt must expose its durable status");
+    let outcomes = [
+        serde_json::from_value::<ProbeBarkOutcome>(stored).unwrap(),
+        process(
+            &|| Ok(fixture.config.clone()),
+            &fixture.db,
+            &key,
+            NotificationChannel::Bark,
+            &candidate,
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .unwrap(),
+        codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+            .await
+            .unwrap(),
+    ];
+    for outcome in outcomes {
+        assert_eq!(outcome.status.as_deref(), Some("retrying"));
+        assert!(!outcome.sent && !outcome.skipped);
+        assert_eq!(outcome.attempts, 1);
+        assert_eq!(outcome.request_count, 1);
+        assert_eq!(outcome.chunk_count, 1);
+        assert_eq!(outcome.confirmed_chunks, 0);
+        assert!(outcome.next_retry_ms.is_none());
+    }
+    assert_eq!(
+        fixture.status(NotificationChannel::Bark, &key),
+        "delivering"
+    );
+    assert_eq!(fixture.bark.count(), 0);
 }
 
 #[tokio::test]
@@ -409,13 +520,13 @@ async fn bark_delivers_native_grok_and_claude_events_without_replaying_them() {
         let duplicate = native(&fixture.config, &reopened, &delivery, REQUEST_TIMEOUT)
             .await
             .unwrap();
-        assert!(duplicate.skipped && !duplicate.sent);
+        assert!(duplicate.sent || duplicate.skipped);
         assert_eq!(fixture.bark.count(), 1);
     }
 }
 
 #[tokio::test]
-async fn invalid_bark_acknowledgement_is_unknown_and_never_retried() {
+async fn invalid_bark_acknowledgement_is_retried_and_recovers_after_restart() {
     let fixture = Fixture::new().await;
     let mut invalid = Reply::bark();
     invalid.body = b"fixture-invalid-json".to_vec();
@@ -426,18 +537,23 @@ async fn invalid_bark_acknowledgement_is_unknown_and_never_retried() {
         .await
         .unwrap();
     assert!(!outcome.sent && !outcome.skipped);
-    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "unknown");
-    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    assert_eq!(outcome.reason.as_deref(), Some("response_decode"));
+    assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(fixture.bark.count(), 2);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    let requests = fixture.bark.requests();
+    assert_eq!(requests[0].body["id"], requests[1].body["id"]);
 }
 
 #[tokio::test]
 async fn explicit_transient_failures_are_retried_at_most_three_times_across_restart() {
-    for status in [429, 500, 502, 503, 504] {
+    for status in [408, 429, 500, 502, 503, 504] {
         let fixture = Fixture::new().await;
         fixture.bark.reply(Reply::json(
             StatusCode::from_u16(status).unwrap(),
@@ -467,8 +583,16 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         let duplicate = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
             .await
             .unwrap();
-        assert!(duplicate.skipped);
+        assert!(!duplicate.sent);
+        assert_eq!(duplicate.status.as_deref(), Some("failed"));
         assert_eq!(fixture.bark.count(), 3);
+        let requests = fixture.bark.requests();
+        let id = requests[0].body["id"].as_str().unwrap();
+        assert!(!id.is_empty());
+        assert!(requests.iter().all(|request| request.body["id"] == id));
+        for private in [TOKEN, BODY, "fixture-main", "fixture-event"] {
+            assert!(!id.contains(private));
+        }
     }
 }
 
@@ -521,7 +645,17 @@ async fn a_successful_bark_retry_updates_the_existing_business_event() {
 
 #[tokio::test]
 async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_switches() {
-    for change in ["transcript", "identity", "provider", "event", "channel"] {
+    for change in [
+        "transcript",
+        "rewritten",
+        "replaced",
+        "identity",
+        "provider",
+        "event",
+        "channel",
+        "target",
+        "secret",
+    ] {
         let mut fixture = Fixture::new().await;
         fixture.bark.reply(Reply::json(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -536,6 +670,14 @@ async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_s
         fixture.due_now(&key);
         match change {
             "transcript" => writeln!(fs::OpenOptions::new().append(true).open(&fixture.rollout).unwrap(), "{}", json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"next-fixture-turn"}})).unwrap(),
+            "rewritten" => fs::write(&fixture.rollout, "{}\n").unwrap(),
+            "replaced" => {
+                let bytes = fs::read(&fixture.rollout).unwrap();
+                fs::rename(&fixture.rollout, fixture.rollout.with_extension("previous")).unwrap();
+                fs::write(&fixture.rollout, bytes).unwrap();
+            }
+            "target" => fixture.config.probe.notifications.server_url = format!("{}/different-target", fixture.bark.url),
+            "secret" => fixture.db.set_secret_setting_bytes(PROBE_BARK_DEVICE_KEY_SETTING, b"fixture-replacement-device-key").unwrap(),
             "identity" => {
                 Connection::open(fixture.config.codex.home.join("state_5.sqlite")).unwrap().execute("DELETE FROM threads WHERE id='fixture-main'", []).unwrap();
             }
@@ -557,7 +699,130 @@ async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_s
 }
 
 #[tokio::test]
-async fn timeout_keeps_unknown_outcome_and_never_resends_after_restart() {
+async fn retry_batch_reloads_configuration_after_an_earlier_request_has_started() {
+    for change in ["target", "channel", "provider", "event"] {
+        let fixture = Fixture::new().await;
+        let replacement = LoopbackServer::new(Reply::bark()).await;
+        fixture.bark.reply(Reply::json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"fixture rejection"}),
+        ));
+        let mut keys = Vec::new();
+        for dedupe_key in ["fixture-first-event", "fixture-second-event"] {
+            let mut event = fixture.event();
+            event.dedupe_key = dedupe_key.into();
+            let key = codex_key(&event);
+            let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+                .await
+                .unwrap();
+            assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
+            fixture.due_now(&key);
+            keys.push(key);
+        }
+        assert_eq!(fixture.bark.count(), 2);
+        fixture.bark.reply(Reply::bark());
+        let gate = fixture.bark.gate_next_request();
+        let live_config = Mutex::new(fixture.config.clone());
+        let load_config = || Ok(live_config.lock().unwrap().clone());
+        let update_config = async {
+            tokio::time::timeout(REQUEST_TIMEOUT, gate.entered.notified())
+                .await
+                .expect("the first queued retry must reach the original endpoint");
+            {
+                let mut config = live_config.lock().unwrap();
+                match change {
+                    "target" => config.probe.notifications.server_url = replacement.url.clone(),
+                    "channel" => config.probe.notifications.enabled = false,
+                    "provider" => config.probe.notifications.notify_codex = false,
+                    "event" => config.probe.notifications.notify_completion = false,
+                    _ => unreachable!(),
+                }
+            }
+            gate.release.notify_one();
+        };
+        let (result, ()) = tokio::join!(
+            retry_pending_with_config(&fixture.db, &load_config),
+            update_config
+        );
+        result.unwrap();
+        assert_eq!(fixture.bark.count(), 3, "{change}");
+        assert_eq!(replacement.count(), 0, "{change}");
+        let mut statuses: Vec<_> = keys
+            .iter()
+            .map(|key| fixture.status(NotificationChannel::Bark, key))
+            .collect();
+        statuses.sort();
+        assert_eq!(statuses, ["sent", "skipped"], "{change}");
+    }
+}
+
+#[tokio::test]
+async fn retry_reloads_configuration_after_source_validation_before_sending() {
+    for change in ["target", "channel", "provider", "event", "home"] {
+        let fixture = Fixture::new().await;
+        let replacement = LoopbackServer::new(Reply::bark()).await;
+        let event = fixture.event();
+        let key = codex_key(&event);
+        let candidate = queued_candidate(
+            &fixture.config,
+            &fixture.db,
+            Source::Codex {
+                event: Box::new(event.clone()),
+                fingerprint: codex_fingerprint(&fixture.config, &event),
+            },
+            fixture.request(),
+            fixture.event_ms(),
+        )
+        .unwrap();
+        assert!(current(&fixture.config, &fixture.db, &candidate).await);
+        assert!(fixture
+            .db
+            .stage_notification_delivery(
+                NotificationChannel::Bark,
+                &key,
+                candidate.event_ms,
+                &serde_json::to_value(&candidate).unwrap(),
+            )
+            .unwrap());
+        let mut changed_config = fixture.config.clone();
+        match change {
+            "target" => changed_config.probe.notifications.server_url = replacement.url.clone(),
+            "channel" => changed_config.probe.notifications.enabled = false,
+            "provider" => changed_config.probe.notifications.notify_codex = false,
+            "event" => changed_config.probe.notifications.notify_completion = false,
+            "home" => changed_config.codex.home = fixture.root.join("replacement-codex"),
+            _ => unreachable!(),
+        }
+        let initial_config = Mutex::new(Some(fixture.config.clone()));
+        let load_config = || {
+            Ok(initial_config
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| changed_config.clone()))
+        };
+        let outcome = process(
+            &load_config,
+            &fixture.db,
+            &key,
+            NotificationChannel::Bark,
+            &candidate,
+            REQUEST_TIMEOUT,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(outcome.skipped && !outcome.sent, "{change}");
+        assert_eq!(outcome.status.as_deref(), Some("skipped"), "{change}");
+        assert_eq!(fixture.bark.count(), 0, "{change}");
+        assert_eq!(replacement.count(), 0, "{change}");
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "skipped");
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    }
+}
+
+#[tokio::test]
+async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     let fixture = Fixture::new().await;
     let mut delayed = Reply::bark();
     delayed.delay = Duration::from_secs(1);
@@ -574,20 +839,401 @@ async fn timeout_keeps_unknown_outcome_and_never_resends_after_restart() {
     .await
     .unwrap();
     assert!(!outcome.sent && !outcome.skipped);
+    assert_eq!(outcome.reason.as_deref(), Some("timeout"));
+    assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
     assert!(outcome.http_status.is_none());
     assert_eq!(outcome.request_count, 1);
     assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
+    fixture.bark.reply(Reply::bark());
+    fixture.due_now(&key);
+    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    retry_pending(&fixture.config, &reopened).await.unwrap();
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+    let requests = fixture.bark.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body["id"], requests[1].body["id"]);
+    codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(fixture.bark.count(), 2);
+}
+
+#[tokio::test]
+async fn permanent_http_and_apns_rejections_never_enter_retry_queue() {
+    let mut cases: Vec<Reply> = [400, 401, 403, 404, 413, 425, 501, 599]
+        .into_iter()
+        .map(|status| Reply::json(StatusCode::from_u16(status).unwrap(), json!({"code":200})))
+        .collect();
+    for reason in ["BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"] {
+        cases.push(Reply::json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"code":500,"message":format!("{reason} {TOKEN}")}),
+        ));
+    }
+    for reply in cases {
+        let fixture = Fixture::new().await;
+        fixture.bark.reply(reply);
+        let event = fixture.event();
+        let key = codex_key(&event);
+        let outcome = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+            .await
+            .unwrap();
+        assert!(!outcome.sent && !outcome.skipped);
+        assert_eq!(outcome.status.as_deref(), Some("failed"));
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "failed");
+        fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+        let rendered = serde_json::to_string(&outcome).unwrap();
+        assert!(!rendered.contains(TOKEN));
+        assert!(!rendered.contains(&fixture.bark.url));
+        fixture.due_now(&key);
+        let reopened = PanelDb::open(fixture.db.path()).unwrap();
+        retry_pending(&fixture.config, &reopened).await.unwrap();
+        assert_eq!(fixture.bark.count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn bark_requires_both_a_successful_http_status_and_code_200() {
+    for (status, body, sent, retryable, uncertain) in [
+        (200, json!({"code":200}), true, false, false),
+        (202, json!({"code":200}), true, false, false),
+        (200, json!({"code":429}), false, true, false),
+        (200, json!({"code":400}), false, false, false),
+        (
+            200,
+            json!({"message":"fixture missing acknowledgement"}),
+            false,
+            true,
+            true,
+        ),
+        (400, json!({"code":200}), false, false, false),
+        (503, json!({"code":200}), false, true, false),
+    ] {
+        let fixture = Fixture::new().await;
+        fixture
+            .bark
+            .reply(Reply::json(StatusCode::from_u16(status).unwrap(), body));
+        let outcome = send_bark_notification(
+            &fixture.config,
+            TOKEN.as_bytes(),
+            &fixture.request(),
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (outcome.sent, outcome.retryable, outcome.uncertain),
+            (sent, retryable, uncertain)
+        );
+        assert_eq!(outcome.http_status, Some(status));
+        assert_eq!(fixture.bark.count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn redirects_are_rejected_without_forwarding_the_device_key() {
+    let fixture = Fixture::new().await;
+    let destination = LoopbackServer::new(Reply::bark()).await;
+    fixture.bark.reply(
+        Reply::json(StatusCode::TEMPORARY_REDIRECT, json!({"code":200}))
+            .header("Location", &format!("{}/push", destination.url)),
+    );
+    let outcome = send_bark_notification(
+        &fixture.config,
+        TOKEN.as_bytes(),
+        &fixture.request(),
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.sent && !outcome.retryable);
+    assert_eq!(outcome.reason.as_deref(), Some("redirect_rejected"));
+    assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(destination.count(), 0);
+    assert!(!serde_json::to_string(&outcome)
+        .unwrap()
+        .contains(&destination.url));
+}
+
+#[tokio::test]
+async fn retry_after_headers_reach_the_persistent_schedule() {
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(
+        Reply::json(StatusCode::TOO_MANY_REQUESTS, json!({"code":429}))
+            .header("Retry-After", "120"),
+    );
+    let before = chrono::Utc::now().timestamp_millis();
+    let outcome = codex(
+        &fixture.config,
+        &fixture.db,
+        &fixture.event(),
+        true,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    let after = chrono::Utc::now().timestamp_millis();
+    assert_eq!(outcome.status.as_deref(), Some("waiting_retry"));
+    assert!((before + 120_000..=after + 120_000).contains(&outcome.next_retry_ms.unwrap()));
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.bark.count(), 1);
+
+    let date = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc2822();
+    fixture.bark.reply(
+        Reply::json(StatusCode::SERVICE_UNAVAILABLE, json!({"code":503}))
+            .header("Retry-After", &date),
+    );
+    let outcome = send_bark_notification(
+        &fixture.config,
+        TOKEN.as_bytes(),
+        &fixture.request(),
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!((118_000..=120_000).contains(&outcome.retry_after_ms.unwrap()));
+}
+
+#[tokio::test]
+async fn incomplete_http_response_is_classified_without_leaking_transport_details() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut fixture = Fixture::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    fixture.config.probe.notifications.server_url =
+        format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 512\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        socket.shutdown().await.unwrap();
+    });
+    let outcome = send_bark_notification(
+        &fixture.config,
+        TOKEN.as_bytes(),
+        &fixture.request(),
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    task.await.unwrap();
+    assert!(!outcome.sent && outcome.retryable && outcome.uncertain);
+    assert_eq!(outcome.reason.as_deref(), Some("response_read"));
+    let rendered = serde_json::to_string(&outcome).unwrap();
+    assert!(!rendered.contains(TOKEN));
+    assert!(!rendered.contains(&fixture.config.probe.notifications.server_url));
+}
+
+#[tokio::test]
+async fn refused_loopback_connection_is_retryable_and_has_only_a_safe_category() {
+    let mut fixture = Fixture::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    for path in ["", "certificate", "ssl", "dns", "certificate/ssl/dns"] {
+        fixture.config.probe.notifications.server_url = format!("http://{address}/{path}");
+        let outcome = send_bark_notification(
+            &fixture.config,
+            TOKEN.as_bytes(),
+            &fixture.request(),
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !outcome.sent && outcome.retryable && !outcome.uncertain,
+            "{path}"
+        );
+        assert_eq!(outcome.reason.as_deref(), Some("connection"), "{path}");
+        assert_eq!(
+            outcome.error_category.as_deref(),
+            Some("connection"),
+            "{path}"
+        );
+        let rendered = serde_json::to_string(&outcome).unwrap();
+        assert!(!rendered.contains(TOKEN));
+        assert!(!rendered.contains("127.0.0.1"));
+        assert!(!rendered.contains(&fixture.config.probe.notifications.server_url));
+    }
+}
+
+#[tokio::test]
+async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
+    let fixture = Fixture::new().await;
+    let mut invalid = Reply::bark();
+    invalid.body = b"fixture invalid acknowledgement".to_vec();
+    fixture.bark.reply(invalid);
+    let event = fixture.event();
+    let key = codex_key(&event);
+    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    for attempt in 2..=3 {
+        fixture.due_now(&key);
+        retry_pending(&fixture.config, &fixture.db).await.unwrap();
+        assert_eq!(fixture.bark.count(), attempt);
+    }
     assert_eq!(fixture.status(NotificationChannel::Bark, &key), "unknown");
     fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
     let reopened = PanelDb::open(fixture.db.path()).unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    let duplicate = codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
+    codex(&fixture.config, &reopened, &event, true, REQUEST_TIMEOUT)
         .await
         .unwrap();
-    assert!(duplicate.skipped && !duplicate.sent);
-    assert_eq!(fixture.bark.count(), 1);
+    assert_eq!(fixture.bark.count(), 3);
+}
+
+#[tokio::test]
+async fn segmented_delivery_resumes_after_restart_without_repeating_confirmed_chunks() {
+    let fixture = Fixture::new().await;
+    fixture.bark.replies(vec![
+        Reply::bark(),
+        Reply::json(StatusCode::SERVICE_UNAVAILABLE, json!({"code":503})),
+    ]);
+    let mut event = fixture.event();
+    event.bark_body = format!(
+        "{}\n{}\n{}",
+        "甲".repeat(900),
+        "乙".repeat(900),
+        "丙".repeat(900)
+    );
+    let key = codex_key(&event);
+    let first = codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(first.status.as_deref(), Some("waiting_retry"));
+    assert!(first.chunk_count >= 3);
+    assert_eq!(first.confirmed_chunks, 1);
+    assert_eq!(fixture.bark.count(), 2);
+    fixture.due_now(&key);
+    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    retry_pending(&fixture.config, &reopened).await.unwrap();
+    let outcome = reopened
+        .notification_delivery_outcome(NotificationChannel::Bark, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome["status"], "sent");
+    assert_eq!(outcome["confirmed_chunks"], first.chunk_count);
+    assert_eq!(outcome["request_count"], first.chunk_count + 1);
+    let requests = fixture.bark.requests();
+    assert_eq!(requests.len(), first.chunk_count + 1);
+    assert_ne!(requests[0].body["id"], requests[1].body["id"]);
+    assert_eq!(requests[1].body["id"], requests[2].body["id"]);
+    assert_eq!(requests[1].body["body"], requests[2].body["body"]);
+    let confirmed: Vec<_> = requests
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1)
+        .map(|(_, request)| request)
+        .collect();
+    let reconstructed: String = confirmed
+        .iter()
+        .enumerate()
+        .map(|(index, request)| {
+            let prefix = format!("第 {}/{} 段\n\n", index + 1, first.chunk_count);
+            request.body["body"]
+                .as_str()
+                .unwrap()
+                .strip_prefix(&prefix)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(reconstructed, event.bark_body);
+    let ids: std::collections::HashSet<_> = confirmed
+        .iter()
+        .map(|request| request.body["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), first.chunk_count);
+    fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
+}
+
+#[tokio::test]
+async fn unrelated_append_only_records_do_not_cancel_a_valid_retry() {
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"code":503}),
+    ));
+    let event = fixture.event();
+    let key = codex_key(&event);
+    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&fixture.rollout)
+            .unwrap(),
+        "{}",
+        json!({"type":"event_msg","payload":{"type":"token_count","turn_id":"fixture-turn"}})
+    )
+    .unwrap();
+    fixture.bark.reply(Reply::bark());
+    fixture.due_now(&key);
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.bark.count(), 2);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+}
+
+#[tokio::test]
+async fn repeated_entrance_keeps_the_original_encrypted_message_and_identifier() {
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"code":503}),
+    ));
+    let mut event = fixture.event();
+    let key = codex_key(&event);
+    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    event.bark_body = "fixture replacement body must not overwrite the queue".into();
+    event.bark_title = "fixture replacement title".into();
+    fixture.bark.reply(Reply::bark());
+    fixture.due_now(&key);
+    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.bark.count(),
+        1,
+        "duplicate entrances leave retries to the monitor"
+    );
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    let requests = fixture.bark.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body["body"], BODY);
+    assert_eq!(requests[0].body, requests[1].body);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+}
+
+#[tokio::test]
+async fn concurrent_retry_workers_claim_one_http_attempt() {
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"code":503}),
+    ));
+    let event = fixture.event();
+    let key = codex_key(&event);
+    codex(&fixture.config, &fixture.db, &event, true, REQUEST_TIMEOUT)
+        .await
+        .unwrap();
+    fixture.bark.reply(Reply::bark());
+    fixture.due_now(&key);
+    let reopened = PanelDb::open(fixture.db.path()).unwrap();
+    let (first, second) = tokio::join!(
+        retry_pending(&fixture.config, &fixture.db),
+        retry_pending(&fixture.config, &reopened)
+    );
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(fixture.bark.count(), 2);
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
 }
 
 #[tokio::test]

@@ -16,7 +16,10 @@ use uuid::Uuid;
 mod native_probe;
 mod notification_channels;
 pub use native_probe::NativeDelivery;
-pub use notification_channels::{NotificationChannel, NotificationDelivery};
+pub use notification_channels::{
+    notification_retry_delay_ms, NotificationChannel, NotificationDelivery, NotificationLease,
+    NOTIFICATION_LIFETIME_MS,
+};
 
 #[derive(Clone)]
 pub struct PanelDb {
@@ -936,7 +939,10 @@ impl PanelDb {
         conn.execute(
             r#"
             UPDATE probe_error_incidents
-            SET event_id=COALESCE(?2, event_id), bark_status=?3, updated_at=?4
+            SET event_id=COALESCE(?2, event_id),
+                bark_status=COALESCE((SELECT json_extract(payload_json,'$.bark.status')
+                    FROM probe_events WHERE id=COALESCE(?2,probe_error_incidents.event_id)),?3),
+                updated_at=?4
             WHERE incident_key=?1
             "#,
             params![incident_key, event_id, bark_status, Self::now()],

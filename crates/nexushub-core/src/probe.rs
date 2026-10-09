@@ -101,6 +101,15 @@ fn redact_probe_event_text(text: &str) -> String {
     extract_proposed_plan_text(&redacted).unwrap_or(redacted)
 }
 
+/// The native sidecar executes on the source machine, independently of UI selection.
+pub fn bark_test_body() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "来自本机的测试通知。"
+    } else {
+        "来自腾讯云的测试通知。"
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProbeRuntime {
     config: Config,
@@ -195,7 +204,6 @@ impl ProbeRuntime {
             effective_constants: json!({
                 "thread_probe_uses_local_read_model": true,
                 "delete_uses_existing_dry_run_confirm_flow": true,
-                "legacy_sentinel_cli_runtime": false,
                 "hidden_desktop_control": false,
                 "auto_reply": false,
                 "bark_payload_contains_device_key": false
@@ -317,7 +325,7 @@ impl ProbeRuntime {
         ProbeActionPlan {
             plan_id: format!("probe-bark-test-{suffix}"),
             kind: "bark-test".to_string(),
-            title: "探针 Bark 测试".to_string(),
+            title: "NexusHub 推送测试".to_string(),
             summary: "发送一条固定的 Probe 测试通知，计划和审计记录只保留脱敏配置状态".to_string(),
             steps: vec![
                 if self.config.probe.notifications.enabled {
@@ -337,11 +345,10 @@ impl ProbeRuntime {
                 "server_url": self.config.probe.notifications.server_url,
                 "device_key": if device_key_configured { "[configured]" } else { "[missing]" },
                 "bark_payload": {
-                    "title": "Codex Sentinel Lite",
-                    "body": "Bark 推送通道正常。"
+                    "title": "NexusHub 推送测试",
+                    "body": bark_test_body()
                 },
-                "redacted_fields": ["device_key", "sound", "group", "url"],
-                "would_call_legacy_sentinel_cli": false
+                "redacted_fields": ["device_key", "sound", "group", "url"]
             }),
             requires_confirmation: false,
             command: "nexushub-webd probe bark-test".to_string(),
@@ -482,7 +489,6 @@ impl ProbeRuntime {
             "notify_completion": notify_completion,
             "auto_reply": false,
             "hidden_desktop_control": false,
-            "legacy_sentinel_cli_runtime": false,
             "event_type": event_type.clone(),
             "bark": {
                 "title": bark.title.clone(),

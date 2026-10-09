@@ -1,6 +1,7 @@
 mod api;
 mod async_question_monitor;
 mod auth;
+mod bark;
 mod linux_adapter;
 mod notification_delivery;
 mod provider_monitor;
@@ -20,11 +21,7 @@ use nexushub_core::{
         rollout_hook_stop_message_selection, rollout_request_user_input_state, PendingElicitation,
         RolloutMessageSelection, RolloutRequestUserInputState,
     },
-    config::{
-        patch_probe_config_toml, valid_probe_notification_server_url, CodexProbeConfigPatch,
-        Config, ProbeConfigFilePatch, ProbeHooksConfigPatch, ProbeNotificationsConfigPatch,
-        ProbeObservabilityConfigPatch, ProbeSettingsPatch,
-    },
+    config::Config,
     db::{NewProbeErrorIncident, NewProbeEvent, PanelDb, ProbeErrorIncident},
     platform::PlatformPaths,
     probe::{redact_probe_event_for_output, ProbeEventInput, ProbeEventOutcome, ProbeRuntime},
@@ -152,6 +149,7 @@ enum ProbeCommand {
     BarkTest,
     LifecycleRepair,
     ServiceRestart,
+    #[command(hide = true)]
     LegacyImport,
     #[command(hide = true)]
     MonitorErrors,
@@ -162,7 +160,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "nexushub-webd=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "nexushub_webd=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
@@ -238,14 +236,19 @@ async fn main() -> Result<()> {
         Command::Probe { command } => {
             let config = Config::load(&cli.config)?;
             let db = open_panel_db(&config)?;
-            run_probe_command(command, &config, db).await?;
+            run_probe_command(command, &config, db, &cli.config).await?;
         }
         Command::Serve { surface } => serve(cli.config, surface).await?,
     }
     Ok(())
 }
 
-async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) -> Result<()> {
+async fn run_probe_command(
+    command: ProbeCommand,
+    config: &Config,
+    db: PanelDb,
+    config_path: &Path,
+) -> Result<()> {
     match command {
         ProbeCommand::Status => {
             println!(
@@ -344,43 +347,9 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             );
         }
         ProbeCommand::BarkTest => {
-            let device_key = db.get_secret_setting_bytes("probe_bark_device_key")?;
-            let configured = device_key.as_ref().is_some_and(|value| !value.is_empty());
-            let bark = if config.probe.notifications.enabled && configured {
-                send_bark_notification(
-                    config,
-                    device_key.as_deref().unwrap_or_default(),
-                    &ProbeBarkRequest {
-                        title: "Codex Sentinel Lite".to_string(),
-                        body: "Bark 推送通道正常。".to_string(),
-                        dedupe_key: "probe-bark-test".to_string(),
-                    },
-                    std::time::Duration::from_secs(8),
-                )
-                .await?
-            } else {
-                ProbeBarkOutcome::skipped(
-                    if config.probe.notifications.enabled {
-                        "device_key_missing"
-                    } else {
-                        "notifications_disabled"
-                    },
-                    config.probe.notifications.enabled,
-                    true,
-                    configured,
-                )
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": bark.sent || (!config.probe.notifications.enabled && bark.skipped),
-                    "configured": configured,
-                    "skipped": bark.skipped,
-                    "sent": bark.sent,
-                    "reason": bark.reason,
-                    "http_status": bark.http_status,
-                }))?
-            );
+            let bark = notification_delivery::test(config_path, &db).await?;
+            println!("{}", serde_json::to_string_pretty(&bark)?);
+            anyhow::ensure!(bark.sent, "Bark test was not accepted");
         }
         ProbeCommand::LifecycleRepair => {
             anyhow::bail!(
@@ -393,8 +362,7 @@ async fn run_probe_command(command: ProbeCommand, config: &Config, db: PanelDb) 
             );
         }
         ProbeCommand::LegacyImport => {
-            let result = import_legacy_sentinel_config(&db)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            anyhow::bail!("unavailable: legacy configuration import is retired");
         }
     }
     Ok(())
@@ -1558,8 +1526,20 @@ struct BarkPushResponse {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct ProbeBarkOutcome {
+    status: Option<String>,
+    error_category: Option<String>,
+    attempts: usize,
+    confirmed_chunks: usize,
+    next_retry_ms: Option<i64>,
+    #[serde(skip_serializing)]
+    retryable: bool,
+    #[serde(skip_serializing)]
+    retry_after_ms: Option<i64>,
+    #[serde(skip_serializing)]
+    uncertain: bool,
     sent: bool,
     skipped: bool,
     reason: Option<String>,
@@ -1597,6 +1577,7 @@ impl ProbeBarkOutcome {
             device_key_configured,
             dedupe_hit: false,
             dedupe_key,
+            ..Self::default()
         }
     }
 
@@ -1620,30 +1601,7 @@ impl ProbeBarkOutcome {
             device_key_configured,
             dedupe_hit: reason == "dedupe",
             dedupe_key: None,
-        }
-    }
-
-    fn failed_status(
-        status: u16,
-        notifications_enabled: bool,
-        relevant_switch_enabled: bool,
-        device_key_configured: bool,
-        dedupe_key: Option<String>,
-    ) -> Self {
-        Self {
-            sent: false,
-            skipped: false,
-            reason: Some("http_status".to_string()),
-            http_status: Some(status),
-            server_url: None,
-            request_url: None,
-            request_count: 0,
-            chunk_count: 0,
-            notifications_enabled,
-            relevant_switch_enabled,
-            device_key_configured,
-            dedupe_hit: false,
-            dedupe_key,
+            ..Self::default()
         }
     }
 
@@ -1668,20 +1626,8 @@ impl ProbeBarkOutcome {
             device_key_configured,
             dedupe_hit: false,
             dedupe_key,
+            ..Self::default()
         }
-    }
-
-    fn with_delivery_metadata(
-        mut self,
-        server_url: &str,
-        request_count: usize,
-        chunk_count: usize,
-    ) -> Self {
-        self.server_url = Some(server_url.to_string());
-        self.request_url = (request_count > 0).then(|| "[redacted]".to_string());
-        self.request_count = request_count;
-        self.chunk_count = chunk_count;
-        self
     }
 }
 
@@ -1790,7 +1736,9 @@ async fn record_probe_event_with_bark_timeout(
         &event,
         claimed && feedback_claimed && !passive_sent,
         &bark,
-        probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref()),
+        bark.status.as_deref().unwrap_or_else(|| {
+            probe_service::probe_bark_status_label(bark.sent, bark.skipped, bark.reason.as_deref())
+        }),
     )?;
     if let Some(mut record) = write_plan.record {
         record.payload["notification_event_key"] = json!(notification_delivery::codex_key(&event));
@@ -1832,158 +1780,35 @@ fn codex_stop_continue_output() -> Value {
     })
 }
 
+#[cfg(test)]
 async fn send_bark_notification(
     config: &Config,
     device_key: &[u8],
     request: &ProbeBarkRequest,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<ProbeBarkOutcome> {
-    let device_key = match std::str::from_utf8(device_key) {
-        Ok(value) => value,
-        Err(err) => {
-            tracing::warn!("Bark device_key is not utf-8: {err}");
-            return Ok(ProbeBarkOutcome::failed_request(
-                "invalid_device_key_encoding",
-                config.probe.notifications.enabled,
-                true,
-                true,
-                Some(request.dedupe_key.clone()),
-            ));
-        }
-    };
-    let server_url = config.probe.notifications.server_url.trim();
-    let server_url = if server_url.is_empty() {
-        "https://api.day.app"
-    } else {
-        server_url
-    };
-    if !valid_probe_notification_server_url(server_url) {
-        tracing::warn!("Bark notification server URL rejected by Probe policy");
-        return Ok(ProbeBarkOutcome::failed_request(
-            "invalid_server_url",
-            config.probe.notifications.enabled,
-            true,
-            true,
-            Some(request.dedupe_key.clone()),
-        ));
-    }
-    let base = if server_url.ends_with('/') {
-        server_url.to_string()
-    } else {
-        format!("{server_url}/")
-    };
-    let push_url = match reqwest::Url::parse(&base).and_then(|url| url.join("push")) {
-        Ok(url) => url,
-        Err(err) => {
-            tracing::warn!("Bark notification push URL build failed: {err}");
-            return Ok(ProbeBarkOutcome::failed_request(
-                "invalid_server_url",
-                config.probe.notifications.enabled,
-                true,
-                true,
-                Some(request.dedupe_key.clone()),
-            ));
-        }
-    };
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
-        Ok(client) => client,
-        Err(err) => {
-            tracing::warn!("Bark notification client build failed: {err}");
-            return Ok(ProbeBarkOutcome::failed_request(
-                "client_build_error",
-                config.probe.notifications.enabled,
-                true,
-                true,
-                Some(request.dedupe_key.clone()),
-            ));
-        }
-    };
     let chunks = bark_body_chunks(&request.body, PROBE_BARK_BODY_CHUNK_BYTES);
-    let chunk_count = chunks.len();
-    let mut last_status = None;
-    let mut request_count = 0usize;
+    let identity = uuid::Uuid::new_v4().to_string();
+    let mut outcome = ProbeBarkOutcome::default();
     for (index, chunk) in chunks.iter().enumerate() {
-        let chunk_title = if chunk_count > 1 {
-            format!("{} ({}/{})", request.title, index + 1, chunk_count)
-        } else {
-            request.title.clone()
-        };
-        let payload = json!({
-            "device_key": device_key.trim(),
-            "title": chunk_title,
-            "body": chunk,
-        });
-        let response = client.post(push_url.clone()).json(&payload).send().await;
-        request_count += 1;
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => {
-                let reason = if err.is_timeout() {
-                    "timeout"
-                } else {
-                    "request_error"
-                };
-                tracing::warn!("Bark notification request failed: {reason}");
-                return Ok(ProbeBarkOutcome::failed_request(
-                    reason,
-                    config.probe.notifications.enabled,
-                    true,
-                    true,
-                    Some(request.dedupe_key.clone()),
-                )
-                .with_delivery_metadata(server_url, request_count, chunk_count));
-            }
-        };
-        let status = response.status().as_u16();
-        last_status = Some(status);
-        if !response.status().is_success() {
-            return Ok(ProbeBarkOutcome::failed_status(
-                status,
-                config.probe.notifications.enabled,
-                true,
-                true,
-                Some(request.dedupe_key.clone()),
-            )
-            .with_delivery_metadata(server_url, request_count, chunk_count));
-        }
-        let bark_response = match response.json::<BarkPushResponse>().await {
-            Ok(response) => response,
-            Err(err) => {
-                tracing::warn!("Bark notification response decode failed: {err}");
-                return Ok(ProbeBarkOutcome::failed_request(
-                    "response_decode",
-                    config.probe.notifications.enabled,
-                    true,
-                    true,
-                    Some(request.dedupe_key.clone()),
-                )
-                .with_delivery_metadata(server_url, request_count, chunk_count));
-            }
-        };
-        if bark_response.code != Some(200) {
-            if let Some(message) = bark_response.message.as_deref() {
-                tracing::warn!("Bark notification rejected: {message}");
-            }
-            let mut outcome = ProbeBarkOutcome::failed_request(
-                "bark_response_code",
-                config.probe.notifications.enabled,
-                true,
-                true,
-                Some(request.dedupe_key.clone()),
-            )
-            .with_delivery_metadata(server_url, request_count, chunk_count);
-            outcome.http_status = Some(status);
-            return Ok(outcome);
+        outcome = bark::send_chunk(
+            config,
+            device_key,
+            request,
+            chunk,
+            index,
+            chunks.len(),
+            &format!("{identity}-{index}"),
+            1,
+            timeout,
+        )
+        .await;
+        outcome.request_count = index + 1;
+        if !outcome.sent {
+            break;
         }
     }
-    Ok(ProbeBarkOutcome::sent(
-        last_status.unwrap_or(0),
-        config.probe.notifications.enabled,
-        true,
-        true,
-        Some(request.dedupe_key.clone()),
-    )
-    .with_delivery_metadata(server_url, request_count, chunk_count))
+    Ok(outcome)
 }
 
 fn utf8_chunks(value: &str, max_bytes: usize) -> Vec<String> {
@@ -2029,154 +1854,6 @@ fn bark_body_chunks(value: &str, max_bytes: usize) -> Vec<String> {
 
 fn bark_chunk_prefix(index: usize, chunk_count: usize) -> String {
     format!("第 {index}/{chunk_count} 段\n\n")
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LegacySentinelConfig {
-    server: LegacySentinelServerSection,
-    bark: LegacySentinelBarkSection,
-    observability: LegacySentinelObservabilitySection,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LegacySentinelServerSection {
-    host_label: String,
-    codex_home: Option<PathBuf>,
-    app_server_service: String,
-    poll_seconds: Option<u64>,
-    recent_limit: Option<usize>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LegacySentinelBarkSection {
-    enabled: Option<bool>,
-    server_url: String,
-    device_key: String,
-    sound: String,
-    group: String,
-    url: String,
-    notify_completion: Option<bool>,
-    notify_abnormal: Option<bool>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LegacySentinelObservabilitySection {
-    hook_event_max_lines: Option<usize>,
-    hook_cooldown_max_lines: Option<usize>,
-    log_max_bytes: Option<usize>,
-}
-
-fn import_legacy_sentinel_config(db: &PanelDb) -> Result<Value> {
-    let legacy_path = PathBuf::from("/etc/codex-sentinel-server/config.toml");
-    let config_path = std::env::var_os("NEXUSHUB_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PlatformPaths::current().config_file);
-    import_legacy_sentinel_config_from_path(db, &legacy_path, &config_path)
-}
-
-fn import_legacy_sentinel_config_from_path(
-    db: &PanelDb,
-    legacy_path: &Path,
-    config_path: &Path,
-) -> Result<Value> {
-    if !legacy_path.exists() {
-        return Ok(json!({
-            "ok": true,
-            "action": "legacy_import",
-            "imported": false,
-            "legacy_config": legacy_path,
-            "skip_reason": "legacy_config_missing",
-        }));
-    }
-
-    let text = fs::read_to_string(legacy_path)
-        .with_context(|| format!("read {}", legacy_path.display()))?;
-    let legacy: LegacySentinelConfig =
-        toml::from_str(&text).with_context(|| format!("parse {}", legacy_path.display()))?;
-    let patch = legacy_sentinel_config_patch(&legacy);
-    let current = fs::read_to_string(config_path)
-        .with_context(|| format!("read {}", config_path.display()))?;
-    let updated = patch_probe_config_toml(&current, &patch)?;
-    fs::write(config_path, updated).with_context(|| format!("write {}", config_path.display()))?;
-
-    let mut imported_secret = false;
-    let device_key = legacy.bark.device_key.trim();
-    if !device_key.is_empty() {
-        db.set_secret_setting_bytes("probe_bark_device_key", device_key.as_bytes())?;
-        imported_secret = true;
-    }
-    db.set_setting(
-        "probe_legacy_import",
-        &json!({
-            "legacy_config": legacy_path,
-            "config_path": config_path,
-            "imported_bark_device_key": imported_secret,
-            "imported_at": chrono::Utc::now().to_rfc3339(),
-        })
-        .to_string(),
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "action": "legacy_import",
-        "imported": true,
-        "legacy_config": legacy_path,
-        "config_path": config_path,
-        "imported_bark_device_key": imported_secret,
-        "mapped": {
-            "codex": ["home", "host_label"],
-            "probe": ["enabled", "poll_seconds", "recent_limit", "notifications", "observability"],
-        }
-    }))
-}
-
-fn legacy_sentinel_config_patch(legacy: &LegacySentinelConfig) -> ProbeConfigFilePatch {
-    let nonempty = |value: &str| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    };
-    ProbeConfigFilePatch {
-        codex: Some(CodexProbeConfigPatch {
-            home: legacy
-                .server
-                .codex_home
-                .as_ref()
-                .map(|path| Some(path.to_string_lossy().to_string())),
-            host_label: nonempty(&legacy.server.host_label),
-            ..Default::default()
-        }),
-        probe: Some(ProbeSettingsPatch {
-            enabled: Some(true),
-            poll_seconds: legacy.server.poll_seconds,
-            recent_limit: legacy.server.recent_limit,
-            hooks: Some(ProbeHooksConfigPatch {
-                manage_stop_hook: Some(true),
-                reload_app_server_after_install: Some(true),
-            }),
-            notifications: Some(ProbeNotificationsConfigPatch {
-                enabled: legacy.bark.enabled,
-                server_url: nonempty(&legacy.bark.server_url),
-                sound: Some(nonempty(&legacy.bark.sound)),
-                group: nonempty(&legacy.bark.group),
-                url: Some(nonempty(&legacy.bark.url)),
-                notify_completion: legacy.bark.notify_completion,
-                notify_reply_needed: legacy.bark.notify_completion,
-                notify_recoverable: legacy.bark.notify_abnormal,
-                ..Default::default()
-            }),
-            observability: Some(ProbeObservabilityConfigPatch {
-                event_retention_days: None,
-                hook_event_max_lines: legacy.observability.hook_event_max_lines,
-                hook_cooldown_max_lines: legacy.observability.hook_cooldown_max_lines,
-                log_max_bytes: legacy.observability.log_max_bytes,
-            }),
-            error_monitor: None,
-        }),
-    }
 }
 
 fn write_admin_key(db: &PanelDb, output: &Path) -> Result<()> {
@@ -2233,7 +1910,7 @@ fn spawn_probe_error_monitor(state: AppState) {
     tokio::spawn(async move {
         loop {
             let config = state.config();
-            match run_probe_error_monitor_once(&config, &state.db).await {
+            match run_probe_error_monitor_once(&state.db, &|| Ok(state.config())).await {
                 Ok(outcome) if outcome.new_incidents > 0 => tracing::info!(
                     new_incidents = outcome.new_incidents,
                     "Probe error monitor processed Codex turn errors"
@@ -2260,7 +1937,9 @@ async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
                 }
                 match open_panel_db(&config) {
                     Ok(db) => {
-                        if let Err(err) = run_probe_error_monitor_once(&config, &db).await {
+                        if let Err(err) =
+                            run_probe_error_monitor_once(&db, &|| Config::load(&config_path)).await
+                        {
                             tracing::warn!("Probe error monitor scan failed: {err}");
                         }
                     }
@@ -2278,12 +1957,14 @@ async fn run_probe_error_monitor_daemon(config_path: PathBuf) -> Result<()> {
 }
 
 async fn run_probe_error_monitor_once(
-    config: &Config,
     db: &PanelDb,
+    load_config: &(dyn Fn() -> Result<Config> + Sync),
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
-    db.sync_notification_channels(config)?;
-    notification_delivery::retry_pending(config, db).await?;
+    notification_delivery::retry_pending_with_config(db, load_config).await?;
+    let config =
+        load_config().map_err(|_| anyhow::anyhow!("notification configuration unavailable"))?;
+    let config = &config;
     if let Err(error) = async_question_monitor::run(config, db).await {
         tracing::warn!(
             "Codex structured question monitor failed: {}",
@@ -2440,7 +2121,9 @@ async fn deliver_probe_error_incidents(
         let (outcome, bark) =
             record_probe_event_with_bark_timeout(config, db, event, Duration::from_secs(3)).await?;
         let event_id = db.probe_event_id_by_dedupe_key(&outcome.dedupe_key)?;
-        let bark_status = if bark.sent {
+        let bark_status = if let Some(status) = bark.status.as_ref() {
+            status.clone()
+        } else if bark.sent {
             "sent".to_string()
         } else if bark.skipped {
             format!("skipped:{}", bark.reason.as_deref().unwrap_or("unknown"))
@@ -2588,7 +2271,9 @@ mod tests {
 
         for command in [ProbeCommand::LifecycleRepair, ProbeCommand::ServiceRestart] {
             let db = PanelDb::open(":memory:").unwrap();
-            let err = run_probe_command(command, &config, db).await.unwrap_err();
+            let err = run_probe_command(command, &config, db, Path::new("fixture-unused.toml"))
+                .await
+                .unwrap_err();
             let message = format!("{err:#}");
             assert!(message.contains("unsupported"));
             assert!(!message.contains("\"ok\": true"));
@@ -2613,100 +2298,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_import_maps_server_bark_observability_without_plaintext_secret() {
-        let unique = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
+    fn legacy_import_is_hidden_and_retired() {
+        use clap::CommandFactory;
+        let mut command = Cli::command();
+        let mut help = Vec::new();
+        command
+            .find_subcommand_mut("probe")
             .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-{unique}"));
-        fs::create_dir_all(&dir).unwrap();
-        let config_path = dir.join("config.toml");
-        let legacy_path = dir.join("legacy.toml");
-        let mut config = Config::default();
-        config.security.secret_key = "7q9DCmCPyxnTrH3FhrV1sUJol1yqPgscQsBnR-mXA2E".to_string();
-        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
-        fs::write(
-            &legacy_path,
-            r#"
-[server]
-host_label = "tencent-example-user"
-codex_home = "/root/.codex"
-app_server_service = "codex-app-server-root.service"
-poll_seconds = 60
-recent_limit = 50
-
-[bark]
-enabled = true
-server_url = "https://api.day.app"
-device_key = "legacy-bark-secret"
-sound = "bell"
-group = "Codex"
-url = "https://panel.example.com/nexushub/"
-notify_completion = true
-notify_abnormal = false
-
-[observability]
-hook_event_max_lines = 500
-hook_cooldown_max_lines = 1000
-log_max_bytes = 5242880
-"#,
-        )
-        .unwrap();
-        let db = PanelDb::open_with_secret_box(
-            dir.join("nexushub.sqlite"),
-            config.secret_box().unwrap(),
-        )
-        .unwrap();
-
-        let result =
-            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
-
-        assert_eq!(result["imported"], true);
-        assert_eq!(result["imported_bark_device_key"], true);
-        let updated = fs::read_to_string(&config_path).unwrap();
-        assert!(updated.contains("home = \"/root/.codex\""));
-        assert!(updated.contains("host_label = \"tencent-example-user\""));
-        assert!(updated.contains("poll_seconds = 60"));
-        assert!(updated.contains("enabled = true"));
-        assert!(updated.contains("sound = \"bell\""));
-        assert!(updated.contains("notify_recoverable = false"));
-        assert!(updated.contains("hook_event_max_lines = 500"));
-        assert!(updated.contains("log_max_bytes = 5242880"));
-        assert!(!updated.contains("legacy-bark-secret"));
-        assert!(!updated.contains("app_server_service"));
-        assert!(!updated.contains("codex-app-server-root.service"));
-        assert_eq!(
-            db.get_secret_setting_bytes("probe_bark_device_key")
-                .unwrap()
-                .as_deref(),
-            Some("legacy-bark-secret".as_bytes())
-        );
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn legacy_import_reports_missing_config_without_touching_current_config() {
-        let unique = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexushub-legacy-import-missing-{unique}"));
-        fs::create_dir_all(&dir).unwrap();
-        let config_path = dir.join("config.toml");
-        let legacy_path = dir.join("missing.toml");
-        fs::write(&config_path, "sentinel = \"keep\"\n").unwrap();
-        let db = PanelDb::open(dir.join("nexushub.sqlite")).unwrap();
-
-        let result =
-            import_legacy_sentinel_config_from_path(&db, &legacy_path, &config_path).unwrap();
-
-        assert_eq!(result["imported"], false);
-        assert_eq!(result["skip_reason"], "legacy_config_missing");
-        assert_eq!(
-            fs::read_to_string(&config_path).unwrap(),
-            "sentinel = \"keep\"\n"
-        );
-        fs::remove_dir_all(&dir).unwrap();
+            .write_long_help(&mut help)
+            .unwrap();
+        assert!(!String::from_utf8(help).unwrap().contains("legacy-import"));
     }
 
     #[test]
@@ -3514,7 +3115,7 @@ last_error = "old nexushub request hook"
         .await
         .unwrap();
 
-        assert_eq!(first.bark.reason.as_deref(), Some("request_error"));
+        assert_eq!(first.bark.reason.as_deref(), Some("connection"));
         assert_eq!(
             duplicate.stdout,
             json!({"continue": true, "suppressOutput": false})
@@ -4472,8 +4073,8 @@ last_error = "old nexushub request hook"
         config.probe.notifications.url = Some("https://panel.example.com/nexushub/".to_string());
 
         let request = ProbeBarkRequest {
-            title: "Codex Sentinel Lite".to_string(),
-            body: "Bark 推送通道正常。".to_string(),
+            title: "NexusHub 推送测试".to_string(),
+            body: "来自本机的测试通知。".to_string(),
             dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
         };
         let result = send_bark_notification(
@@ -4498,9 +4099,10 @@ last_error = "old nexushub request hook"
         let body = raw.split("\r\n\r\n").nth(1).unwrap();
         let payload: Value = serde_json::from_str(body).unwrap();
         assert_eq!(payload["device_key"], "device key/with spaces");
-        assert_eq!(payload["title"], "Codex Sentinel Lite");
-        assert_eq!(payload["body"], "Bark 推送通道正常。");
-        assert_eq!(payload.as_object().unwrap().len(), 3);
+        assert_eq!(payload["title"], "NexusHub 推送测试");
+        assert_eq!(payload["body"], "来自本机的测试通知。");
+        assert_eq!(payload.as_object().unwrap().len(), 4);
+        assert!(payload["id"].is_string());
         assert!(payload.get("group").is_none());
         assert!(payload.get("sound").is_none());
         assert!(payload.get("url").is_none());
@@ -5142,7 +4744,7 @@ last_error = "old nexushub request hook"
             &config,
             b"device-key-secret",
             &ProbeBarkRequest {
-                title: "Codex Sentinel Lite".to_string(),
+                title: "NexusHub 推送测试".to_string(),
                 body: "ok".to_string(),
                 dedupe_key: "hook-stop:thread-a:turn-1".to_string(),
             },
@@ -5156,10 +4758,8 @@ last_error = "old nexushub request hook"
         assert_eq!(result.http_status, Some(200));
         assert_eq!(result.request_count, 1);
         assert_eq!(result.chunk_count, 1);
-        assert_eq!(result.server_url.as_deref(), Some(server.url().as_str()));
-        assert!(result.request_url.as_deref().is_some_and(|value| {
-            value == "[redacted]" || !value.contains("device-key-secret")
-        }));
+        assert!(result.server_url.is_none());
+        assert!(result.request_url.is_none());
         assert!(!serde_json::to_string(&result)
             .unwrap()
             .contains("device-key-secret"));
@@ -5167,7 +4767,7 @@ last_error = "old nexushub request hook"
     }
 
     #[tokio::test]
-    async fn bark_test_uses_codex_sentinel_lite_title_and_body() {
+    async fn bark_test_uses_nexushub_title_and_machine_body() {
         let server = TestHttpServer::start_n(
             1,
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"code\":200}",
@@ -5179,17 +4779,22 @@ last_error = "old nexushub request hook"
         db.set_secret_setting_bytes("probe_bark_device_key", b"device-key")
             .unwrap();
 
-        run_probe_command(ProbeCommand::BarkTest, &config, db)
+        let dir = temp_test_dir("nexushub-bark-cli");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+        run_probe_command(ProbeCommand::BarkTest, &config, db, &path)
             .await
             .unwrap();
+        fs::remove_dir_all(dir).unwrap();
 
         let raw = server.request();
         assert!(raw.starts_with("POST /push "));
         let body = raw.split("\r\n\r\n").nth(1).unwrap();
         let payload: Value = serde_json::from_str(body).unwrap();
         assert_eq!(payload["device_key"], "device-key");
-        assert_eq!(payload["title"], "Codex Sentinel Lite");
-        assert_eq!(payload["body"], "Bark 推送通道正常。");
+        assert_eq!(payload["title"], "NexusHub 推送测试");
+        assert_eq!(payload["body"], nexushub_core::probe::bark_test_body());
     }
 
     #[tokio::test]

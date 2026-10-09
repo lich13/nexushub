@@ -92,7 +92,7 @@ describe("Probe UI helpers", () => {
 
     expect(display.title).toBe("需回复");
     expect(display.summary).toContain("Need operator input");
-    expect(display.bark).toBe("Bark 跳过: dedupe");
+    expect(display.bark).toBe("Bark 已跳过");
     expect(display.dedupe).toBe("重复事件");
     expect(display.source).toBe("nexushub-webd probe passive-scan");
     expect(display.time).toContain("2026-06-15");
@@ -168,7 +168,7 @@ describe("Probe UI helpers", () => {
       reason: "等待用户确认",
       source: "nexushub-webd probe passive-scan",
       time: "2026-06-16 09:30:00 北京时间",
-      bark: { label: "Bark 已发送 HTTP 200", tone: "success" },
+      bark: { label: "Bark 已受理", tone: "success" },
       dedupe: { label: "已认领", tone: "success" }
     });
     expect(card.details).toEqual(expect.arrayContaining([
@@ -240,7 +240,7 @@ describe("Probe UI helpers", () => {
     expect(card.summary).toContain("...");
   });
 
-  test("marks skipped Bark and duplicate dedupe outcomes with warning labels", () => {
+  test("marks skipped Bark separately from duplicate dedupe outcomes", () => {
     const event: ProbeEvent = {
       id: "event-duplicate",
       kind: "hook-stop",
@@ -257,8 +257,109 @@ describe("Probe UI helpers", () => {
     const card = probeEventCard(event);
 
     expect(card.title).toBe("完成");
-    expect(card.bark).toEqual({ label: "Bark 跳过: dedupe · 去重命中", tone: "warning" });
+    expect(card.bark).toEqual({ label: "Bark 已跳过", tone: "muted" });
     expect(card.dedupe).toEqual({ label: "重复事件", tone: "warning" });
+  });
+
+  test.each([
+    ["waiting_retry", "Bark 等待重试", "warning"],
+    ["retrying", "Bark 重试中", "warning"],
+    ["sent", "Bark 已受理", "success"],
+    ["failed", "Bark 发送失败", "warning"],
+    ["unknown", "Bark 结果未确认", "warning"],
+    ["skipped", "Bark 已跳过", "muted"]
+  ])("renders the %s delivery state without inventing device receipt", (status, label, tone) => {
+    const event: ProbeEvent = {
+      id: `event-${status}`,
+      kind: "completion",
+      source: "fixture-source",
+      payload: { body_summary: "安全摘要", bark: { status } },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    expect(probeEventCard(event).bark).toEqual({ label, tone });
+    expect(probeEventDisplay(event).bark).toBe(label);
+  });
+
+  test.each([
+    ["dns", "域名解析失败"],
+    ["connection", "连接失败"],
+    ["tls", "TLS 连接失败"],
+    ["certificate_validation", "证书验证失败"],
+    ["timeout", "请求超时"],
+    ["response_decode", "响应无法确认"],
+    ["response_read", "响应读取失败"],
+    ["redirect_rejected", "重定向已拒绝"],
+    ["http_status", "HTTP 拒绝"],
+    ["bark_response_code", "服务拒绝"],
+    ["apns_permanent_rejection", "推送服务永久拒绝"]
+  ])("maps the %s failure reason to a fixed safe label", (reason, description) => {
+    const event: ProbeEvent = {
+      id: "event-safe-reason",
+      kind: "completion",
+      source: "fixture-source",
+      payload: { body_summary: "安全摘要", bark: { status: "failed", reason } },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    expect(probeEventCard(event).bark.label).toBe(`Bark 发送失败 · ${description}`);
+  });
+
+  test("shows confirmed chunks and the next attempt without exposing pending payloads", () => {
+    const event: ProbeEvent = {
+      id: "event-retry-details",
+      kind: "completion",
+      source: "fixture-source",
+      payload: {
+        body_summary: "安全摘要",
+        bark: {
+          status: "waiting_retry",
+          title: "完成通知",
+          chunk_count: 4,
+          confirmed_chunks: 2,
+          attempts: 2,
+          request_count: 5,
+          next_retry_ms: Date.parse("2026-06-16T00:01:00Z"),
+          body: "fixture private pending body",
+          device_key: "fixture private device key",
+          response_body: "fixture raw response body",
+          request_url: "https://push.example.invalid/private-key"
+        }
+      },
+      created_at: "2026-06-16T00:00:00Z"
+    };
+
+    const card = probeEventCard(event);
+    const detail = card.details.find((item) => item.label === "Bark")?.value;
+    expect(card.bark.label).toBe("Bark 等待重试");
+    expect(detail).toContain("2/4 段已受理");
+    expect(detail).toContain("第 2 次尝试");
+    expect(detail).toContain("下次重试");
+    expect(detail).toContain("5 请求");
+    for (const privateValue of [
+      "fixture private pending body", "fixture private device key", "fixture raw response body",
+      "https://push.example.invalid/private-key"
+    ]) {
+      expect(JSON.stringify(card)).not.toContain(privateValue);
+    }
+  });
+
+  test("unknown raw reasons never become visible error text", () => {
+    const rawReason = "fixture transport failure https://push.example.invalid/private-key fixture-device-key";
+    for (const status of ["waiting_retry", "retrying", "failed", "unknown", "skipped"]) {
+      const event: ProbeEvent = {
+        id: `event-private-${status}`,
+        kind: "completion",
+        source: "fixture-source",
+        payload: { body_summary: "安全摘要", bark: { status, reason: rawReason } },
+        created_at: "2026-06-16T00:00:00Z"
+      };
+
+      const card = probeEventCard(event);
+      expect(JSON.stringify(card)).not.toContain(rawReason);
+      expect(JSON.stringify(card)).not.toContain("private-key");
+      expect(JSON.stringify(card)).not.toContain("fixture-device-key");
+    }
   });
 
   test("builds a form draft and leaves configured Bark device_key unchanged when blank", () => {
