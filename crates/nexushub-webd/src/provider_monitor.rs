@@ -1,5 +1,5 @@
 //! Shared by the Linux service and the desktop's port-free monitor helper.
-use super::{send_bark_notification, ProbeBarkOutcome, ProbeBarkRequest};
+use super::{notification_delivery, ProbeBarkOutcome};
 use anyhow::Result;
 use nexushub_core::{
     config::Config,
@@ -11,7 +11,7 @@ use std::time::Duration;
 pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
     db.recover_interrupted_native_deliveries()?;
-    db.retry_rejected_claude_deliveries()?;
+
     let mut snapshots = Vec::new();
     for provider in [NativeProvider::Grok, NativeProvider::Claude] {
         let scan = if provider.enabled(config) {
@@ -55,7 +55,6 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Option<NativeScan>>,
 {
-    let key = db.get_secret_setting_bytes("probe_bark_device_key")?;
     for delivery in db.pending_native_deliveries(100)? {
         // Identity and branch are resolved by each native parser. Codex's
         // main-task identity filter must never be applied to these providers.
@@ -84,64 +83,22 @@ where
             && delivery
                 .provider
                 .event_enabled(config, &delivery.event.kind);
-        let configured = key.as_ref().is_some_and(|key| !key.is_empty());
-        let outcome = if !still_current {
-            ProbeBarkOutcome::skipped(
+        let (outcome, gotify) = if !still_current || !enabled {
+            let skipped = ProbeBarkOutcome::skipped(
                 "native_identity_or_branch_changed",
-                config.probe.notifications.enabled,
+                config.probe.notifications.any_channel_enabled(),
                 enabled,
-                configured,
-            )
-        } else if !enabled {
-            ProbeBarkOutcome::skipped(
-                "event_switch_disabled",
-                config.probe.notifications.enabled,
                 false,
-                configured,
-            )
-        } else if !configured {
-            ProbeBarkOutcome::skipped(
-                "device_key_missing",
-                config.probe.notifications.enabled,
-                true,
-                false,
-            )
+            );
+            (skipped.clone(), skipped)
         } else {
-            let label = if delivery.event.kind == "reply_needed" {
-                "需要回复"
-            } else if delivery.event.kind == "completion" {
-                "完成"
-            } else {
-                "失败"
-            };
-            let provider = delivery.provider.as_str();
-            let request = ProbeBarkRequest {
-                title: format!("{} · {} · {}", provider, label, delivery.title),
-                body: format!(
-                    "{}\n\n线程 ID：{}\n回合：{}",
-                    delivery.event.body, delivery.thread_id, delivery.event.turn_id
-                ),
-                dedupe_key: delivery.event_key.clone(),
-            };
-            match send_bark_notification(
-                config,
-                key.as_deref().unwrap_or_default(),
-                &request,
-                Duration::from_secs(8),
-            )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => ProbeBarkOutcome::failed_request(
-                    "delivery_error",
-                    true,
-                    true,
-                    true,
-                    Some(delivery.event_key.clone()),
-                ),
-            }
+            notification_delivery::native(config, db, &delivery, Duration::from_secs(8)).await?
         };
-        db.finish_native_delivery(&delivery, serde_json::to_value(outcome)?)?;
+        db.finish_native_delivery_channels(
+            &delivery,
+            serde_json::to_value(outcome)?,
+            serde_json::to_value(gotify)?,
+        )?;
     }
     Ok(())
 }

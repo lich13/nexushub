@@ -511,3 +511,229 @@ describe("Probe UI helpers", () => {
   });
 
 });
+
+function gotifySettings(overrides: Partial<NonNullable<ProbeSettings["gotify"]>> = {}): ProbeSettings {
+  return {
+    codex: { host_label: "fixture-host" },
+    probe: {},
+    notifications: { enabled: false, server_url: "https://example.invalid/bark/" },
+    gotify: {
+      enabled: false,
+      server_url: "https://example.invalid/gotify/",
+      priority: 5,
+      token_configured: false,
+      ...overrides
+    }
+  };
+}
+
+describe("Gotify settings", () => {
+  test("defaults to disabled with priority 5 and never prefills a returned Token", () => {
+    const defaults = gotifySettings();
+    defaults.gotify = {} as NonNullable<ProbeSettings["gotify"]>;
+    expect(buildProbeSettingsDraft(defaults).gotify).toEqual({
+      supported: true,
+      enabled: false,
+      server_url: "",
+      priority: 5,
+      token: "",
+      token_configured: false,
+      clear_token: false
+    });
+    const configured = gotifySettings({ token_configured: true, token: "fixture-returned-token" });
+    expect(buildProbeSettingsDraft(configured).gotify).toMatchObject({ token: "", token_configured: true });
+  });
+
+  test("an old service without Gotify settings receives no Gotify patch or validation errors", () => {
+    const legacy = gotifySettings();
+    delete legacy.gotify;
+    const draft = buildProbeSettingsDraft(legacy);
+    expect(draft.gotify).toMatchObject({ supported: false, enabled: false, priority: 5 });
+    draft.gotify.enabled = true;
+    draft.gotify.server_url = "http://example.invalid/gotify/";
+    draft.gotify.priority = "";
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    expect(buildProbeSettingsPayload(draft, legacy)).not.toHaveProperty("gotify");
+  });
+
+  test.each(["", "   "])("enabling Gotify without a configured or entered Token rejects %j", token => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ enabled: true }));
+    draft.gotify.token = token;
+    expect(probeSettingsValidation(draft)).toEqual(["请先填写 Gotify Application Token"]);
+    expect(() => buildProbeSettingsPayload(draft)).toThrow("请先填写 Gotify Application Token");
+  });
+
+  test("an entered Token is trimmed without enabling either channel implicitly", () => {
+    const draft = buildProbeSettingsDraft(gotifySettings());
+    draft.gotify.token = " fixture-application-token ";
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    const disabled = buildProbeSettingsPayload(draft);
+    expect(disabled.gotify).toMatchObject({ enabled: false, token: "fixture-application-token" });
+    expect(disabled.probe.notifications?.enabled).toBe(false);
+    draft.gotify.enabled = true;
+    expect(buildProbeSettingsPayload(draft).gotify?.enabled).toBe(true);
+  });
+
+  test.each([
+    "",
+    "http://example.invalid/gotify/",
+    "ftp://example.invalid/gotify/",
+    "https://test:fixture-password@example.invalid/gotify/",
+    "https://example.invalid/gotify/?token=fixture-token",
+    "https://example.invalid/gotify/#fixture",
+    "fixture-invalid-url"
+  ])("rejects an enabled Gotify address outside the safe URL contract: %j", server_url => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ enabled: true, token_configured: true, server_url }));
+    expect(probeSettingsValidation(draft)).toEqual(["Gotify 地址必须使用 HTTPS，且不能包含凭据或查询参数"]);
+    expect(() => buildProbeSettingsPayload(draft)).toThrow("Gotify 地址必须使用 HTTPS");
+  });
+
+  test.each([
+    "https://example.invalid/gotify/",
+    "https://example.invalid:8443/push/gotify/",
+    "http://127.0.0.1:8080/gotify/",
+    "http://localhost:8080/gotify/",
+    "http://[::1]:8080/gotify/"
+  ])("accepts HTTPS and loopback HTTP addresses: %s", server_url => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ enabled: true, token_configured: true, server_url }));
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    expect(buildProbeSettingsPayload(draft).gotify?.server_url).toBe(server_url);
+  });
+
+  test("a disabled and unconfigured channel can be saved with no URL or Token", () => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ server_url: "" }));
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    expect(buildProbeSettingsPayload(draft).gotify).toEqual({ enabled: false, server_url: "", priority: 5 });
+  });
+
+  test.each([-1, 11, 2.5, Number.NaN, Number.POSITIVE_INFINITY, ""] as const)(
+    "rejects priority values outside integer 0 through 10: %j", priority => {
+      const draft = buildProbeSettingsDraft(gotifySettings({ enabled: true, token_configured: true }));
+      draft.gotify.priority = priority;
+      expect(probeSettingsValidation(draft)).toEqual(["Gotify 优先级必须在 0 到 10 之间"]);
+      expect(() => buildProbeSettingsPayload(draft)).toThrow("Gotify 优先级必须在 0 到 10 之间");
+    }
+  );
+
+  test.each([0, 5, 10])("preserves valid priority %i", priority => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ priority }));
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    expect(buildProbeSettingsPayload(draft).gotify?.priority).toBe(priority);
+  });
+
+  test("blank Token input keeps a configured Token without resending credential state", () => {
+    const current = gotifySettings({ enabled: true, token_configured: true });
+    const draft = buildProbeSettingsDraft(current);
+    draft.gotify.token = "   ";
+    draft.gotify.server_url = " https://example.invalid/gotify/ ";
+    expect(probeSettingsValidation(draft)).toEqual([]);
+    expect(buildProbeSettingsPayload(draft, current).gotify).toEqual({
+      enabled: true, server_url: "https://example.invalid/gotify/", priority: 5
+    });
+  });
+
+  test("explicit Token removal disables Gotify and takes precedence over an entered replacement", () => {
+    const current = gotifySettings({ enabled: true, token_configured: true });
+    current.notifications.enabled = true;
+    const draft = buildProbeSettingsDraft(current);
+    const originalBark = buildProbeSettingsPayload(draft, current).probe.notifications;
+    draft.gotify.clear_token = true;
+    draft.gotify.token = "fixture-replacement-token";
+    const payload = buildProbeSettingsPayload(draft, current);
+    expect(payload.gotify).toEqual({
+      enabled: false, server_url: "https://example.invalid/gotify/", priority: 5, clear_token: true
+    });
+    expect(payload.probe.notifications).toEqual(originalBark);
+  });
+
+  test.each([
+    { bark: false, gotify: false },
+    { bark: false, gotify: true },
+    { bark: true, gotify: false },
+    { bark: true, gotify: true }
+  ])("preserves independent channel switches and shared Provider filters: %j", channels => {
+    const current = gotifySettings({ token_configured: true });
+    const draft = buildProbeSettingsDraft(current);
+    const filters = {
+      notify_codex: false,
+      notify_completion: false,
+      notify_reply_needed: true,
+      notify_recoverable: false,
+      notify_grok: true,
+      notify_grok_completion: false,
+      notify_grok_failure: true,
+      notify_claude: false,
+      notify_claude_completion: true,
+      notify_claude_failure: false,
+      notify_claude_reply_needed: true
+    };
+    Object.assign(draft.notifications, filters, { enabled: channels.bark });
+    draft.gotify.enabled = channels.gotify;
+    const payload = buildProbeSettingsPayload(draft, current);
+    expect(payload.probe.notifications).toMatchObject({ enabled: channels.bark, ...filters });
+    expect(payload.gotify).toEqual({
+      enabled: channels.gotify, server_url: "https://example.invalid/gotify/", priority: 5
+    });
+    for (const key of Object.keys(filters)) expect(payload.gotify).not.toHaveProperty(key);
+  });
+
+  test("saving a new Bark key does not enable Gotify or replace its configured Token", () => {
+    const draft = buildProbeSettingsDraft(gotifySettings({ token_configured: true }));
+    draft.notifications.device_key = "fixture-bark-key";
+    const payload = buildProbeSettingsPayload(draft);
+    expect(payload.probe.notifications).toMatchObject({ enabled: true, device_key: "fixture-bark-key" });
+    expect(payload.gotify).toEqual({ enabled: false, server_url: "https://example.invalid/gotify/", priority: 5 });
+  });
+});
+
+function notificationEvent(payload: ProbeEvent["payload"]): ProbeEvent {
+  return {
+    id: "fixture-notification-event",
+    kind: "completion",
+    source: "fixture-provider-monitor",
+    payload,
+    created_at: "2026-06-16T00:00:00Z"
+  };
+}
+
+describe("independent notification event outcomes", () => {
+  test("Gotify success stays visible when Bark fails and confirms only server acceptance", () => {
+    const card = probeEventCard(notificationEvent({
+      bark: { sent: false, reason: "http_error", http_status: 503 },
+      gotify: { sent: true, http_status: 200, message_id: 1, token: "fixture-application-token" }
+    }));
+    expect(card.bark).toEqual({ label: "Bark 未发送: http_error", tone: "warning" });
+    expect(card.gotify).toEqual({ label: "Gotify 已送达服务器", tone: "success" });
+    expect(JSON.stringify(card)).not.toMatch(/安卓.*(?:已收到|已接收|已送达)|(?:已收到|已接收|已送达).*安卓/);
+    expect(JSON.stringify(card)).not.toContain("fixture-application-token");
+  });
+
+  test("Bark success stays visible when Gotify fails", () => {
+    const card = probeEventCard(notificationEvent({
+      bark: { sent: true, http_status: 200 },
+      gotify: { sent: false, reason: "http_error", http_status: 503 }
+    }));
+    expect(card.bark).toEqual({ label: "Bark 已发送 HTTP 200", tone: "success" });
+    expect(card.gotify).toEqual({ label: "Gotify 投递失败", tone: "warning" });
+  });
+
+  test.each(["delivery_outcome_unknown", "delivery_interrupted_outcome_unknown", "response_invalid"])(
+    "does not turn an uncertain Gotify result into success: %s", reason => {
+      const card = probeEventCard(notificationEvent({ gotify: { sent: false, reason } }));
+      expect(card.gotify).toEqual({ label: "Gotify 投递结果未知", tone: "warning" });
+    }
+  );
+
+  test("legacy and disabled Gotify events omit the badge while explicit skips stay readable", () => {
+    expect(probeEventCard(notificationEvent({ bark: { sent: true } })).gotify).toBeUndefined();
+    expect(probeEventCard(notificationEvent({ gotify: { skipped: true, reason: "notifications_disabled" } })).gotify).toBeUndefined();
+    expect(probeEventCard(notificationEvent({ gotify: { skipped: true, reason: "dedupe" } })).gotify)
+      .toEqual({ label: "Gotify 已跳过", tone: "muted" });
+  });
+
+  test("Gotify test events use a channel-specific title", () => {
+    const event = notificationEvent({ gotify: { sent: true } });
+    event.kind = "gotify-test";
+    expect(probeEventCard(event).title).toBe("Gotify 测试");
+  });
+});

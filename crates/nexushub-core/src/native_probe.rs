@@ -27,7 +27,7 @@ impl NativeProvider {
     }
     pub fn enabled(self, config: &Config) -> bool {
         config.probe.enabled
-            && config.probe.notifications.enabled
+            && config.probe.notifications.any_channel_enabled()
             && match self {
                 Self::Grok => config.probe.notifications.notify_grok,
                 Self::Claude => config.probe.notifications.notify_claude,

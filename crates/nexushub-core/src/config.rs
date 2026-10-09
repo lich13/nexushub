@@ -85,6 +85,8 @@ pub struct ProbeHooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeNotificationsConfig {
     #[serde(default)]
+    pub gotify: GotifyConfig,
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_bark_server_url")]
     pub server_url: String,
@@ -116,6 +118,37 @@ pub struct ProbeNotificationsConfig {
     pub notify_claude_failure: bool,
     #[serde(default = "default_true")]
     pub notify_claude_reply_needed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GotifyConfig {
+    pub enabled: bool,
+    pub server_url: String,
+    pub priority: u32,
+}
+
+impl Default for GotifyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server_url: String::new(),
+            priority: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GotifyConfigPatch {
+    pub enabled: Option<bool>,
+    pub server_url: Option<String>,
+    pub priority: Option<u32>,
+}
+
+impl ProbeNotificationsConfig {
+    pub fn any_channel_enabled(&self) -> bool {
+        self.enabled || self.gotify.enabled
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,6 +201,7 @@ pub struct ProbeHooksConfigPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeNotificationsConfigPatch {
+    pub gotify: Option<GotifyConfigPatch>,
     pub enabled: Option<bool>,
     pub server_url: Option<String>,
     pub sound: Option<Option<String>>,
@@ -260,6 +294,7 @@ impl Default for ProbeHooksConfig {
 impl Default for ProbeNotificationsConfig {
     fn default() -> Self {
         Self {
+            gotify: GotifyConfig::default(),
             enabled: false,
             server_url: default_bark_server_url(),
             sound: None,
@@ -637,6 +672,14 @@ impl ProbeConfig {
     pub fn normalize(&mut self) {
         self.poll_seconds = self.poll_seconds.clamp(5, 3_600);
         self.recent_limit = self.recent_limit.clamp(1, 500);
+        self.notifications.gotify.priority = self.notifications.gotify.priority.min(10);
+        self.notifications.gotify.server_url = self
+            .notifications
+            .gotify
+            .server_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
         if !valid_probe_notification_server_url(&self.notifications.server_url) {
             self.notifications.server_url = default_bark_server_url();
         }
@@ -690,6 +733,40 @@ pub fn valid_probe_notification_server_url(value: &str) -> bool {
         return false;
     };
     is_loopback_host(host)
+}
+
+pub fn valid_gotify_server_url(value: &str) -> bool {
+    if value.contains(['?', '#', '\\'])
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return false;
+    }
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return false;
+    };
+    let Some(host) = url_host(rest) else {
+        return false;
+    };
+    if host.is_empty() {
+        return false;
+    }
+    let authority = rest.split('/').next().unwrap_or_default();
+    let port = &authority[host.len()..];
+    if !port.is_empty()
+        && !port
+            .strip_prefix(':')
+            .is_some_and(|port| port.parse::<u16>().is_ok_and(|p| p > 0))
+    {
+        return false;
+    }
+    scheme == "https"
+        || scheme == "http"
+            && (host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback()))
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -756,6 +833,15 @@ pub fn patch_probe_config_toml(text: &str, patch: &ProbeConfigFilePatch) -> Resu
             editor.set_bool("probe.error_monitor", "enabled", error_monitor.enabled);
         }
         if let Some(notifications) = probe.notifications.as_ref() {
+            if let Some(gotify) = notifications.gotify.as_ref() {
+                editor.set_bool("probe.notifications.gotify", "enabled", gotify.enabled);
+                editor.set_string(
+                    "probe.notifications.gotify",
+                    "server_url",
+                    gotify.server_url.as_deref(),
+                );
+                editor.set_u32("probe.notifications.gotify", "priority", gotify.priority);
+            }
             editor.set_bool(
                 "probe.notifications",
                 "notify_codex",

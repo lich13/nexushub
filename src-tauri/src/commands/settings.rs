@@ -37,6 +37,14 @@ pub fn probeBarkTest(
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command(rename = "probe.gotifyTest")]
+pub fn probeGotifyTest(
+    state: tauri::State<'_, DesktopState>,
+) -> Result<DesktopActionResponse, String> {
+    settings_service::probe_action_with_state(&state, probe_service::ProbeAction::GotifyTest)
+        .map_err(|err| err.to_string())
+}
+
 #[tauri::command(rename = "probe.installHooks")]
 pub fn probeInstallHooks(
     state: tauri::State<'_, DesktopState>,

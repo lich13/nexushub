@@ -118,6 +118,7 @@ impl ProbeRuntime {
         let hook_status = self.hook_status();
         Ok(ProbeStatus {
             provider_notifications: json!([]),
+            notification_channels: json!({}),
             label: "Probe".to_string(),
             enabled: self.config.probe.enabled,
             available: true,
@@ -213,7 +214,7 @@ impl ProbeRuntime {
             service_name: self.paths.service_name.clone(),
             enabled: self.config.probe.enabled,
             hooks_enabled: self.config.probe.hooks.manage_stop_hook,
-            notifications_enabled: self.config.probe.notifications.enabled,
+            notifications_enabled: self.config.probe.notifications.any_channel_enabled(),
             poll_seconds: self.config.probe.poll_seconds,
             recent_limit: self.config.probe.recent_limit,
             next_actions: self.lifecycle_next_actions(),
@@ -304,6 +305,19 @@ impl ProbeRuntime {
                 requires_confirmation: true,
                 command: "nexushub-webd probe hooks-install".to_string(),
             }),
+        }
+    }
+
+    pub fn gotify_test_plan(&self, token_configured: bool) -> ProbeActionPlan {
+        ProbeActionPlan {
+            plan_id: format!("probe-gotify-test-{}", Uuid::new_v4()),
+            kind: "gotify-test".into(),
+            title: "Gotify 测试".into(),
+            summary: "发送测试通知".into(),
+            steps: vec![],
+            payload: json!({"enabled": self.config.probe.notifications.gotify.enabled, "configured": token_configured}),
+            requires_confirmation: false,
+            command: "nexushub-webd probe gotify-test".into(),
         }
     }
 
@@ -743,6 +757,8 @@ pub struct ProbeLifecycleStatus {
 pub struct ProbeStatus {
     #[serde(default)]
     pub provider_notifications: Value,
+    #[serde(default)]
+    pub notification_channels: Value,
     pub label: String,
     pub enabled: bool,
     pub available: bool,

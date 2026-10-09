@@ -14,23 +14,29 @@ const replies = [
   { questionItemId: "question-demo-2", question: questionTwo, answer: answerTwo }
 ];
 const replyEnvelope = `<send_user_message_question_reply>${JSON.stringify(replies)}</send_user_message_question_reply>`;
-const instructionBlock = [
+const instructionDisclosure = [
   "# AGENTS.md instructions for /isolated/fictional-project",
   "",
   "<INSTRUCTIONS>",
+  "# Project rules",
   "Use the fictional branch label only.",
+  "## Internal section",
   "Keep this exact line break.",
   "</INSTRUCTIONS>"
 ].join("\n");
-const longInstructionBlock = [
+const environmentContext = "<environment_context>fixture-only</environment_context>";
+const instructionBlock = instructionDisclosure + environmentContext;
+const longInstructionDisclosure = [
   "# AGENTS.md instructions for /isolated/fictional-project",
   "",
   "<INSTRUCTIONS>",
+  "# Project rules",
   "Use only this fictional workspace.",
-  "# Internal same-level section",
+  "## Internal section",
   ...Array.from({ length: 150 }, (_, index) => `Instruction line ${index + 1}: preserve sample-${index + 1}.`),
   "</INSTRUCTIONS>"
 ].join("\n");
+const longInstructionBlock = longInstructionDisclosure + environmentContext;
 const trailingRequest = "Please inspect sample.txt and keep this request visible.";
 const formattedText = `${replyEnvelope}\n\n${instructionBlock}\n\n${trailingRequest}`;
 const longFormattedText = `${longInstructionBlock}\n\n${trailingRequest}`;
@@ -96,7 +102,10 @@ for (const provider of providers) {
       expect(rendered).not.toContain("<send_user_message_question_reply>");
       expect(rendered).not.toContain("questionItemId");
       expect(rendered).not.toContain(replyEnvelope);
-      await expect(page.getByText(trailingRequest, { exact: true })).toBeVisible();
+      expect(rendered).not.toContain("# Project rules");
+      expect(rendered).not.toContain("## Internal section");
+      expect(rendered).not.toContain("Use the fictional branch label only.");
+      await expect(article.locator(".user-message-bubble").filter({ hasText: trailingRequest })).toBeVisible();
 
       const firstReply = article.locator(".user-question-reply").first();
       const question = firstReply.locator("details.user-question-context");
@@ -121,14 +130,17 @@ for (const provider of providers) {
       await expect(instructions).toHaveCount(1);
       await expect(instructions).not.toHaveAttribute("open");
       const instructionSummary = instructions.locator(":scope > summary");
-      const byteCount = new TextEncoder().encode(instructionBlock).length;
-      await expect(instructionSummary).toContainText(`6 行 · ${byteCount} 字节`);
+      const lineCount = instructionDisclosure.split("\n").length;
+      const byteCount = new TextEncoder().encode(instructionDisclosure).length;
+      await expect(instructionSummary).toContainText(`${lineCount} 行 · ${byteCount} 字节`);
       await expect(instructions.locator(".user-instructions-body")).toHaveCount(0);
+      await expect(article.locator(".user-message-bubble").last()).toContainText(environmentContext);
       await instructionSummary.focus();
       await page.keyboard.press("Enter");
       await expect(instructions).toHaveAttribute("open", "");
       const instructionBody = instructions.locator(".user-instructions-body");
-      await expect(instructionBody).toHaveText(instructionBlock);
+      await expect(instructionBody).toHaveText(instructionDisclosure);
+      await expect(instructionBody.locator("h1, h2")).toHaveCount(0);
       await expect(instructionBody).toHaveCSS("white-space", "pre-wrap");
       await assertNoOverflow(page);
     });
@@ -186,17 +198,18 @@ test("long user AGENTS body scrolls internally and keeps its choice across mobil
   const instructions = page.locator("details.user-instructions");
   await expect(instructions).not.toHaveAttribute("open");
   const summary = instructions.locator(":scope > summary");
-  const lineCount = longInstructionBlock.split("\n").length;
-  const byteCount = new TextEncoder().encode(longInstructionBlock).length;
+  const lineCount = longInstructionDisclosure.split("\n").length;
+  const byteCount = new TextEncoder().encode(longInstructionDisclosure).length;
   await expect(summary).toContainText(`${lineCount} 行 · ${byteCount} 字节`);
   await expect(instructions.locator(".user-instructions-body")).toHaveCount(0);
+  await expect(page.locator(".user-message-bubble").last()).toContainText(environmentContext);
 
   await summary.click();
   await expect(instructions).toHaveAttribute("open", "");
   const body = instructions.locator(".user-instructions-body");
-  await expect(body).toHaveText(longInstructionBlock);
-  await expect(body).toContainText("# Internal same-level section");
-  await expect(page.getByText(trailingRequest, { exact: true })).toBeVisible();
+  await expect(body).toHaveText(longInstructionDisclosure);
+  await expect(body).toContainText("## Internal section");
+  await expect(page.locator(".user-message-bubble").filter({ hasText: trailingRequest })).toBeVisible();
   await expect(body).toHaveCSS("max-height", "460px");
   const scroll = await body.evaluate(element => ({
     clientHeight: element.clientHeight,

@@ -62,6 +62,8 @@ describe("visible Markdown", () => {
 });
 
 describe("instruction files", () => {
+  const nativeInstructions = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Rules\nKeep checks.\n# Notes\n保留格式🙂\n</INSTRUCTIONS>";
+
   test("recognizes explicit file references in names, input and result", () => {
     for (const value of ["AGENTS.md", "Read /workspace/AGENTS.md", '{"path":"/workspace/AGENTS.md"}', "Output:\n./AGENTS.md\nGuidance"])
       expect(isInstructionFileActivity(value)).toBe(true);
@@ -83,6 +85,45 @@ describe("instruction files", () => {
     const sections = instructionSegments("# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n# Rules\nGuidance\n</INSTRUCTIONS>\n\nUser request.");
     expect(sections.map(s => s.kind)).toEqual(["instructions", "markdown"]);
     expect(sections[1].text.trim()).toBe("User request.");
+  });
+
+  test.each([
+    { name: "adjacent metadata", newline: "\n", bytes: 102, tail: "<environment_context>fixture</environment_context>\n\nWrite a short response." },
+    { name: "a request on the closing line", newline: "\n", bytes: 102, tail: "Please continue with the example." },
+    { name: "CRLF metadata", newline: "\r\n", bytes: 109, tail: "<environment_context>fixture</environment_context>\r\n\r\nWrite a short response." }
+  ])("folds the complete native envelope before $name", ({ newline, bytes, tail }) => {
+    const instructions = nativeInstructions.replaceAll("\n", newline);
+    const source = instructions + tail;
+    const sections = instructionSegments(source);
+    expect(sections.map(section => section.kind)).toEqual(["instructions", "markdown"]);
+    expect(sections[0]).toMatchObject({ text: instructions, lines: 8, bytes });
+    expect(sections[1].text).toBe(tail);
+    expect(sections.map(section => section.text).join("")).toBe(source);
+    expect(instructionSegments(source + "\nMore request text.")[0].id).toBe(sections[0].id);
+  });
+
+  test("keeps repeated envelopes separate from their adjacent metadata and requests", () => {
+    const metadata = "<environment_context>fixture</environment_context>\n\n";
+    const secondInstructions = "# AGENTS.md instructions\n<INSTRUCTIONS>\n# Additional rules\nUse sample values.\n</INSTRUCTIONS>";
+    const request = "Request after the second block.";
+    const sections = instructionSegments(nativeInstructions + metadata + secondInstructions + request);
+    expect(sections.map(section => section.kind)).toEqual(["instructions", "markdown", "instructions", "markdown"]);
+    expect(sections.map(section => section.text)).toEqual([nativeInstructions, metadata, secondInstructions, request]);
+    expect(new Set(sections.map(section => section.id)).size).toBe(4);
+  });
+
+  test.each([
+    ["fenced", "```xml\n</INSTRUCTIONS><environment_context>example</environment_context>\n```"],
+    ["inline", "`example\n</INSTRUCTIONS><environment_context>example</environment_context>\nend`"],
+    ["quoted", "> </INSTRUCTIONS><environment_context>example</environment_context>"],
+    ["indented", "    </INSTRUCTIONS><environment_context>example</environment_context>"]
+  ])("keeps a %s closing-tag example inside the native envelope", (_name, example) => {
+    const instructions = `# AGENTS.md instructions\n\n<INSTRUCTIONS>\n\n# Examples\n${example}\n\n# Later rule\nKeep this inside.\n</INSTRUCTIONS>`;
+    const tail = "<environment_context>fixture</environment_context>\n\nActual request.";
+    const sections = instructionSegments(instructions + tail);
+    expect(sections.map(section => section.kind)).toEqual(["instructions", "markdown"]);
+    expect(sections[0].text).toBe(instructions);
+    expect(sections[1].text).toBe(tail);
   });
 
   test("does not fold prose, code examples or a similarly named file", () => {

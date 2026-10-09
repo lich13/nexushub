@@ -24,6 +24,7 @@ pub(crate) struct DesktopProbeSettings {
     pub codex: Value,
     pub probe: nexushub_core::config::ProbeConfig,
     pub notifications: Value,
+    pub gotify: settings_service::GotifySettingsView,
 }
 
 impl From<settings_service::SettingsView> for DesktopProbeSettings {
@@ -31,6 +32,7 @@ impl From<settings_service::SettingsView> for DesktopProbeSettings {
         Self {
             codex: serde_json::to_value(view.codex).unwrap_or_else(|_| json!({})),
             probe: view.probe,
+            gotify: view.gotify,
             notifications: serde_json::to_value(view.notifications).unwrap_or_else(|_| json!({})),
         }
     }
@@ -57,9 +59,13 @@ pub(crate) fn probe_settings_with_state(state: &DesktopState) -> Result<DesktopP
             .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
             .as_deref(),
     );
-    let plan = NexusHubUseCases::with_config(&config, state.platform())
+    let mut plan = NexusHubUseCases::with_config(&config, state.platform())
         .settings()?
         .probe_settings_view(secret_state)?;
+    plan.settings.gotify.token_configured = state
+        .db
+        .get_secret_setting_bytes(settings_service::PROBE_GOTIFY_TOKEN_SETTING)?
+        .is_some_and(|key| !key.is_empty());
     Ok(DesktopProbeSettings::from(plan.settings))
 }
 
@@ -83,6 +89,14 @@ fn probe_save_settings_with_state_and_repair(
     let plan = NexusHubUseCases::with_config(&config, state.platform())
         .settings()?
         .save_probe_settings(request)?;
+    settings_service::validate_gotify_settings_save(
+        &config,
+        &plan,
+        state
+            .db
+            .get_secret_setting_bytes(settings_service::PROBE_GOTIFY_TOKEN_SETTING)?
+            .is_some_and(|key| !key.is_empty()),
+    )?;
     let config_path = state.platform().config_file.clone();
     if !config_path.exists() {
         anyhow::bail!("config file not found: {}", config_path.display());
@@ -92,11 +106,16 @@ fn probe_save_settings_with_state_and_repair(
     std::fs::write(&config_path, updated)?;
     let response_config = Config::load(&config_path)?;
     for secret_write in plan.secret_writes {
+        if secret_write.secret_value.is_empty() {
+            state.db.remove_secret_setting(&secret_write.setting_key)?;
+            continue;
+        }
         state.db.set_secret_setting_bytes(
             &secret_write.setting_key,
             secret_write.secret_value.as_bytes(),
         )?;
     }
+    state.db.sync_notification_channels(&response_config)?;
     state.replace_config(response_config.clone());
     repair_error_monitor(&response_config, state.platform())?;
     probe_settings_with_state(state)
@@ -116,7 +135,11 @@ pub(crate) fn probe_action_with_state(
 ) -> Result<DesktopActionResponse> {
     let device_key_configured = state
         .db
-        .get_secret_setting_bytes(settings_service::PROBE_BARK_DEVICE_KEY_SETTING)?
+        .get_secret_setting_bytes(if action == probe_service::ProbeAction::GotifyTest {
+            settings_service::PROBE_GOTIFY_TOKEN_SETTING
+        } else {
+            settings_service::PROBE_BARK_DEVICE_KEY_SETTING
+        })?
         .is_some_and(|value| !value.is_empty());
     let config = state.config();
     let plan = NexusHubUseCases::with_config(&config, state.platform())

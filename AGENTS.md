@@ -39,7 +39,7 @@ Grok display activity and deletion protection are separate: use one native-proce
 
 ## Required gates
 
-Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits after this 1.2.12 change.
+Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits after this 1.2.13 change.
 
 ## 1.2.8 管理边界
 
@@ -75,3 +75,11 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 ## 1.2.12 界面说明
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；文案精简不能改变底层完整性判断或管理保护。
+
+## 1.2.13 指令与推送边界
+
+- 完整原生 INSTRUCTIONS 包装允许结束标签与后续环境标签同行；内部标题不能截断折叠。代码、引用示例与不完整结构保持保守处理，原生会话不写回。
+- Bark 和 Gotify 独立启用，共用 Provider/事件筛选，以稳定事件身份和通道分别持久化认领与结果。旧记录按 Bark 迁移；新通道建立基线，不补发历史。
+- Gotify Application Token 使用现有加密存储，读取只返回配置状态；使用 X-Gotify-Key 请求头、保留 HTTPS 子路径且禁止重定向。明确临时 HTTP 拒绝最多三次，未知结果不自动重发。
+- probe.gotifyTest 走共享契约与两端适配器，能力缺失提示升级，API 协议仍为 2。HTTP 接收与安卓设备实收必须分别验收。
+- Gotify 反代和部署脚本归运维仓库；只新增指定路由与独立数据、账户和容器，不替换共用 Nginx/TLS 或现有服务。

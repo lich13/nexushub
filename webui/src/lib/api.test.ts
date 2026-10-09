@@ -934,6 +934,7 @@ describe("archive delete API compatibility", () => {
       "sessions.bulkPreview",
       "sessions.bulkExecute",
       "probe.barkTest",
+      "probe.gotifyTest",
       "probe.events",
       "probe.installHooks",
       "probe.settings.get",

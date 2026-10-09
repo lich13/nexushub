@@ -66,6 +66,7 @@ impl FromStr for HostSurface {
 pub enum Capability {
     Threads,
     ThreadSubagents,
+    Gotify,
     Jobs,
     Probe,
     Settings,
@@ -82,6 +83,7 @@ impl Capability {
     pub const ALL: &'static [Capability] = &[
         Capability::Threads,
         Capability::ThreadSubagents,
+        Capability::Gotify,
         Capability::Jobs,
         Capability::Probe,
         Capability::Settings,
@@ -102,6 +104,7 @@ impl Capability {
         match self {
             Self::Threads => "threads",
             Self::ThreadSubagents => "thread_subagents",
+            Self::Gotify => "gotify",
             Self::Jobs => "jobs",
             Self::Probe => "probe",
             Self::Settings => "settings",
@@ -127,6 +130,7 @@ impl Capability {
         match self {
             Self::Threads
             | Self::ThreadSubagents
+            | Self::Gotify
             | Self::Jobs
             | Self::Probe
             | Self::Settings
@@ -144,6 +148,8 @@ pub struct SystemCapabilities {
     pub threads: bool,
     #[serde(default)]
     pub thread_subagents: bool,
+    #[serde(default)]
+    pub gotify: bool,
     pub jobs: bool,
     pub probe: bool,
     pub settings: bool,
@@ -236,6 +242,7 @@ pub fn system_capabilities_for_surface(
     host_surface: HostSurface,
 ) -> SystemCapabilities {
     SystemCapabilities {
+        gotify: Capability::Gotify.is_supported_on_surface(platform, host_surface),
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
         thread_subagents: Capability::ThreadSubagents
             .is_supported_on_surface(platform, host_surface),

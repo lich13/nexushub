@@ -1,10 +1,10 @@
 use crate::{
     codex::resolve_codex_paths,
     config::{
-        valid_probe_notification_server_url, CodexProbeConfigPatch, Config, ProbeConfig,
-        ProbeConfigFilePatch, ProbeErrorMonitorConfigPatch, ProbeHooksConfigPatch,
-        ProbeNotificationsConfig, ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch,
-        ProbeSettingsPatch,
+        valid_gotify_server_url, valid_probe_notification_server_url, CodexProbeConfigPatch,
+        Config, GotifyConfig, GotifyConfigPatch, ProbeConfig, ProbeConfigFilePatch,
+        ProbeErrorMonitorConfigPatch, ProbeHooksConfigPatch, ProbeNotificationsConfig,
+        ProbeNotificationsConfigPatch, ProbeObservabilityConfigPatch, ProbeSettingsPatch,
     },
     platform::PlatformPaths,
     services::system::{require_capability, Capability},
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const PROBE_BARK_DEVICE_KEY_SETTING: &str = "probe_bark_device_key";
+pub const PROBE_GOTIFY_TOKEN_SETTING: &str = "probe_gotify_token";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeSecretState {
@@ -36,6 +37,7 @@ impl ProbeSecretState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettingsView {
+    pub gotify: GotifySettingsView,
     pub codex: CodexSettingsView,
     pub probe: ProbeConfig,
     pub notifications: ProbeNotificationsSettingsView,
@@ -111,6 +113,10 @@ pub struct ProbeNotificationsSettingsView {
 pub fn build_settings_view(config: &Config, bark_device_key: ProbeSecretState) -> SettingsView {
     let resolved = resolve_codex_paths(&config.codex.home);
     SettingsView {
+        gotify: GotifySettingsView {
+            config: config.probe.notifications.gotify.clone(),
+            token_configured: false,
+        },
         codex: CodexSettingsView {
             home: resolved.configured_codex_home.clone(),
             configured_codex_home: resolved.configured_codex_home,
@@ -228,8 +234,26 @@ pub fn merge_probe_notification_patch(
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GotifySettingsView {
+    #[serde(flatten)]
+    pub config: GotifyConfig,
+    pub token_configured: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GotifySettingsSavePatch {
+    #[serde(flatten)]
+    pub config: GotifyConfigPatch,
+    #[serde(default, skip_serializing)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub clear_token: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeSettingsSaveRequest {
+    pub gotify: Option<GotifySettingsSavePatch>,
     pub codex: Option<CodexProbeConfigPatch>,
     pub probe: Option<ProbeSettingsSavePatch>,
     pub notifications: Option<ProbeNotificationsSavePatch>,
@@ -276,6 +300,8 @@ pub struct ProbeNotificationsSavePatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NormalizedProbeSettingsPatch {
+    #[serde(default, skip_serializing)]
+    pub gotify_token: Option<String>,
     pub config_patch: ProbeConfigFilePatch,
     #[serde(default, skip_serializing)]
     pub bark_device_key: Option<String>,
@@ -305,18 +331,68 @@ pub struct ProbeConfigWritePlan {
     pub patch: ProbeConfigFilePatch,
 }
 
+/// Validate the effective channel before adapters write either config or secrets.
+pub fn validate_gotify_settings_save(
+    config: &Config,
+    plan: &ProbeSettingsSavePlan,
+    token_configured: bool,
+) -> Result<()> {
+    let mut gotify = config.probe.notifications.gotify.clone();
+    if let Some(patch) = plan
+        .config_patch
+        .probe
+        .as_ref()
+        .and_then(|p| p.notifications.as_ref())
+        .and_then(|p| p.gotify.as_ref())
+    {
+        if let Some(enabled) = patch.enabled {
+            gotify.enabled = enabled;
+        }
+        if let Some(url) = &patch.server_url {
+            gotify.server_url = url.clone();
+        }
+        if let Some(priority) = patch.priority {
+            gotify.priority = priority;
+        }
+    }
+    let has_token = plan
+        .secret_writes
+        .iter()
+        .find(|w| w.setting_key == PROBE_GOTIFY_TOKEN_SETTING)
+        .map(|w| !w.secret_value.is_empty())
+        .unwrap_or(token_configured);
+    if gotify.enabled
+        && (!valid_gotify_server_url(&gotify.server_url) || gotify.priority > 10 || !has_token)
+    {
+        bail!("开启 Gotify 前请配置有效的 HTTPS 地址、Application Token 和 0–10 优先级");
+    }
+    Ok(())
+}
+
 pub fn plan_probe_settings_save(
     platform: &PlatformPaths,
     request: ProbeSettingsSaveRequest,
 ) -> Result<ProbeSettingsSavePlan> {
     require_capability(platform, Capability::Settings)?;
     let normalized = normalize_probe_settings_save_request(request)?;
-    let secret_writes: Vec<SecretSettingWritePlan> = normalized
+    let mut secret_writes: Vec<SecretSettingWritePlan> = normalized
         .bark_device_key
         .as_deref()
         .map(bark_device_key_write_plan)
         .into_iter()
         .collect();
+    if let Some(token) = normalized.gotify_token.as_ref() {
+        secret_writes.push(SecretSettingWritePlan {
+            setting_key: PROBE_GOTIFY_TOKEN_SETTING.to_string(),
+            secret_value: token.clone(),
+            audit_value: if token.is_empty() {
+                "[removed]"
+            } else {
+                "[configured]"
+            }
+            .to_string(),
+        });
+    }
     let config_write = probe_config_file_patch_has_changes(&normalized.config_patch).then(|| {
         ProbeConfigWritePlan {
             patch: normalized.config_patch.clone(),
@@ -363,12 +439,47 @@ pub fn normalize_probe_settings_save_request(
         probe_patch = None;
     }
 
+    let mut gotify_token = None;
+    if let Some(gotify) = request.gotify {
+        if gotify.clear_token
+            && gotify
+                .token
+                .as_ref()
+                .is_some_and(|token| !token.trim().is_empty())
+        {
+            bail!("不能同时保存和移除 Gotify Token");
+        }
+        gotify_token = if gotify.clear_token {
+            Some(String::new())
+        } else {
+            gotify
+                .token
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty())
+        };
+        if gotify_token
+            .as_ref()
+            .is_some_and(|token| token.len() > 512 || token.chars().any(char::is_control))
+        {
+            bail!("Gotify Token 格式无效");
+        }
+        let mut config = gotify.config;
+        if gotify.clear_token {
+            config.enabled = Some(false);
+        }
+        probe_patch
+            .get_or_insert_with(ProbeSettingsPatch::default)
+            .notifications
+            .get_or_insert_with(ProbeNotificationsConfigPatch::default)
+            .gotify = Some(config);
+    }
     let config_patch = normalize_probe_config_file_patch(ProbeConfigFilePatch {
         codex: request.codex,
         probe: probe_patch,
     })?;
 
     Ok(NormalizedProbeSettingsPatch {
+        gotify_token,
         config_patch,
         bark_device_key,
     })
@@ -406,6 +517,7 @@ impl ProbeNotificationsSavePatch {
     fn into_config_patch_and_bark_key(self) -> (ProbeNotificationsConfigPatch, Option<String>) {
         (
             ProbeNotificationsConfigPatch {
+                gotify: None,
                 enabled: self.enabled,
                 server_url: self.server_url,
                 sound: self.sound,
@@ -463,7 +575,8 @@ fn is_probe_settings_patch_empty(patch: &ProbeSettingsPatch) -> bool {
 }
 
 fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> bool {
-    patch.enabled.is_none()
+    patch.gotify.is_none()
+        && patch.enabled.is_none()
         && patch.server_url.is_none()
         && patch.sound.is_none()
         && patch.group.is_none()
@@ -526,6 +639,22 @@ fn normalize_probe_hooks_patch(patch: ProbeHooksConfigPatch) -> ProbeHooksConfig
 fn normalize_probe_notifications_patch(
     mut patch: ProbeNotificationsConfigPatch,
 ) -> Result<ProbeNotificationsConfigPatch> {
+    if let Some(gotify) = patch.gotify.as_mut() {
+        if let Some(server_url) = gotify.server_url.as_mut() {
+            *server_url = server_url.trim().trim_end_matches('/').to_string();
+            if !server_url.is_empty() && !valid_gotify_server_url(server_url) {
+                bail!("Gotify 地址必须使用 HTTPS，本机测试可使用 HTTP");
+            }
+            if !server_url.is_empty()
+                && (server_url.contains(['?', '#']) || server_url.chars().any(char::is_whitespace))
+            {
+                bail!("Gotify 地址不能包含查询参数、片段或空白");
+            }
+        }
+        if gotify.priority.is_some_and(|priority| priority > 10) {
+            bail!("Gotify 优先级必须为 0–10");
+        }
+    }
     if let Some(server_url) = patch.server_url.take() {
         let server_url = server_url.trim().to_string();
         if !valid_probe_notification_server_url(&server_url) {

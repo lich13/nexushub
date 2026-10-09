@@ -17,7 +17,7 @@ fn is_fresh(completed_ms: i64) -> bool {
 
 fn enabled(config: &Config) -> bool {
     config.probe.enabled
-        && config.probe.notifications.enabled
+        && config.probe.notifications.any_channel_enabled()
         && config.probe.notifications.notify_codex
         && config.probe.notifications.notify_reply_needed
 }

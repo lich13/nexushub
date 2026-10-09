@@ -1,8 +1,27 @@
+import { Children, isValidElement, type ComponentProps, type MouseEvent, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { UserMessage } from "./UserMessage";
 import { CopyReplyButton } from "./CopyReplyButton";
+import { DisclosureScope } from "./ActivityDetails";
 import { MessageBlockView } from "../chat/MessageStream";
+
+const observedDisclosures = vi.hoisted(() => ({ elements: [] as ReactElement<ComponentProps<"details">>[] }));
+
+// Observe the actual event handlers without replacing disclosure state behavior.
+vi.mock("./ActivityDetails", async importOriginal => {
+  const actual = await importOriginal<typeof import("./ActivityDetails")>();
+  return {
+    ...actual,
+    ActivityDetails: (props: ComponentProps<typeof actual.ActivityDetails>) => {
+      const element = actual.ActivityDetails(props);
+      observedDisclosures.elements.push(element);
+      return element;
+    }
+  };
+});
+
+const adjacentInstructions = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Rules\nKeep checks.\n# Notes\n保留格式🙂\n</INSTRUCTIONS>";
 
 test("user content is literal text with line breaks and no Markdown headings", () => {
   const text = "# Heading\n  - list\n```js\nconsole.log(1)\n```";
@@ -56,6 +75,53 @@ test("legacy Codex instruction messages default closed and keep following reques
   expect(html).not.toMatch(/<details[^>]*\bopen=/);
   expect(html).not.toContain("Guidance");
   expect(html).toContain("Request");
+});
+
+test("same-line metadata follows a closed disclosure with the full line and byte summary", () => {
+  const text = adjacentInstructions + "<environment_context>fixture</environment_context>\n\nVisible request";
+  const html = renderToStaticMarkup(<MessageBlockView block={{ id: "adjacent-instruction-fixture", role: "user", kind: "message", questions: [], text }} />);
+  expect(html.match(/<details\b/g)).toHaveLength(1);
+  expect(html).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+  expect(html).toContain("8 行 · 102 字节");
+  expect(html).not.toContain("# Rules");
+  expect(html).not.toContain("Keep checks.");
+  expect(html).not.toContain("保留格式🙂");
+  expect(html).toContain("&lt;environment_context&gt;fixture&lt;/environment_context&gt;");
+  expect(html).toContain("Visible request");
+});
+
+test("a user's expanded instruction disclosure survives a refreshed native message", () => {
+  const renderMessage = (request: string, activityId: string, messageId = "stable-instruction-fixture") => {
+    observedDisclosures.elements = [];
+    return renderToStaticMarkup(<DisclosureScope.Provider value="instruction-refresh-fixture">
+      <UserMessage message={{ id: messageId, text: adjacentInstructions + request, attachments: [] }} activityId={activityId} />
+    </DisclosureScope.Provider>);
+  };
+  const initialHtml = renderMessage("First request", "initial-activity-fixture");
+  expect(initialHtml).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+  expect(initialHtml).not.toContain("保留格式🙂");
+  expect(initialHtml).toContain("First request");
+  expect(observedDisclosures.elements).toHaveLength(1);
+
+  const summary = Children.toArray(observedDisclosures.elements[0].props.children)
+    .find(child => isValidElement(child) && child.type === "summary");
+  if (!isValidElement<ComponentProps<"summary">>(summary)) throw new Error("Instruction summary is missing");
+  expect(summary.props.onClick).toBeTypeOf("function");
+  const preventDefault = vi.fn();
+  summary.props.onClick!({ target: { closest: () => null }, preventDefault } as unknown as MouseEvent<HTMLElement>);
+  expect(preventDefault).toHaveBeenCalledOnce();
+
+  const refreshedHtml = renderMessage("Updated request", "refreshed-activity-fixture");
+  expect(refreshedHtml).toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+  expect(refreshedHtml).toContain("8 行 · 102 字节");
+  expect(refreshedHtml).toContain("Keep checks.");
+  expect(refreshedHtml).toContain("保留格式🙂");
+  expect(refreshedHtml).toContain("Updated request");
+  expect(refreshedHtml).not.toContain("First request");
+
+  const otherMessage = renderMessage("Other request", "refreshed-activity-fixture", "different-instruction-fixture");
+  expect(otherMessage).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+  expect(otherMessage).not.toContain("保留格式🙂");
 });
 
 test("native question reply renders a question and answer with an answer-only copy action", () => {
