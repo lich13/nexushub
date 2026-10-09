@@ -178,10 +178,12 @@ test("a missing collection offers an upgrade instead of claiming a confirmed emp
   expect(html).not.toContain("正在读取子智能体");
 });
 
-test("partial collections keep their warning alongside the readable agents", () => {
+test("partial collections retain readable agents without claiming a confirmed empty list", () => {
   const html = renderList(collection([agent], { complete: false, warning: "示例关联记录未全部读取" }));
-  expect(html).toContain("示例关联记录未全部读取");
   expect(html).toContain(agent.name);
+  expect(html).toContain('aria-disabled="false"');
+  const emptyHtml = renderList(collection([], { complete: false }));
+  expect(emptyHtml).not.toContain("暂无直属子智能体");
 });
 
 test("legacy child details remain readable when their own collection is unavailable", () => {

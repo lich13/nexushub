@@ -285,7 +285,7 @@ small { font-size: 12px; }
 .archive-plan .metric strong, .probe-core-metrics .metric strong { text-align: left; }
 .settings-meta-grid { display: grid; gap: 4px; margin-bottom: 12px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.cleanup-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+.cleanup-panel-head { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
 .cleanup-panel-head > span { overflow-wrap: anywhere; }
 .cleanup-actions { margin-top: 12px; }
 .probe-layout { display: grid; gap: 20px; }

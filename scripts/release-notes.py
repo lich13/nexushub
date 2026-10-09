@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.12": [
+        "精简子智能体汇总和清理面板，移除三处重复说明，保留状态数量与实际操作结果。",
+        "延续 1.2.11 的开始活动、统一任务名称、直属统计及内部页面标记过滤。",
+    ],
     "1.2.11": [
         "修复 Codex 子智能体开始活动漏显示及任务名称不一致，开始记录在任务完成后仍保留。",
         "线程详情新增直属子智能体状态汇总，可从列表进入详情并返回；父线程静止时仍更新数量。",
@@ -116,6 +120,34 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.12":
+        sections = {
+            "版本概览": ["本版精简子智能体与清理页面的说明文字，延续 1.2.11 的功能修复。"],
+            "功能调整": [
+                "子智能体汇总和列表移除统计不完整的通用说明，继续展示运行中、已完成、未知及不可用状态。",
+                "归档清理、隐藏线程清理移除标题下方的重复说明，保留预览、确认、执行状态和逐项结果。",
+            ],
+            "问题修复": ["清理面板移除说明后，状态标记仍保持右对齐，避免留下多余的说明区域。"],
+            "兼容性与迁移": [
+                "API 协议保持 2，无数据库或配置迁移。既有父子关联校验、清理保护、跳过规则和真实错误反馈保持有效。",
+                "继续支持子智能体开始与完成活动、任务名称和直属计数；内部页面包装默认隐藏。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：API 服务压缩包与 SHA-256 校验文件；latest.json 仅映射 darwin-aarch64，共七项资产。",
+            ],
+            "升级提示": [
+                "升级至 1.2.12 即可应用界面调整；现有会话、连接、API Key、Keychain 和通知设置无需重建。",
+                "安装前核对校验和与 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，现有资源封装的系统签名校验限制仍在；Minisign 签名用于验证更新归档来源。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.11":
         sections = {

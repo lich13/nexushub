@@ -425,7 +425,7 @@ test("a missing collection offers an upgrade while historical child entries stay
   await expect(panel(page)).toContainText("更新当前机器服务后可查看子智能体汇总");
 });
 
-test("a partial empty collection keeps its warning visible without claiming zero active children", async ({ page }) => {
+test("a partial empty collection keeps list access without claiming zero active children", async ({ page }) => {
   await installSubagents(page, [message("root-reply", "父线程示例回复")]);
   await mockCommand(page, "threads.detail", () => ({
     ...detail(root, [message("root-reply", "父线程示例回复")]),
@@ -433,7 +433,11 @@ test("a partial empty collection keeps its warning visible without claiming zero
   }));
   await openRoot(page);
   const main = page.locator(".conversation-main");
-  await expect(main).toContainText("示例直属记录未全部读取");
   await expect(main).not.toContainText("0 个运行中");
   await expect(main).not.toContainText("更新当前机器服务后可查看子智能体汇总");
+  await main.getByRole("button", { name: "查看直属子智能体", exact: true }).click();
+  const view = panel(page);
+  await expect(view).toBeVisible();
+  await expect(view.locator(".subagent-panel-header strong")).toHaveText("直属子智能体");
+  await expect(view).not.toContainText("暂无直属子智能体");
 });
