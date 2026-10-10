@@ -68,9 +68,11 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   detail.before_cursor = "b:45";
   detail.total_blocks = 91;
   await mockCommand(page, "threads.detail", args => detail);
+  let blockRequests = 0;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   await mockCommand(page, "threads.blocks", async () => {
+    blockRequests += 1;
     await gate;
     return { threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null };
   });
@@ -82,17 +84,19 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   const retained = page.locator("details.execution-command").filter({ hasText: "printf earlier-45" });
   await retained.locator("summary").click();
   await expect(retained).toHaveAttribute("open", "");
-  await expect.poll(() => stream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
-  await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
-  await stream.evaluate(node => {
-    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
-    node.dispatchEvent(new Event("scroll", { bubbles: true }));
-    node.scrollTop = 200;
-    node.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
-  await expect(stream.locator(".history-loading")).toContainText("正在加载较早消息");
+  expect(blockRequests).toBe(0);
+  const rows = group.locator(".execution-rows");
+  await rows.evaluate(node => { node.scrollTop = 0; });
+  expect(await rows.evaluate(node => node.scrollTop)).toBe(0);
+  const streamBox = await stream.boundingBox();
+  expect(streamBox).not.toBeNull();
   const anchor = retained.locator("summary");
   const top = await anchor.evaluate(node => node.getBoundingClientRect().top);
+  await page.mouse.move(streamBox!.x + 8, streamBox!.y + Math.min(streamBox!.height / 2, 180));
+  await page.mouse.wheel(0, -600);
+  await expect(stream.locator(".history-loading")).toContainText("正在加载较早消息");
+  await expect.poll(() => blockRequests).toBe(1);
+  expect(Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - top)).toBeLessThanOrEqual(2);
   release();
   await expect(group).toContainText("90 条命令");
   await expect(group).toHaveAttribute("open", "");

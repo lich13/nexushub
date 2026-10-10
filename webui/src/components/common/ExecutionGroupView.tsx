@@ -38,6 +38,6 @@ export function ExecutionGroupView({ group }: { group: ExecutionGroup }) {
     <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>
     {group.running && <RunningIndicator />}
   </>}>
-    {() => <div className="execution-rows">{group.commands.map(command => <CommandView key={command.id} command={command} />)}</div>}
+    {() => <div className="execution-rows" data-history-scroll-container="commands">{group.commands.map(command => <CommandView key={command.id} command={command} />)}</div>}
   </ActivityDetails>;
 }
