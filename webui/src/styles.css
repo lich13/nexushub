@@ -129,6 +129,17 @@ small { font-size: 12px; }
 .thread-item-status { flex: none; font-size: 12px; color: var(--muted); }
 .thread-item-preview, .provider-session span, .provider-session small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .thread-item-preview { flex: 1; }
+.session-status-row { display: flex; align-items: center; gap: 6px; }
+.provider-session .session-status-row { overflow: visible; }
+.session-status-row > small { flex: 1; min-width: 0; }
+.thread-item-meta .session-size, .provider-session .session-size { margin-left: auto; flex: none; font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; min-width: 5.5ch; overflow: visible; }
+.session-size.success { color: var(--success); }
+.session-size.warning { color: var(--warning); }
+.session-size.danger { color: var(--danger); }
+.session-size.muted { color: var(--muted); }
+.renameable-session > button:focus-visible .session-size::after { content: attr(data-size-description); position: absolute; right: 0; bottom: 100%; z-index: 4; padding: 5px 8px; border: 1px solid var(--hairline); border-radius: 5px; background: var(--surface); color: var(--text); max-width: 280px; white-space: normal; }
+.history-loading { flex: none; min-height: 24px; font-size: 12px; color: var(--muted); text-align: center; }
+.message-stream, .provider-events { overflow-anchor: none; }
 .thread-running-indicator { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
 .thread-running-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--hairline); border-top-color: var(--text); animation: thread-spin .9s linear infinite; }
 @keyframes thread-spin { to { transform: rotate(360deg); } }

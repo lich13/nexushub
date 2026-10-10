@@ -132,6 +132,7 @@ fn core_probe_views_own_snapshot_metadata() {
 
 fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {
     ThreadSummary {
+        storage_size: None,
         id: id.to_string(),
         title: format!("Thread {id}"),
         status,

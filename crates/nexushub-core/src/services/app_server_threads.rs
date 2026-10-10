@@ -89,6 +89,7 @@ pub fn app_server_thread_summary(
         .or_else(|| fallback.map(|thread| thread.title.clone()))
         .unwrap_or_else(|| "未命名线程".to_string());
     let mut summary = ThreadSummary {
+        storage_size: fallback.and_then(|row| row.storage_size.clone()),
         id: id.clone(),
         title,
         status: status.clone(),
@@ -132,6 +133,11 @@ pub fn app_server_thread_summary(
         },
         last_event_kind: fallback.and_then(|thread| thread.last_event_kind.clone()),
     };
+    if fallback.is_none_or(|row| row.rollout_path != summary.rollout_path) {
+        summary.storage_size = Some(crate::session_storage::SessionStorageSize::unavailable(
+            crate::session_storage::StorageScope::File,
+        ));
+    }
     if !matches!(app_thread_state(thread), AppThreadState::Recoverable)
         && !thread_archived(thread)
         && summary.rollout_path.is_some()

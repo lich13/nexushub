@@ -79,21 +79,45 @@ test("Claude rename, blocked records and missing native data", async ({ page }) 
 test("Claude paging retains the visible anchor and command expansion", async ({ page }) => {
   await mockApi(page);
   const history: ClaudeHistoryEvent[] = Array.from({ length: 80 }, (_, i) => i % 2 === 0
-    ? { id: `text-${i}`, kind: "assistant_message", text: `Claude history ${i}` }
-    : { id: `tool-${i}`, kind: "tool_call", role: "Bash", status: "completed", detail: JSON.stringify({ command: `printf example-${i}` }), result: "ok" });
+    ? { id: `text-${i}`, kind: "assistant_message", text: `Claude history ${i}\n\n${"Readable history fixture. ".repeat(8)}` }
+    : { id: `tool-${i}`, kind: "tool_call", role: "Bash", status: "completed", detail: JSON.stringify({ command: `printf example-${i}` }), result: `ok ${"tool output. ".repeat(8)}` });
+  const requests: Array<{ before?: string }> = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
   await mockCommand(page, "claude.list", () => [summary]);
-  await mockCommand(page, "claude.detail", args => ({ summary, events: args.before ? history.slice(0, 40) : history.slice(40), hasMore: !args.before, beforeCursor: args.before ? null : "text-40", totalEvents: 80 }));
+  await mockCommand(page, "claude.detail", async args => {
+    requests.push({ before: args.before });
+    if (args.before) await gate;
+    return { summary, events: args.before ? history.slice(0, 40) : history.slice(40), hasMore: !args.before, beforeCursor: args.before ? null : "text-40", totalEvents: 80 };
+  });
   await openClaude(page);
   const stream = page.locator(".provider-events");
-  await stream.evaluate(node => { node.scrollTop = 0; });
-  const anchor = page.getByText("Claude history 40", { exact: true });
+  await expect.poll(() => stream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
+  const initial = await stream.evaluate(node => ({ top: node.scrollTop, height: node.scrollHeight, client: node.clientHeight }));
+  expect(initial.height).toBeGreaterThan(initial.client);
+  expect(initial.top).toBeGreaterThanOrEqual(initial.height - initial.client - 1);
+  await expect(page.getByText("Claude history 0", { exact: true })).toHaveCount(0);
+  const anchor = page.getByText("Claude history 42", { exact: true });
+  await stream.evaluate(node => {
+    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    node.scrollTop = 200;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect.poll(() => requests.filter(request => request.before).length).toBe(1);
+  await expect(stream.locator(".history-loading")).toContainText("正在加载较早消息");
+  await expect(anchor).toBeVisible();
   const top = await anchor.evaluate(node => node.getBoundingClientRect().top);
-  await page.getByRole("button", { name: "加载较早消息" }).click();
+  release();
   await expect(stream.locator(".execution-group")).toHaveCount(40);
+  await expect(stream.locator(".history-loading")).toHaveCount(0);
   expect(Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - top)).toBeLessThanOrEqual(2);
+  expect(requests.filter(request => request.before)).toEqual([{ before: "text-40" }]);
+  await expect(page.getByText("Claude history 0", { exact: true })).toBeVisible();
   await page.getByTitle("刷新任务").click();
   await expect(stream.locator(".execution-group")).toHaveCount(40);
-  await expect(page.getByRole("button", { name: "加载较早消息" })).toHaveCount(0);
+  await expect(page.getByText("Claude history 0", { exact: true })).toBeVisible();
 });
 
 test("Claude attachments and disclosure cache stay isolated between machines", async ({ page }) => {

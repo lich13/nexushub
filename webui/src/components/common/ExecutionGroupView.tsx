@@ -32,7 +32,7 @@ function CommandView({ command }: { command: ExecutionCommand }) {
 
 export function ExecutionGroupView({ group }: { group: ExecutionGroup }) {
   const { label, Icon } = executionSummary(group);
-  return <ActivityDetails timelineId={group.id} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
+  return <ActivityDetails timelineId={group.id} timelineAliases={group.commands.map(command => `group:${command.id}`)} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
     <Icon size={17} aria-hidden="true" />
     <span className="activity-label">{label}</span>
     <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>

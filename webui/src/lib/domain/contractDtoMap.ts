@@ -1,4 +1,5 @@
 export const contractDtoNames = [
+  "SessionStorageSize",
   "PlanSaveRequest",
   "PlanSaveResult",
   "RemoteConnectionView",

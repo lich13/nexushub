@@ -466,6 +466,7 @@ fn apply_running_job_to_thread_list(
 
 fn thread_summary_from_running_job(job: &JobRecord) -> ThreadSummary {
     ThreadSummary {
+        storage_size: None,
         id: job.thread_id.clone().unwrap_or_else(|| job.id.clone()),
         title: "未命名线程".to_string(),
         status: ThreadStatus::Running,
@@ -649,6 +650,7 @@ mod tests {
     #[test]
     fn merge_running_jobs_preserves_existing_active_turn_and_uses_job_title_fallback() {
         let mut rows = vec![ThreadSummary {
+            storage_size: None,
             active_turn_id: Some("turn-from-rollout".to_string()),
             latest_message: None,
             ..thread("thread-a", ThreadStatus::ReplyNeeded, None)
@@ -787,6 +789,7 @@ mod tests {
 
     fn thread(id: &str, status: ThreadStatus, updated_at: Option<&str>) -> ThreadSummary {
         ThreadSummary {
+            storage_size: None,
             id: id.to_string(),
             title: format!("Thread {id}"),
             status,

@@ -105,9 +105,9 @@ test("the newest page updates a nested child whose activity only exists in older
   expect(nested.delegation).toBe("保留较早的委派内容。");
 });
 
-test("a pending older-page read disables the pagination control", () => {
+test("a pending older-page read does not render the retired pagination control", () => {
   queryState({ hasNextPage: true, isFetchingNextPage: true, data: { pages: [page([message("current", "当前回复")])], pageParams: [null] } });
-  expect(renderPanel()).toMatch(/<button[^>]*disabled=""[^>]*>较早消息<\/button>/);
+  expect(renderPanel()).not.toContain("较早消息");
 });
 
 test("delegation starts collapsed and nested activities expose their own detail entry", () => {

@@ -420,7 +420,7 @@ function isVisibleLastEventKind(value?: string | null): boolean {
   return Boolean(event && !event.startsWith("app-server.") && !event.startsWith("panel."));
 }
 
-function mergeBlocksPreservingHistory(current: MessageBlock[], incoming: MessageBlock[]): MessageBlock[] {
+export function mergeBlocksPreservingHistory<T extends { id: string }>(current: T[], incoming: T[]): T[] {
   if (!current.length) return incoming;
   if (!incoming.length) return current;
   const incomingIds = new Set(incoming.map((block) => block.id));
@@ -430,8 +430,8 @@ function mergeBlocksPreservingHistory(current: MessageBlock[], incoming: Message
   // that moves when its later native start event arrives. Keep loaded history
   // before that window and newer realtime messages after it.
   const next = firstOverlap < 0 ? [...current] : current.slice(0, firstOverlap);
-  const beforeAnchor = new Map<string, MessageBlock[]>();
-  let pending: MessageBlock[] = [];
+  const beforeAnchor = new Map<string, T[]>();
+  let pending: T[] = [];
   if (firstOverlap >= 0) {
     for (const block of current.slice(firstOverlap)) {
       if (incomingIds.has(block.id)) {
@@ -481,7 +481,7 @@ export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock):
   return updated;
 }
 
-function messageBlocksEqual(left: MessageBlock, right: MessageBlock): boolean {
+function messageBlocksEqual(left: unknown, right: unknown): boolean {
   try {
     return JSON.stringify(left) === JSON.stringify(right);
   } catch {

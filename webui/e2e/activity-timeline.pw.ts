@@ -9,7 +9,7 @@ for (const provider of ["codex", "grok"] as const) {
       await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 850 });
       await page.emulateMedia({ colorScheme: mobile ? "dark" : "light", reducedMotion: "reduce" });
       await mockApi(page);
-      const events = [
+      const events: Array<{ kind: string; callId?: string; role?: string; method?: string; text: string; detail?: string; status?: string }> = [
         { kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: "Before activity" },
         ...Array.from({ length: 90 }, (_, n) => ({ kind: "tool_call", callId: `cmd-${n}`, role: "bash", method: "exec_command", text: "exec_command", detail: JSON.stringify({ cmd: `printf example-${n}` }), status: "completed" })),
         { kind: provider === "grok" ? "agent_message_chunk" : "assistant_message", text: "Between activity" },
@@ -68,21 +68,39 @@ test("Codex earlier-page loading preserves all tool rows and the open group", as
   detail.before_cursor = "b:45";
   detail.total_blocks = 91;
   await mockCommand(page, "threads.detail", args => detail);
-  await mockCommand(page, "threads.blocks", args => ({ threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null }));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await mockCommand(page, "threads.blocks", async () => {
+    await gate;
+    return { threadId: detail.summary.id, blocks: tools.slice(0, 45), totalBlocks: 91, hasMoreBlocks: false, beforeCursor: null };
+  });
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
+  const stream = page.locator(".message-stream");
   const group = page.locator("details.execution-group");
   await group.locator(":scope > summary").click();
   const retained = page.locator("details.execution-command").filter({ hasText: "printf earlier-45" });
   await retained.locator("summary").click();
   await expect(retained).toHaveAttribute("open", "");
-  await page.getByRole("button", { name: "较早消息", exact: true }).click();
+  await expect.poll(() => stream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
+  await stream.evaluate(node => {
+    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    node.scrollTop = 200;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(stream.locator(".history-loading")).toContainText("正在加载较早消息");
+  const anchor = retained.locator("summary");
+  const top = await anchor.evaluate(node => node.getBoundingClientRect().top);
+  release();
   await expect(group).toContainText("90 条命令");
   await expect(group).toHaveAttribute("open", "");
   await expect(retained).toHaveAttribute("open", "");
   await expect(group.locator("details.execution-command")).toHaveCount(90);
-  await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
-  expect(await page.locator(".message-stream").evaluate(element => element.scrollTop >= 0 && element.scrollTop <= element.scrollHeight - element.clientHeight + 1)).toBe(true);
+  await expect(stream.locator(".history-loading")).toHaveCount(0);
+  expect(Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - top)).toBeLessThanOrEqual(2);
+  expect(await stream.evaluate(element => element.scrollTop >= 0 && element.scrollTop <= element.scrollHeight - element.clientHeight + 1)).toBe(true);
 });
 
 
@@ -94,19 +112,31 @@ test("native pagination inserts older activity while preserving the visible anch
   ]).flat();
   const detail = { ...demo.demoThreadDetail("019e95a0-demo"), blocks: blocks.slice(40), total_blocks: 80, has_more_blocks: true, before_cursor: "b:40" };
   await mockCommand(page, "threads.detail", args => detail);
-  await mockCommand(page, "threads.blocks", args => ({ threadId: detail.summary.id, blocks: blocks.slice(0, 40), totalBlocks: 80, hasMoreBlocks: false, beforeCursor: null }));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await mockCommand(page, "threads.blocks", async () => {
+    await gate;
+    return { threadId: detail.summary.id, blocks: blocks.slice(0, 40), totalBlocks: 80, hasMoreBlocks: false, beforeCursor: null };
+  });
   await page.goto("/");
   await page.locator(".thread-item").filter({ hasText: "Plan Mode 修复" }).click();
   const stream = page.locator(".message-stream");
-  await stream.evaluate(node => { node.scrollTop = 0; });
-  const anchor = page.getByText("Timeline reply 20", { exact: true });
+  await expect.poll(() => stream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
+  const anchor = page.getByText("Timeline reply 22", { exact: true });
+  await stream.evaluate(node => {
+    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    node.scrollTop = 200;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(stream.locator(".history-loading")).toContainText("正在加载较早消息");
   const before = await anchor.evaluate(node => node.getBoundingClientRect().top);
-  await page.getByRole("button", { name: "较早消息", exact: true }).click();
+  release();
   await expect(stream.locator(".execution-group")).toHaveCount(40);
   expect(Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - before)).toBeLessThanOrEqual(2);
   await page.getByTitle("刷新任务").click();
   await expect(stream.locator(".execution-group")).toHaveCount(40);
-  await expect(page.getByRole("button", { name: "较早消息", exact: true })).toHaveCount(0);
 });
 
 for (const provider of ["codex", "claude", "grok"] as const) {

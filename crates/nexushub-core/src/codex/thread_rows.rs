@@ -417,6 +417,7 @@ pub(super) fn read_thread_rows_matching(
         };
         Ok(Some(LocalThreadRow {
             summary: ThreadSummary {
+                storage_size: None,
                 id,
                 title: choose_initial_thread_title(title.as_deref(), None),
                 status,

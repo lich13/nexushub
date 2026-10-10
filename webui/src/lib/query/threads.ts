@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   archiveThread,
   getThread,
-  getThreadBlocks,
   listThreads,
   renameThread,
   restoreThread,
@@ -11,7 +10,6 @@ import {
 } from "../api";
 import type {
   MessageBlock,
-  ThreadBlockPage,
   ThreadDetail,
   ThreadStatus,
   ThreadSummary,
@@ -474,23 +472,6 @@ export function useThreadDetailQuery(input: {
     enabled: Boolean(input.threadId),
     refetchInterval: (query) => input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary),
     placeholderData: preservePreviousQueryData
-  });
-}
-
-export function useThreadBlockPageMutation(input: {
-  onBeforeLoad: (threadId: string) => number;
-  onSuccess: (result: { threadId: string; cursor: string; page: ThreadBlockPage; beforeHeight: number }) => void;
-  onError: (error: Error, variables?: { threadId: string; cursor: string }) => void;
-}) {
-  return useMutation({
-    mutationFn: async ({ threadId, cursor }: { threadId: string; cursor: string }) => {
-      if (!cursor) throw new Error("没有更早的消息");
-      const beforeHeight = input.onBeforeLoad(threadId);
-      const page = await getThreadBlocks(threadId, { limit: 120, before: cursor });
-      return { threadId, cursor, page, beforeHeight };
-    },
-    onSuccess: input.onSuccess,
-    onError: input.onError
   });
 }
 

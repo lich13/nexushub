@@ -13,6 +13,12 @@ pub enum ThreadStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
+    #[serde(
+        default,
+        rename = "storageSize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub storage_size: Option<crate::session_storage::SessionStorageSize>,
     pub id: String,
     pub title: String,
     pub status: ThreadStatus,

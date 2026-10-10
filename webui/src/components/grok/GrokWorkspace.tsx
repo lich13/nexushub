@@ -1,3 +1,4 @@
+import { SessionSize } from "../common/SessionSize";
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
@@ -104,7 +105,7 @@ export function GrokWorkspace({}: { }) {
             { id: "delete", label: "删除任务文件", icon: <Trash2 size={15} />, danger: true, disabled: actions.preview.isPending || !(item.status === "recent"),
               reason: "运行中或状态未知的任务不能删除", run: () => { actions.remove.reset(); actions.preview.mutate(item.id, { onSuccess: setPreview }); } },
           ]}
-        ><strong>{grokSessionLabel(item)}</strong><span>{item.cwd}</span>{item.status === "running" ? <RunningIndicator /> : <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>}</RenameableSession></div>)}
+        ><strong>{grokSessionLabel(item)}</strong><span>{item.cwd}</span><span className="session-status-row">{item.status === "running" ? <RunningIndicator /> : <small>{item.status === "unknown" ? "状态未知" : item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "最近"}</small>}<SessionSize size={item.storageSize} /></span></RenameableSession></div>)}
         {sessions.isLoading && <div className="muted-row">正在读取任务...</div>}
         {!sessions.isLoading && !sessions.data?.length && <div className="muted-row">暂无 Grok 任务</div>}
       </div>

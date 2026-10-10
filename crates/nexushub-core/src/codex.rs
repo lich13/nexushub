@@ -108,7 +108,8 @@ pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<Threa
         return Ok(None);
     };
     let index = read_session_index(paths).unwrap_or_default();
-    Ok(enrich_local_thread_row(paths, &mut row, index.get(id)).then_some(row.summary))
+    let visible = enrich_local_thread_row(paths, &mut row, index.get(id));
+    Ok(visible.then_some(row.summary))
 }
 
 /// Notification discovery reads headers only; it never scans every historical rollout.
@@ -155,7 +156,7 @@ fn enrich_local_thread_row(
             })
             .unwrap_or_else(|| "未命名线程".to_string());
     }
-    !enrich_thread_from_rollout(&mut row.summary).unwrap_or(false)
+    !enrich_thread_from_rollout_with_storage(&mut row.summary, Some(&paths.home)).unwrap_or(false)
 }
 
 fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
@@ -186,10 +187,27 @@ fn missing_rollout_inside_codex_home(paths: &CodexPaths, path: &Path) -> bool {
 }
 
 pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
+    enrich_thread_from_rollout_with_storage(row, None)
+}
+
+fn enrich_thread_from_rollout_with_storage(
+    row: &mut ThreadSummary,
+    root: Option<&Path>,
+) -> Result<bool> {
     let Some(path) = &row.rollout_path else {
         return Ok(false);
     };
     let scan = scan_rollout(path, 80)?;
+    if let Some(root) = root {
+        use crate::session_storage::{self, SessionStorageSize, StorageScope};
+        row.storage_size = Some(
+            if !scan.identity_conflict && scan.session_id.as_deref() == Some(&row.id) {
+                session_storage::file_size(root, path)
+            } else {
+                SessionStorageSize::unavailable(StorageScope::File)
+            },
+        );
+    }
     row.message_count = scan.message_count;
     row.latest_message = scan.latest_message;
     if !matches!(row.status, ThreadStatus::Archived) {

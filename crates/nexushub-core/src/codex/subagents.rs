@@ -670,6 +670,7 @@ fn verified_detail(
     current_agent.name = display_name(names.for_record(record), record);
     let before = fs::metadata(&path)?;
     let summary = ThreadSummary {
+        storage_size: None,
         id: record.id.clone(),
         title: current_agent.name.clone(),
         status: if status == SubagentStatus::Running {

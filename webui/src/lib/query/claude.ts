@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteClaudeSession, getClaudeSession, listClaudeSessions, previewClaudeSessionDelete, renameClaudeSession } from "../api/claude";
 import type { ClaudeDeleteRequest } from "../../types";
+import { retainClaudeHistory } from "./historyWindows";
 
 export function useClaudeSessions(q: string) {
   return useQuery({ queryKey: ["claude_code", "sessions", q], queryFn: () => listClaudeSessions({ q, limit: 100 }), refetchInterval: 5000 });
@@ -11,7 +12,9 @@ export function useClaudeDetail(sessionKey?: string) {
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => getClaudeSession(sessionKey!, pageParam),
     getNextPageParam: page => page.hasMore ? page.beforeCursor ?? undefined : undefined,
+    structuralSharing: retainClaudeHistory,
     enabled: Boolean(sessionKey),
+    retry: false,
     refetchInterval: query => query.state.data?.pages[0]?.summary.status === "running" ? 1000 : 2000
   });
 }

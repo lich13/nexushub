@@ -3633,6 +3633,7 @@ last_error = "old nexushub request hook"
     #[test]
     fn passive_reply_needed_body_formats_questions_and_extracts_plan_text() {
         let thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             id: "thread-question".to_string(),
             title: "问题线程".to_string(),
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
@@ -3700,6 +3701,7 @@ last_error = "old nexushub request hook"
         assert!(!event.bark_body.contains("thread-question"));
 
         let plan_thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             pending_elicitation: None,
             latest_message: Some(
                 "<proposed_plan>\n# 修复计划\n- 等待确认\n</proposed_plan>".to_string(),
@@ -3736,6 +3738,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         let thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             id: "thread-plan-replied".to_string(),
             title: "计划已回复线程".to_string(),
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
@@ -3766,6 +3769,7 @@ last_error = "old nexushub request hook"
     #[test]
     fn passive_reply_needed_scan_rejects_old_reply_needed_threads() {
         let thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             id: "thread-old-plan".to_string(),
             title: "旧计划线程".to_string(),
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
@@ -4455,6 +4459,7 @@ last_error = "old nexushub request hook"
             )
             .unwrap();
             let thread = nexushub_core::codex::ThreadSummary {
+                storage_size: None,
                 id: format!("thread-{name}"),
                 title: "计划应被抑制线程".to_string(),
                 status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
@@ -4501,6 +4506,7 @@ last_error = "old nexushub request hook"
         )
         .unwrap();
         let thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             id: "thread-fallback-old-plan".to_string(),
             title: "fallback 旧计划线程".to_string(),
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,
@@ -4550,6 +4556,7 @@ last_error = "old nexushub request hook"
             None
         );
         let thread = nexushub_core::codex::ThreadSummary {
+            storage_size: None,
             id: "thread-fallback-empty-complete".to_string(),
             title: "fallback 空完成线程".to_string(),
             status: nexushub_core::codex::ThreadStatus::ReplyNeeded,

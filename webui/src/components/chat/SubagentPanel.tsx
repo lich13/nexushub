@@ -3,7 +3,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { mergeSubagentUpdates } from "../../lib/threadMessageStore";
 import { useSubagentDetail } from "../../lib/query/subagents";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
-import { shouldAutoFollowMessageStream } from "../../lib/domain/conversationViewModel";
+import { useHistoryScroll } from "../../lib/useHistoryScroll";
+import { HistoryLoading } from "../common/HistoryLoading";
+import { machineScope } from "../../lib/query/connection";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import type { MessageBlock, SubagentActivity, SubagentCollection } from "../../types";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
@@ -29,8 +31,6 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
   const panel = useRef<HTMLElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const stream = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
-  const prepend = useRef<number | null>(null);
   const positions = useRef(new Map<string, { top: number; follow: boolean; returnTo?: string }>());
   const restore = useRef<{ top: number; returnTo?: string } | null>(null);
   const query = useSubagentDetail(rootThreadId, agent?.agentId);
@@ -43,9 +43,23 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
     return mergeSubagentUpdates([...map.values()], query.data?.pages[0]?.detail.subagent_updates);
   }, [query.data]);
   const items = groupCodexCommandBlocks(blocks);
+  const oldestPage = query.data?.pages[query.data.pages.length - 1];
+  const history = useHistoryScroll({
+    scopeKey: `${machineScope()}:subagent:${rootThreadId}:${frameKey}`, streamRef: stream,
+    cursor: oldestPage?.detail.before_cursor, hasMore: frame.kind === "detail" && Boolean(query.hasNextPage),
+    ready: frame.kind === "list" || Boolean(detail), busy: query.isFetching,
+    initialPosition: positions.current.get(frameKey) ?? (frame.kind === "list" ? { top: 0, follow: false } : undefined),
+    loadPage: async () => {
+      const result = await query.fetchNextPage({ cancelRefetch: false });
+      if (result.isError) throw result.error;
+      const page = result.data?.pages[result.data.pages.length - 1]?.detail;
+      if (!page) throw new Error("历史读取失败");
+      return { cursor: page.before_cursor, hasMore: Boolean(page.has_more_blocks) };
+    }
+  });
   const savePosition = (trigger?: HTMLButtonElement) => {
     if (stream.current) positions.current.set(frameKey, {
-      top: stream.current.scrollTop, follow: follow.current,
+      top: stream.current.scrollTop, follow: history.follow.current,
       returnTo: trigger?.closest<HTMLElement>("[data-timeline-id], [data-agent-key]")?.getAttribute("data-timeline-id")
         ?? trigger?.getAttribute("data-agent-key") ?? (trigger ? "summary" : undefined)
     });
@@ -57,16 +71,13 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
   };
   useLayoutEffect(() => {
     const saved = positions.current.get(frameKey);
-    follow.current = saved?.follow ?? frame.kind === "detail";
     restore.current = saved ?? null;
-    prepend.current = null;
     close.current?.focus({ preventScroll: true });
   }, [frameKey, frame.kind]);
   useLayoutEffect(() => {
     const element = stream.current;
     if (!element) return;
     if (restore.current && (detail || frame.kind === "list")) {
-      element.scrollTop = restore.current.top;
       const id = restore.current.returnTo;
       const target = Array.from(panel.current?.querySelectorAll<HTMLElement>("[data-timeline-id], [data-agent-key]") ?? [])
         .find(item => item.dataset.timelineId === id || item.dataset.agentKey === id);
@@ -74,11 +85,9 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
         : target?.matches("button") ? target as HTMLButtonElement : target?.querySelector<HTMLButtonElement>("button");
       button?.focus({ preventScroll: true });
       restore.current = null;
-    } else if (prepend.current !== null && !query.isFetchingNextPage) {
-      element.scrollTop = element.scrollHeight - prepend.current;
-      prepend.current = null;
-    } else if (follow.current) element.scrollTop = element.scrollHeight;
-  }, [blocks, detail, frame.kind, query.isFetchingNextPage]);
+    }
+    history.capture();
+  }, [blocks, detail, frame.kind, query.isFetchingNextPage, history.capture]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !document.querySelector("dialog[open]")) { event.preventDefault(); onClose(); }
@@ -105,9 +114,9 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
       {frame.kind === "detail" && detail && <SubagentSummary collection={collection} onOpen={trigger => {
         savePosition(trigger); setStack(items => [...items, { kind: "list", agent: current }]);
       }} />}
-      <div ref={stream} className="subagent-stream message-stream" onScroll={event => { follow.current = shouldAutoFollowMessageStream(event.currentTarget); }}>
+      <div ref={stream} className="subagent-stream message-stream" onScroll={history.onScroll} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {agent && query.isLoading && <div role="status" className="muted-row">正在读取子智能体…</div>}
-        {agent && query.error && <div className="form-error" role="alert">{query.error.message}<button className="file-path-label" onClick={() => void query.refetch()}>重试</button></div>}
+        {agent && query.error && !query.isFetchNextPageError && <div className="form-error" role="alert">{query.error.message}<button className="file-path-label" onClick={() => void query.refetch()}>重试</button></div>}
         {frame.kind === "list" ? <>
           {!collection && !query.isLoading && <div className="muted-row">更新当前机器服务后可查看子智能体汇总。</div>}
           {[...(collection?.agents ?? [])].sort((a, b) => priority[a.status] - priority[b.status]).map(child => <button
@@ -119,10 +128,7 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
           </button>)}
           {collection?.complete && !collection.agents.length && <div className="muted-row">暂无直属子智能体</div>}
         </> : agent && <>
-          {query.hasNextPage && <button type="button" className="secondary-button" disabled={query.isFetchingNextPage} onClick={() => {
-            if (stream.current) prepend.current = stream.current.scrollHeight - stream.current.scrollTop;
-            follow.current = false; void query.fetchNextPage();
-          }}>较早消息</button>}
+          <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
           <UserMessageScope.Provider value={{ provider: "codex", sessionKey: agent.agentId!, rootThreadId }}>
             <MarkdownPathScope.Provider value={detail?.summary.cwd}><DisclosureScope.Provider value={`codex:${rootThreadId}:agent:${agent.agentId}`}>
               {agent.delegation && <ActivityDetails stateKey="delegation" className="subagent-delegation" initiallyOpen={false} summary={<span>委派内容</span>}>

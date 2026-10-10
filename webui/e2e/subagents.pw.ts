@@ -190,21 +190,25 @@ test("older child pages retain the visible anchor and expanded command", async (
   const view = panel(page);
   const stream = view.locator(".subagent-stream");
   await expect(stream.locator("article")).toHaveCount(21);
-  await stream.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event("scroll", { bubbles: true })); });
+  await expect.poll(() => stream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
   const group = stream.locator("details.execution-group");
   await group.locator(":scope > summary").click();
   const retained = group.locator("details.execution-command");
   await retained.locator("summary").click();
   await expect(retained).toHaveAttribute("open", "");
-  await stream.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event("scroll", { bubbles: true })); });
   const anchor = view.getByText("当前页锚点", { exact: true });
+  await stream.evaluate(node => {
+    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    node.scrollTop = 200;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(view.locator(".history-loading")).toContainText("正在加载较早消息");
   const offset = await anchor.evaluate(node => node.getBoundingClientRect().top);
-  const older = view.getByRole("button", { name: "较早消息", exact: true });
-  await older.click();
-  await expect(older).toBeDisabled();
   release();
   await expect(stream.locator("article")).toHaveCount(41);
-  await expect(older).toHaveCount(0);
+  await expect(view.locator(".history-loading")).toHaveCount(0);
   await expect(retained).toHaveAttribute("open", "");
   await expect(group).toHaveAttribute("open", "");
   await expect.poll(async () => Math.abs(await anchor.evaluate(node => node.getBoundingClientRect().top) - offset)).toBeLessThanOrEqual(2);
@@ -250,6 +254,7 @@ test("opening and closing a docked child preserves the parent reading anchor", a
   const before = Array.from({ length: 14 }, (_, index) => message(`before-${index}`, `父线程较早示例 ${index}\n\n${"用于观察宽度变化后的正文。".repeat(25)}`));
   const after = Array.from({ length: 14 }, (_, index) => message(`after-${index}`, `父线程后续示例 ${index}\n\n${"用于观察宽度变化后的正文。".repeat(25)}`));
   await installSubagents(page, [...before, activity(), ...after]);
+  await mockCommand(page, "threads.subagentDetail", () => childPage(child, Array.from({ length: 18 }, (_, index) => message(`child-scroll-${index}`, `子智能体独立滚动示例 ${index}\n\n${"用于验证详情滚动容器隔离。".repeat(24)}`))));
   await openRoot(page);
   const stream = parentStream(page);
   await trigger(page).scrollIntoViewIfNeeded();
@@ -262,6 +267,16 @@ test("opening and closing a docked child preserves the parent reading anchor", a
   const offset = () => stream.locator(`[data-timeline-id="${anchor.id}"]`).evaluate(node => node.getBoundingClientRect().top - node.closest(".message-stream")!.getBoundingClientRect().top);
   await trigger(page).click();
   await expect(panel(page)).toHaveClass(/docked/);
+  const childStream = panel(page).locator(".subagent-stream");
+  await expect.poll(() => childStream.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  const parentTop = await stream.evaluate(node => node.scrollTop);
+  await childStream.evaluate(node => {
+    node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    node.scrollTop = 120;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  expect(await stream.evaluate(node => node.scrollTop)).toBe(parentTop);
   await expect.poll(async () => Math.abs(await offset() - anchor.offset)).toBeLessThanOrEqual(2);
   await panel(page).getByRole("button", { name: "关闭子智能体详情", exact: true }).click();
   await expect(panel(page)).toHaveCount(0);
