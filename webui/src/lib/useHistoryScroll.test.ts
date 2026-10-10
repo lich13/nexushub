@@ -223,6 +223,58 @@ describe("useHistoryScroll contract", () => {
     expect(newCommand.getBoundingClientRect().top).toBe(80);
   });
 
+  test("does not drain pages when only the inner command viewport is at the boundary", async () => {
+    const oldGroup = item("group:long", 0, 360);
+    const oldRows = scrollContainer(0, 180, 600, 220);
+    const oldCommand = item("group:cmd-1", 300, 80);
+    connect(oldGroup, oldRows);
+    connect(oldRows, oldCommand);
+    // The outer stream is shorter than its viewport, so it remains at 0 even
+    // after the inner execution viewport restores its reading position.
+    const next = stream([oldGroup, oldCommand], { clientHeight: 400, scrollHeight: 320 });
+    const first = deferred<{ cursor: string; hasMore: boolean }>();
+    const second = deferred<{ cursor: string; hasMore: boolean }>();
+    const loadPage = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const controller = createHistoryScrollCoordinator();
+    const initial = optionsFor(next, { loadPage });
+    controller.update(initial);
+    controller.onRendered();
+
+    controller.upwardIntent();
+    await Promise.resolve();
+    expect(loadPage).toHaveBeenCalledTimes(1);
+
+    first.resolve({ cursor: "cursor-b", hasMore: true });
+    await expect(controller.loadOlder("scroll")).resolves.toBe(true);
+    controller.update({ ...initial, cursor: "cursor-b", hasMore: true });
+
+    oldCommand.isConnected = false;
+    oldGroup.isConnected = false;
+    const newGroup = item("group:new", 0, 520);
+    const newRows = scrollContainer(0, 180, 900, 0);
+    const newCommand = item("command:cmd-1", 520, 80, "group:cmd-1");
+    connect(newGroup, newRows);
+    connect(newRows, newCommand);
+    next.items = [newGroup, newCommand];
+    connect(next, newGroup);
+    next.scrollHeight = 320;
+    controller.onRendered();
+
+    expect(newRows.scrollTop).toBe(440);
+    expect(next.scrollTop).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(loadPage).toHaveBeenCalledTimes(1);
+
+    controller.upwardIntent();
+    await Promise.resolve();
+    expect(loadPage).toHaveBeenCalledTimes(2);
+    second.resolve({ cursor: "cursor-c", hasMore: false });
+    await expect(controller.loadOlder("scroll")).resolves.toBe(true);
+  });
+
   test("does not anchor a command clipped by its nested execution viewport", async () => {
     const oldGroup = item("group:stable", 150, 300);
     const oldRows = scrollContainer(0, 100, 400, 200);

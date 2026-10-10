@@ -113,7 +113,13 @@ export function createHistoryScrollCoordinator(onChange: () => void = () => {}) 
     onChange();
     return active;
   };
-  const maybeLoad = () => {
+  const maybeLoad = (fromUpwardInput = false) => {
+    const element = options?.streamRef.current;
+    // A merged tool group may grow only inside its bounded scroller. Once
+    // prepend has put earlier commands above the anchor, wait for the reader
+    // to continue upward instead of draining every page at a fixed root top.
+    if (!fromUpwardInput && element && anchor?.element
+      && innerContainers(anchor.element, element).some(container => container.scrollTop > 200)) return;
     if (initialized && upward && !options?.searchActive && options?.streamRef.current && options.streamRef.current.scrollTop <= 200) void loadOlder("scroll");
   };
   const onRendered = () => {
@@ -151,14 +157,15 @@ export function createHistoryScrollCoordinator(onChange: () => void = () => {}) 
   };
   const onScroll = (element: HTMLDivElement) => {
     if (!initialized) return;
-    if (element.scrollTop < lastTop - 1) upward = true;
+    const movedUp = element.scrollTop < lastTop - 1;
+    if (movedUp) upward = true;
     else if (element.scrollTop > lastTop + 1) upward = false;
     follow.current = !upward && shouldAutoFollowMessageStream(element);
     capture();
-    maybeLoad();
+    maybeLoad(movedUp);
   };
   const upwardIntent = () => {
-    if (initialized) { upward = true; follow.current = false; capture(); maybeLoad(); }
+    if (initialized) { upward = true; follow.current = false; capture(); maybeLoad(true); }
   };
   const retry = () => { if (options?.busy) return; failure = null; void loadOlder("scroll"); };
   return {
