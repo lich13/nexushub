@@ -22,6 +22,9 @@ export function useHistoryScroll(options: HistoryScrollOptions) {
   useLayoutEffect(() => { history.onRendered(); });
 
   const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => history.onScroll(event.currentTarget), [history]);
+  const onScrollCapture = useCallback((event: UIEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) history.capture();
+  }, [history]);
   const onWheel = useCallback((event: WheelEvent<HTMLDivElement>) => { if (event.deltaY < 0 && !innerScroll(event.target, event.currentTarget)) history.upwardIntent(); }, [history]);
   const onTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => { touchY.current = event.touches[0]?.clientY ?? null; }, []);
   const onTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
@@ -37,6 +40,6 @@ export function useHistoryScroll(options: HistoryScrollOptions) {
     options.streamRef.current?.focus({ preventScroll: true });
     history.retry();
   }, [history, options.streamRef]);
-  return { onScroll, onWheel, onTouchStart, onTouchMove, onKeyDown, capture: history.capture, follow: history.follow,
+  return { onScroll, onScrollCapture, onWheel, onTouchStart, onTouchMove, onKeyDown, capture: history.capture, follow: history.follow,
     loadOlder: history.loadOlder, retry, loading: history.loading, error: history.error };
 }

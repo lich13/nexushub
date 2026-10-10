@@ -2,11 +2,14 @@ import { describe, expect, test, vi } from "vitest";
 import { createHistoryScrollCoordinator, type HistoryScrollOptions } from "./historyScrollCoordinator";
 
 type FakeItem = {
-  dataset: { timelineId?: string; timelineAliases?: string };
+  dataset: { timelineId?: string; timelineAliases?: string; historyScrollContainer?: string };
   isConnected: boolean;
   parentElement: FakeItem | FakeStream | null;
   top: number;
   height: number;
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
   children: FakeItem[];
   contains: (target: unknown) => boolean;
   getBoundingClientRect: () => { top: number; bottom: number; height: number };
@@ -23,27 +26,39 @@ type FakeStream = {
   contains: (target: unknown) => boolean;
 };
 
-function item(id: string, top: number, height: number, aliases?: string): FakeItem {
+function item(id: string, top: number, height: number, aliases?: string, options: { scrollTop?: number; clientHeight?: number; scrollHeight?: number; historyScrollContainer?: string } = {}): FakeItem {
   const next: FakeItem = {
     dataset: { timelineId: id, timelineAliases: aliases },
     isConnected: true,
     parentElement: null,
     top,
     height,
+    scrollTop: options.scrollTop ?? 0,
+    clientHeight: options.clientHeight ?? height,
+    scrollHeight: options.scrollHeight ?? height,
     children: [],
     contains: target => target === next || next.children.some(child => child.contains(target)),
     getBoundingClientRect: () => {
+      let topInViewport = next.top;
       let parent = next.parentElement;
-      let scrollTop = 0;
       while (parent) {
-        if ("items" in parent) { scrollTop = parent.scrollTop; break; }
+        topInViewport -= parent.scrollTop;
+        if ("items" in parent) {
+          topInViewport += parent.getBoundingClientRect().top;
+          break;
+        }
+        topInViewport += parent.top;
         parent = parent.parentElement;
       }
-      const topInViewport = next.top - scrollTop;
       return { top: topInViewport, bottom: topInViewport + next.height, height: next.height };
     }
   };
+  if (options.historyScrollContainer !== undefined) next.dataset.historyScrollContainer = options.historyScrollContainer;
   return next;
+}
+
+function scrollContainer(top: number, clientHeight: number, scrollHeight: number, scrollTop: number): FakeItem {
+  return item("", top, clientHeight, undefined, { clientHeight, scrollHeight, scrollTop, historyScrollContainer: "commands" });
 }
 
 function stream(items: FakeItem[] = [], overrides: Partial<Pick<FakeStream, "scrollTop" | "scrollHeight" | "clientHeight">> = {}): FakeStream {
@@ -69,7 +84,7 @@ function stream(items: FakeItem[] = [], overrides: Partial<Pick<FakeStream, "scr
   if (overrides.clientHeight !== undefined) next.clientHeight = overrides.clientHeight;
   if (overrides.scrollHeight !== undefined) next.scrollHeight = overrides.scrollHeight;
   if (overrides.scrollTop !== undefined) next.scrollTop = overrides.scrollTop;
-  for (const child of items) connect(next, child);
+  for (const child of items) if (!child.parentElement) connect(next, child);
   return next;
 }
 
@@ -170,10 +185,12 @@ describe("useHistoryScroll contract", () => {
     await expect(secondRequest).resolves.toBe(true);
   });
 
-  test("restores a nested command anchor when a group ID changes during prepend", async () => {
+  test("restores a nested command anchor when a group remounts during prepend", async () => {
     const oldGroup = item("group:old", 180, 420);
-    const oldCommand = item("group:cmd-1", 230, 80);
-    connect(oldGroup, oldCommand);
+    const oldRows = scrollContainer(0, 180, 600, 220);
+    const oldCommand = item("group:cmd-1", 300, 80);
+    connect(oldGroup, oldRows);
+    connect(oldRows, oldCommand);
     const next = stream([oldGroup, oldCommand], { scrollTop: 180, scrollHeight: 1000 });
     const pending = deferred<{ cursor: string; hasMore: boolean }>();
     const controller = createHistoryScrollCoordinator();
@@ -190,16 +207,58 @@ describe("useHistoryScroll contract", () => {
     oldCommand.isConnected = false;
     oldGroup.isConnected = false;
     const newGroup = item("group:new", 150, 600);
-    const newCommand = item("command:cmd-1", 530, 80, "group:cmd-1");
-    connect(newGroup, newCommand);
+    const newRows = scrollContainer(0, 180, 900, 0);
+    const newCommand = item("command:cmd-1", 520, 80, "group:cmd-1");
+    connect(newGroup, newRows);
+    connect(newRows, newCommand);
     next.items = [newGroup, newCommand];
     connect(next, newGroup);
     next.scrollHeight = 1300;
     controller.onRendered();
 
-    // The nested command moved by 300px; anchoring the outer group would move
-    // by -30px instead and visibly jump the reader.
-    expect(next.scrollTop).toBe(480);
+    // The remounted group moved, and its command gained 220px of prepended
+    // content. Restore the inner viewport first, then compensate the parent.
+    expect(newRows.scrollTop).toBe(440);
+    expect(next.scrollTop).toBe(150);
+    expect(newCommand.getBoundingClientRect().top).toBe(80);
+  });
+
+  test("does not anchor a command clipped by its nested execution viewport", async () => {
+    const oldGroup = item("group:stable", 150, 300);
+    const oldRows = scrollContainer(0, 100, 400, 200);
+    const oldCommand = item("group:cmd-clipped", 300, 80);
+    connect(oldGroup, oldRows);
+    connect(oldRows, oldCommand);
+    const next = stream([oldGroup, oldCommand], { scrollTop: 100, scrollHeight: 1000 });
+    const pending = deferred<{ cursor: string; hasMore: boolean }>();
+    const controller = createHistoryScrollCoordinator();
+    const initial = optionsFor(next, { searchActive: true, loadPage: () => pending.promise });
+    controller.update(initial);
+    controller.onRendered();
+    next.scrollTop = 100;
+    controller.onScroll(next);
+
+    const request = controller.loadOlder("search");
+    await Promise.resolve();
+    pending.resolve({ cursor: "cursor-b", hasMore: false });
+    await expect(request).resolves.toBe(true);
+
+    oldCommand.isConnected = false;
+    oldGroup.isConnected = false;
+    const newGroup = item("group:stable", 180, 300);
+    const newRows = scrollContainer(0, 100, 400, 0);
+    const newCommand = item("group:cmd-clipped", 300, 80);
+    connect(newGroup, newRows);
+    connect(newRows, newCommand);
+    next.items = [newGroup, newCommand];
+    connect(next, newGroup);
+    next.scrollHeight = 1200;
+    controller.onRendered();
+
+    // The command intersects the reading pane but lies outside the bounded
+    // execution viewport. The visible group, not the clipped command, is the anchor.
+    expect(next.scrollTop).toBe(130);
+    expect(newGroup.getBoundingClientRect().top).toBe(50);
   });
 
   test("does not retry a failed page until explicitly requested", async () => {

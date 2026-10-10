@@ -138,8 +138,8 @@ small { font-size: 12px; }
 .session-size.danger { color: var(--danger); }
 .session-size.muted { color: var(--muted); }
 .renameable-session > button:focus-visible .session-size::after { content: attr(data-size-description); position: absolute; right: 0; bottom: 100%; z-index: 4; padding: 5px 8px; border: 1px solid var(--hairline); border-radius: 5px; background: var(--surface); color: var(--text); max-width: 280px; white-space: normal; }
-.history-loading { flex: none; min-height: 24px; font-size: 12px; color: var(--muted); text-align: center; }
-.message-stream, .provider-events { overflow-anchor: none; }
+.history-loading { position: absolute; z-index: 4; top: 0; left: 40px; right: 40px; height: 16px; line-height: 16px; font-size: 12px; color: var(--muted); background: var(--canvas); text-align: center; }
+.message-stream, .provider-events { position: relative; overflow-anchor: none; }
 .thread-running-indicator { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
 .thread-running-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--hairline); border-top-color: var(--text); animation: thread-spin .9s linear infinite; }
 @keyframes thread-spin { to { transform: rotate(360deg); } }
@@ -191,7 +191,6 @@ small { font-size: 12px; }
 .history-collapse-cell span { color: var(--muted); font-size: 12px; }
 .history-collapse-cell strong { font-size: 13px; overflow-wrap: anywhere; }
 .history-collapse-cell button { flex: none; }
-.load-earlier-button { align-self: center; padding: 8px 14px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; }
 .markdown-content { min-width: 0; overflow-wrap: anywhere; line-height: 1.65; font-size: 15px; white-space: normal; }
 .markdown-content p { margin: 0 0 10px; }
 .markdown-content > :last-child { margin-bottom: 0; }

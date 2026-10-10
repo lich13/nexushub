@@ -114,7 +114,7 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
       {frame.kind === "detail" && detail && <SubagentSummary collection={collection} onOpen={trigger => {
         savePosition(trigger); setStack(items => [...items, { kind: "list", agent: current }]);
       }} />}
-      <div ref={stream} className="subagent-stream message-stream" onScroll={history.onScroll} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+      <div ref={stream} className="subagent-stream message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {agent && query.isLoading && <div role="status" className="muted-row">正在读取子智能体…</div>}
         {agent && query.error && !query.isFetchNextPageError && <div className="form-error" role="alert">{query.error.message}<button className="file-path-label" onClick={() => void query.refetch()}>重试</button></div>}
         {frame.kind === "list" ? <>

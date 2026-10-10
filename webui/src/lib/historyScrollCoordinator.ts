@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import { shouldAutoFollowMessageStream } from "./domain/conversationViewModel";
 
 type Page = { cursor?: string | null; hasMore: boolean };
-type Snapshot = { element: HTMLElement | null; id?: string; offset: number; height: number; top: number };
+type Snapshot = { element: HTMLElement | null; id?: string; offset: number; height: number; top: number; innerOffsets: Array<{ kind: string; offset: number }> };
 export type HistoryScrollOptions = {
   scopeKey: string;
   streamRef: RefObject<HTMLDivElement>;
@@ -15,18 +15,39 @@ export type HistoryScrollOptions = {
   loadPage: (cursor: string, isCurrent: () => boolean) => Promise<Page>;
 };
 
+function innerContainers(target: HTMLElement, root: HTMLElement): HTMLElement[] {
+  const containers: HTMLElement[] = [];
+  for (let parent = target.parentElement; parent && parent !== root; parent = parent.parentElement) {
+    if (parent.dataset.historyScrollContainer !== undefined) containers.push(parent);
+  }
+  return containers;
+}
+
 function snapshot(element: HTMLDivElement): Snapshot {
   const bounds = element.getBoundingClientRect();
   let anchor: HTMLElement | null = null;
   for (const item of element.querySelectorAll<HTMLElement>("[data-timeline-id]")) {
     const rect = item.getBoundingClientRect();
     if (rect.height <= 0 || rect.bottom <= bounds.top || rect.top >= bounds.bottom) continue;
+    const containers = innerContainers(item, element);
+    // A command can intersect the reading pane but still be clipped by the
+    // tool group's bounded scroller. Only anchor content the reader can see.
+    let visibleTop = bounds.top;
+    let visibleBottom = bounds.bottom;
+    for (const container of containers) {
+      const clip = container.getBoundingClientRect();
+      visibleTop = Math.max(visibleTop, clip.top);
+      visibleBottom = Math.min(visibleBottom, clip.bottom);
+    }
+    if (visibleBottom <= visibleTop || rect.bottom <= visibleTop || rect.top >= visibleBottom) continue;
     // Prefer a visible command within an expanded group. Its outer group can
     // acquire older commands on prepend without moving the group's top edge.
     if (!anchor || anchor.contains(item)) anchor = item;
     else break;
   }
-  return { element: anchor, id: anchor?.dataset.timelineId, offset: anchor ? anchor.getBoundingClientRect().top - bounds.top : 0, height: element.scrollHeight, top: element.scrollTop };
+  const top = anchor?.getBoundingClientRect().top ?? bounds.top;
+  return { element: anchor, id: anchor?.dataset.timelineId, offset: top - bounds.top, height: element.scrollHeight, top: element.scrollTop,
+    innerOffsets: anchor ? innerContainers(anchor, element).map(container => ({ kind: container.dataset.historyScrollContainer!, offset: top - container.getBoundingClientRect().top })) : [] };
 }
 
 /** Coordinates page requests and viewport changes independently of the UI lifecycle. */
@@ -112,6 +133,14 @@ export function createHistoryScrollCoordinator(onChange: () => void = () => {}) 
         : saved.id ? Array.from(element.querySelectorAll<HTMLElement>("[data-timeline-id], [data-timeline-aliases]"))
           .find(item => item.dataset.timelineId === saved.id || item.dataset.timelineAliases?.split(/\s+/).includes(saved.id!)) : null;
       if (target) {
+        // Prepending commands can remount a merged group. Restore the command
+        // inside each bounded scroller before compensating the reading pane.
+        innerContainers(target, element).forEach((container, index) => {
+          const previous = saved.innerOffsets[index];
+          if (previous?.kind === container.dataset.historyScrollContainer) {
+            container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top - previous.offset;
+          }
+        });
         element.scrollTop += target.getBoundingClientRect().top - element.getBoundingClientRect().top - saved.offset;
       } else if (element.scrollHeight !== saved.height) {
         element.scrollTop = saved.top + element.scrollHeight - saved.height;
