@@ -39,6 +39,8 @@ impl GrokPaths {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokSessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_size: Option<crate::session_storage::SessionStorageSize>,
     pub id: String,
     pub title: String,
     pub cwd: String,
@@ -114,6 +116,12 @@ pub fn list_grok_sessions(
     let active = activity::Snapshot::capture(paths);
     for summary in &mut result {
         summary.status = active.status(summary).to_string();
+        summary.storage_size = Some(crate::session_storage::directory_size(
+            &root,
+            &summary.path,
+            None,
+            &summary.id,
+        ));
     }
     Ok(result)
 }
@@ -206,11 +214,17 @@ pub fn grok_session_detail(
     id: &str,
     cwd: Option<&str>,
 ) -> Result<GrokSessionDetail> {
-    let summary = resolve_session(paths, id)?;
+    let mut summary = resolve_session(paths, id)?;
     ensure!(
         cwd.is_none_or(|cwd| summary.cwd == cwd),
         "Grok workspace identity changed"
     );
+    summary.storage_size = Some(crate::session_storage::directory_size(
+        &paths.sessions(),
+        &summary.path,
+        None,
+        &summary.id,
+    ));
     let history = summary.path.join("updates.jsonl");
     static CACHE: crate::read_cache::ReadCache<Vec<GrokHistoryEvent>> =
         crate::read_cache::ReadCache::new(8 * 1024 * 1024);
@@ -486,6 +500,7 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize;
     Ok(Some(GrokSessionSummary {
+        storage_size: None,
         id,
         title,
         cwd,

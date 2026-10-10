@@ -1149,6 +1149,7 @@ mod tests {
     #[test]
     fn passive_notification_plans_are_core_defined() {
         let thread = ThreadSummary {
+            storage_size: None,
             id: "thread-a".to_string(),
             title: "Thread A".to_string(),
             status: ThreadStatus::Recoverable,

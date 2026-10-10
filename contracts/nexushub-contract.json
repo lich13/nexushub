@@ -686,6 +686,10 @@
     }
   ],
   "dtoCatalog": {
+    "SessionStorageSize": {
+      "core": "SessionStorageSize",
+      "webui": "SessionStorageSize"
+    },
     "SessionBatchRequest": {
       "core": "SessionBatchRequest",
       "webui": "SessionBatchRequest"

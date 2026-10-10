@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.16": [
+        "向上滚动自动加载较早消息，保留当前阅读位置，搜索与分页协同工作。",
+        "Codex、Claude Code、Grok 线程列表显示 K／M／G 大小，支持本机和腾讯云。",
+    ],
     "1.2.15": [
         "Bark 网络异常后有限重试，重启继续未确认分段，减少漏推。",
         "细分安全错误与中文投递状态，统一 NexusHub 测试文案并移除旧配置导入。",
@@ -131,6 +135,42 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.16":
+        sections = {
+            "版本概览": ["本版改进长线程阅读：上滚即可继续查看历史，列表同时显示会话占用大小。"],
+            "功能调整": [
+                "Codex 主线程、Claude Code 和 Codex 子智能体详情在向上滚动到顶部附近时，自动逐页加载较早消息；首次打开仍定位到最新内容。",
+                "三种 Provider 的线程大小放在原状态行右侧，按 1024 换算为 K／M／G，分别使用绿色、琥珀色和红色；悬停或键盘聚焦可查看准确字节数及统计范围。",
+                "Codex 统计 rollout 文件；Claude Code 统计主 JSONL 及确认归属的会话专属目录；Grok 统计会话专属目录。本机与腾讯云采用相同口径。",
+            ],
+            "问题修复": [
+                "取消日常阅读中的手动加载按钮，加载失败后才显示重试入口；历史耗尽时不保留空白区域。",
+                "加载较早消息时保持可见内容及其像素位置，轮询追加、工具展开和继续滚动不会把阅读位置拉回底部。",
+                "搜索与滚动共用分页协调，避免重复请求；轮询保留已加载历史及最早游标，机器或线程切换后丢弃旧响应。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，不新增公共命令或数据库表；现有会话、连接、凭据及 Bark 配置继续使用。",
+                "目录在后台有界统计，缓存最长 30 秒刷新；不扫描项目工作目录或共享存储，不读取外部附件，不跟随符号链接。",
+                "未知或旧服务缺少大小字段时显示 —，部分统计用 ≥ 标记；文件替换或截断会使旧缓存失效。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：API 服务包与 SHA-256 校验文件；latest.json 仅映射 darwin-aarch64，共七项资产。",
+                "不提供 Linux 桌面包、网页版或安卓安装包。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App；打开较长线程向上阅读，即可触发历史加载。目录大小可能在下一次列表刷新后显示。",
+                "大小表示会话存储的逻辑字节数，不代表项目目录体积或删除后必然释放的磁盘空间。",
+                "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.15":
         sections = {

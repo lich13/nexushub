@@ -141,6 +141,8 @@ pub fn is_macos_network_volume_path(path: &Path) -> bool {
 
 #[derive(Default, Clone)]
 pub(crate) struct RolloutScan {
+    pub(crate) session_id: Option<String>,
+    pub(crate) identity_conflict: bool,
     pub(crate) message_count: usize,
     pub(crate) latest_message: Option<String>,
     pub(crate) reply_needed: bool,
@@ -226,6 +228,17 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
         };
         normalize_canonical_turn(&mut value, &mut turn_context);
         async_questions.push(&value, 0);
+        let metadata = value
+            .get("session_meta")
+            .and_then(|v| v.get("payload"))
+            .or_else(|| (value["type"] == "session_meta").then(|| &value["payload"]));
+        if let Some(id) = metadata
+            .and_then(|m| m["id"].as_str())
+            .filter(|id| !id.is_empty())
+        {
+            scan.identity_conflict |= scan.session_id.as_deref().is_some_and(|old| old != id);
+            scan.session_id = Some(id.to_owned());
+        }
         if let Some(payload) = value.get("session_meta").and_then(|v| v.get("payload")) {
             scan.is_subagent |= is_subagent_session_meta(payload);
             scan.cwd = payload

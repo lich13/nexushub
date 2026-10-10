@@ -15,6 +15,7 @@ mod read_cache;
 pub mod security;
 mod selected_codex;
 pub mod services;
+pub mod session_storage;
 pub mod system;
 pub mod update;
 

@@ -40,6 +40,8 @@ impl ClaudePaths {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeSessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_size: Option<crate::session_storage::SessionStorageSize>,
     pub id: String,
     pub session_key: String,
     pub title: String,
@@ -251,6 +253,7 @@ fn summary(
         .filter(|e| matches!(e.kind.as_str(), "user_message" | "assistant_message"))
         .collect();
     Ok(ClaudeSessionSummary {
+        storage_size: None,
         id: parsed.id.clone(),
         session_key: key_for(&paths.projects.canonicalize()?, path, &parsed.id),
         title: parsed.title.clone(),
@@ -296,11 +299,52 @@ pub fn list_claude_sessions(
             .then(a.session_key.cmp(&b.session_key))
     });
     result.truncate(limit.clamp(1, 200));
+    for summary in &mut result {
+        attach_storage_size(paths, summary);
+    }
     Ok(result)
+}
+
+fn attach_storage_size(paths: &ClaudePaths, summary: &mut ClaudeSessionSummary) {
+    use crate::session_storage::{self, StorageScope, StorageStatus};
+    let mut size = session_storage::file_size(&paths.projects, &summary.path);
+    if summary.read_error.is_some() {
+        summary.storage_size = Some(session_storage::SessionStorageSize::unavailable(
+            StorageScope::File,
+        ));
+        return;
+    }
+    // A same-ID directory belongs to this transcript only when the native ID,
+    // native filename and project all agree. Duplicate IDs in other files do not inherit it.
+    if summary.path.file_stem().and_then(|s| s.to_str()) == Some(&summary.id) {
+        let directory = summary.path.with_extension("");
+        match fs::symlink_metadata(&directory) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
+                size = session_storage::directory_size(
+                    &paths.projects,
+                    &directory,
+                    Some(&summary.path),
+                    &summary.session_key,
+                );
+            }
+            Ok(_) => {
+                size.scope = StorageScope::Directory;
+                size.status = StorageStatus::Partial;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                size.scope = StorageScope::Directory;
+                size.status = StorageStatus::Partial;
+            }
+        }
+    }
+    summary.storage_size = Some(size);
 }
 pub fn claude_session_summary(paths: &ClaudePaths, key: &str) -> Result<ClaudeSessionSummary> {
     let (path, parsed) = resolve(paths, key)?;
-    summary(paths, &path, &parsed, &activity::Snapshot::capture())
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
+    attach_storage_size(paths, &mut summary);
+    Ok(summary)
 }
 pub fn claude_session_detail(
     paths: &ClaudePaths,
@@ -322,8 +366,10 @@ pub fn claude_session_detail(
             user.refresh_files(Some(&parsed.cwd));
         }
     }
+    let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
+    attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
-        summary: summary(paths, &path, &parsed, &activity::Snapshot::capture())?,
+        summary,
         events,
         total_events: parsed.events.len(),
         has_more: start > 0,

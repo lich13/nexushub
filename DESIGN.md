@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub 1.2.15 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub 1.2.16 follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
 
 ## Layout and interaction
 
@@ -95,3 +95,11 @@ Probe 仅展示 Bark 设置与既有 Provider、事件筛选。移除退休通�
 同一事件卡片显示最新投递结果，重试成功不新建卡片。“等待重试”显示下次时间；“重试中”显示当前次数；确认成功显示“Bark 已受理”；最终拒绝、结果不明和停止投递分别显示“发送失败”“结果未确认”“已跳过”。错误仅使用安全中文分类，分段通知显示已确认进度。
 
 测试标题统一为“NexusHub 推送测试”，正文分别为“来自本机的测试通知。”或“来自腾讯云的测试通知。”。任务入队不显示发送成功，等待期间保留运行状态；受理和失败结果就地呈现。旧程序名称、配置导入入口和无用诊断字段不进入产品输出。
+
+## 1.2.16 历史与大小
+
+- Codex 主线程、Claude 和 Codex 子智能体共用顶部加载逻辑。首次完成底部定位后，向上阅读至距顶部 200px 时加载一页；搜索与滚动使用同一请求协调，不并发请求相同游标。
+- 顶部只在加载中显示紧凑进度；失败显示“加载失败，重试”，停止自动重试。历史耗尽时不保留占位。轮询、追加、工具展开及加载中继续滚动都应保留可见消息的像素偏移，不拉回底部。
+- 大小位于原状态行右侧，使用等宽数字和固定数值位置，不增加卡片高度；保持标题省略、批量复选框和 spinner。K／M／G 按 1024 换算，分别使用可适配浅暗主题的绿色、琥珀色和红色；最多一位小数，去除 .0。
+- 零字节显示 0K，不足 1K 显示 <1K，未知或后台统计中显示灰色 —，部分结果使用 ≥。悬停或键盘聚焦显示准确字节数、文件／目录口径及不完整状态，不把下限当作完整大小。
+- 历史和大小均沿用机器隔离。Codex 子智能体面板独立滚动，分页不重置父线程位置或手动折叠状态。

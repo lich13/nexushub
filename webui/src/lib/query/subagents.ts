@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { getSubagentDetail } from "../api/threads";
 import { machineScope } from "./connection";
+import { retainSubagentHistory } from "./historyWindows";
 
 export function useSubagentDetail(rootThreadId: string, agentId?: string | null) {
   return useInfiniteQuery({
@@ -16,6 +17,7 @@ export function useSubagentDetail(rootThreadId: string, agentId?: string | null)
       return response;
     },
     getNextPageParam: page => page.detail.has_more_blocks ? page.detail.before_cursor : undefined,
+    structuralSharing: retainSubagentHistory,
     refetchInterval: query => {
       if (document.visibilityState !== "visible") return false;
       const latest = query.state.data?.pages[0];

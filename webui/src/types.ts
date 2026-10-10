@@ -3,7 +3,10 @@ export type UserMessageContent = { id: string; text: string; attachments: UserAt
 
 export type ThreadStatus = "Recent" | "Running" | "ReplyNeeded" | "Recoverable" | "Archived";
 
+export type SessionStorageSize = { bytes: number | null; scope: "file" | "directory"; status: "complete" | "partial" | "pending" | "unavailable" };
+
 export type GrokSessionSummary = {
+  storageSize?: SessionStorageSize | null;
   id: string;
   title: string;
   cwd: string;
@@ -31,6 +34,7 @@ export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint: s
 export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number };
 
 export type ClaudeSessionSummary = {
+  storageSize?: SessionStorageSize | null;
   id: string;
   sessionKey: string;
   title: string;
@@ -58,6 +62,7 @@ export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: 
 
 
 export type ThreadSummary = {
+  storageSize?: SessionStorageSize | null;
   id: string;
   title: string;
   status: ThreadStatus;

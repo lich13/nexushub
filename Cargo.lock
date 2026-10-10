@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-core"
-version = "1.2.15"
+version = "1.2.16"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "nexushub-webd"
-version = "1.2.15"
+version = "1.2.16"
 dependencies = [
  "anyhow",
  "axum",

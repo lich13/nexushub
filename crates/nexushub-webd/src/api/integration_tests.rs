@@ -115,6 +115,7 @@ fn authenticated_test_state_with_config_file() -> (crate::state::AppState, Strin
 
 fn fallback_summary(id: &str, title: &str) -> ThreadSummary {
     ThreadSummary {
+        storage_size: None,
         id: id.to_string(),
         title: title.to_string(),
         status: ThreadStatus::Recent,

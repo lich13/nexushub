@@ -8,10 +8,10 @@ import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { useSessionSelection } from "../../lib/query/sessions";
 import { SessionBatchControls } from "../common/SessionBatchControls";
 import { TaskMenu } from "../common/TaskMenu";
-import { useReadOnlyThreadActions, useThreadBlockPageMutation, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
+import { useReadOnlyThreadActions, type ThreadMessageSlot, type ThreadMessageStoreController } from "../../lib/query/threads";
 import { threadStatusLabel, type SelectedThread, type View } from "../../lib/domain/codexViewModel";
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
-import { latestAssistantCopyText, shouldAutoFollowMessageStream, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
+import { latestAssistantCopyText, threadResumeCommand, visibleConversationBlocksForHistory } from "../../lib/domain/conversationViewModel";
 import type { RuntimeCapabilityMatrix } from "../../lib/query/system";
 import type { SessionSearchResult, SubagentActivity, ThreadDetail, ThreadSummary } from "../../types";
 import { groupCodexCommandBlocks } from "../../lib/domain/executionGroups";
@@ -20,6 +20,9 @@ import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
 import { SubagentPanel } from "./SubagentPanel";
 import { SubagentSummary } from "./SubagentSummary";
+import { getThreadBlocks } from "../../lib/api/threads";
+import { useHistoryScroll } from "../../lib/useHistoryScroll";
+import { HistoryLoading } from "../common/HistoryLoading";
 import { machineScope } from "../../lib/query/connection";
 
 
@@ -75,7 +78,6 @@ export function Conversation(props: {
     setAgentSelection(null);
     requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }); });
   };
-  const scrollState = useRef({ threadId: "", follow: true, prepend: null as number | null });
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
   const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
   const visibleItems = groupCodexCommandBlocks(visibleBlocks);
@@ -88,33 +90,21 @@ export function Conversation(props: {
     if (keys.includes(props.threadId)) props.onSelect(null);
   });
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
-  const older = useThreadBlockPageMutation({
-    onBeforeLoad: () => stream.current ? stream.current.scrollHeight - stream.current.scrollTop : 0,
-    onSuccess: ({ threadId, cursor, page, beforeHeight }) => {
-      if (threadId === props.threadId) scrollState.current.prepend = beforeHeight;
-      props.messageStore.applyBlockPage(threadId, page, cursor);
-    },
-    onError: (error) => setFeedback(error.message)
+  const history = useHistoryScroll({
+    scopeKey: `${machine}:codex:${props.threadId}`, streamRef: stream,
+    cursor: slot.beforeCursor, hasMore: slot.hasMoreBlocks, ready: detail.summary.id === props.threadId,
+    searchActive: Boolean(props.searchTarget),
+    loadPage: async (cursor, isCurrent) => {
+      const page = await getThreadBlocks(props.threadId, { limit: 120, before: cursor });
+      if (isCurrent()) props.messageStore.applyBlockPage(props.threadId, page, cursor);
+      return { cursor: page.before_cursor, hasMore: page.has_more_blocks };
+    }
   });
-  useLayoutEffect(() => {
-    const element = stream.current;
-    if (!element) return;
-    const state = scrollState.current;
-    if (state.threadId !== props.threadId) {
-      state.threadId = props.threadId;
-      state.follow = true;
-      state.prepend = null;
-      setHistoryExpanded(false);
-      setRenaming(false);
-      setFeedback(null);
-    }
-    if (state.prepend !== null) {
-      element.scrollTop = element.scrollHeight - state.prepend;
-      state.prepend = null;
-    } else if (state.follow) {
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [props.threadId, blocks, historyExpanded]);
+  useEffect(() => {
+    setHistoryExpanded(false);
+    setRenaming(false);
+    setFeedback(null);
+  }, [props.threadId, machine]);
   useLayoutEffect(() => {
     const anchor = viewportAnchor.current;
     const element = stream.current;
@@ -122,7 +112,8 @@ export function Conversation(props: {
       element.scrollTop += anchor.element.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.offset;
     }
     viewportAnchor.current = null;
-  }, [selectedAgent, docked]);
+    history.capture();
+  }, [selectedAgent, docked, history.capture]);
   useEffect(() => {
     if (!shell.current || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(entries => {
@@ -134,18 +125,21 @@ export function Conversation(props: {
   }, []);
   useEffect(() => {
     const target = props.searchTarget;
-    if (!target || target.sessionKey !== props.threadId || !props.searchReady || older.isPending) return;
-    if (locateTimelineTarget(target.positionKey)) {
+    if (!target || target.sessionKey !== props.threadId || !props.searchReady || history.loading) return;
+    history.follow.current = false;
+    if (locateTimelineTarget(target.positionKey, stream.current?.closest(".conversation-main") ?? undefined, "auto")) {
+      history.capture();
       props.onSearchResolved?.();
       return;
     }
     if (slot.hasMoreBlocks && slot.beforeCursor) {
-      older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor });
+      if (history.error) return;
+      void history.loadOlder("search");
       return;
     }
     setFeedback("结果所在历史未加载，请刷新后重试");
     props.onSearchMiss?.();
-  }, [props.searchTarget, props.threadId, props.searchReady, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, older.isPending, blocks.length]);
+  }, [props.searchTarget, props.threadId, props.searchReady, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, history.loading, history.error, history.loadOlder, history.capture, history.follow, blocks.length]);
   const copy = async (text: string | null | undefined) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
@@ -182,12 +176,12 @@ export function Conversation(props: {
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={(event) => { scrollState.current.follow = shouldAutoFollowMessageStream(event.currentTarget); }}>
+      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
-        {slot.hasMoreBlocks && slot.beforeCursor && <button className="secondary-button" disabled={older.isPending} onClick={() => older.mutate({ threadId: props.threadId, cursor: slot.beforeCursor! })}>较早消息</button>}
-        {older.error && <div role="alert" className="form-error">{older.error.message}</div>}
+        <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
         <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
-          if (stream.current) scrollState.current.prepend = stream.current.scrollHeight - stream.current.scrollTop;
+          history.follow.current = false;
+          history.capture();
           setHistoryExpanded(true);
         }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}

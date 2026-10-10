@@ -1,3 +1,4 @@
+import { SessionSize } from "../common/SessionSize";
 import { Archive, ArchiveRestore, Copy, MessageSquare, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { threadDetailFromSlot, useConversationController } from "../../hooks/useConversationController";
@@ -198,6 +199,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
                     <span className={`thread-item-status ${thread.status}`}>{threadListItemStatusText(thread)}</span>
                   )}
                   {preview && <span className="thread-item-preview">{preview}</span>}
+                  <SessionSize size={thread.storageSize} />
                 </span>
               </span>
             </RenameableSession>
