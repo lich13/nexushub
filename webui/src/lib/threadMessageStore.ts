@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from "../types";
+import { historyCursorIndex, stableHistoryCursor } from "./domain/historyCursor";
 
 export type ThreadMessageSlot = {
+  history?: ThreadDetail["history"];
   subagents?: ThreadDetail["subagents"];
   subagentUpdates?: ThreadDetail["subagent_updates"];
   summary: ThreadSummary | null;
@@ -84,6 +86,7 @@ export function threadDetailFromMessageSlot(
     ? fallback ? { ...slot.summary, ...fallback } : slot.summary
     : fallback ?? fallbackThreadSummary(threadId);
   return {
+    history: slot.history,
     subagents: slot.subagents,
     subagent_updates: slot.subagentUpdates,
     summary,
@@ -219,6 +222,11 @@ export function applyThreadDetailToSlot(
   if (detail.summary.id !== threadId) {
     return slot;
   }
+  // A legacy count can lag pagination or a realtime tail. Only verified source
+  // identity/change metadata can discard already loaded messages.
+  const reset = detail.history?.reset || (slot.history && detail.history && slot.history.epoch !== detail.history.epoch);
+  if (reset) { slot.blocks = []; slot.beforeCursor = null; slot.hasMoreBlocks = false; }
+  slot.history = detail.history;
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;
   const mergedBlocks = mergeSubagentUpdates(mergeBlocksPreservingHistory(slot.blocks, incomingBlocks), detail.subagent_updates);
@@ -239,8 +247,8 @@ export function applyThreadDetailToSlot(
     slot.beforeCursor = null;
     slot.hasMoreBlocks = false;
   } else if (detail.before_cursor) {
-    if (!previousBefore || cursorIndex(detail.before_cursor) < cursorIndex(previousBefore)) {
-      slot.beforeCursor = detail.before_cursor;
+    if (!previousBefore || historyCursorIndex(detail.before_cursor) < historyCursorIndex(previousBefore)) {
+      slot.beforeCursor = stableHistoryCursor(detail) ?? null;
     }
   } else if (!slot.blocks.length || slot.blocks.length >= slot.totalBlocks) {
     slot.beforeCursor = null;
@@ -259,7 +267,7 @@ export function applyThreadBlockPageToSlot(
   expectedCursor?: string | null
 ): ThreadMessageSlot {
   const slot = getThreadSlot(store, threadId);
-  if (page.thread_id !== threadId) {
+  if (page.thread_id !== threadId || (slot.history && page.history && slot.history.epoch !== page.history.epoch)) {
     return slot;
   }
   if (expectedCursor && slot.beforeCursor && slot.beforeCursor !== expectedCursor) {
@@ -270,7 +278,7 @@ export function applyThreadBlockPageToSlot(
   slot.blocks = nextBlocks;
   slot.totalBlocks = page.total_blocks ?? Math.max(slot.totalBlocks, nextBlocks.length);
   slot.hasMoreBlocks = Boolean(page.has_more_blocks);
-  slot.beforeCursor = page.before_cursor ?? null;
+  slot.beforeCursor = stableHistoryCursor(page) ?? null;
   slot.loadingEarlier = false;
   slot.loadError = null;
   if (changed) slot.visibleUpdateRevision += 1;
@@ -453,22 +461,21 @@ export function mergeBlocksPreservingHistory<T extends { id: string }>(current: 
 
 export function mergeMessageBlocks(current: MessageBlock[], incoming: MessageBlock[], mode: "append" | "prepend" = "append"): MessageBlock[] {
   if (!incoming.length) return current;
+  const values = new Map(current.map(block => [block.id, block]));
+  const added: string[] = [];
   let changed = false;
-  let next = current;
   const ordered = mode === "prepend" ? [...incoming].reverse() : incoming;
   for (const block of ordered) {
-    if (mode === "prepend" && !next.some((item) => item.id === block.id)) {
-      next = [block, ...next];
-      changed = true;
-      continue;
-    }
-    const updated = upsertMessageBlock(next, block);
-    if (updated !== next) {
-      next = updated;
-      changed = true;
-    }
+    const previous = values.get(block.id);
+    if (previous && messageBlocksEqual(previous, block)) continue;
+    if (!previous) added.push(block.id);
+    values.set(block.id, block);
+    changed = true;
   }
-  return changed ? next : current;
+  if (!changed) return current;
+  const existing = current.map(block => values.get(block.id)!);
+  const additions = added.map(id => values.get(id)!);
+  return mode === "prepend" ? [...additions.reverse(), ...existing] : [...existing, ...additions];
 }
 
 export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock): MessageBlock[] {
@@ -482,17 +489,12 @@ export function upsertMessageBlock(current: MessageBlock[], next: MessageBlock):
 }
 
 function messageBlocksEqual(left: unknown, right: unknown): boolean {
-  try {
-    return JSON.stringify(left) === JSON.stringify(right);
-  } catch {
-    return false;
-  }
-}
-
-function cursorIndex(cursor: string | null | undefined): number {
-  if (!cursor) return Number.POSITIVE_INFINITY;
-  const parsed = Number(cursor.replace(/^b:/, ""));
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every(key => Object.prototype.hasOwnProperty.call(b, key) && messageBlocksEqual(a[key], b[key]));
 }
 
 // Refresh loaded historical activities without inserting off-page messages or moving anchors.

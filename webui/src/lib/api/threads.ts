@@ -31,10 +31,11 @@ export async function getThreadBlocks(id: string, options: Pick<ThreadDetailOpti
     return demoThreadBlockPage(id);
   }
   const page = await callCommand<ThreadBlockPage | {
-    threadId: string; blocks: MessageBlock[]; totalBlocks: number; hasMoreBlocks: boolean; beforeCursor?: string | null;
+    history?: ThreadBlockPage["history"]; threadId: string; blocks: MessageBlock[]; totalBlocks: number; hasMoreBlocks: boolean; beforeCursor?: string | null;
   }>("threads.blocks", { id, options });
   if ("thread_id" in page) return page;
   return {
+    history: page.history,
     thread_id: page.threadId,
     blocks: page.blocks,
     total_blocks: page.totalBlocks,

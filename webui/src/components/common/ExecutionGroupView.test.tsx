@@ -92,3 +92,31 @@ test("Codex and Grok detect instruction command input without changing grouping"
     expect(renderToStaticMarkup(<ExecutionGroupView group={entry.group} />)).not.toMatch(/<details[^>]*open/);
   }
 });
+
+test("an open activity group does not mount the large output of completed commands", () => {
+  const group = summaryGroup(["exec_command", "read_file"], { running: true });
+  group.commands[0].sections = [{ label: "结果", text: "Completed output payload fixture.\n".repeat(4096) }];
+  group.commands[1].status = "running";
+  group.commands[1].sections = [{ label: "结果", text: "Visible running output fixture." }];
+
+  const html = renderToStaticMarkup(<ExecutionGroupView group={group} />);
+  expect(html.match(/<details[^>]*open/g)).toHaveLength(2);
+  expect(html).toContain("已完成");
+  expect(html).toContain("Visible running output fixture.");
+  expect(html.includes("Completed output payload fixture."), "closed completed commands should not mount output").toBe(false);
+});
+
+test("an open failed group keeps instruction output unmounted and ordinary failure output visible", () => {
+  const group = summaryGroup(["read_file", "exec_command"], { failedCount: 2 });
+  group.commands[0].instructionFile = true;
+  group.commands[0].status = "failed";
+  group.commands[0].sections = [{ label: "结果", text: "Instruction output payload fixture.\n".repeat(4096) }];
+  group.commands[1].status = "failed";
+  group.commands[1].sections = [{ label: "结果", text: "Visible failed output fixture." }];
+
+  const html = renderToStaticMarkup(<ExecutionGroupView group={group} />);
+  expect(html.match(/<details[^>]*open/g)).toHaveLength(2);
+  expect(html).toContain("AGENTS.md");
+  expect(html).toContain("Visible failed output fixture.");
+  expect(html.includes("Instruction output payload fixture."), "closed instruction commands should not mount output").toBe(false);
+});

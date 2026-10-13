@@ -1,7 +1,5 @@
 use nexushub_core::{
-    codex::{
-        resolve_codex_paths, CodexAppServerClient, CodexPaths, ResolvedCodexPaths, ThreadDetail,
-    },
+    codex::{resolve_codex_paths, CodexAppServerClient, CodexPaths, ResolvedCodexPaths},
     config::Config,
     db::PanelDb,
     jobs::JobRunner,
@@ -11,7 +9,6 @@ use nexushub_core::{
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -25,7 +22,6 @@ pub struct AppState {
     pub jobs: JobRunner,
     pub app_server_client: CodexAppServerClient,
     pub auth_limiter: Arc<Mutex<AuthLimiter>>,
-    pub rollout_detail_cache: Arc<Mutex<HashMap<String, CachedThreadDetail>>>,
     pub probe_status_cache: Arc<Mutex<ProbeStatusCache>>,
 }
 
@@ -65,7 +61,6 @@ impl AppState {
             jobs,
             app_server_client,
             auth_limiter: Arc::new(Mutex::new(AuthLimiter::new(auth_rate_limit))),
-            rollout_detail_cache: Arc::new(Mutex::new(HashMap::new())),
             probe_status_cache: Arc::new(Mutex::new(ProbeStatusCache::default())),
         }
     }
@@ -106,26 +101,6 @@ pub struct ProbeStatusCache {
 pub struct CachedProbeStatus {
     pub value: Value,
     pub refreshed_at_unix: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct CachedThreadDetail {
-    pub signature: ThreadDetailCacheSignature,
-    pub detail: ThreadDetail,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadDetailCacheSignature {
-    pub rollout_path: Option<PathBuf>,
-    pub rollout: Option<FileSignature>,
-    pub state_db: Option<FileSignature>,
-    pub session_index: Option<FileSignature>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileSignature {
-    pub len: u64,
-    pub modified_ms: Option<u128>,
 }
 
 pub struct AuthLimiter {

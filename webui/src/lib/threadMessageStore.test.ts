@@ -106,6 +106,94 @@ describe("thread message store", () => {
     expect(slot?.beforeCursor).toBe("b:80");
   });
 
+  test("a lagging legacy count retains loaded history and the newer SSE tail", () => {
+    const store = createThreadMessageStoreState();
+    const tail = detail("thread-a", [block("tail-1"), block("tail-2")], "b:10");
+    const slot = applyThreadDetailToSlot(store, "thread-a", tail);
+    applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a", blocks: [block("old-1"), block("old-2")],
+      total_blocks: 20, has_more_blocks: true, before_cursor: "b:8"
+    }, "b:10");
+    applyRealtimeBlocksToThreadSlot(store, "thread-a", [block("sse-new")]);
+    const blocks = slot.blocks;
+    const followRevision = slot.bottomFollowRevision;
+
+    applyThreadDetailToSlot(store, "thread-a", { ...tail, total_blocks: 2 });
+
+    expect(slot.history).toBeUndefined();
+    expect(slot.blocks.map(item => item.id)).toEqual(["old-1", "old-2", "tail-1", "tail-2", "sse-new"]);
+    expect(slot.blocks).toBe(blocks);
+    expect(slot.bottomFollowRevision).toBe(followRevision);
+  });
+
+  test.each([
+    { scenario: "source replacement", history: { epoch: "replacement-fixture", revision: "revision-2" }, total: 8, before: "b:6" },
+    { scenario: "verified truncation", history: { epoch: "source-fixture", revision: "revision-2", reset: true }, total: 2, before: null }
+  ])("$scenario removes loaded history and the previous SSE tail", ({ history, total, before }) => {
+    const store = createThreadMessageStoreState();
+    const originalHistory = { epoch: "source-fixture", revision: "revision-1" };
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("old-tail")], "b:7"), history: originalHistory, total_blocks: 8
+    });
+    expect(slot.beforeCursor).toBe("b:7:old-tail");
+    applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a", blocks: [block("old-page")], history: originalHistory,
+      total_blocks: 8, has_more_blocks: true, before_cursor: "b:6"
+    }, "b:7:old-tail");
+    expect(slot.beforeCursor).toBe("b:6:old-page");
+    applyRealtimeBlocksToThreadSlot(store, "thread-a", [block("old-sse")]);
+    expect(slot.blocks.map(item => item.id)).toEqual(["old-page", "old-tail", "old-sse"]);
+    applyThreadDetailToSlot(store, "thread-b", detail("thread-b", [block("other-thread")]));
+
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("new-1"), block("new-2")], before), history, total_blocks: total
+    });
+
+    expect(slot.blocks.map(item => item.id)).toEqual(["new-1", "new-2"]);
+    expect(slot.history).toEqual(history);
+    expect(slot.totalBlocks).toBe(total);
+    expect(slot.beforeCursor).toBe(before ? `${before}:new-1` : null);
+    expect(slot.hasMoreBlocks).toBe(Boolean(before));
+    expect(threadDetailFromMessageSlot("thread-a", slot).history).toEqual(history);
+    expect(store.slots.get("thread-b")?.blocks.map(item => item.id)).toEqual(["other-thread"]);
+  });
+
+  test("a verified reset to an empty stream clears all old blocks and pagination", () => {
+    const store = createThreadMessageStoreState();
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("old")], "b:8"),
+      history: { epoch: "source-fixture", revision: "revision-1" }
+    });
+    applyRealtimeBlocksToThreadSlot(store, "thread-a", [block("old-sse")]);
+
+    applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", []), history: { epoch: "source-fixture", revision: "revision-2", reset: true }
+    });
+
+    expect(slot.blocks).toEqual([]);
+    expect(slot.totalBlocks).toBe(0);
+    expect(slot.beforeCursor).toBeNull();
+    expect(slot.hasMoreBlocks).toBe(false);
+  });
+
+  test("an older-page response from the replaced source cannot restore removed blocks", () => {
+    const store = createThreadMessageStoreState();
+    const slot = applyThreadDetailToSlot(store, "thread-a", {
+      ...detail("thread-a", [block("fresh")], "b:9"),
+      history: { epoch: "replacement-fixture", revision: "revision-1" }
+    });
+    const blocks = slot.blocks;
+
+    applyThreadBlockPageToSlot(store, "thread-a", {
+      thread_id: "thread-a", blocks: [block("obsolete")],
+      history: { epoch: "source-fixture", revision: "revision-1" },
+      total_blocks: 10, has_more_blocks: true, before_cursor: "b:8"
+    }, "b:9:fresh");
+
+    expect(slot.blocks).toBe(blocks);
+    expect(slot.beforeCursor).toBe("b:9:fresh");
+  });
+
   test.each([
     { scenario: "fully overlapping cached blocks", includeHistory: false, includeRealtimeTail: false },
     { scenario: "loaded pagination history", includeHistory: true, includeRealtimeTail: false },

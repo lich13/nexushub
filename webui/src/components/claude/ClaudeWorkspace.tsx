@@ -54,8 +54,8 @@ export function ClaudeWorkspace() {
     return [...latest.values()];
   }, [detail.data]);
   const groupedEvents = useMemo(() => groupClaudeEvents(events), [events]);
-  const timelineEntries = userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : []));
+  const timelineEntries = useMemo(() => userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [groupedEvents]);
   const actions = useClaudeActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? (detail.isFetchNextPageError ? null : detail.error) ?? sessions.error;
   const selectSearchResult = useCallback((result: SessionSearchResult) => {

@@ -302,81 +302,100 @@ fn validate_relation(
     bail!("子智能体嵌套层级过深")
 }
 
+struct NativeState {
+    status: SubagentStatus,
+    turn: Option<String>,
+    pending: HashSet<String>,
+    invalid: bool,
+}
+impl Default for NativeState {
+    fn default() -> Self {
+        Self {
+            status: SubagentStatus::Unknown,
+            turn: None,
+            pending: HashSet::new(),
+            invalid: false,
+        }
+    }
+}
 fn native_status(path: &Path) -> Result<SubagentStatus> {
-    static CACHE: crate::read_cache::ReadCache<SubagentStatus> =
-        crate::read_cache::ReadCache::new(1024 * 1024);
+    static CACHE: crate::jsonl_cache::JsonlCache<NativeState> =
+        crate::jsonl_cache::JsonlCache::new(1024 * 1024);
     CACHE.read(
         path,
-        |_, _| 256,
-        || {
-            let mut status = SubagentStatus::Unknown;
-            let mut turn = None;
-            let mut pending = HashSet::new();
-            let mut reader = BufReader::new(File::open(path)?);
-            let mut line = String::new();
-            while reader.read_line(&mut line)? > 0 {
-                if !line.ends_with('\n') {
-                    return Ok(SubagentStatus::Unknown);
+        |_| Ok(0),
+        false,
+        |state, line, _, _| {
+            if state.invalid || line.iter().all(u8::is_ascii_whitespace) {
+                return Ok(());
+            }
+            let Ok(value) = serde_json::from_slice::<Value>(line) else {
+                state.invalid = true;
+                return Ok(());
+            };
+            let mut status = state.status;
+            let mut turn = state.turn.take();
+            let pending = &mut state.pending;
+            let event = value.get("payload").unwrap_or(&value);
+            let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+            let event_turn = field(event, &["turn_id", "turnId"]);
+            match kind {
+                "task_started" | "turn_started" | "turn/started" => {
+                    turn = event_turn;
+                    pending.clear();
+                    status = SubagentStatus::Running;
                 }
-                if !line.trim().is_empty() {
-                    let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                        return Ok(SubagentStatus::Unknown);
+                "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted"
+                | "turn/aborted" | "turn_error" | "turn_failed"
+                    if event_turn.is_none() || turn.is_none() || event_turn == turn =>
+                {
+                    let terminal = field(event, &["status", "turn_status"]).unwrap_or_default();
+                    status = if kind.contains("aborted")
+                        || matches!(terminal.as_str(), "cancelled" | "canceled" | "interrupted")
+                    {
+                        SubagentStatus::Interrupted
+                    } else if matches!(kind, "turn_error" | "turn_failed")
+                        || matches!(terminal.as_str(), "failed" | "error")
+                    {
+                        SubagentStatus::Failed
+                    } else if pending.is_empty() {
+                        SubagentStatus::Completed
+                    } else {
+                        SubagentStatus::Unknown
                     };
-                    let event = value.get("payload").unwrap_or(&value);
-                    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-                    let event_turn = field(event, &["turn_id", "turnId"]);
-                    match kind {
-                        "task_started" | "turn_started" | "turn/started" => {
-                            turn = event_turn;
-                            pending.clear();
-                            status = SubagentStatus::Running;
-                        }
-                        "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted"
-                        | "turn/aborted" | "turn_error" | "turn_failed"
-                            if event_turn.is_none() || turn.is_none() || event_turn == turn =>
-                        {
-                            let terminal =
-                                field(event, &["status", "turn_status"]).unwrap_or_default();
-                            status = if kind.contains("aborted")
-                                || matches!(
-                                    terminal.as_str(),
-                                    "cancelled" | "canceled" | "interrupted"
-                                ) {
-                                SubagentStatus::Interrupted
-                            } else if matches!(kind, "turn_error" | "turn_failed")
-                                || matches!(terminal.as_str(), "failed" | "error")
-                            {
-                                SubagentStatus::Failed
-                            } else if pending.is_empty() {
-                                SubagentStatus::Completed
-                            } else {
-                                SubagentStatus::Unknown
-                            };
-                            pending.clear();
-                        }
-                        "function_call" | "custom_tool_call" => {
-                            if let Some(call) = field(event, &["call_id", "callId"]) {
-                                pending.insert(call);
-                            }
-                        }
-                        "function_call_output" | "custom_tool_call_output" => {
-                            if let Some(call) = field(event, &["call_id", "callId"]) {
-                                pending.remove(&call);
-                            }
-                        }
-                        "message"
-                            if event.get("role").and_then(Value::as_str) == Some("user")
-                                && status != SubagentStatus::Running =>
-                        {
-                            status = SubagentStatus::Unknown;
-                        }
-                        _ => {}
+                    pending.clear();
+                }
+                "function_call" | "custom_tool_call" => {
+                    if let Some(call) = field(event, &["call_id", "callId"]) {
+                        pending.insert(call);
                     }
                 }
-                line.clear();
+                "function_call_output" | "custom_tool_call_output" => {
+                    if let Some(call) = field(event, &["call_id", "callId"]) {
+                        pending.remove(&call);
+                    }
+                }
+                "message"
+                    if event.get("role").and_then(Value::as_str) == Some("user")
+                        && status != SubagentStatus::Running =>
+                {
+                    status = SubagentStatus::Unknown;
+                }
+                _ => {}
             }
-            Ok(status)
+
+            state.status = status;
+            state.turn = turn;
+            Ok(())
         },
+        |state, info| {
+            Ok(if info.partial || state.invalid {
+                SubagentStatus::Unknown
+            } else {
+                state.status
+            })
+        },
+        |state| 256 + state.pending.len() as u64 * 128,
     )
 }
 
@@ -508,6 +527,12 @@ fn record_activity(
 /// Recompute direct children independently of the parent's message window or stamp.
 /// Lifecycle fields belong to an event; status belongs to the current child turn.
 pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
+    let visible: HashSet<_> = detail.blocks.iter().map(|block| block.id.clone()).collect();
+    detail.blocks.extend(
+        std::mem::take(&mut detail.history_subagent_blocks)
+            .into_iter()
+            .filter(|block| !visible.contains(&block.id)),
+    );
     let graph = read_graph(paths);
     let mut collection = SubagentCollection {
         agents: Vec::new(),
@@ -649,11 +674,13 @@ pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
             })
         })
         .collect();
+    detail.blocks.retain(|block| visible.contains(&block.id));
 }
 
 fn verified_detail(
     paths: &CodexPaths,
     request: &SubagentDetailRequest,
+    paged: bool,
 ) -> Result<SubagentDetailResponse> {
     let graph = read_graph(paths)?;
     validate_relation(paths, &graph, &request.root_thread_id, &request.agent_id)?;
@@ -690,14 +717,13 @@ fn verified_detail(
         pending_elicitation: None,
         last_event_kind: None,
     };
-    static CACHE: crate::read_cache::ReadCache<ThreadDetail> =
-        crate::read_cache::ReadCache::new(16 * 1024 * 1024);
-    let mut detail = CACHE.read(
-        &path,
-        |_, size| size,
-        || super::rollout_events::subagent_detail_from_summary(summary.clone()),
+    let mut detail = super::rollout_events::thread_detail_page_from_summary(
+        summary,
+        false,
+        paged.then(|| request.limit.unwrap_or(120).clamp(1, 500)),
+        request.before.as_deref(),
+        None,
     )?;
-    detail.summary = summary;
     let after = fs::metadata(validate_rollout(paths, record)?)?;
     ensure!(
         before.len() == after.len() && before.modified()? == after.modified()?,
@@ -756,13 +782,7 @@ pub fn read_subagent_detail(
             "无效的历史游标"
         );
     }
-    let mut response = verified_detail(paths, request)?;
-    response.detail = super::window_thread_detail(
-        response.detail,
-        Some(request.limit.unwrap_or(120).clamp(1, 500)),
-        request.before.as_deref(),
-    );
-    Ok(response)
+    verified_detail(paths, request, true)
 }
 
 /// Attachment identity is resolved from the verified native message, never a caller path.
@@ -782,6 +802,7 @@ pub(crate) fn read_attachment(
             limit: None,
             before: None,
         },
+        false,
     )?;
     let message = response
         .detail

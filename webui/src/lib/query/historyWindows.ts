@@ -1,6 +1,9 @@
 import { replaceEqualDeep, type InfiniteData } from "@tanstack/react-query";
-import type { ClaudeSessionDetail, SubagentDetailResponse } from "../../types";
+import type { ClaudeSessionDetail, SubagentDetailResponse, GrokSessionDetail, ThreadDetail } from "../../types";
 import { mergeBlocksPreservingHistory } from "../threadMessageStore";
+import { historyCursorIndex, stableHistoryCursor } from "../domain/historyCursor";
+
+import type { HistoryAdapter } from "./usePagedHistory";
 
 type WindowBoundary = { hasMore?: boolean; cursor?: string | null };
 type HistoryPageAdapter<Page> = {
@@ -66,3 +69,54 @@ export function retainSubagentHistory(previous: unknown, incoming: unknown): Inf
     }
   });
 }
+
+export function retainGrokHistory(previous: unknown, incoming: unknown): InfiniteData<GrokSessionDetail> {
+  return retainHistoryWindows<GrokSessionDetail>(previous, incoming, {
+    identity: page => page.summary.id,
+    total: page => page.totalEvents,
+    merge: (oldPage, page) => {
+      const boundary = retainedBoundary({ hasMore: oldPage.hasMore, cursor: oldPage.beforeCursor }, { hasMore: page.hasMore, cursor: page.beforeCursor });
+      // Old services don't supply stable event identities or pagination.
+      const events = page.events.every(event => event.id) && oldPage.events.every(event => event.id)
+        ? mergeBlocksPreservingHistory(oldPage.events as (typeof page.events[number] & { id: string })[], page.events as (typeof page.events[number] & { id: string })[]) : page.events;
+      return { ...page, events, hasMore: boundary.hasMore, beforeCursor: boundary.cursor };
+    }
+  });
+}
+
+export function retainCodexHistory(previous: unknown, incoming: unknown): InfiniteData<ThreadDetail> {
+  return retainHistoryWindows<ThreadDetail>(previous, incoming, {
+    identity: page => page.summary.id,
+    total: page => page.total_blocks,
+    merge: (oldPage, page) => {
+      const boundary = retainedBoundary({ hasMore: oldPage.has_more_blocks, cursor: oldPage.before_cursor }, { hasMore: page.has_more_blocks, cursor: page.before_cursor });
+      return { ...page, blocks: mergeBlocksPreservingHistory(oldPage.blocks, page.blocks), has_more_blocks: boundary.hasMore, before_cursor: boundary.cursor };
+    }
+  });
+}
+
+export const claudeHistoryAdapter: HistoryAdapter<ClaudeSessionDetail> = {
+  ids: page => page.events.map(event => event.id), history: page => page.history, total: page => page.totalEvents,
+  cursor: page => page.hasMore ? page.beforeCursor ?? undefined : undefined,
+  cursorAfter: (page, index) => page.events[index + 1]?.id,
+  merge: retainClaudeHistory
+};
+export const grokHistoryAdapter: HistoryAdapter<GrokSessionDetail> = {
+  ids: page => page.events.map(event => event.id ?? event.callId ?? event.userMessage?.id ?? "").filter(Boolean), history: page => page.history, total: page => page.totalEvents,
+  cursor: page => page.hasMore ? page.beforeCursor ?? undefined : undefined,
+  cursorAfter: (page, index) => page.events[index + 1]?.id,
+  merge: retainGrokHistory
+};
+export const codexHistoryAdapter: HistoryAdapter<ThreadDetail> = {
+  ids: page => page.blocks.map(block => block.id), history: page => page.history, total: page => page.total_blocks,
+  cursor: page => page.has_more_blocks ? stableHistoryCursor(page) ?? undefined : undefined,
+  cursorAfter: (page, index) => page.history && page.blocks[index]
+    ? `a:${page.blocks[index].id}` : `b:${(page.before_cursor ? historyCursorIndex(page.before_cursor) : 0) + index + 1}`,
+  invalidate: page => ({ ...page, history: page.history ? { ...page.history, reset: true } : undefined }),
+  merge: retainCodexHistory
+};
+export const subagentHistoryAdapter: HistoryAdapter<SubagentDetailResponse> = {
+  ids: page => codexHistoryAdapter.ids(page.detail), history: page => page.detail.history, total: page => page.detail.total_blocks,
+  cursor: page => codexHistoryAdapter.cursor(page.detail), cursorAfter: (page, index) => codexHistoryAdapter.cursorAfter(page.detail, index),
+  merge: retainSubagentHistory
+};

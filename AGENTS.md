@@ -21,7 +21,7 @@ Grok display activity and deletion protection are separate: use one native-proce
 
 ## UI and safety
 
-- Use the shared `RunningIndicator` for running Codex, Claude Code and Grok sessions. Codex, Claude Code and Grok group adjacent native tool activity at its original position between messages. Never discard historical tool rows; keep chronological call/result pairing and bounded pagination. Both levels use native `<details>` controls. Completed groups are closed by default; active and failed groups remain open. For 1.2.9, AGENTS.md rows and instruction-only groups always start closed; retain explicit user choices by session/activity identity. Plan copy and Markdown download use the same cleaned source as rendering, with safe title-derived filenames. Hide structured memory metadata before parsing, preserve code examples and ordinary prose, and never rewrite native files.
+- Use the shared `RunningIndicator` for running Codex, Claude Code and Grok sessions. Codex, Claude Code and Grok group adjacent native tool activity at its original position between messages. Never discard historical tool rows; keep chronological call/result pairing and bounded pagination. Both levels use native `<details>` controls. Completed groups are closed by default; active and failed groups remain open. AGENTS.md rows and instruction-only groups always start closed; retain explicit user choices by session/activity identity. Plan copy and Markdown download use the same cleaned source as rendering, with safe title-derived filenames. Hide structured memory metadata before parsing, preserve code examples and ordinary prose, and never rewrite native files.
 - Timeline rail markers represent only recognized user messages for each Provider; tools, plans, assistant replies and activity groups keep their original anchors for search and focus without becoming rail markers.
 - Batch requests contain 1–100 explicit keys. A changed filter clears selection; polling never selects new rows. Only preview-approved items execute, and per-item failures stay visible.
 - Never expose arbitrary shell, public Codex sockets, private deployment values or real session content in tests and packages. Use reserved example values and a GitHub noreply commit identity.
@@ -39,9 +39,9 @@ Grok display activity and deletion protection are separate: use one native-proce
 
 ## Required gates
 
-Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits after this 1.2.16 change.
+Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects`, `git diff --check`, contract checks and `bash scripts/test-install-script.sh`. Use normal incremental commits for subsequent changes.
 
-## 1.2.8 管理边界
+## 管理边界
 
 - 线程右键、省略号和键盘菜单共用动作模型；右键目标独立于当前详情。保留焦点返回、边缘避让、双击改名和批量模式。
 - Codex 普通与归档线程永久删除必须绑定预览指纹。复核明确终态、原生身份、关联、符号链接及共享引用；不级联删除其他线程。
@@ -50,7 +50,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
 - 发布前检查当前树、索引、可达历史和资产。仅发现可达历史敏感值时才按授权重写；平台保留的不可达对象另行记录，不声称已完全擦除。
 
-## 1.2.9 阅读与子智能体边界
+## 阅读与子智能体边界
 
 - 三个 Provider 共用紧凑阅读基线；复制动作不增加正文行高，用户气泡、工具两层折叠、Plan、搜索与用户指令时间线保持原规则。
 - Codex 子智能体只通过原生调用身份、精确任务路径和父子关联读取，不按显示名称猜测。只使用子线程自己的回合证据判断运行状态。
@@ -58,13 +58,13 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 子智能体能力缺失时按不支持处理，API 协议保持 2；机器切换关闭面板、隔离缓存并丢弃迟到响应。
 - Hook 集成测试必须启动本次 Cargo 构建的 CLI；不得跳过测试或借用已安装的正式服务。浏览器、Tauri 与真实入口验收分别记录。
 
-## 1.2.10 凭据边界
+## 凭据边界
 
 - Keychain 读写统一经过 `CredentialAccess`，不在异步执行线程直接调用阻塞凭据 API。读取超时仍保留在执行工作所持许可，避免并发堆积。
 - 保存与移除连接按完整后台事务执行，调用方取消不提前释放连接变更保护；提交或回滚后才允许切换。
 - 凭据读取与能力验证后重新验证连接修订号及目标；固定错误消息不含原生异常、Key 或地址。测试不得访问真实钥匙串。
 
-## 1.2.11 子智能体活动与汇总
+## 子智能体活动与汇总
 
 - 原生 `item_completed` 中的 `SubAgentActivity.kind` 表示历史活动，外层完成不能当作子线程终态。保留开始、完成、中断及交互时点，并与同次创建调用/结果去重。
 - 活动、列表和详情共用任务名解析，优先 `task_name`，再使用已验证路径末段；不让昵称或角色覆盖任务名。
@@ -72,18 +72,18 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 汇总和嵌套列表复用只读详情边界、机器隔离及焦点/滚动恢复。API 协议保持 2，不新增 RPC、数据库表或原生写入。
 - 完整内部 `external_codex_apps_open_page` JSON 包装从显示、复制、导出和搜索排除；代码与引用示例保留，不产生空用户气泡或时间线标记。
 
-## 1.2.12 界面说明
+## 界面说明
 
 子智能体汇总和列表不显示通用的统计不完整说明。归档与隐藏线程清理不显示重复描述，保留状态、预览、确认及逐项结果；文案精简不能改变底层完整性判断或管理保护。
 
-## 1.2.14 指令与通知边界
+## 指令与通知边界
 
 - 完整原生 INSTRUCTIONS 包装允许结束标签与后续环境标签同行；内部标题不能截断折叠。代码、引用示例与不完整结构保持保守处理，原生会话不写回。
 - Gotify 已退役；只允许迁移代码和不可执行契约 tombstone 引用旧标识。移除其配置、Token、队列、测试任务和投递字段时，必须保留 Bark 凭据、基线、成功/未知记录及待投递状态。
-- Bark 使用下述 1.2.15 有限重试规则。接口协议保持 2，不改变 Provider 或事件识别规则。
+- Bark 使用下述有限重试规则。接口协议保持 2，不改变 Provider 或事件识别规则。
 - 外部通知服务卸载归运维仓库，须明确配置与数据归属；不改共用 Nginx/TLS、其他服务或用户原生会话。
 
-## 1.2.15 Bark 投递边界
+## Bark 投递边界
 
 - 每分段最多 3 次，重试等待 15/60 秒并加入 ±20% 抖动；首次投递起 10 分钟内有效。尊重 Retry-After，不提前发送或无限保留。
 - 网络失败、结果未知和明确临时拒绝可重试；凭据、证书验证、重定向、非法请求及已知永久 APNs 拒绝不能重试。日志仅含安全分类、状态码、耗时、次数和匿名身份，不含原始异常、地址、Key 或正文。
@@ -91,9 +91,16 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 保留旧成功、去重与基线，旧终态未知或失败不重新入队；结束后清除待投递正文。稳定 Bark ID 不能被描述为绝对去重保证。
 - 测试通知使用“NexusHub 推送测试”与机器来源正文，作业等待真实终态，HTTP 成功且 Bark code=200 才算受理。旧配置导入仅保留不可执行入口。
 
-## 1.2.16 历史与大小边界
+## 历史与大小边界
 
-- Codex、Claude 和子智能体共用自动上滚分页；初次定位最新内容，不自动读完整条历史。搜索与滚动按机器、线程及游标协调，错误或游标不推进时停止；可见锚点与像素偏移优先于旧滚动高度。
+- Codex、Claude、Grok 和子智能体共用自动上滚分页；初次定位最新内容，不自动读完整条历史。搜索与滚动按机器、线程及游标协调，错误或游标不推进时停止；可见锚点与像素偏移优先于旧滚动高度。
 - 轮询不能丢失已加载历史和最早游标；机器、线程或文件身份改变时丢弃旧响应。保留独立子面板、工具折叠与用户指令时间线。
 - 大小只按已验证的 rollout 或会话专属目录统计逻辑字节，不读正文、不计算全内容哈希、不跟随符号链接、不扫描项目或共享存储。目录后台扫描和缓存必须有界，身份变化立即失效。
 - `storageSize` 为可选摘要字段，未知、待统计和部分结果不能冒充完整大小；旧服务仍可读取。API 协议保持 2，不新增命令、表或客户端路径参数。
+
+## 读取性能
+
+- 读取使用有界后台执行和按来源串行的增量缓存；热读不重新解析正文，普通追加只消费新记录。缓存受条目数和内存限制，替换、截断、原地修改和原生身份变化必须失效；半行不能成为已发布记录。
+- 历史变更元数据和 Grok 分页是协议 2 的可选扩展。旧客户端保持原响应行为；新客户端只在来源支持时使用稳定块游标。静态旧页不能随轮询重复请求，历史工具、问题与子智能体状态仍需更新。
+- K／M／G 只表示单位，颜色按实际字节在 100MiB、300MiB 分界；未知或待统计为灰色，部分结果按已确认下限分色并保留 ≥ 与不完整提示。
+- 常规受影响检查在本机运行，完整回归和跨平台构建交由现有三项 CI。性能比较使用运行时合成数据及相同样本，区分冷读、热读、追加、分页传输和远程网络耗时；不将 fixture 结果记为真实入口验收。

@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
@@ -19,27 +19,36 @@ struct Stamp {
 }
 
 impl Stamp {
-    fn read(path: &Path) -> Option<Self> {
-        let mut file = fs::File::open(path).ok()?;
-        let metadata = file.metadata().ok()?;
+    fn read(path: &Path, hash_edges: bool) -> Option<Self> {
         // Coarse filesystem clocks can give a same-sized rewrite the same stamp.
         // Read bounded edges so an appended/replaced native record cannot reuse
         // a snapshot merely because its metadata timestamps share one clock tick.
-        let mut digest = Sha256::new();
-        let mut edge = [0_u8; 4096];
-        let head = file.read(&mut edge).ok()?;
-        digest.update(&edge[..head]);
-        if metadata.len() > edge.len() as u64 {
-            file.seek(SeekFrom::End(-(edge.len() as i64))).ok()?;
-            let tail = file.read(&mut edge).ok()?;
-            digest.update(&edge[..tail]);
-        }
+        let (metadata, edge_hash) = if hash_edges {
+            let mut file = fs::File::open(path).ok()?;
+            let metadata = file.metadata().ok()?;
+            let mut digest = Sha256::new();
+            let mut edge = [0_u8; 4096];
+            let head = file.read(&mut edge).ok()?;
+            digest.update(&edge[..head]);
+            if metadata.len() > edge.len() as u64 {
+                file.seek(SeekFrom::End(-(edge.len() as i64))).ok()?;
+                let tail = file.read(&mut edge).ok()?;
+                digest.update(&edge[..tail]);
+            }
+            (metadata, digest.finalize().into())
+        } else {
+            let metadata = fs::symlink_metadata(path).ok()?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return None;
+            }
+            (metadata, [0; 32])
+        };
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Some(Self {
             size: metadata.len(),
             modified: metadata.modified().ok()?,
-            edge_hash: digest.finalize().into(),
+            edge_hash,
             #[cfg(unix)]
             identity: (
                 metadata.dev(),
@@ -54,13 +63,15 @@ impl Stamp {
 struct Entry<T> {
     path: PathBuf,
     stamp: Stamp,
-    value: T,
+    value: Arc<T>,
     bytes: u64,
 }
 
 pub(crate) struct ReadCache<T> {
     entries: Mutex<VecDeque<Entry<T>>>,
     max_bytes: u64,
+    max_entries: usize,
+    hash_edges: bool,
 }
 
 impl<T: Clone> ReadCache<T> {
@@ -68,7 +79,23 @@ impl<T: Clone> ReadCache<T> {
         Self {
             entries: Mutex::new(VecDeque::new()),
             max_bytes,
+            max_entries: 64,
+            hash_edges: true,
         }
+    }
+
+    pub(crate) const fn with_entry_limit(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
+    }
+
+    /// Derived JSONL summaries use the same native identity and nanosecond
+    /// mtime/ctime invalidation as their source cache. Rehashing both file edges
+    /// before and after each summary duplicates the source reader's cold I/O.
+    /// Keep edge validation on platforms without a native change timestamp.
+    pub(crate) const fn with_native_metadata(mut self) -> Self {
+        self.hash_edges = !cfg!(unix);
+        self
     }
 
     pub(crate) fn read(
@@ -77,25 +104,28 @@ impl<T: Clone> ReadCache<T> {
         weight: impl Fn(&T, u64) -> u64,
         load: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        let before = Stamp::read(path);
+        let before = Stamp::read(path, self.hash_edges);
         if let Ok(mut entries) = self.entries.lock() {
             if let Some(index) = entries.iter().position(|entry| entry.path == path) {
                 let entry = entries.remove(index).expect("known cache entry");
                 if Some(&entry.stamp) == before.as_ref() {
                     let value = entry.value.clone();
                     entries.push_back(entry);
-                    return Ok(value);
+                    drop(entries);
+                    return Ok((*value).clone());
                 }
             }
         }
-        let value = load()?;
+        let value = Arc::new(load()?);
         // Never publish a snapshot while its source is being appended or replaced.
-        if let Some(stamp) = before.filter(|stamp| Some(stamp) == Stamp::read(path).as_ref()) {
+        if let Some(stamp) =
+            before.filter(|stamp| Some(stamp) == Stamp::read(path, self.hash_edges).as_ref())
+        {
             let bytes = weight(&value, stamp.size);
             if bytes <= self.max_bytes {
                 if let Ok(mut entries) = self.entries.lock() {
                     entries.retain(|entry| entry.path != path);
-                    while entries.len() >= 64
+                    while entries.len() >= self.max_entries
                         || entries.iter().map(|entry| entry.bytes).sum::<u64>() + bytes
                             > self.max_bytes
                     {
@@ -112,7 +142,7 @@ impl<T: Clone> ReadCache<T> {
                 }
             }
         }
-        Ok(value)
+        Ok(Arc::unwrap_or_clone(value))
     }
 }
 

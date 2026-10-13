@@ -13,6 +13,6 @@ export function formatSessionStorage(size?: SessionStorageSize | null): { label:
   let label = bytes > 0 && bytes < 1024 ? "<1K" : `${amount}${unit}`;
   const exact = bytes.toLocaleString("en-US");
   if (size.status === "partial") label = bytes > 0 && bytes < 1024 ? "≥0K" : `≥${label}`;
-  return { label, tone: unit === "G" ? "danger" : unit === "M" ? "warning" : "success",
+  return { label, tone: bytes >= 300 * 1024 ** 2 ? "danger" : bytes >= 100 * 1024 ** 2 ? "warning" : "success",
     title: size.status === "partial" ? `${scope} · 至少 ${exact} 字节（统计不完整）` : `${scope} · ${exact} 字节` };
 }

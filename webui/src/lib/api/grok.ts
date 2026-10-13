@@ -17,6 +17,6 @@ export function deleteGrokSession(request: GrokDeleteRequest): Promise<GrokDelet
   return callCommand("grok.deleteExecute", { request });
 }
 
-export function getGrokSession(id: string): Promise<GrokSessionDetail> {
-  return callCommand<GrokSessionDetail>("grok.detail", { id });
+export function getGrokSession(id: string, options?: { limit?: number; before?: string }): Promise<GrokSessionDetail> {
+  return callCommand<GrokSessionDetail>("grok.detail", { id, ...options });
 }

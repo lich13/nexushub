@@ -1,3 +1,5 @@
+import { refreshHistory } from "./usePagedHistory";
+import { codexHistoryAdapter } from "./historyWindows";
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -460,17 +462,26 @@ export function useThreadsQuery(input: {
 export function useThreadDetailQuery(input: {
   threadId: string | null;
   selectedThreadSummary?: ThreadSummary | null;
+  snapshot?: () => ThreadDetail | undefined;
   select?: (detail: ThreadDetail) => ThreadDetail;
   refetchInterval: (detail: ThreadDetail | undefined, summary?: ThreadSummary | null) => number | false;
 }) {
   return useQuery({
     queryKey: threadQueryKeys.thread(input.threadId),
-    queryFn: async () => {
-      const detail = await getThread(input.threadId!);
+    queryFn: async ({ signal }) => {
+      const read = async (before?: string) => {
+        const page = await getThread(input.threadId!, { before });
+        if (signal.aborted) throw new DOMException("请求已取消", "AbortError");
+        return page;
+      };
+      const head = await read();
+      const previous = input.snapshot?.();
+      const result = await refreshHistory(previous?.blocks.length ? { pages: [previous], pageParams: [undefined] } : undefined, head, read, codexHistoryAdapter, signal);
+      const detail = result.pages[0];
       return input.select ? input.select(detail) : detail;
     },
     enabled: Boolean(input.threadId),
-    refetchInterval: (query) => input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary),
+    refetchInterval: (query) => document.visibilityState !== "visible" ? false : input.refetchInterval(query.state.data as ThreadDetail | undefined, input.selectedThreadSummary),
     placeholderData: preservePreviousQueryData
   });
 }

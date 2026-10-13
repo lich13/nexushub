@@ -5,6 +5,7 @@ use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::Path,
+    sync::Arc,
 };
 
 const REQUEST_USER_INPUT_TAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -21,60 +22,192 @@ use super::{
     PendingElicitation, ThreadDetail, ThreadSummary, UserInputAnswer,
 };
 
+#[derive(Default)]
+struct DetailState {
+    messages: Vec<CodexMessage>,
+    builder: MessageBlockBuilder,
+    raw_event_count: usize,
+    turn_context: Option<String>,
+    blocks: Vec<Arc<MessageBlock>>,
+    compacted: Vec<Arc<MessageBlock>>,
+    journal: crate::jsonl_cache::HistoryJournal,
+}
+
 pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
-    parse_thread_detail(summary, true)
+    thread_detail_page_from_summary(summary, true, None, None, None)
 }
 
-pub(super) fn subagent_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
-    parse_thread_detail(summary, false)
-}
-
-fn parse_thread_detail(summary: ThreadSummary, compact_history: bool) -> Result<ThreadDetail> {
-    let mut messages = Vec::new();
-    let mut block_builder = MessageBlockBuilder::default();
-    let mut raw_event_count = 0;
-    let mut turn_context = None;
-    if let Some(path) = &summary.rollout_path {
-        let text =
-            fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            raw_event_count += 1;
-            let Ok(mut value) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            normalize_canonical_turn(&mut value, &mut turn_context);
-            if let Some(message) = parse_message_event(&value) {
-                messages.push(message);
-            }
-            block_builder.push_event(&value, raw_event_count);
-        }
-    }
-    let mut blocks = if compact_history {
-        block_builder.finish()
-    } else {
-        block_builder.finish_uncompacted()
+pub fn thread_detail_page_from_summary(
+    summary: ThreadSummary,
+    compact: bool,
+    limit: Option<usize>,
+    before: Option<&str>,
+    since: Option<&str>,
+) -> Result<ThreadDetail> {
+    static CACHE: crate::jsonl_cache::JsonlCache<DetailState> =
+        crate::jsonl_cache::JsonlCache::new(384 * 1024 * 1024);
+    let Some(path) = summary.rollout_path.clone() else {
+        return Ok(ThreadDetail {
+            history_subagent_blocks: Vec::new(),
+            summary,
+            subagents: None,
+            subagent_updates: Default::default(),
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+            history: None,
+        });
     };
-    for message in blocks
-        .iter_mut()
-        .filter_map(|block| block.user_message.as_mut())
-    {
-        message.refresh_files(summary.cwd.as_deref());
+    CACHE.read(
+        &path,
+        |_| Ok(0),
+        true,
+        |state, line, _, _| {
+            if line.iter().all(u8::is_ascii_whitespace) {
+                return Ok(());
+            }
+            state.raw_event_count += 1;
+            if let Ok(mut value) = serde_json::from_slice::<Value>(line) {
+                normalize_canonical_turn(&mut value, &mut state.turn_context);
+                if let Some(message) = parse_message_event(&value) {
+                    state.messages.push(message);
+                }
+                state.builder.push_event(&value, state.raw_event_count);
+            }
+            Ok(())
+        },
+        |state, info| {
+            if info.changed {
+                let blocks = state.builder.clone().finish_uncompacted();
+                let previous: HashMap<_, _> = state
+                    .blocks
+                    .iter()
+                    .map(|block| (&block.id, block))
+                    .collect();
+                let compacted = compact_chat_history(blocks.clone(), CHAT_HISTORY_LIMIT);
+                let old_markers: HashMap<_, _> = state
+                    .compacted
+                    .iter()
+                    .filter(|block| block.kind == "chat_history_collapsed")
+                    .map(|block| (&block.id, block))
+                    .collect();
+                let mut changed: Vec<_> = blocks
+                    .iter()
+                    .filter(|block| {
+                        previous
+                            .get(&block.id)
+                            .is_some_and(|old| !Arc::ptr_eq(old, block) && ***old != ***block)
+                    })
+                    .map(|block| block.id.clone())
+                    .collect();
+                changed.extend(
+                    compacted
+                        .iter()
+                        .filter(|block| {
+                            old_markers
+                                .get(&block.id)
+                                .is_some_and(|old| ***old != ***block)
+                        })
+                        .map(|block| block.id.clone()),
+                );
+                let current_ids: HashSet<_> = blocks.iter().map(|block| &block.id).collect();
+                let removed = state
+                    .blocks
+                    .iter()
+                    .any(|block| !current_ids.contains(&block.id));
+                state.journal.record_changes(&info, changed, removed);
+                state.compacted = compacted;
+                state.blocks = blocks;
+            }
+            let source = if compact {
+                &state.compacted
+            } else {
+                &state.blocks
+            };
+            let total_blocks = source.len();
+            let end = history_end(source, before);
+            let start = limit
+                .filter(|n| *n > 0)
+                .map_or(0, |n| end.saturating_sub(n));
+            let mut blocks: Vec<_> = source[start..end]
+                .iter()
+                .map(|block| (**block).clone())
+                .collect();
+            for message in blocks
+                .iter_mut()
+                .filter_map(|block| block.user_message.as_mut())
+            {
+                message.refresh_files(summary.cwd.as_deref());
+            }
+            Ok(ThreadDetail {
+                history_subagent_blocks: if limit.is_some() {
+                    source
+                        .iter()
+                        .filter(|block| block.subagent.is_some())
+                        .map(|block| (**block).clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                summary,
+                subagents: None,
+                subagent_updates: Default::default(),
+                messages: if limit.is_none() {
+                    state.messages.clone()
+                } else {
+                    Vec::new()
+                },
+                blocks,
+                raw_event_count: state.raw_event_count,
+                total_blocks,
+                has_more_blocks: start > 0,
+                before_cursor: (start > 0).then(|| format!("b:{start}")),
+                history: Some(state.journal.metadata(since)),
+            })
+        },
+        |state| {
+            fn weight(block: &MessageBlock) -> u64 {
+                1024 + block.text.as_ref().map_or(0, String::len) as u64
+                    + block.input.as_ref().map_or(0, String::len) as u64
+                    + block
+                        .user_message
+                        .as_ref()
+                        .map_or(0, crate::user_message::UserMessage::weight)
+            }
+            state
+                .messages
+                .iter()
+                .map(|m| m.text.len() as u64 + 128)
+                .sum::<u64>()
+                + state.blocks.iter().map(|block| weight(block)).sum::<u64>()
+                + state.blocks.len() as u64 * 64
+        },
+    )
+}
+
+fn history_end(blocks: &[Arc<MessageBlock>], before: Option<&str>) -> usize {
+    let Some(cursor) = before else {
+        return blocks.len();
+    };
+    if let Some(id) = cursor.strip_prefix("a:") {
+        return blocks
+            .iter()
+            .position(|block| block.id == id)
+            .map_or(0, |index| index + 1);
     }
-    let total_blocks = blocks.len();
-    Ok(ThreadDetail {
-        subagents: None,
-        subagent_updates: Default::default(),
-        summary,
-        messages,
-        blocks,
-        raw_event_count,
-        total_blocks,
-        has_more_blocks: false,
-        before_cursor: None,
-    })
+    let Some(value) = cursor.strip_prefix("b:") else {
+        return blocks.len();
+    };
+    if let Some((_, id)) = value.split_once(':') {
+        return blocks.iter().position(|block| block.id == id).unwrap_or(0);
+    }
+    value
+        .parse::<usize>()
+        .unwrap_or(blocks.len())
+        .min(blocks.len())
 }
 
 pub fn window_thread_detail(
@@ -82,6 +215,9 @@ pub fn window_thread_detail(
     limit: Option<usize>,
     before: Option<&str>,
 ) -> ThreadDetail {
+    if detail.total_blocks > detail.blocks.len() || detail.has_more_blocks {
+        return detail;
+    }
     let total = detail.blocks.len();
     detail.total_blocks = total;
     let Some(limit) = limit.filter(|value| *value > 0) else {
@@ -191,41 +327,29 @@ pub struct RolloutMessageSelection {
     pub candidate_count: usize,
 }
 
-pub(crate) fn scan_rollout(path: &Path, max_messages: usize) -> Result<RolloutScan> {
-    static CACHE: crate::read_cache::ReadCache<RolloutScan> =
-        crate::read_cache::ReadCache::new(4 * 1024 * 1024);
-    CACHE.read(
-        path,
-        |scan, _| {
-            4096 + scan.latest_message.as_ref().map_or(0, String::len) as u64
-                + scan
-                    .pending_elicitation
-                    .as_ref()
-                    .and_then(|value| serde_json::to_vec(value).ok())
-                    .map_or(0, |value| value.len()) as u64
-        },
-        || scan_rollout_uncached(path, max_messages),
-    )
+#[derive(Default)]
+struct ScanState {
+    scan: RolloutScan,
+    pending_action: Option<PendingAction>,
+    async_questions: super::user_input::AsyncQuestionTracker,
+    current_plan_marker: Option<(Option<String>, Option<String>)>,
+    last_task_status: Option<String>,
+    active_tasks: Vec<Option<String>>,
+    pending_tool_turns: HashMap<String, Option<String>>,
+    turn_context: Option<String>,
 }
-
-fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read rollout {}", path.display()))?;
-    let mut scan = RolloutScan::default();
-    let mut pending_action: Option<PendingAction> = None;
-    let mut async_questions = super::user_input::AsyncQuestionTracker::default();
-    let mut current_plan_marker: Option<(Option<String>, Option<String>)> = None;
-    let mut last_task_status: Option<String> = None;
-    let mut active_tasks: Vec<Option<String>> = Vec::new();
-    let mut pending_tool_turns: HashMap<String, Option<String>> = HashMap::new();
-    let mut turn_context = None;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+impl ScanState {
+    fn push(&mut self, mut value: Value) {
+        let Self {
+            mut scan,
+            mut pending_action,
+            mut async_questions,
+            mut current_plan_marker,
+            mut last_task_status,
+            mut active_tasks,
+            mut pending_tool_turns,
+            mut turn_context,
+        } = std::mem::take(self);
         normalize_canonical_turn(&mut value, &mut turn_context);
         async_questions.push(&value, 0);
         let metadata = value
@@ -400,30 +524,69 @@ fn scan_rollout_uncached(path: &Path, max_messages: usize) -> Result<RolloutScan
                 }
             }
         }
+
+        *self = Self {
+            scan,
+            pending_action,
+            async_questions,
+            current_plan_marker,
+            last_task_status,
+            active_tasks,
+            pending_tool_turns,
+            turn_context,
+        };
     }
-    if let Some(pending) = pending_action {
-        scan.reply_needed = true;
-        scan.recoverable = false;
-        if let PendingAction::Elicitation { elicitation, .. } = pending {
-            scan.pending_elicitation = Some(elicitation);
+    fn summary(&self) -> RolloutScan {
+        let mut scan = self.scan.clone();
+        let pending_action = self.pending_action.clone();
+        let async_questions = &self.async_questions;
+        let pending_tool_turns = &self.pending_tool_turns;
+        let active_tasks = &self.active_tasks;
+        let last_task_status = &self.last_task_status;
+        if let Some(pending) = pending_action {
+            scan.reply_needed = true;
+            scan.recoverable = false;
+            if let PendingAction::Elicitation { elicitation, .. } = pending {
+                scan.pending_elicitation = Some(elicitation);
+            }
         }
+        if let Some(call) = async_questions.pending().next() {
+            scan.reply_needed = true;
+            scan.pending_elicitation = call.pending();
+        }
+        if scan.active_turn_id.is_none() {
+            scan.active_turn_id = pending_tool_turns.values().find_map(Clone::clone);
+        }
+        scan.running = scan.active_turn_id.is_some()
+            || !active_tasks.is_empty()
+            || !pending_tool_turns.is_empty()
+            || matches!(
+                last_task_status.as_deref(),
+                Some("running" | "in_progress" | "inProgress")
+            );
+        scan
     }
-    if let Some(call) = async_questions.pending().next() {
-        scan.reply_needed = true;
-        scan.pending_elicitation = call.pending();
-    }
-    let _ = max_messages;
-    if scan.active_turn_id.is_none() {
-        scan.active_turn_id = pending_tool_turns.values().find_map(Clone::clone);
-    }
-    scan.running = scan.active_turn_id.is_some()
-        || !active_tasks.is_empty()
-        || !pending_tool_turns.is_empty()
-        || matches!(
-            last_task_status.as_deref(),
-            Some("running" | "in_progress" | "inProgress")
-        );
-    Ok(scan)
+}
+pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutScan> {
+    static CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
+        crate::jsonl_cache::JsonlCache::new(8 * 1024 * 1024);
+    CACHE.read(
+        path,
+        |_| Ok(0),
+        true,
+        |state, line, _, _| {
+            if let Ok(value) = serde_json::from_slice::<Value>(line) {
+                state.push(value);
+            }
+            Ok(())
+        },
+        |state, _| Ok(state.summary()),
+        |state| {
+            8192 + state.scan.latest_message.as_ref().map_or(0, String::len) as u64
+                + state.async_questions.calls.len() as u64 * 4096
+                + state.pending_tool_turns.len() as u64 * 256
+        },
+    )
 }
 
 pub fn rollout_latest_assistant_message(path: &Path) -> Result<Option<String>> {
@@ -1343,9 +1506,9 @@ const TOOL_INPUT_LIMIT: usize = 4_000;
 const TOOL_SUMMARY_LIMIT: usize = 220;
 const CHAT_HISTORY_LIMIT: usize = 80;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct MessageBlockBuilder {
-    blocks: Vec<MessageBlock>,
+    blocks: Vec<Arc<MessageBlock>>,
     block_positions: HashMap<String, usize>,
     pending_tools: HashMap<String, PendingToolCall>,
     suppressed_call_ids: HashSet<String>,
@@ -1385,7 +1548,7 @@ impl MessageBlockBuilder {
 
     fn push_event_inner(&mut self, value: &Value, raw_index: usize) {
         if let Some(block) = super::subagents::native_activity_block(value) {
-            self.blocks.push(block);
+            self.blocks.push(Arc::new(block));
             return;
         }
         if is_internal_agent_message(value) {
@@ -1418,7 +1581,7 @@ impl MessageBlockBuilder {
             if let Some(call_id) = &block.call_id {
                 self.suppressed_call_ids.insert(call_id.clone());
             }
-            self.blocks.push(block);
+            self.blocks.push(Arc::new(block));
             return;
         }
 
@@ -1460,13 +1623,13 @@ impl MessageBlockBuilder {
             if let Some(call) = &pending {
                 self.block_positions.insert(call.id.clone(), call.raw_index);
             }
-            self.blocks.push(tool_output_block(
+            self.blocks.push(Arc::new(tool_output_block(
                 value,
                 payload,
                 payload_type,
                 raw_index,
                 pending,
-            ));
+            )));
             return;
         }
 
@@ -1503,7 +1666,7 @@ impl MessageBlockBuilder {
             if matches!(block.role.as_str(), "user" | "assistant" | "tool") {
                 self.resolve_pending_plans();
             }
-            self.blocks.push(block);
+            self.blocks.push(Arc::new(block));
         }
     }
 
@@ -1513,7 +1676,7 @@ impl MessageBlockBuilder {
         block.display_kind = Some("plan".to_string());
         block.plan_status = block.plan_status.or_else(|| block.status.clone());
         if let Some(index) = self.plan_block_indexes.get(&key).copied() {
-            let existing = &mut self.blocks[index];
+            let existing = Arc::make_mut(&mut self.blocks[index]);
             if block.status.as_deref() == Some("streaming") {
                 let next_text = block.text.unwrap_or_default();
                 if !next_text.trim().is_empty() {
@@ -1542,12 +1705,13 @@ impl MessageBlockBuilder {
             return;
         }
         self.plan_block_indexes.insert(key, self.blocks.len());
-        self.blocks.push(block);
+        self.blocks.push(Arc::new(block));
     }
 
     fn resolve_pending_plans(&mut self) {
         for block in &mut self.blocks {
             if block.kind == "plan" && block.resolved != Some(true) {
+                let block = Arc::make_mut(block);
                 block.status = Some("completed".to_string());
                 block.plan_status = Some("completed".to_string());
                 block.resolved = Some(true);
@@ -1567,6 +1731,7 @@ impl MessageBlockBuilder {
                     .as_deref()
                     .is_some_and(|turn_id| turn_id != progress_turn_id)
             {
+                let block = Arc::make_mut(block);
                 block.status = Some("completed".to_string());
                 block.plan_status = Some("completed".to_string());
                 block.resolved = Some(true);
@@ -1585,7 +1750,7 @@ impl MessageBlockBuilder {
                 candidate.call_id.as_deref() == Some(key.as_str())
                     || candidate.item_id.as_deref() == Some(key.as_str())
             }) {
-                let pending = &mut self.blocks[index];
+                let pending = Arc::make_mut(&mut self.blocks[index]);
                 if pending.kind == "request_user_input" {
                     pending.kind = "request_user_input_result".to_string();
                     pending.status = Some("completed".to_string());
@@ -1598,7 +1763,7 @@ impl MessageBlockBuilder {
                 }
             }
         }
-        self.blocks.push(block);
+        self.blocks.push(Arc::new(block));
     }
 
     fn clear_pending_tools_for_turn(&mut self, turn_id: Option<&str>) {
@@ -1614,14 +1779,18 @@ impl MessageBlockBuilder {
 
     fn finish(self) -> Vec<MessageBlock> {
         compact_chat_history(self.finish_uncompacted(), CHAT_HISTORY_LIMIT)
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect()
     }
 
-    fn finish_uncompacted(mut self) -> Vec<MessageBlock> {
+    fn finish_uncompacted(mut self) -> Vec<Arc<MessageBlock>> {
         for block in &mut self.blocks {
             if let Some(call) = self.async_questions.calls.iter().find(|call| {
                 block.call_id.as_deref() == Some(&call.call_id)
                     && block.turn_id.as_deref() == Some(&call.turn_id)
             }) {
+                let block = Arc::make_mut(block);
                 let pending = call.pending();
                 block.resolved = Some(pending.is_none());
                 block.status = Some(
@@ -1641,7 +1810,7 @@ impl MessageBlockBuilder {
         pending.sort_by_key(|call| call.raw_index);
         for call in pending {
             self.block_positions.insert(call.id.clone(), call.raw_index);
-            self.blocks.push(call.into_running_block());
+            self.blocks.push(Arc::new(call.into_running_block()));
         }
         self.blocks.sort_by_key(|block| {
             self.block_positions
@@ -1654,7 +1823,10 @@ impl MessageBlockBuilder {
     }
 }
 
-fn compact_chat_history(blocks: Vec<MessageBlock>, max_chat_messages: usize) -> Vec<MessageBlock> {
+fn compact_chat_history(
+    blocks: Vec<Arc<MessageBlock>>,
+    max_chat_messages: usize,
+) -> Vec<Arc<MessageBlock>> {
     let chat_indexes = blocks
         .iter()
         .enumerate()
@@ -1710,15 +1882,16 @@ fn compact_chat_history(blocks: Vec<MessageBlock>, max_chat_messages: usize) -> 
                 if inserted {
                     marker.id = format!("chat-history-collapsed:{}", block.id);
                 }
-                compacted.push(marker);
+                compacted.push(Arc::new(marker));
                 inserted = true;
                 segment_count = 0;
                 compacted.len() - 1
             });
             segment_count += 1;
             let summary = Some(format!("{segment_count} 条历史对话已折叠"));
-            compacted[position].text = summary.clone();
-            compacted[position].summary = summary;
+            let marker = Arc::make_mut(&mut compacted[position]);
+            marker.text = summary.clone();
+            marker.summary = summary;
             continue;
         }
         segment = None;

@@ -2,7 +2,7 @@ import { MoreHorizontal, Pencil } from "lucide-react";
 import { ContextTaskMenu, ThreadMenuItems, type ThreadMenuAction } from "./TaskMenu";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-export function RenameableSession({ title, className, disabled, selecting, selected = false, renameBlockReason, onSelect, onRename, menuActions, children }: {
+export function RenameableSession({ title, className, disabled, selecting, renameBlockReason, onSelect, onRename, menuActions, children }: {
   title: string;
   className: string;
   disabled?: boolean;
@@ -24,35 +24,11 @@ export function RenameableSession({ title, className, disabled, selecting, selec
   const input = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const cancelled = useRef(false);
-  const clickTimer = useRef<ReturnType<typeof setTimeout>>();
-  const outsideFlushTimer = useRef<ReturnType<typeof setTimeout>>();
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; clearTimeout(clickTimer.current); clearTimeout(outsideFlushTimer.current); };
+    return () => { mounted.current = false; };
   }, []);
-  const flushPendingSelection = () => {
-    if (!clickTimer.current) return;
-    clearTimeout(clickTimer.current);
-    clickTimer.current = undefined;
-    if (!cancelled.current && mounted.current && !selecting && !disabled && !selected) onSelect();
-  };
-  useEffect(() => {
-    const flushOutsideClick = (event: PointerEvent) => {
-      if (clickTimer.current && !root.current?.contains(event.target as Node)) {
-        clearTimeout(outsideFlushTimer.current);
-        outsideFlushTimer.current = setTimeout(() => {
-          outsideFlushTimer.current = undefined;
-          flushPendingSelection();
-        }, 0);
-      }
-    };
-    document.addEventListener("pointerdown", flushOutsideClick, true);
-    return () => {
-      document.removeEventListener("pointerdown", flushOutsideClick, true);
-      clearTimeout(outsideFlushTimer.current);
-    };
-  });
   useEffect(() => {
     if (selecting || disabled) {
       cancelled.current = true;
@@ -99,23 +75,11 @@ export function RenameableSession({ title, className, disabled, selecting, selec
     }
   };
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
-    if (selecting || event.detail === 0) {
-      onSelect();
-      return;
-    }
-    cancelled.current = false;
-    clearTimeout(clickTimer.current);
-    clickTimer.current = setTimeout(() => {
-      clickTimer.current = undefined;
-      if (!cancelled.current && mounted.current) onSelect();
-    }, 220);
-  };
-  const cancelPendingClick = () => {
-    clearTimeout(clickTimer.current); clickTimer.current = undefined;
-    clearTimeout(outsideFlushTimer.current); outsideFlushTimer.current = undefined;
+    // Selecting immediately also keeps the row mounted for native double-click
+    // rename; the second click doesn't re-select or reset the reading position.
+    if (selecting || event.detail < 2) onSelect();
   };
   const openMenu = (x: number, y: number) => {
-    cancelPendingClick();
     if (!selecting && !disabled) setContext({ x, y });
   };
   const actions: ThreadMenuAction[] = [
@@ -137,7 +101,7 @@ export function RenameableSession({ title, className, disabled, selecting, selec
     </div> : <button ref={button} type="button" className={className} disabled={disabled} title={title}
       onClick={handleClick}
       onContextMenu={event => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
-      onDoubleClick={event => { event.preventDefault(); cancelPendingClick(); begin(); }}
+      onDoubleClick={event => { event.preventDefault(); begin(); }}
       onKeyDown={event => {
         if (event.key === "F2") { event.preventDefault(); begin(); }
         if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
@@ -148,7 +112,7 @@ export function RenameableSession({ title, className, disabled, selecting, selec
       }}>
       {children}
     </button>}
-    {!editing && !selecting && !disabled && <div className="session-row-menu" onPointerDown={cancelPendingClick}>
+    {!editing && !selecting && !disabled && <div className="session-row-menu">
       <button type="button" className="icon-button" title="线程操作" aria-label="线程操作" aria-expanded={Boolean(context)} onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom + 4); }}><MoreHorizontal size={18} /></button>
     </div>}
     {context && <ContextTaskMenu x={context.x} y={context.y} onClose={() => setContext(null)} returnFocus={button.current}>

@@ -1,3 +1,5 @@
+import { usePagedHistory } from "./usePagedHistory";
+import { grokHistoryAdapter } from "./historyWindows";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getGrokSession, listGrokSessions, renameGrokSession, previewGrokSessionDelete, deleteGrokSession } from "../api/grok";
 import type { GrokDeleteRequest } from "../../types";
@@ -7,11 +9,11 @@ export function useGrokSessions(q: string) {
   return useQuery({ queryKey: [...grokQueryKeys.list, q], queryFn: () => listGrokSessions({ q, limit: 100 }), refetchInterval: 5000 });
 }
 export function useGrokDetail(id?: string) {
-  return useQuery({
-    queryKey: ["grok", "session", id],
-    queryFn: () => getGrokSession(id!),
-    enabled: Boolean(id),
-    refetchInterval: query => query.state.data?.summary?.status === "running" ? 1000 : 2000
+  return usePagedHistory({
+    ...grokHistoryAdapter,
+    queryKey: ["grok", "session", id], enabled: Boolean(id),
+    read: before => getGrokSession(id!, { limit: 160, before }),
+    interval: page => page?.summary.status === "running" ? 1000 : 2000
   });
 }
 export function useGrokActions() {

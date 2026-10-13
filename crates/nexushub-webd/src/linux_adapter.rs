@@ -1,11 +1,8 @@
-use crate::{
-    auth::AuthContext,
-    state::{AppState, CachedThreadDetail, FileSignature, ThreadDetailCacheSignature},
-};
+use crate::{auth::AuthContext, state::AppState};
 use anyhow::{anyhow, Result};
 use nexushub_core::services::jobs::thread_state_action_response as core_thread_state_action_response;
 use nexushub_core::{
-    codex::{self, CodexPaths, ThreadDetail, ThreadSummary},
+    codex::{self, ThreadDetail, ThreadSummary},
     config::{patch_probe_config_toml, Config},
     db::JobRecord,
     platform::PlatformPaths,
@@ -18,12 +15,7 @@ use nexushub_core::{
     },
 };
 use serde_json::{json, Value};
-use std::{
-    collections::HashSet,
-    fs,
-    path::{Path, Path as FsPath},
-    time::UNIX_EPOCH,
-};
+use std::{collections::HashSet, fs, path::Path};
 
 pub fn apply_probe_settings_save_plan(
     state: &AppState,
@@ -154,10 +146,16 @@ pub fn probe_threads_read_model(
 
 pub fn load_thread_detail_read_model(
     state: &AppState,
-    thread_id: &str,
+    plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadDetail>> {
     let paths = state.codex_paths();
-    let mut detail = load_base_thread_detail_cached(state, &paths, thread_id)?;
+    let mut detail = codex::thread_detail_page(
+        &paths,
+        &plan.thread_id,
+        plan.block_limit,
+        plan.before.as_deref(),
+        None,
+    )?;
     if let Some(detail) = detail.take() {
         let detail_thread_id = detail.summary.id.clone();
         let active_job = active_job_for_thread(state, &detail_thread_id)?;
@@ -181,7 +179,7 @@ pub fn window_thread_detail_read_model(
     state: &AppState,
     plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadDetail>> {
-    let Some(detail) = load_thread_detail_read_model(state, &plan.thread_id)? else {
+    let Some(detail) = load_thread_detail_read_model(state, plan)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::window_thread_detail_for_plan(
@@ -193,7 +191,7 @@ pub fn thread_blocks_read_model(
     state: &AppState,
     plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadBlocksPage>> {
-    let Some(detail) = load_thread_detail_read_model(state, &plan.thread_id)? else {
+    let Some(detail) = load_thread_detail_read_model(state, plan)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::thread_blocks_page_for_plan(
@@ -283,78 +281,6 @@ fn job_response_value(job: JobRecord) -> Result<Value> {
     .jobs()
     .response(job);
     Ok(serde_json::to_value(response)?)
-}
-
-fn load_base_thread_detail_cached(
-    state: &AppState,
-    paths: &CodexPaths,
-    id: &str,
-) -> Result<Option<ThreadDetail>> {
-    if let Some(cached) = state
-        .rollout_detail_cache
-        .lock()
-        .expect("rollout detail cache mutex")
-        .get(id)
-        .cloned()
-    {
-        let signature = thread_detail_cache_signature(paths, cached.signature.rollout_path.clone());
-        if cached.signature == signature {
-            return Ok(Some(cached.detail));
-        }
-    }
-
-    let detail = codex::thread_detail(paths, id)?;
-    let signature = thread_detail_cache_signature(
-        paths,
-        detail
-            .as_ref()
-            .and_then(|detail| detail.summary.rollout_path.clone()),
-    );
-    if let Some(detail) = detail.as_ref() {
-        state
-            .rollout_detail_cache
-            .lock()
-            .expect("rollout detail cache mutex")
-            .insert(
-                id.to_string(),
-                CachedThreadDetail {
-                    signature,
-                    detail: detail.clone(),
-                },
-            );
-    } else {
-        state
-            .rollout_detail_cache
-            .lock()
-            .expect("rollout detail cache mutex")
-            .remove(id);
-    }
-    Ok(detail)
-}
-
-fn thread_detail_cache_signature(
-    paths: &CodexPaths,
-    rollout_path: Option<std::path::PathBuf>,
-) -> ThreadDetailCacheSignature {
-    ThreadDetailCacheSignature {
-        rollout: rollout_path.as_deref().and_then(file_signature),
-        rollout_path,
-        state_db: file_signature(&paths.state_db()),
-        session_index: file_signature(&paths.session_index()),
-    }
-}
-
-fn file_signature(path: &FsPath) -> Option<FileSignature> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis());
-    Some(FileSignature {
-        len: metadata.len(),
-        modified_ms,
-    })
 }
 
 pub async fn apply_thread_state_action_plan(

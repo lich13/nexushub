@@ -34,7 +34,7 @@ pub async fn getSubagentDetail(
 ) -> Result<nexushub_core::codex::subagents::SubagentDetailResponse, String> {
     let paths = state.codex_paths();
     let platform = state.platform().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         nexushub_core::services::use_cases::NexusHubUseCases::new(&platform)
             .threads()
             .subagent_detail(&paths, &request)
@@ -45,60 +45,72 @@ pub async fn getSubagentDetail(
 }
 
 #[tauri::command(rename = "threads.list")]
-pub fn listThreads(
+pub async fn listThreads(
     state: tauri::State<'_, DesktopState>,
     status: Option<String>,
     q: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<nexushub_core::codex::ThreadSummary>, String> {
-    thread_service::threads_with_state(
-        &state,
-        ThreadListRequest {
-            status,
-            query: q,
-            limit,
-        },
-    )
-    .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        thread_service::threads_with_state(
+            &state,
+            ThreadListRequest {
+                status,
+                query: q,
+                limit,
+            },
+        )
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
-
 #[tauri::command(rename = "threads.detail")]
-pub fn getThread(
+pub async fn getThread(
     state: tauri::State<'_, DesktopState>,
     id: String,
     options: Option<ThreadDetailOptions>,
 ) -> Result<Option<nexushub_core::codex::ThreadDetail>, String> {
-    let options = options.unwrap_or_default();
-    thread_service::thread_detail_with_state(
-        &state,
-        ThreadDetailRequest {
-            id,
-            limit: options.limit,
-            before: options.before,
-            full: options.full,
-        },
-    )
-    .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        let options = options.unwrap_or_default();
+        thread_service::thread_detail_with_state(
+            &state,
+            ThreadDetailRequest {
+                id,
+                limit: options.limit,
+                before: options.before,
+                full: options.full,
+            },
+        )
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
-
 #[tauri::command(rename = "threads.blocks")]
-pub fn getThreadBlocks(
+pub async fn getThreadBlocks(
     state: tauri::State<'_, DesktopState>,
     id: String,
     options: Option<ThreadDetailOptions>,
 ) -> Result<Option<ThreadBlocksPage>, String> {
-    let options = options.unwrap_or_default();
-    thread_service::thread_blocks_with_state(
-        &state,
-        ThreadBlocksRequest {
-            id,
-            limit: options.limit,
-            before: options.before,
-        },
-    )
-    .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        let options = options.unwrap_or_default();
+        thread_service::thread_blocks_with_state(
+            &state,
+            ThreadBlocksRequest {
+                id,
+                limit: options.limit,
+                before: options.before,
+            },
+        )
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
-
 #[tauri::command(rename = "threads.archive")]
 pub fn archiveThread(
     state: tauri::State<'_, DesktopState>,

@@ -13,7 +13,7 @@ pub(crate) async fn search(
     Json(request): Json<SessionSearchRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let result = tokio::task::spawn_blocking(move || {
+    let result = nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .search(state.codex_paths())
             .search(request)
@@ -29,7 +29,7 @@ pub(crate) async fn attachment_read(
     Json(request): Json<nexushub_core::user_message::SessionAttachmentRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let result = tokio::task::spawn_blocking(move || {
+    let result = nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .attachment_read(request)
@@ -45,7 +45,7 @@ pub(crate) async fn bulk_preview(
     Json(request): Json<SessionBatchRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let result = tokio::task::spawn_blocking(move || {
+    let result = nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .bulk_preview(request)

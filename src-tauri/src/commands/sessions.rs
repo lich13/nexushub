@@ -14,7 +14,7 @@ pub async fn searchSessions(
     request: SessionSearchRequest,
 ) -> Result<SessionSearchResponse, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .search(state.codex_paths())
             .search(request)
@@ -30,7 +30,7 @@ pub async fn readSessionAttachment(
     request: nexushub_core::user_message::SessionAttachmentRequest,
 ) -> Result<nexushub_core::user_message::SessionAttachmentResponse, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .attachment_read(request)
@@ -46,7 +46,7 @@ pub async fn previewSessionBatch(
     request: SessionBatchRequest,
 ) -> Result<SessionBatchPreview, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .sessions(state.codex_paths())
             .bulk_preview(request)

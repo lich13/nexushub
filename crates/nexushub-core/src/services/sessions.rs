@@ -137,7 +137,7 @@ impl SessionUseCases {
         }
         let message = match request.provider {
             SessionProvider::Claude => {
-                return crate::claude::read_attachment(&self.claude, &request)
+                return crate::claude::read_attachment(&self.claude, &request);
             }
             SessionProvider::Codex => codex::thread_detail(&self.codex, &request.session_key)?
                 .into_iter()
@@ -147,9 +147,10 @@ impl SessionUseCases {
             SessionProvider::Grok => {
                 grok::grok_session_detail(&self.grok, &request.session_key, None)?
                     .events
-                    .into_iter()
-                    .filter_map(|event| event.user_message)
+                    .iter()
+                    .filter_map(|event| event.user_message.as_ref())
                     .find(|message| message.id == request.message_id)
+                    .cloned()
             }
         }
         .ok_or_else(|| anyhow::anyhow!("会话消息已变化或不存在，请刷新会话"))?;

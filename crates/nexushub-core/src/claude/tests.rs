@@ -554,6 +554,325 @@ fn oversized_unrelated_file_does_not_hide_readable_sessions_and_cache_is_reused(
 }
 
 #[test]
+fn claude_summary_list_caches_many_transcripts_and_refreshes_one_append() {
+    const SESSION_COUNT: usize = 70;
+
+    let f = Fixture::new();
+    let write_rows = |path: &Path, rows: &[Value]| {
+        fs::write(
+            path,
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    };
+    let mut sessions = Vec::with_capacity(SESSION_COUNT);
+    for index in 0..SESSION_COUNT {
+        let id = format!("cache-fixture-{index:03}");
+        let path = f.paths.projects.join("project").join(format!("{id}.jsonl"));
+        let user_id = format!("{id}-user");
+        let assistant_id = format!("{id}-assistant");
+        let mut user = f.row(
+            &user_id,
+            None,
+            "user",
+            json!(format!("Initial request {id}")),
+        );
+        user["sessionId"] = json!(id.as_str());
+        let mut assistant = f.row(
+            &assistant_id,
+            Some(&user_id),
+            "assistant",
+            json!([{"type":"text","text":format!("Initial response {id}")}]),
+        );
+        assistant["sessionId"] = json!(id.as_str());
+        write_rows(&path, &[user, assistant]);
+        sessions.push((id, path, assistant_id));
+    }
+
+    reader::BODY_RECORDS.with(|records| records.set(0));
+    let first = list_claude_sessions(&f.paths, 100, None).unwrap();
+    assert_eq!(first.len(), SESSION_COUNT);
+    let first_reads = reader::BODY_RECORDS.with(|records| records.get());
+    assert_eq!(first_reads, SESSION_COUNT * 2);
+
+    let target_id = &sessions.last().unwrap().0;
+    let initial_title = format!("Initial request {target_id}");
+    let initial_last_message = format!("Initial response {target_id}");
+    let first_target = first.iter().find(|row| &row.id == target_id).unwrap();
+    assert_eq!(first_target.title, initial_title);
+    assert_eq!(first_target.message_count, 2);
+    assert_eq!(
+        first_target.last_message.as_deref(),
+        Some(initial_last_message.as_str())
+    );
+    assert_eq!(first_target.status, "recent");
+
+    let second = list_claude_sessions(&f.paths, 100, None).unwrap();
+    assert_eq!(
+        reader::BODY_RECORDS.with(|records| records.get()),
+        first_reads,
+        "a repeated list must use the lightweight summary cache"
+    );
+    assert_eq!(second.len(), SESSION_COUNT);
+
+    let (target_id, target_path, last_assistant_id) = sessions.last().unwrap();
+    let follow_up_id = format!("{target_id}-follow-up");
+    let mut follow_up = f.row(
+        &follow_up_id,
+        Some(last_assistant_id),
+        "user",
+        json!(format!("Follow-up request {target_id}")),
+    );
+    follow_up["sessionId"] = json!(target_id.as_str());
+    follow_up["timestamp"] = json!("2026-09-30T00:00:00Z");
+    let custom_title = json!({
+        "type": "custom-title",
+        "sessionId": target_id,
+        "customTitle": "Refreshed title"
+    });
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(target_path)
+        .unwrap();
+    file.write_all(format!("{follow_up}\n{custom_title}\n").as_bytes())
+        .unwrap();
+
+    let updated = list_claude_sessions(&f.paths, 100, None).unwrap();
+    let reads_after_update = reader::BODY_RECORDS.with(|records| records.get());
+    let update_reads = reads_after_update - first_reads;
+    assert!(
+        matches!(update_reads, 2 | 4),
+        "only the changed transcript should be parsed (2 appended records, or 4 if its body cache entry was evicted); read {update_reads}"
+    );
+    assert_eq!(updated.len(), SESSION_COUNT);
+    let updated_target = updated.iter().find(|row| row.id == *target_id).unwrap();
+    let expected_last_message = format!("Follow-up request {target_id}");
+    assert_eq!(updated_target.title, "Refreshed title");
+    assert_eq!(updated_target.message_count, 3);
+    assert_eq!(
+        updated_target.last_message.as_deref(),
+        Some(expected_last_message.as_str())
+    );
+    assert_eq!(updated_target.status, "unknown");
+
+    for before in first.iter().filter(|row| row.id != *target_id) {
+        let after = updated.iter().find(|row| row.id == before.id).unwrap();
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.message_count, before.message_count);
+        assert_eq!(after.last_message, before.last_message);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+    }
+
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            session_key: updated_target.session_key.clone(),
+            limit: None,
+            before: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(detail.summary.title, updated_target.title);
+    assert_eq!(detail.summary.message_count, updated_target.message_count);
+    assert_eq!(detail.summary.last_message, updated_target.last_message);
+    assert_eq!(detail.summary.status, updated_target.status);
+    assert_eq!(
+        detail.events.last().and_then(|event| event.text.as_deref()),
+        Some(expected_last_message.as_str())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_summary_cache_revalidates_rewrites_truncation_and_atomic_replacement() {
+    use std::os::unix::fs::MetadataExt;
+
+    let f = Fixture::new();
+    f.complete();
+    let key = f.key();
+    let list_summary = || {
+        list_claude_sessions(&f.paths, 100, None)
+            .unwrap()
+            .into_iter()
+            .find(|summary| summary.session_key == key)
+            .expect("fixture summary")
+    };
+    let check = |listed: &ClaudeSessionSummary,
+                 title: &str,
+                 message_count: usize,
+                 last_message: &str,
+                 status: &str,
+                 can_manage: bool| {
+        assert_eq!(listed.title, title);
+        assert_eq!(listed.message_count, message_count);
+        assert_eq!(listed.last_message.as_deref(), Some(last_message));
+        assert_eq!(listed.status, status);
+        assert_eq!(listed.can_rename, can_manage);
+        assert_eq!(listed.can_delete, can_manage);
+        assert_eq!(listed.rename_block_reason.is_some(), !can_manage);
+        assert_eq!(listed.delete_block_reason.is_some(), !can_manage);
+
+        let detail = claude_session_detail(
+            &f.paths,
+            &ClaudeDetailRequest {
+                session_key: key.clone(),
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(detail.summary.id, listed.id);
+        assert_eq!(detail.summary.session_key, listed.session_key);
+        assert_eq!(detail.summary.title, listed.title);
+        assert_eq!(detail.summary.updated_at, listed.updated_at);
+        assert_eq!(detail.summary.message_count, listed.message_count);
+        assert_eq!(detail.summary.last_message, listed.last_message);
+        assert_eq!(detail.summary.status, listed.status);
+        assert_eq!(detail.summary.can_rename, listed.can_rename);
+        assert_eq!(detail.summary.can_delete, listed.can_delete);
+        assert_eq!(
+            detail.summary.rename_block_reason,
+            listed.rename_block_reason
+        );
+        assert_eq!(
+            detail.summary.delete_block_reason,
+            listed.delete_block_reason
+        );
+        assert_eq!(detail.summary.read_error, listed.read_error);
+        assert_eq!(detail.summary.read_warning, listed.read_warning);
+        assert_eq!(detail.total_events, message_count);
+        assert_eq!(
+            detail.events.last().and_then(|event| event.text.as_deref()),
+            Some(last_message)
+        );
+
+        if can_manage {
+            assert!(preview_claude_delete(&f.paths, &key).is_ok());
+        } else {
+            assert!(rename_claude_session(&f.paths, &key, "Blocked").is_err());
+            assert!(preview_claude_delete(&f.paths, &key).is_err());
+        }
+    };
+
+    let initial = list_summary();
+    check(
+        &initial,
+        "Example request",
+        2,
+        "Example complete",
+        "recent",
+        true,
+    );
+
+    let before_rewrite = fs::metadata(&f.file).unwrap();
+    let original = fs::read(&f.file).unwrap();
+    let rewritten = String::from_utf8(original.clone()).unwrap().replacen(
+        "Example request",
+        "Changed request",
+        1,
+    );
+    assert_ne!(rewritten.as_bytes(), original.as_slice());
+    assert_eq!(rewritten.len() as u64, before_rewrite.len());
+    fs::write(&f.file, rewritten.as_bytes()).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&f.file)
+        .unwrap()
+        .set_modified(before_rewrite.modified().unwrap())
+        .unwrap();
+    let after_rewrite = fs::metadata(&f.file).unwrap();
+    assert_eq!(after_rewrite.len(), before_rewrite.len());
+    assert_eq!(
+        after_rewrite.modified().unwrap(),
+        before_rewrite.modified().unwrap()
+    );
+    assert_eq!(
+        (after_rewrite.dev(), after_rewrite.ino()),
+        (before_rewrite.dev(), before_rewrite.ino())
+    );
+    assert_ne!(
+        (after_rewrite.ctime(), after_rewrite.ctime_nsec()),
+        (before_rewrite.ctime(), before_rewrite.ctime_nsec())
+    );
+    let rewritten_summary = list_summary();
+    check(
+        &rewritten_summary,
+        "Changed request",
+        2,
+        "Example complete",
+        "recent",
+        true,
+    );
+
+    let before_replace = fs::metadata(&f.file).unwrap();
+    let replaced = String::from_utf8(fs::read(&f.file).unwrap())
+        .unwrap()
+        .replacen("Changed request", "Swapped request", 1);
+    assert_eq!(replaced.len() as u64, before_replace.len());
+    let replacement = f
+        .file
+        .with_file_name(format!(".atomic-replacement-{}.tmp", uuid::Uuid::new_v4()));
+    fs::write(&replacement, replaced.as_bytes()).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_modified(before_replace.modified().unwrap())
+        .unwrap();
+    let replacement_metadata = fs::metadata(&replacement).unwrap();
+    assert_eq!(replacement_metadata.len(), before_replace.len());
+    assert_eq!(
+        replacement_metadata.modified().unwrap(),
+        before_replace.modified().unwrap()
+    );
+    assert_ne!(
+        (replacement_metadata.dev(), replacement_metadata.ino()),
+        (before_replace.dev(), before_replace.ino())
+    );
+    fs::rename(&replacement, &f.file).unwrap();
+    let after_replace = fs::metadata(&f.file).unwrap();
+    assert_eq!(after_replace.len(), before_replace.len());
+    assert_eq!(
+        after_replace.modified().unwrap(),
+        before_replace.modified().unwrap()
+    );
+    assert_ne!(
+        (after_replace.dev(), after_replace.ino()),
+        (before_replace.dev(), before_replace.ino())
+    );
+    let replaced_summary = list_summary();
+    check(
+        &replaced_summary,
+        "Swapped request",
+        2,
+        "Example complete",
+        "recent",
+        true,
+    );
+
+    let bytes = fs::read(&f.file).unwrap();
+    let first_record_len = bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+    fs::File::options()
+        .write(true)
+        .open(&f.file)
+        .unwrap()
+        .set_len(first_record_len as u64)
+        .unwrap();
+    let truncated_summary = list_summary();
+    check(
+        &truncated_summary,
+        "Swapped request",
+        1,
+        "Swapped request",
+        "unknown",
+        false,
+    );
+}
+
+#[test]
 fn reads_stream_init_aliases_tool_references_and_empty_result_falls_back() {
     let f = Fixture::new();
     f.write(&[

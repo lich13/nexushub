@@ -11,7 +11,7 @@ pub async fn listClaudeSessions(
     q: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<nexushub_core::claude::ClaudeSessionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .list(limit.unwrap_or(100), q.as_deref())
@@ -27,7 +27,7 @@ pub async fn getClaudeSession(
     limit: Option<usize>,
     before: Option<String>,
 ) -> Result<nexushub_core::claude::ClaudeSessionDetail, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .detail(nexushub_core::claude::ClaudeDetailRequest {
@@ -46,7 +46,7 @@ pub async fn renameClaudeSession(
     session_key: String,
     title: String,
 ) -> Result<nexushub_core::claude::ClaudeSessionSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .rename(&session_key, &title)
@@ -60,7 +60,7 @@ pub async fn renameClaudeSession(
 pub async fn previewClaudeSessionDelete(
     session_key: String,
 ) -> Result<ClaudeDeletePreview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .delete_preview(&session_key)
@@ -74,7 +74,7 @@ pub async fn previewClaudeSessionDelete(
 pub async fn deleteClaudeSession(
     request: ClaudeDeleteRequest,
 ) -> Result<ClaudeDeleteResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&PlatformPaths::desktop_current())
             .claude()
             .delete_execute(request)

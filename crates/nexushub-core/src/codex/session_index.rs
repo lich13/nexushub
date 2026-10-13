@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use super::{
     rollout_events::{first_user_message_title, thread_title_candidate},
@@ -27,41 +27,48 @@ impl SessionIndexEntry {
     }
 }
 
-pub(crate) fn read_session_index(paths: &CodexPaths) -> Result<HashMap<String, SessionIndexEntry>> {
-    let index = paths.session_index();
-    let text = fs::read_to_string(&index).with_context(|| format!("read {}", index.display()))?;
-    let mut map: HashMap<String, SessionIndexEntry> = HashMap::new();
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(id) = value.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let mut entry = SessionIndexEntry {
-            path: session_index_path(paths, &value),
-            title: session_index_title(&value),
-            first_user_message: session_index_string_field(&value, "first_user_message")
-                .or_else(|| session_index_string_field(&value, "firstUserMessage")),
-        };
-        if let Some(existing) = map.get_mut(id) {
-            if entry.title.is_some() {
-                existing.title = entry.title.take();
+pub(crate) fn read_session_index(
+    paths: &CodexPaths,
+) -> Result<Arc<HashMap<String, SessionIndexEntry>>> {
+    static CACHE: crate::jsonl_cache::JsonlCache<Arc<HashMap<String, SessionIndexEntry>>> =
+        crate::jsonl_cache::JsonlCache::new(16 * 1024 * 1024);
+    CACHE.read(
+        &paths.session_index(),
+        |_| Ok(0),
+        true,
+        |map, line, _, _| {
+            let Ok(value) = serde_json::from_slice::<Value>(line) else {
+                return Ok(());
+            };
+            let Some(id) = value.get("id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let mut entry = SessionIndexEntry {
+                path: session_index_path(paths, &value),
+                title: session_index_title(&value),
+                first_user_message: session_index_string_field(&value, "first_user_message")
+                    .or_else(|| session_index_string_field(&value, "firstUserMessage")),
+            };
+            let map = Arc::make_mut(map);
+            if let Some(existing) = map.get_mut(id) {
+                if entry.title.is_some() {
+                    existing.title = entry.title.take();
+                }
+                if existing.path.is_none() {
+                    existing.path = entry.path.take();
+                }
+                if existing.first_user_message.is_none() {
+                    existing.first_user_message = entry.first_user_message.take();
+                }
+            } else {
+                map.insert(id.to_string(), entry);
             }
-            if existing.path.is_none() {
-                existing.path = entry.path.take();
-            }
-            if existing.first_user_message.is_none() {
-                existing.first_user_message = entry.first_user_message.take();
-            }
-        } else {
-            map.insert(id.to_string(), entry);
-        }
-    }
-    Ok(map)
+
+            Ok(())
+        },
+        |map, _| Ok(map.clone()),
+        |map| map.len() as u64 * 2048,
+    )
 }
 
 fn session_index_path(paths: &CodexPaths, value: &Value) -> Option<PathBuf> {

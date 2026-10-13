@@ -79,7 +79,7 @@ pub(super) fn output_identity(block: &MessageBlock) -> (Option<String>, Option<S
 
 // Keep native chronology and retain the creation anchor used by search. This runs
 // before pagination, for both search and the detail reader.
-pub(in crate::codex) fn merge_creation_events(blocks: &mut Vec<MessageBlock>) {
+pub(in crate::codex) fn merge_creation_events(blocks: &mut Vec<std::sync::Arc<MessageBlock>>) {
     let mut seen = HashSet::new();
     blocks.retain(|block| {
         block
@@ -134,7 +134,7 @@ pub(in crate::codex) fn merge_creation_events(blocks: &mut Vec<MessageBlock>) {
         let anchor = creation.id.clone();
         let input = creation.input.clone();
         let call = creation.call_id.clone();
-        let native = &mut blocks[target];
+        let native = std::sync::Arc::make_mut(&mut blocks[target]);
         native.id = anchor;
         native.input = input;
         native.call_id = call;
@@ -203,13 +203,67 @@ impl CreationNames {
     }
 }
 
+#[derive(Default)]
+struct CreationState {
+    names: CreationNames,
+    pending: HashMap<String, String>,
+    stopped: bool,
+}
 pub(super) fn creation_names(path: &Path) -> Result<CreationNames> {
-    static CACHE: crate::read_cache::ReadCache<CreationNames> =
-        crate::read_cache::ReadCache::new(4 * 1024 * 1024);
+    static CACHE: crate::jsonl_cache::JsonlCache<CreationState> =
+        crate::jsonl_cache::JsonlCache::new(4 * 1024 * 1024);
     CACHE.read(
         path,
-        |names, _| {
-            names
+        |_| Ok(0),
+        false,
+        |state, line, _, _| {
+            state.stopped |= line.len() > 20 * 1024 * 1024;
+            if state.stopped {
+                return Ok(());
+            }
+            let Ok(value) = serde_json::from_slice::<Value>(line) else {
+                return Ok(());
+            };
+            let names = &mut state.names;
+            let pending = &mut state.pending;
+            let payload = value.get("payload").unwrap_or(&value);
+            match payload.get("type").and_then(Value::as_str) {
+                Some("function_call" | "custom_tool_call") => {
+                    if let Some(agent) =
+                        field(payload, &["name"]).and_then(|name| creation_activity(&name, payload))
+                    {
+                        if let Some(call) = field(payload, &["call_id"]) {
+                            ensure!(pending.len() < MAX_RECORDS, "子智能体创建记录过多");
+                            pending.insert(call, agent.name);
+                        }
+                    }
+                }
+                Some("function_call_output" | "custom_tool_call_output") => {
+                    if let Some(name) =
+                        field(payload, &["call_id"]).and_then(|call| pending.remove(&call))
+                    {
+                        let raw = payload.get("output").unwrap_or(&Value::Null);
+                        let parsed = raw
+                            .as_str()
+                            .and_then(|s| serde_json::from_str::<Value>(s).ok());
+                        let output = parsed.as_ref().unwrap_or(raw);
+                        ensure!(names.names.len() < MAX_RECORDS, "子智能体创建记录过多");
+                        names.names.push((
+                            field(output, &["agent_id", "thread_id", "id"]),
+                            field(output, &["task_name", "agent_path"]),
+                            name,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+
+            Ok(())
+        },
+        |state, _| Ok(state.names.clone()),
+        |state| {
+            state
+                .names
                 .names
                 .iter()
                 .map(|(id, path, name)| {
@@ -218,62 +272,12 @@ pub(super) fn creation_names(path: &Path) -> Result<CreationNames> {
                         + name.len()
                         + 128) as u64
                 })
-                .sum()
-        },
-        || {
-            let mut names = CreationNames::default();
-            let mut pending = HashMap::new();
-            let mut reader = BufReader::new(File::open(path)?);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if reader
-                    .by_ref()
-                    .take(20 * 1024 * 1024 + 1)
-                    .read_line(&mut line)?
-                    == 0
-                {
-                    break;
-                }
-                if !line.ends_with('\n') {
-                    break;
-                }
-                let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                let payload = value.get("payload").unwrap_or(&value);
-                match payload.get("type").and_then(Value::as_str) {
-                    Some("function_call" | "custom_tool_call") => {
-                        if let Some(agent) = field(payload, &["name"])
-                            .and_then(|name| creation_activity(&name, payload))
-                        {
-                            if let Some(call) = field(payload, &["call_id"]) {
-                                ensure!(pending.len() < MAX_RECORDS, "子智能体创建记录过多");
-                                pending.insert(call, agent.name);
-                            }
-                        }
-                    }
-                    Some("function_call_output" | "custom_tool_call_output") => {
-                        if let Some(name) =
-                            field(payload, &["call_id"]).and_then(|call| pending.remove(&call))
-                        {
-                            let raw = payload.get("output").unwrap_or(&Value::Null);
-                            let parsed = raw
-                                .as_str()
-                                .and_then(|s| serde_json::from_str::<Value>(s).ok());
-                            let output = parsed.as_ref().unwrap_or(raw);
-                            ensure!(names.names.len() < MAX_RECORDS, "子智能体创建记录过多");
-                            names.names.push((
-                                field(output, &["agent_id", "thread_id", "id"]),
-                                field(output, &["task_name", "agent_path"]),
-                                name,
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(names)
+                .sum::<u64>()
+                + state
+                    .pending
+                    .iter()
+                    .map(|(id, name)| (id.len() + name.len() + 128) as u64)
+                    .sum::<u64>()
         },
     )
 }

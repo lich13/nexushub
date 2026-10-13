@@ -14,26 +14,43 @@ pub(crate) struct GrokListQuery {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct GrokDetailQuery {
+    pub limit: Option<usize>,
+    pub before: Option<String>,
+}
+
 pub(crate) async fn grok_list(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<GrokListQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(NexusHubUseCases::new(&http_update_platform())
-        .grok()
-        .list(query.limit.unwrap_or(50), query.q.as_deref())?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&http_update_platform())
+            .grok()
+            .list(query.limit.unwrap_or(50), query.q.as_deref())
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }
 
 pub(crate) async fn grok_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<GrokDetailQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(NexusHubUseCases::new(&http_update_platform())
-        .grok()
-        .detail(&id)?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&http_update_platform()).grok().page(
+            &id,
+            query.limit,
+            query.before.as_deref(),
+        )
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }
 
 #[derive(Debug, Deserialize)]

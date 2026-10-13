@@ -1,4 +1,4 @@
-# NexusHub 架构说明（维护者文档）— 1.2.16
+# NexusHub 架构说明（维护者文档）
 
 本文用于维护者理解模块边界和契约流程；用户能力与下载说明见 [README.md](../README.md)。
 
@@ -26,7 +26,7 @@ NexusHub Goal DTOs, RPC handlers, scheduler, recovery retries and `codex_thread_
 
 Batch actions use explicit provider keys and return per-item preview/execute results. Files are isolated before deletion and indexes are replaced atomically. Failures retain a recovery path and are not cascaded to unselected records.
 
-`sessions.search` is a shared read-only action. The core searches provider summaries and bounded detail pages using the same visible Markdown cleaner as rendering and export. Its request contains provider, thread/provider scope, an opaque session key, query, cursor and limit; clients cannot submit filesystem paths. Results carry a stable event/block position key. The WebUI scopes requests to the active machine, opens a result in its provider workspace, loads bounded history for Codex/Claude, and uses the shared timeline anchor for centering and highlighting.
+`sessions.search` is a shared read-only action. The core searches provider summaries and bounded detail pages using the same visible Markdown cleaner as rendering and export. Its request contains provider, thread/provider scope, an opaque session key, query, cursor and limit; clients cannot submit filesystem paths. Results carry a stable event/block position key. The WebUI scopes requests to the active machine, opens a result in its provider workspace, loads bounded history for Codex/Claude/Grok, and uses the shared timeline anchor for centering and highlighting.
 
 ## Grok activity
 
@@ -88,7 +88,7 @@ Known 2.x records include user/assistant blocks, title records, tools, queue/his
 
 Claude notification cursors and atomic delivery claims reuse the provider monitor. Only explicit completed or failed turns and unresolved `AskUserQuestion` calls or permission requests bound to a pending primary tool call qualify. Sending rechecks native identity and pending state; first enable and the compatible-reader upgrade establish a baseline without replaying history. New user requests supersede undelivered prior events. Bark transport follows the shared bounded retry policy below, including uncertain network outcomes; previously terminal delivery records are never replayed. Permissions not persisted in the transcript cannot generate notifications. Claude never receives Codex natural-language question inference.
 
-## 1.2.8：定向删除与退役迁移
+## 定向删除与退役迁移
 
 `selected_codex` 为普通和归档线程生成安全快照；身份、明确终态、DB/索引关联、共享引用和文件指纹全部通过才允许删除。文件先进入私有暂存，数据库事务与索引原子替换配合；失败恢复文件和索引，不删除未选中的子线程。
 
@@ -98,7 +98,7 @@ Claude notification cursors and atomic delivery claims reuse the provider monito
 
 窗口生命周期集中于 `desktop_boot`：隐藏创建 → 一次最大化或工作区回退 → Ready 显示。Reopen 只显示、取消最小化和聚焦，不再次设置几何信息。
 
-## 1.2.9：父线程绑定的子智能体读取
+## 父线程绑定的子智能体读取
 
 `MessageBlock.subagent` 是可选展示信息，原生创建调用与结果通过调用 ID 配对，再由返回的线程 ID 或精确任务路径关联原生父子图。关系有歧义时保持不可用。状态读取子线程回合与未完成工具证据，不由父线程状态或登记存在推断。`ThreadDetail.subagent_updates` 只刷新已加载卡片，避免最新分页遗漏较早委派的状态。
 
@@ -108,13 +108,13 @@ Claude notification cursors and atomic delivery claims reuse the provider monito
 
 React 使用机器、主线程和子线程身份隔离查询、分页及折叠状态；取消或迟到响应不得覆盖新目标。父视图保持挂载，详情面板独立滚动与嵌套返回。共享阅读布局不改变用户纯文本、Plan、路径、记忆过滤和 AGENTS.md 折叠规则。
 
-## 1.2.10：凭据后台串行访问
+## 凭据后台串行访问
 
 共享 `CredentialAccess` 用异步信号量限制凭据并发，再通过 `spawn_blocking` 调用原生钥匙串。读取的 15 秒限制覆盖排队和执行；原生操作已经开始后不能取消，因此超时或调用方取消时仍由后台任务持有许可，直到真实结束。尚未开始的阻塞任务可以取消，避免堆积。
 
 保存和移除连接只在等待凭据许可时允许超时；一旦事务开始，等待提交或回滚的明确结果。`ChangeGuard` 随事务进入后台任务，调用方取消不会提前允许切换。读取 Key 及验证能力后再次核对连接修订号、目标和地址；业务响应回写也绑定修订号。错误使用固定文案，不返回原生异常正文；无新增凭据缓存、RPC、数据库字段或 API 协议变更。
 
-## 1.2.11：原生子智能体活动和直属状态
+## 原生子智能体活动和直属状态
 
 读取器识别 `item_completed → SubAgentActivity`，用原生事件 ID 保留 started、completed、interrupted 和 interacted 的顺序。同次创建调用、结果和开始事件合并，保留稳定搜索锚点；续接产生的新开始时点独立存在。外层 item 完成与子线程终态分开判断。
 
@@ -124,11 +124,11 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 可见文本清理额外识别完整 `external_codex_apps_open_page` 包装及其 page_id JSON；渲染、复制、Plan 导出与搜索过滤，代码和引用示例保留，不改写会话原文件。
 
-## 1.2.12：展示文案精简
+## 展示文案精简
 
 只移除共享子智能体组件的通用完整性说明，以及清理工作区的两段重复描述。DTO 的 complete/warning、关联校验、未知状态、逐项跳过及错误结果均保持原有语义；不新增接口或存储变化。
 
-## 1.2.14：完整指令与通知退役迁移
+## 完整指令与通知退役迁移
 
 共享 `instructionSegments` 在代码和引用保护范围外识别完整原生 INSTRUCTIONS 标签，结束标签无需独占一行；整个包装成为单一片段，内部标题不改变边界。三个 Provider 的 UserMessage 共用解析和稳定 disclosure 身份。
 
@@ -136,7 +136,7 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 迁移精确删除 Gotify 配置、加密 Token、通道行、队列行、Probe 结果字段与专属测试任务，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；中断标记保证清理可接续。Bark、API Key、其他设置、任务和原生会话不受影响。`probe.gotifyTest` 仅为不可执行 tombstone；能力、DTO、Tauri、Linux RPC、CLI 与 WebUI 均无执行入口。API 协议仍为 2。
 
-## 1.2.15：安全诊断与持久化重试
+## 安全诊断与持久化重试
 
 `bark` 复用支持 HTTP/2 的连接池并禁止重定向，区分 DNS、连接、TLS、超时、响应读取、HTTP 拒绝和 Bark 业务拒绝。已知永久 APNs 错误优先于外层 HTTP 状态。原始异常只用于进程内分类，输出仅保留安全分类、状态码、耗时、次数与匿名关联标识。
 
@@ -146,12 +146,26 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 迁移保留成功、去重和首次基线，旧失败与终态未知不入新队列。新未知结果允许有限重试，仍可能重复提醒。主动测试使用独立身份和同一队列，最终未受理以失败退出；旧配置导入实现已删除，退休入口明确拒绝。API 协议保持 2。
 
-## 1.2.16 自动历史与存储元数据
+## 自动历史与存储元数据
 
-`historyScrollCoordinator` 与 `useHistoryScroll` 为主线程、Claude 和子智能体提供统一的首次定位、上滚触发、请求互斥及可见锚点补偿。搜索定位复用同一分页入口；游标不前进或请求失败后停止自动重试。`historyWindows` 在轮询更新时合并已加载页面，保留最早历史游标；来源身份改变或记录截断时使旧窗口失效。
+`historyScrollCoordinator` 与 `useHistoryScroll` 为主线程、Claude、Grok 和子智能体提供统一的首次定位、上滚触发、请求互斥及可见锚点补偿。搜索定位复用同一分页入口；游标不前进或请求失败后停止自动重试。`historyWindows` 在轮询更新时合并已加载页面，保留最早历史游标；来源身份改变或记录截断时使旧窗口失效。
 
 `session_storage` 仅统计调用方已验证归属的文件或目录，使用逻辑字节数和轻量元数据，不读取正文或计算删除指纹。Codex 只统计其 rollout；Claude 包含主 JSONL 和同一项目中经身份确认的同名会话目录；Grok 统计原生专属目录。独立线程、共享数据及项目工作目录不计入，符号链接不跟随。
 
 目录缓存最多 512 项、队列最多 128 项，由两个后台 worker 合并相同目录请求；每次扫描受 10,000 个条目、16 层和 250ms 边界限制，最长 30 秒刷新。普通追加可复用同一文件身份的缓存；截断、替换及归属改变立即失效。未完成、无法确认及部分结果分别返回对应状态，不能用零替代未知。
 
 三个摘要 DTO 增加可选 `storageSize`（bytes、scope、status），经既有列表、详情和 Linux/Tauri 适配层返回。协议保持 2，不新增 RPC、数据库表或客户端路径输入。前端按当前机器的查询缓存显示结果，旧服务缺少字段时显示未知。
+
+## 增量读取与界面刷新
+
+`jsonl_cache` 按文件身份、大小与时间戳复用不可变结果，追加前核对已消费前后锚点。每个来源独立串行，解析和分页不持有全局缓存锁；缓存同时限制 64 个来源和各读取模型的内存。完整记录经流式 reducer 建立快照，半写入尾行留待下一次读取。Codex 详情按原生 ID 直接定位；Claude 的定位缓存只保存服务端发现的身份并重新检查来源；Grok 继续保留原有有界尾部读取范围。
+
+Claude 列表另用最多 2,000 条、8MiB 的轻量摘要缓存，避免多会话列表轮询挤出正文并触发重复解析。macOS 与 Linux 的派生摘要沿用正文缓存的 dev／ino、大小、mtime／ctime 校验，避免重复打开与哈希；其他缓存保留原有边缘校验。Grok 详情和分页共享不可变事件；带附件的响应按需复制并重新核验文件，旧响应不会被后续原生追加改写。
+
+`read_tasks` 通过持有至真实完成的信号量许可限制阻塞读取，避免挤占 Tokio 执行线程。列表、详情、搜索和子智能体读取共享可用快照；管理操作仍重新检查身份、活动和执行指纹。
+
+现有详情接口可返回 `history` 的 epoch、revision 和有界变更记录；来源替换或分支改写使旧窗口失效。Codex 服务仍返回兼容的 `b:index`，支持元数据的新客户端可附带块 ID，或用 `a:block-id` 刷新包含目标的窗口。Grok 在原详情 action 上接受可选 limit/before，省略时保留完整旧响应。没有新增 RPC、数据库表或客户端路径。
+
+`usePagedHistory` 分开最新窗口刷新与历史取页，静态旧页保持缓存，只按稳定身份刷新已变化的可见内容。追平快速追加时补齐窗口间隙；机器、线程或来源变化取消无效请求并丢弃迟到响应。旧服务缺少元数据时保留兼容读取。工作区按需加载，稳定 Markdown／消息复用渲染，折叠正文展开时挂载；时间线仅在布局变化时更新位置缓存。
+
+指令分段复用最多 512 条、8MiB 的源文本切片；Markdown 解析另用最多 512 条、8MiB 的序列化语法树缓存，避免切换线程后重复解析。每次渲染重新建立独立语法树，继续执行过滤和路径解析；缓存不保存 React 组件、折叠状态或机器路径上下文，不改变复制、导出、代码示例和原始指令边界。

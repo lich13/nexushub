@@ -127,7 +127,35 @@ function instructionLabel(line: string): boolean {
     || /^agents\.md(?:\s+instructions(?:\s+for\s+.+)?)?$/i.test(label);
 }
 
+// Thread switches remount message components. Retain only bounded source slices,
+// so unchanged instructions do not need a fresh Markdown parse on every mount.
+const instructionCache = new Map<string, { segments: InstructionSegment[]; bytes: number }>();
+let instructionCacheBytes = 0;
+const instructionCacheLimit = 8 * 1024 * 1024;
+
 export function instructionSegments(text: string): InstructionSegment[] {
+  const cached = instructionCache.get(text);
+  if (cached) {
+    instructionCache.delete(text);
+    instructionCache.set(text, cached);
+    return cached.segments;
+  }
+  const segments = parseInstructionSegments(text);
+  const bytes = text.length * 2 + segments.reduce((total, segment) => total + segment.text.length * 2 + 128, 0);
+  if (bytes <= instructionCacheLimit) {
+    while (instructionCache.size >= 512 || instructionCacheBytes + bytes > instructionCacheLimit) {
+      const key = instructionCache.keys().next().value;
+      if (key === undefined) break;
+      instructionCacheBytes -= instructionCache.get(key)!.bytes;
+      instructionCache.delete(key);
+    }
+    instructionCache.set(text, { segments, bytes });
+    instructionCacheBytes += bytes;
+  }
+  return segments;
+}
+
+function parseInstructionSegments(text: string): InstructionSegment[] {
   if (!/agents\.md/i.test(text)) return [{ kind: "markdown", id: "text", text, lines: text.split(/\r?\n/).length, bytes: new TextEncoder().encode(text).length }];
   const code = codeRanges(text, false, true);
   const lines = Array.from(text.matchAll(/[^\n]*(?:\n|$)/g)).filter(match => match[0]);

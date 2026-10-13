@@ -2,7 +2,7 @@ use anyhow::Result;
 use nexushub_core::{
     codex::{
         archived_thread_ids, hidden_thread_ids, list_threads, set_thread_archived,
-        set_thread_title, thread_detail, ThreadDetail, ThreadSummary,
+        set_thread_title, thread_detail_page, ThreadDetail, ThreadSummary,
     },
     db::JobRecord,
     services::{
@@ -88,7 +88,7 @@ pub(crate) fn thread_detail_with_state(
             full: request.full,
             before: request.before,
         })?;
-    let Some(detail) = load_thread_detail_read_model(state, &plan.detail.thread_id)? else {
+    let Some(detail) = load_thread_detail_read_model(state, &plan.detail)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::window_thread_detail_for_plan(
@@ -104,7 +104,7 @@ pub(crate) fn thread_blocks_with_state(
     let plan = NexusHubUseCases::new(state.platform())
         .threads()
         .blocks_read(&request.id, request.limit, request.before)?;
-    let Some(detail) = load_thread_detail_read_model(state, &plan.detail.thread_id)? else {
+    let Some(detail) = load_thread_detail_read_model(state, &plan.detail)? else {
         return Ok(None);
     };
     Ok(Some(thread_service::thread_blocks_page_for_plan(
@@ -152,10 +152,17 @@ pub(crate) async fn rename_thread_with_state(
 
 fn load_thread_detail_read_model(
     state: &DesktopState,
-    thread_id: &str,
+    plan: &thread_service::ThreadDetailPlan,
 ) -> Result<Option<ThreadDetail>> {
     let paths = state.codex_paths();
-    let Some(detail) = thread_detail(&paths, thread_id)? else {
+    let Some(detail) = thread_detail_page(
+        &paths,
+        &plan.thread_id,
+        plan.block_limit,
+        plan.before.as_deref(),
+        None,
+    )?
+    else {
         return Ok(None);
     };
     let active_job = active_job_for_thread(state, &detail.summary.id)?;

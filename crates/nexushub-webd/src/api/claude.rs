@@ -20,7 +20,7 @@ pub(crate) async fn claude_list(
     Query(query): Query<ClaudeListQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(tokio::task::spawn_blocking(move || {
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .claude()
             .list(query.limit.unwrap_or(100), query.q.as_deref())
@@ -35,7 +35,7 @@ pub(crate) async fn claude_detail(
     Json(request): Json<nexushub_core::claude::ClaudeDetailRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(tokio::task::spawn_blocking(move || {
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .claude()
             .detail(request)
@@ -57,7 +57,7 @@ pub(crate) async fn claude_rename(
     Json(request): Json<ClaudeRenameRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(tokio::task::spawn_blocking(move || {
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .claude()
             .rename(&request.session_key, &request.title)
@@ -72,7 +72,7 @@ pub(crate) async fn claude_delete_preview(
     Path(session_key): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(tokio::task::spawn_blocking(move || {
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .claude()
             .delete_preview(&session_key)
@@ -87,7 +87,7 @@ pub(crate) async fn claude_delete_execute(
     Json(request): Json<ClaudeDeleteRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(tokio::task::spawn_blocking(move || {
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(&http_update_platform())
             .claude()
             .delete_execute(request)

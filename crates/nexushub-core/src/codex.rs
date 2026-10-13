@@ -44,7 +44,8 @@ pub use rollout_events::{
     rollout_hook_stop_message, rollout_hook_stop_message_selection,
     rollout_hook_stop_message_with_source, rollout_latest_assistant_message,
     rollout_pending_feedback, rollout_request_user_input_state, thread_detail_from_summary,
-    window_thread_detail, AssistantFeedback, RolloutMessageSelection, RolloutRequestUserInputState,
+    thread_detail_page_from_summary, window_thread_detail, AssistantFeedback,
+    RolloutMessageSelection, RolloutRequestUserInputState,
 };
 #[cfg(test)]
 use rollout_events::{is_request_user_input, parse_message_event, RolloutScan};
@@ -239,14 +240,22 @@ fn enrich_thread_from_rollout_with_storage(
 }
 
 pub fn thread_detail(paths: &CodexPaths, id: &str) -> Result<Option<ThreadDetail>> {
-    let Some(mut summary) = list_threads(paths, None, Some(id), 500)?
-        .into_iter()
-        .find(|thread| thread.id == id)
+    thread_detail_page(paths, id, None, None, None)
+}
+
+pub fn thread_detail_page(
+    paths: &CodexPaths,
+    id: &str,
+    limit: Option<usize>,
+    before: Option<&str>,
+    since: Option<&str>,
+) -> Result<Option<ThreadDetail>> {
+    let Some(summary) =
+        local_thread_summary(paths, id)?.filter(|s| !matches!(s.status, ThreadStatus::Archived))
     else {
         return Ok(None);
     };
-    let _ = enrich_thread_from_rollout(&mut summary);
-    thread_detail_from_summary(summary).map(Some)
+    rollout_events::thread_detail_page_from_summary(summary, true, limit, before, since).map(Some)
 }
 
 fn matches_status(row: &ThreadSummary, status: &str) -> bool {

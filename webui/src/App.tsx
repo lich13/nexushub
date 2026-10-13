@@ -7,15 +7,10 @@ import {
   PanelLeftOpen,
   TriangleAlert
 } from "lucide-react";
-import { Component, ErrorInfo, ReactNode, useState } from "react";
+import { Component, ErrorInfo, ReactNode, Suspense, lazy, useState } from "react";
 import { MachineButton, RemoteConnectionSettings } from "./components/connection/RemoteConnection";
 import { useConnection } from "./lib/query/connection";
-import { ChatWorkspace } from "./components/chat/ChatWorkspace";
-import { OpsWorkspace } from "./components/ops/OpsWorkspace";
-import { ProbeWorkspace } from "./components/probe/ProbeWorkspace";
 import { PROBE_NAV_LABEL } from "./lib/probeUi";
-import { GrokWorkspace } from "./components/grok/GrokWorkspace";
-import { ClaudeWorkspace } from "./components/claude/ClaudeWorkspace";
 import { SearchWorkspaceProvider } from "./components/common/SessionSearch";
 import { useBackgroundJobs } from "./lib/query/jobs";
 import {
@@ -32,9 +27,11 @@ import {
   visibleNavigationItems,
   type View
 } from "./lib/domain/codexViewModel";
-
-
-
+const ChatWorkspace = lazy(() => import("./components/chat/ChatWorkspace").then(module => ({ default: module.ChatWorkspace })));
+const OpsWorkspace = lazy(() => import("./components/ops/OpsWorkspace").then(module => ({ default: module.OpsWorkspace })));
+const ProbeWorkspace = lazy(() => import("./components/probe/ProbeWorkspace").then(module => ({ default: module.ProbeWorkspace })));
+const GrokWorkspace = lazy(() => import("./components/grok/GrokWorkspace").then(module => ({ default: module.GrokWorkspace })));
+const ClaudeWorkspace = lazy(() => import("./components/claude/ClaudeWorkspace").then(module => ({ default: module.ClaudeWorkspace })));
 export const navigationItems: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: "codex", label: "Codex", icon: <MessageSquare /> },
   { id: "claude", label: "Claude Code", icon: <Bot /> },
@@ -82,6 +79,7 @@ export default function App() {
           {(connection.error || systemCapabilities.error) && <div role="alert" className="form-error">{connection.error || systemCapabilities.error?.message}</div>}
           <MobileTopBar onOpenThreads={() => setMobileThreadsOpen(true)} view={view} setView={setView} capabilities={capabilities} />
           <WorkspaceErrorBoundary resetKey={view}>
+            <Suspense fallback={<div className="muted-row" role="status">正在读取…</div>}>
             {view === "codex" && (
               <ChatWorkspace
                 mobileThreadsOpen={mobileThreadsOpen}
@@ -100,6 +98,7 @@ export default function App() {
               </div></header>
               {settingsSection === "remote" ? <RemoteConnectionSettings /> : <OpsWorkspace capabilities={capabilities} />}
             </div>}
+            </Suspense>
           </WorkspaceErrorBoundary>
         </main>
       </div></SearchWorkspaceProvider>;

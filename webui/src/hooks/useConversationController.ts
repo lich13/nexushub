@@ -45,6 +45,7 @@ export function useConversationController(input: {
   const detail = useThreadDetailQuery({
     threadId: resolvedSelected,
     selectedThreadSummary,
+    snapshot: () => resolvedSelected ? threadDetailFromSlot(resolvedSelected, messageStore.getSlot(resolvedSelected), selectedThreadSummary) : undefined,
     select: applyThreadTitleOverrideToDetail,
     refetchInterval: threadDetailRefetchInterval
   });
