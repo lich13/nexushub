@@ -2,6 +2,12 @@ import type { UserMessageContent } from "../../types";
 import { userMessageSegments } from "./userMessageViewModel";
 
 export type TimelineEntry = { id: string; title: string; preview?: string };
+
+export function matchesTimelinePosition(positionKey: string | null | undefined, id?: string, aliases: readonly string[] = []): boolean {
+  return Boolean(positionKey && (id === positionKey || aliases.includes(positionKey)
+    || id?.includes(`:${positionKey}:`) || id?.endsWith(`:${positionKey}`)));
+}
+
 type TimelineSource = {
   id: string;
   role?: string | null;

@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Search, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useSessionSearch } from "../../lib/query/search";
 import { useConnection } from "../../lib/query/connection";
+import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import type { SearchProvider as SessionProvider, SearchScope, SessionSearchRequest, SessionSearchResult } from "../../types";
 
 type SearchWorkspaceRegistration = {
@@ -158,9 +159,10 @@ export function SearchPanel() {
 }
 
 export function locateTimelineTarget(positionKey: string, root: ParentNode = document, behavior?: ScrollBehavior): boolean {
-  const element = Array.from(root.querySelectorAll<HTMLElement>("[data-timeline-id], [data-timeline-aliases]"))
-    .find(candidate => candidate.dataset.timelineId === positionKey || candidate.dataset.timelineAliases?.split(/\s+/).includes(positionKey)
-      || Boolean(candidate.dataset.timelineId && (candidate.dataset.timelineId.includes(`:${positionKey}:`) || candidate.dataset.timelineId.endsWith(`:${positionKey}`))));
+  const candidates = Array.from(root.querySelectorAll<HTMLElement>("[data-timeline-id], [data-timeline-aliases]"));
+  const element = candidates.find(candidate => candidate.dataset.timelineId === positionKey)
+    ?? candidates.filter(candidate => matchesTimelinePosition(positionKey, candidate.dataset.timelineId, candidate.dataset.timelineAliases?.split(/\s+/)))
+      .reduce<HTMLElement | undefined>((best, candidate) => !best || best.contains(candidate) ? candidate : best, undefined);
   if (!element) return false;
   element.scrollIntoView({ behavior: behavior ?? (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"), block: "center" });
   element.classList.remove("timeline-target-highlight");

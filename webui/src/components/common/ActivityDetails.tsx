@@ -1,20 +1,24 @@
 import { machineScope } from "../../lib/query/connection";
 import { ChevronRight } from "lucide-react";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 
 // Only disclosure choices live here, never message contents. The bound prevents
 // long-lived desktop sessions from retaining an unbounded set of thread IDs.
 const choices = new Map<string, boolean>();
 export const DisclosureScope = createContext<string | null>(null);
+export const DisclosureRevealContext = createContext<string | null>(null);
 
-export function ActivityDetails({ className, stateKey, stateAliases = [], initiallyOpen, summary, children, timelineId, timelineAliases = [] }: {
-  className: string; stateKey: string; stateAliases?: string[]; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode); timelineId?: string; timelineAliases?: string[];
+export function ActivityDetails({ className, stateKey, stateAliases = [], initiallyOpen, summary, children, timelineId, timelineAliases = [], reveal = false }: {
+  className: string; stateKey: string; stateAliases?: string[]; initiallyOpen: boolean; summary: ReactNode; children: ReactNode | (() => ReactNode); timelineId?: string; timelineAliases?: string[]; reveal?: boolean;
 }) {
   const scope = useContext(DisclosureScope);
+  const positionKey = useContext(DisclosureRevealContext);
   const id = scope ? `${machineScope()}:${scope}:${stateKey}` : null;
   const [choice, setChoice] = useState<boolean>();
   const aliases = scope ? stateAliases.map(key => `${machineScope()}:${scope}:${key}`) : [];
-  const open = (id ? choices.get(id) ?? aliases.map(key => choices.get(key)).find(value => value !== undefined) : choice) ?? initiallyOpen;
+  const revealed = reveal || matchesTimelinePosition(positionKey, timelineId, timelineAliases);
+  const open = revealed || ((id ? choices.get(id) ?? aliases.map(key => choices.get(key)).find(value => value !== undefined) : choice) ?? initiallyOpen);
   const remember = (next: boolean) => {
     if (id) {
       for (const key of [id, ...aliases]) {
@@ -25,6 +29,9 @@ export function ActivityDetails({ className, stateKey, stateAliases = [], initia
     }
     setChoice(next);
   };
+  // Mount a search target before its parent locates it, and keep it open after
+  // the pending search clears. Other disclosures retain their saved choices.
+  useEffect(() => { if (revealed) remember(true); }, [revealed, positionKey, id]);
   return <details className={className} data-timeline-id={timelineId} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined} open={open} onToggle={event => {
     if (event.target !== event.currentTarget || event.currentTarget.open === open) return;
     remember(event.currentTarget.open);

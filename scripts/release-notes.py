@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.18": [
+        "搜索可展开并定位折叠的旧问答、工具结果与 AGENTS.md 指令。",
+        "保留其他手动折叠选择，修复成功定位后仍显示旧失败提示的问题。",
+    ],
     "1.2.17": [
         "减少长线程重复读取和历史轮询开销，改善页面切换、工具展开与滚动响应",
         "Grok 支持上滚分页，三种 Provider 按 100M／300M 统一线程大小颜色。",
@@ -139,6 +143,34 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.18":
+        sections = {
+            "版本概览": ["本版修复历史搜索定位，延续长线程性能优化和 100M／300M 线程颜色规则。"],
+            "功能调整": ["搜索命中旧问答、工具结果或 AGENTS.md 指令时自动展开目标；再次搜索手动关闭的目标也可重新展开。"],
+            "问题修复": [
+                "修复已加载的旧问答因界面历史折叠而无法定位，以及关闭的工具组内结果没有正文锚点的问题。",
+                "定位命中的具体消息或命令，保留其他折叠选择和分页位置，并清除已失效的搜索失败提示。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2；保留增量读取、历史分页、通知、附件、Plan、子智能体和管理保护。",
+                "无需重建连接或迁移原生会话；凭据、配置、通知游标及 Bark 去重状态继续保留。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包与校验文件；共七项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App。安装前核对校验和与 updater 签名。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.17":
         sections = {

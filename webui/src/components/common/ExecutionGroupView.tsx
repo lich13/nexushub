@@ -1,7 +1,8 @@
 import { Blocks, BookOpen, Search, Terminal } from "lucide-react";
-import { memo } from "react";
+import { memo, useContext } from "react";
 import { ToolOutput } from "./FilePathLink";
-import { ActivityDetails } from "./ActivityDetails";
+import { ActivityDetails, DisclosureRevealContext } from "./ActivityDetails";
+import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { activityFingerprint, type ExecutionCommand, type ExecutionGroup } from "../../lib/domain/executionGroups";
 import { RunningIndicator } from "./RunningIndicator";
@@ -33,7 +34,9 @@ const CommandView = memo(function CommandView({ command }: { command: ExecutionC
 
 export const ExecutionGroupView = memo(function ExecutionGroupView({ group }: { group: ExecutionGroup }) {
   const { label, Icon } = executionSummary(group);
-  return <ActivityDetails timelineId={group.id} timelineAliases={group.commands.map(command => `group:${command.id}`)} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
+  const positionKey = useContext(DisclosureRevealContext);
+  const reveal = Boolean(positionKey && group.commands.some(command => matchesTimelinePosition(positionKey, command.id, command.sourceIds)));
+  return <ActivityDetails timelineId={group.id} timelineAliases={group.commands.map(command => `group:${command.id}`)} className="execution-group" stateKey={group.id} stateAliases={group.commands.map(command => `group:${command.id}`)} reveal={reveal} initiallyOpen={!group.commands.every(command => command.instructionFile) && (group.running || group.failedCount > 0)} summary={<>
     <Icon size={17} aria-hidden="true" />
     <span className="activity-label">{label}</span>
     <small>{group.commands.length} {group.kind === "tool" ? "项工具" : "条命令"}{group.failedCount ? ` · ${group.failedCount} 条失败` : ""}</small>

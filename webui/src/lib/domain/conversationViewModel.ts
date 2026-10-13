@@ -266,11 +266,12 @@ export function visibleConversationBlocksForHistory(
   blocks: MessageBlock[],
   showAllHistory: boolean,
   currentPlan?: MessageBlock | null,
-  currentQuestion?: PendingElicitation | MessageBlock | null
+  currentQuestion?: PendingElicitation | MessageBlock | null,
+  revealedBlockId?: string | null
 ): MessageBlock[] {
   const renderable = blocks.filter(shouldRenderConversationBlock);
   if (showAllHistory) return renderable;
-  return compactConversationBlocks(renderable, 60, 3, currentPlan, currentQuestion);
+  return compactConversationBlocks(renderable, 60, 3, currentPlan, currentQuestion, revealedBlockId);
 }
 
 export function prioritizeCurrentActionBlocks(
@@ -295,7 +296,8 @@ export function compactConversationBlocks(
   maxChatMessages = 60,
   maxActionBlocks = 3,
   currentPlan?: MessageBlock | null,
-  currentQuestion?: PendingElicitation | MessageBlock | null
+  currentQuestion?: PendingElicitation | MessageBlock | null,
+  revealedBlockId?: string | null
 ): MessageBlock[] {
   if (blocks.some((block) => historyCollapseKind(block) === "action")) {
     return blocks;
@@ -304,6 +306,7 @@ export function compactConversationBlocks(
   const actionIndexes = blocks
     .map((block, index) => ({ block, index }))
     .filter(({ block }) => {
+      if (block.id === revealedBlockId) return false;
       if (isHistoryCollapsedBlock(block)) return false;
       if (isActionablePlanBlock(block, currentPlan)) return false;
       if (isActionableQuestionBlock(block, currentQuestion)) return false;
@@ -326,7 +329,7 @@ export function compactConversationBlocks(
 
   const chatIndexes = actionCompacted
     .map((block, index) => ({ block, index }))
-    .filter(({ block }) => shouldRenderConversationMessage(block))
+    .filter(({ block }) => block.id !== revealedBlockId && shouldRenderConversationMessage(block))
     .map(({ index }) => index);
   return compactIndexedBlocks(
     actionCompacted,

@@ -1,6 +1,6 @@
 import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
-import { DisclosureScope } from "../common/ActivityDetails";
+import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
@@ -52,11 +52,15 @@ export function Conversation(props: {
   const [title, setTitle] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [revealedHistory, setRevealedHistory] = useState<{ scope: string; positionKey: string } | null>(null);
   const stream = useRef<HTMLDivElement>(null);
   const shell = useRef<HTMLDivElement>(null);
   const [agentSelection, setAgentSelection] = useState<{ root: string; machine: string; agent?: SubagentActivity; trigger: HTMLButtonElement } | null>(null);
   const [docked, setDocked] = useState(false);
   const machine = machineScope();
+  const historyScope = `${machine}:codex:${props.threadId}`;
+  const searchPosition = props.searchTarget?.sessionKey === props.threadId ? props.searchTarget.positionKey : null;
+  const revealedBlockId = searchPosition ?? (revealedHistory?.scope === historyScope ? revealedHistory.positionKey : null);
   const selectedAgent = agentSelection?.root === props.threadId && agentSelection.machine === machine ? agentSelection : null;
   useEffect(() => { setAgentSelection(null); }, [props.threadId, machine]);
   const viewportAnchor = useRef<{ element: HTMLElement; offset: number } | null>(null);
@@ -79,7 +83,7 @@ export function Conversation(props: {
     requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }); });
   };
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
-  const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded), [blocks, historyExpanded]);
+  const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId), [blocks, historyExpanded, revealedBlockId]);
   const visibleItems = useMemo(() => groupCodexCommandBlocks(visibleBlocks), [visibleBlocks]);
   const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
     && props.capabilities.threadSubagents !== true
@@ -91,7 +95,7 @@ export function Conversation(props: {
   });
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const history = useHistoryScroll({
-    scopeKey: `${machine}:codex:${props.threadId}`, streamRef: stream,
+    scopeKey: historyScope, streamRef: stream,
     cursor: slot.beforeCursor, hasMore: slot.hasMoreBlocks, ready: detail.summary.id === props.threadId,
     searchActive: Boolean(props.searchTarget),
     loadPage: async (cursor, isCurrent) => {
@@ -129,11 +133,18 @@ export function Conversation(props: {
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
+    if (searchPosition) {
+      setRevealedHistory({ scope: historyScope, positionKey: searchPosition });
+      setFeedback(null);
+    }
+  }, [searchPosition, historyScope]);
+  useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.sessionKey !== props.threadId || !props.searchReady || history.loading) return;
     history.follow.current = false;
     if (locateTimelineTarget(target.positionKey, stream.current?.closest(".conversation-main") ?? undefined, "auto")) {
       history.capture();
+      setFeedback(null);
       props.onSearchResolved?.();
       return;
     }
@@ -184,7 +195,7 @@ export function Conversation(props: {
       <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
         <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
-        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={showHistory} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}><DisclosureRevealContext.Provider value={searchPosition}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={showHistory} />)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
     </main>

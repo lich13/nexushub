@@ -1,7 +1,7 @@
 import { SessionSize } from "../common/SessionSize";
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
-import { DisclosureScope } from "../common/ActivityDetails";
+import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -92,7 +92,7 @@ export function GrokWorkspace({}: { }) {
   useEffect(() => {
     if (!pendingSearch || pendingSearch.sessionKey !== selected?.id || detail.isLoading || detail.isFetching || history.loading) return;
     history.follow.current = false;
-    if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setPendingSearch(null); }
+    if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setFeedback(""); setPendingSearch(null); }
     else if (detail.hasNextPage) { if (!history.error) void history.loadOlder("search"); }
     else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
   }, [pendingSearch, selected?.id, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
@@ -138,7 +138,7 @@ export function GrokWorkspace({}: { }) {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}><HistoryLoading loading={history.loading} error={history.error} retry={history.retry} /><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}>{renderGrokEvents(groupedEvents, grokSessionLabel(selected))}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}</div></div>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}><HistoryLoading loading={history.loading} error={history.error} retry={history.retry} /><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.id ? pendingSearch.positionKey : null}>{renderGrokEvents(groupedEvents, grokSessionLabel(selected))}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}</div></div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
@@ -164,7 +164,7 @@ function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: str
       <span className="chat-meta">计划</span>
       <PlanActions markdown={event.text ?? ""} fallbackTitle={sessionTitle} />
     </div>}
-    <MarkdownContent text={event.text ?? ""} activityId={key} foldInstructions={event.kind !== "plan"} />
+    <MarkdownContent text={event.text ?? ""} activityId={key} timelineAliases={sourceIds} foldInstructions={event.kind !== "plan"} />
     {event.kind.startsWith("agent_message") && <CopyReplyButton text={event.text ?? ""} />}
   </article>;
 }
