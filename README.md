@@ -89,7 +89,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 corepack pnpm@11.0.8 --dir webui typecheck
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build:tauri
-corepack pnpm@11.0.8 --dir webui test:browser
+NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui test:browser
 bash scripts/test-install-script.sh
 python3 scripts/privacy-check.py --git-objects
 git diff --check

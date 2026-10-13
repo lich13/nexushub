@@ -305,7 +305,7 @@ function p95(samples: number[]) {
   return [...samples].sort((left, right) => left - right)[Math.ceil(samples.length * 0.95) - 1];
 }
 
-test("long history expansion, scrolling and cached thread switching stay within the local interaction budget", async ({ page }, info) => {
+test("long history expansion, scrolling and cached thread switching stay within the local interaction budget", { tag: "@desktop-performance" }, async ({ page }, info) => {
   test.setTimeout(60000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const fixture = await installHistory(page, "codex");
