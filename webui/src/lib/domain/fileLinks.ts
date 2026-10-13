@@ -46,6 +46,9 @@ export type FileLinkSpan = { start: number; end: number; href: string; label: st
 
 /** Preserve plain tool output and literal code; enhance only real Markdown links. */
 export function fileLinkSpans(text: string): FileLinkSpan[] {
+  // Markdown links/references need '['; URI autolinks need '<'. Plain tool
+  // output can stay literal without constructing a full Markdown syntax tree.
+  if (!text.includes("[") && !text.includes("<")) return [];
   const root = fromMarkdown(text) as Node;
   const definitions = new Map<string, string>();
   const spans: FileLinkSpan[] = [];

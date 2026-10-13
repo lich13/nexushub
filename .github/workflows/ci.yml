@@ -35,8 +35,9 @@ jobs:
       - run: corepack pnpm@11.0.8 --dir webui test
       - run: corepack pnpm@11.0.8 --dir webui build:tauri
       - run: corepack pnpm@11.0.8 --dir webui exec playwright install --with-deps chromium webkit
-      - run: corepack pnpm@11.0.8 --dir webui test:browser
+      - run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep-invert @desktop-performance
         env:
+          NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -101,5 +102,16 @@ jobs:
       - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
       - run: corepack pnpm@11.0.8 --dir webui test
       - run: corepack pnpm@11.0.8 --dir webui build:tauri
+      - run: corepack pnpm@11.0.8 --dir webui exec playwright install chromium webkit
+      - name: Check desktop interaction budget on macOS production build
+        run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance
+        env:
+          NEXUSHUB_BROWSER_PREVIEW: "1"
+          NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-performance-failures
+          path: ${{ runner.temp }}/nexushub-desktop-performance
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

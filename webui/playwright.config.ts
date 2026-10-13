@@ -16,7 +16,9 @@ export default defineConfig({
     { name: "webkit", use: { browserName: "webkit" } }
   ],
   webServer: {
-    command: "VITE_USE_REAL_API=1 corepack pnpm@11.0.8 dev --host 127.0.0.1 --port 5197 --strictPort",
+    command: process.env.NEXUSHUB_BROWSER_PREVIEW === "1"
+      ? "corepack pnpm@11.0.8 exec vite preview --host 127.0.0.1 --port 5197 --strictPort"
+      : "VITE_USE_REAL_API=1 corepack pnpm@11.0.8 dev --host 127.0.0.1 --port 5197 --strictPort",
     url: "http://127.0.0.1:5197",
     reuseExistingServer: false
   }

@@ -29,4 +29,11 @@ describe("file links use source paths", () => {
       { href: "/workspace/reference.md", label: "reference" }
     ]);
   });
+  test("preserves file URI autolinks and literal tool output", () => {
+    const text = "Result: <file:///fixture/report.md>";
+    expect(fileLinkSpans(text).map(({ href, label }) => ({ href, label }))).toEqual([
+      { href: "file:///fixture/report.md", label: "file:///fixture/report.md" }
+    ]);
+    expect(fileLinkSpans("Tool output fixture.\n".repeat(512))).toEqual([]);
+  });
 });
