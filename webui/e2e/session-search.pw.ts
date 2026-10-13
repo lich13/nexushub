@@ -153,7 +153,15 @@ function planBlock(id: string, text: string): MessageBlock {
   };
 }
 
-function answeredQuestionBlock(id: string, answer: string): MessageBlock {
+function answeredQuestionBlock(
+  id: string,
+  answer: string,
+  question: Omit<MessageBlock["questions"][number], "id"> = {
+    question: "继续吗？",
+    options: [{ label: "继续" }]
+  }
+): MessageBlock {
+  const questionId = `${id}-question`;
   return {
     id,
     role: "assistant",
@@ -161,8 +169,8 @@ function answeredQuestionBlock(id: string, answer: string): MessageBlock {
     display_kind: "question_result",
     status: "completed",
     resolved: true,
-    questions: [{ id: `${id}-question`, question: "继续吗？", options: [{ label: "继续" }] }],
-    answers: [{ question_id: `${id}-question`, answers: [answer] }]
+    questions: [{ id: questionId, ...question }],
+    answers: [{ question_id: questionId, answers: [answer] }]
   };
 }
 
@@ -195,7 +203,11 @@ test("search reveals a compacted request_user_input_result from a paged Codex hi
       planBlock("follow-up-plan-two", "Third follow-up plan"),
       answeredQuestionBlock("follow-up-question-two", "Fourth follow-up answer")
     ],
-    olderBlocks: [answeredQuestionBlock(answerId, "Old answer fixture")],
+    olderBlocks: [answeredQuestionBlock(answerId, "Old answer fixture", {
+      header: "Fixture-only hidden header",
+      question: "Which option matches qresult-search-anchor?",
+      options: [{ label: "Fixture option", description: "Original option description fixture" }]
+    })],
     positionKey: answerId,
     matchKind: "question_result"
   });
@@ -203,12 +215,21 @@ test("search reveals a compacted request_user_input_result from a paged Codex hi
   await openSyntheticThread(page, title);
   const stream = page.locator(".conversation-main .message-stream");
   await expect(stream.locator(".history-collapse-cell")).toContainText("历史计划/问题已折叠");
-  await searchAndSelect(page, "older-answer-fixture");
+  await searchAndSelect(page, "qresult-search-anchor");
 
   const target = stream.locator(`.question-result-cell[data-timeline-id="${answerId}"]`);
+  await expect(stream.locator(`[data-timeline-id="${answerId}"]`)).toHaveCount(1);
   await expect.poll(() => fixture.historyRequests.length, { timeout: 5000 }).toBe(1);
-  await expect.soft(target).toBeVisible({ timeout: 4000 });
-  await expect.soft(target).toContainText("Old answer fixture", { timeout: 4000 });
+  await expect(target).toBeVisible({ timeout: 4000 });
+  const question = target.locator(".question-block > strong");
+  await expect(question).toBeVisible();
+  await expect(question).toHaveText("Which option matches qresult-search-anchor?");
+  const optionDescription = target.locator(".choice-option small");
+  await expect(optionDescription).toBeVisible();
+  await expect(optionDescription).toHaveText("Original option description fixture");
+  const answer = target.locator(".answered-row strong");
+  await expect(answer).toBeVisible();
+  await expect(answer).toHaveText("Old answer fixture");
   await expect.soft(target).toHaveClass(/timeline-target-highlight/, { timeout: 4000 });
   await expect.soft(page.getByRole("status").filter({ hasText: "结果所在历史未加载，请刷新后重试" })).toHaveCount(0);
   expect(fixture.historyRequests).toEqual(["b:4"]);

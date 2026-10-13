@@ -2,19 +2,19 @@
 
 ## 当前版本
 
-当前维护版本为 1.2.18。正式发布状态、说明与资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，对应提交的完整回归结果见 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml)。历史改动与交付记录由 Git 和 Release 保留。
+当前维护版本为 1.2.19。正式发布状态、说明与资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，对应提交的完整回归结果见 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml)。历史改动与交付记录由 Git 和 Release 保留。
 
 ## 当前改动
 
 - 三种 Provider 共享有界增量 JSONL 读取，按原生身份定位，复用摘要／正文快照；普通追加不重复解析完整历史。
 - Codex、Claude、Grok 和子智能体分开最新窗口轮询与历史取页，以可选来源版本和稳定身份更新历史状态；API 仍为 2，旧客户端与旧服务继续兼容。
 - 工作区按需加载、折叠正文延迟挂载、稳定消息和 Markdown 复用渲染、时间线缓存位置；线程首击立即选择。
-- 搜索命中压缩的旧问答、关闭的工具结果或 AGENTS.md 指令时，先显示目标再按原生身份定位；保留其他折叠选择，重复搜索可重新展开目标。
+- 搜索命中压缩的旧问答、关闭的工具结果或 AGENTS.md 指令时，先显示目标再按原生身份定位；保留其他折叠选择，重复搜索可重新展开目标。已回答问题同时保留原提问、选项和回答，命中的提问文字可直接阅读。
 - 颜色独立于 K／M／G 单位，按实际字节在 100MiB 与 300MiB 分界。未知与部分统计保持原有提示。
 
 ## 验证状态
 
-读取与缓存改动的 Rust、WebUI、Tauri、契约、安装及隐私检查已通过。搜索补修通过 564 项 WebUI 单测、类型检查、构建、安装检查、Chromium／WebKit 共 12 项搜索回归，以及 11 项历史、工具、时间线和机器隔离回归；完整 CI 以对应提交为准。
+读取与缓存改动的 Rust、WebUI、Tauri、契约、安装及隐私检查已通过。已回答问题展示修复通过 567 项 WebUI 单测、类型检查、构建，以及 Chromium／WebKit 的分页搜索回归；覆盖原提问、选项说明和回答可见、单一定位锚点、只读与文字转义。契约、Tauri 构建配置和安装边界检查通过，完整回归以对应提交的 CI 为准。
 
 本机 72 条合成历史的展开／滚动／缓存切换 p95，Chromium 为 27.2／27.0／33.5ms，WebKit 为 36／35／68ms，均低于 100ms。展开采样 60 次，滚动与切换各 20 次；不与不同环境的 CI 耗时作严格同比。
 

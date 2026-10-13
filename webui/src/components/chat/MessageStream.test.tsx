@@ -13,6 +13,48 @@ test("questions retain their content and options without reply controls", () => 
   expect(html).not.toMatch(/<(button|input|textarea|form)\b/);
 });
 
+test("answered question results keep the original question and options beside escaped answers", () => {
+  const block: MessageBlock = {
+    id: "answered-question-fixture", role: "assistant", kind: "request_user_input_result", text: "",
+    questions: [{
+      id: "answered-question-fixture-q1",
+      header: "Fixture header <hidden> & literal",
+      question: "Fixture question <query> & exact",
+      options: [{ label: "Fixture option <alpha>", description: "Fixture description <detail> & exact" }]
+    }],
+    answers: [{ question_id: "answered-question-fixture-q1", answers: ["Fixture answer <selected> & exact"] }]
+  };
+  const html = renderToStaticMarkup(<MessageBlockView block={block} />);
+
+  for (const text of [
+    "Fixture question &lt;query&gt; &amp; exact",
+    "Fixture option &lt;alpha&gt;",
+    "Fixture description &lt;detail&gt; &amp; exact",
+    "Fixture answer &lt;selected&gt; &amp; exact"
+  ]) expect(html).toContain(text);
+  expect(html.match(/data-timeline-id=/g) ?? []).toHaveLength(1);
+  expect(html).toContain('data-timeline-id="answered-question-fixture"');
+  expect(html).not.toMatch(/<(button|input|textarea|select|form)\b/);
+});
+
+test("answered question results keep answers when the original questions are absent", () => {
+  const html = renderToStaticMarkup(<MessageBlockView block={{
+    id: "answer-only-fixture", role: "assistant", kind: "request_user_input_result", text: "",
+    questions: [], answers: [{ question_id: "missing-question-fixture", answers: ["Fixture answer without prompt"] }]
+  }} />);
+  expect(html).toContain("Fixture answer without prompt");
+  expect(html).toContain('data-timeline-id="answer-only-fixture"');
+});
+
+test("question result without answers keeps its fallback text", () => {
+  const html = renderToStaticMarkup(<MessageBlockView block={{
+    id: "unanswered-result-fixture", role: "assistant", kind: "request_user_input_result", text: "",
+    questions: []
+  }} />);
+  expect(html).toContain("Questions answered");
+  expect(html).toContain('data-timeline-id="unanswered-result-fixture"');
+});
+
 test("plans remain readable with copy and download but no submission controls", () => {
   const block: MessageBlock = {
     id: "plan", role: "assistant", kind: "plan", text: "<proposed_plan>## Verified plan\nOne step</proposed_plan>", questions: []

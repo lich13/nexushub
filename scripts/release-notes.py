@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.19": [
+        "已回答问题保留原提问、选项和回答，搜索命中的提问文字可直接阅读",
+        "延续长线程性能优化、历史分页和 100M／300M 线程颜色规则。",
+    ],
     "1.2.18": [
         "搜索可展开并定位折叠的旧问答、工具结果与 AGENTS.md 指令。",
         "保留其他手动折叠选择，修复成功定位后仍显示旧失败提示的问题。",
@@ -143,6 +147,31 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.19":
+        sections = {
+            "版本概览": ["本版补齐已回答问题的历史展示，延续长线程性能优化和 100M／300M 线程颜色规则。"],
+            "功能调整": ["已回答问题同时显示原提问、选项及说明和已有回答，全部保持只读。"],
+            "问题修复": ["修复搜索命中历史提问后虽然定位成功，卡片却只显示回答、看不到命中文字的问题。"],
+            "兼容性与迁移": [
+                "API 协议保持 2；复用已有问题记录与稳定位置，不改变问题状态、原生会话或通知去重。",
+                "保留增量读取、历史分页、附件、Plan、子智能体、管理保护及已有连接配置。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包与校验文件；共七项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App。安装前核对校验和与 updater 签名。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.18":
         sections = {

@@ -141,6 +141,7 @@ function QuestionResultCell({ block }: { block: MessageBlock }) {
         <span>Questions</span>
         <small>{block.status || "completed"}</small>
       </div>
+      <QuestionContent questions={block.questions} />
       {answers.length > 0 ? (
         <div className="answered-list">
           {answers.map((answer) => (
@@ -165,7 +166,15 @@ function QuestionCell({ block }: { block: MessageBlock }) {
         <span>Questions</span>
         <small>{block.turn_id || block.item_id || block.call_id || "request_user_input"}</small>
       </div>
-      {block.questions.map((question) => (
+      <QuestionContent questions={block.questions} />
+    </article>
+  );
+}
+
+function QuestionContent({ questions }: Pick<MessageBlock, "questions">) {
+  return (
+    <>
+      {questions.map((question) => (
         <div key={question.id} className="question-block">
           <strong>{question.question}</strong>
           <div className="choice-grid readonly-choices">
@@ -182,6 +191,6 @@ function QuestionCell({ block }: { block: MessageBlock }) {
           </div>
         </div>
       ))}
-    </article>
+    </>
   );
 }
