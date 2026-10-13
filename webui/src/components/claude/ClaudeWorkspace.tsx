@@ -1,7 +1,7 @@
 import { UserMessage, UserMessageScope } from "../common/UserMessage";
 import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownPathScope } from "../common/FilePathLink";
-import { ActivityDetails, DisclosureScope } from "../common/ActivityDetails";
+import { ActivityDetails, DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import { visibleMarkdown } from "../../lib/domain/visibleMarkdown";
 import { Check, ChevronLeft, Copy, Pencil, RefreshCw, Search, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useMemo, useState, type ReactNode } from "react";
@@ -91,7 +91,7 @@ export function ClaudeWorkspace() {
   useEffect(() => {
     if (!pendingSearch || pendingSearch.sessionKey !== selected?.sessionKey || detail.isLoading || detail.isFetching || history.loading) return;
     history.follow.current = false;
-    if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setPendingSearch(null); }
+    if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setFeedback(""); setPendingSearch(null); }
     else if (detail.hasNextPage) { if (!history.error) void history.loadOlder("search"); }
     else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
   }, [pendingSearch, selected?.sessionKey, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
@@ -154,7 +154,7 @@ export function ClaudeWorkspace() {
         {error && <div className="form-error" role="alert">{error.message}</div>}
         <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
           <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
-          <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+          <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.sessionKey ? pendingSearch.positionKey : null}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}
         </div></div>
@@ -174,7 +174,7 @@ function ClaudeEvent({ event, activityId, title, timelineAliases = [] }: { event
   if (event.kind === "plan") return <article className="provider-event plan" {...timelineProps}><header className="plan-heading"><strong>计划</strong><PlanActions markdown={event.text ?? ""} fallbackTitle={title} /></header><MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={false} /></article>;
   if (event.detail) return <ActivityDetails timelineId={activityId} timelineAliases={timelineAliases} className="grok-tool" stateKey={activityId} initiallyOpen={false} summary={<span className="tool-title">{event.text ?? "活动记录"}</span>}>{() => <ToolOutput text={event.detail!} />}</ActivityDetails>;
   if (!visibleMarkdown(event.text ?? "").trim()) return null;
-  return <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>{!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}<MarkdownContent text={event.text ?? ""} activityId={activityId} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
+  return <article className={`provider-event ${event.kind}${event.kind.startsWith("assistant_message") ? " assistant-reply" : ""}`} {...timelineProps}>{!event.kind.startsWith("assistant_message") && <div className="chat-meta">{claudeEventLabel(event)}</div>}<MarkdownContent text={event.text ?? ""} activityId={activityId} timelineAliases={timelineAliases} foldInstructions={event.kind !== "compaction" && event.kind !== "branch_summary"} />{event.kind.startsWith("assistant_message") && <CopyReplyButton text={event.text ?? ""} />}</article>;
 }
 
 function renderClaudeEvents(entries: ExecutionRenderItem<ClaudeHistoryEvent>[], title: string): ReactNode {

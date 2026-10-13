@@ -4,7 +4,8 @@ import type { SessionProvider } from "../../lib/api/sessions";
 import type { UserAttachment, UserMessageContent } from "../../types";
 import { readAttachment } from "../../lib/query/attachments";
 import { userMessageSegments } from "../../lib/domain/userMessageViewModel";
-import { ActivityDetails } from "./ActivityDetails";
+import { ActivityDetails, DisclosureRevealContext } from "./ActivityDetails";
+import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import { CopyReplyButton } from "./CopyReplyButton";
 import { FilePathLink } from "./FilePathLink";
 
@@ -14,17 +15,19 @@ export function UserMessage({ message, text = "", activityId = "user-message", t
   const body = message?.text ?? text;
   const segments = useMemo(() => userMessageSegments(body), [body]);
   const identity = message?.id ?? activityId;
+  const positionKey = useContext(DisclosureRevealContext);
+  const reveal = matchesTimelinePosition(positionKey, timelineId ?? identity, timelineAliases);
   if (!segments.length && !message?.attachments.length) return null;
   return <article className="user-message" data-timeline-id={timelineId ?? identity} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined}>
     {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
     {segments.map(segment => segment.kind === "instructions"
-      ? <ActivityDetails key={segment.id} className="user-instructions instruction-file execution-command" stateKey={`${identity}:${segment.id}`} initiallyOpen={false} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
+      ? <ActivityDetails key={segment.id} className="user-instructions instruction-file execution-command" stateKey={`${identity}:${segment.id}`} initiallyOpen={false} reveal={reveal} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
         {() => <div className="user-instructions-body instruction-file-body">{segment.text}</div>}
       </ActivityDetails>
       : segment.kind === "reply" ? <div className="user-question-reply" key={segment.id}>
         <CopyReplyButton text={segment.answer} label="复制回答" copiedLabel="已复制回答" />
         <div className="user-message-bubble user-answer-bubble">
-          {!!segment.question.trim() && <ActivityDetails className="user-question-context" stateKey={`${identity}:${segment.id}:question`} initiallyOpen={false} summary={<span>{segment.question}</span>}>
+          {!!segment.question.trim() && <ActivityDetails className="user-question-context" stateKey={`${identity}:${segment.id}:question`} initiallyOpen={false} reveal={reveal} summary={<span>{segment.question}</span>}>
             {() => <div className="user-question-full">{segment.question}</div>}
           </ActivityDetails>}
           <div className="user-answer">{segment.answer}</div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeUserTimelineId, userTimelineEntries } from "./timelineViewModel";
+import { activeUserTimelineId, matchesTimelinePosition, userTimelineEntries } from "./timelineViewModel";
 
 describe("user instruction timeline", () => {
   it.each(["codex", "claude_code", "grok"] as const)("%s keeps user anchors while excluding assistant, plan and tool items", provider => {
@@ -43,5 +43,20 @@ describe("user instruction timeline", () => {
     expect(activeUserTimelineId(anchors, 100)).toBe("first");
     expect(activeUserTimelineId([], 0)).toBeNull();
     expect(activeUserTimelineId([{ id: "first", top: 200 }], 0)).toBe("first");
+  });
+});
+
+describe("search timeline identity", () => {
+  it("matches native block ids, grouped ids and explicit event aliases", () => {
+    expect(matchesTimelinePosition("block-fixture", "block-fixture")).toBe(true);
+    expect(matchesTimelinePosition("call-fixture", "group:call-fixture")).toBe(true);
+    expect(matchesTimelinePosition("call-fixture", "group:call-fixture:tool")).toBe(true);
+    expect(matchesTimelinePosition("event-fixture", "group-fixture", ["event-fixture"])).toBe(true);
+  });
+
+  it("does not match missing or unrelated timeline identities", () => {
+    expect(matchesTimelinePosition(null, "block-fixture", ["block-fixture"])).toBe(false);
+    expect(matchesTimelinePosition("call-fixture", "group:other-fixture")).toBe(false);
+    expect(matchesTimelinePosition("call-fixture", "call-fixture-extra")).toBe(false);
   });
 });

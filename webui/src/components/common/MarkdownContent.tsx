@@ -1,9 +1,10 @@
 import { Check, Copy } from "lucide-react";
-import { memo, useMemo, useState, type ComponentProps } from "react";
+import { memo, useContext, useMemo, useState, type ComponentProps } from "react";
 import Markdown, { defaultUrlTransform, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { instructionSegments, visibleMarkdown } from "../../lib/domain/visibleMarkdown";
-import { ActivityDetails } from "./ActivityDetails";
+import { ActivityDetails, DisclosureRevealContext } from "./ActivityDetails";
+import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import { fileLinkTarget } from "../../lib/domain/fileLinks";
 import { FilePathLink } from "./FilePathLink";
 
@@ -74,11 +75,13 @@ const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }) {
   }}>{text}</Markdown>;
 });
 
-export const MarkdownContent = memo(function MarkdownContent({ text, activityId = "message", foldInstructions = false }: { text: string; activityId?: string; foldInstructions?: boolean }) {
+export const MarkdownContent = memo(function MarkdownContent({ text, activityId = "message", timelineAliases = [], foldInstructions = false }: { text: string; activityId?: string; timelineAliases?: string[]; foldInstructions?: boolean }) {
   const cleaned = useMemo(() => visibleMarkdown(text), [text]);
   const segments = useMemo(() => foldInstructions ? instructionSegments(cleaned) : null, [cleaned, foldInstructions]);
+  const positionKey = useContext(DisclosureRevealContext);
+  const reveal = matchesTimelinePosition(positionKey, activityId, timelineAliases);
   return <div className="markdown-content">{segments ? segments.map(segment => segment.kind === "instructions"
-    ? <ActivityDetails key={segment.id} stateKey={`${activityId}:${segment.id}`} className="instruction-file execution-command" initiallyOpen={false} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
+    ? <ActivityDetails key={segment.id} stateKey={`${activityId}:${segment.id}`} className="instruction-file execution-command" initiallyOpen={false} reveal={reveal} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
       {() => <div className="instruction-file-body"><MarkdownBody text={segment.text} /></div>}
     </ActivityDetails>
     : <MarkdownBody key={segment.id} text={segment.text} />) : <MarkdownBody text={cleaned} />}</div>;
