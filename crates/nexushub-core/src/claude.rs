@@ -79,6 +79,8 @@ pub struct ClaudeHistoryEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeSessionDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::jsonl_cache::HistoryMetadata>,
     pub summary: ClaudeSessionSummary,
     pub events: Vec<ClaudeHistoryEvent>,
     pub total_events: usize,
@@ -125,7 +127,10 @@ struct Parsed {
     cwd: String,
     version: String,
     updated_at: Option<String>,
-    events: Vec<ClaudeHistoryEvent>,
+    events: Vec<Arc<ClaudeHistoryEvent>>,
+    message_count: usize,
+    last_message: Option<String>,
+    history: crate::jsonl_cache::HistoryJournal,
     issues: Vec<String>,
     warnings: Vec<String>,
     last_turn_at: Option<i64>,
@@ -140,14 +145,26 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
 fn digest(value: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(value.as_ref()))
 }
+type LocatedSessions = HashMap<String, (PathBuf, PathBuf)>;
+static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessions>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 fn key_for(root: &Path, path: &Path, id: &str) -> String {
-    format!(
+    let key = format!(
         "claude:{}",
         digest(format!(
             "{}\0{id}",
             path.strip_prefix(root).unwrap_or(path).to_string_lossy()
         ))
-    )
+    );
+    if let Ok(mut cache) = LOCATED_SESSIONS.lock() {
+        if cache.len() >= 20_000 && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache
+            .entry(key.clone())
+            .or_insert_with(|| (root.into(), path.into()));
+    }
+    key
 }
 
 fn files(paths: &ClaudePaths) -> Result<Vec<PathBuf>> {
@@ -178,8 +195,13 @@ fn files(paths: &ClaudePaths) -> Result<Vec<PathBuf>> {
     result.sort();
     Ok(result)
 }
-fn read_or_warning(path: &Path) -> Arc<Parsed> {
-    reader::read(path).unwrap_or_else(|_| {
+fn read_or_warning(path: &Path, summary_only: bool) -> Arc<Parsed> {
+    let result = if summary_only {
+        reader::summary(path)
+    } else {
+        reader::read(path)
+    };
+    result.unwrap_or_else(|_| {
         let id = path
             .file_stem()
             .unwrap_or_default()
@@ -201,13 +223,48 @@ fn resolve(paths: &ClaudePaths, key: &str) -> Result<(PathBuf, Arc<Parsed>)> {
             && key[7..].bytes().all(|c| c.is_ascii_hexdigit()),
         "无效的 Claude 会话定位键"
     );
+    ensure!(
+        !fs::symlink_metadata(&paths.projects)?
+            .file_type()
+            .is_symlink(),
+        "Claude 会话根不能是符号链接"
+    );
     let root = paths
         .projects
         .canonicalize()
         .context("未发现 Claude 会话")?;
+    let located = LOCATED_SESSIONS.lock().ok().and_then(|cache| {
+        cache
+            .get(key)
+            .filter(|(source, _)| source == &root)
+            .map(|(_, path)| path.clone())
+    });
+    if let Some(path) = located {
+        // Revalidate every native identity, including the ancestor chain. The
+        // lookup stores only paths discovered by our own bounded directory scan.
+        let safe = path.starts_with(&root)
+            && path
+                .ancestors()
+                .take_while(|parent| *parent != root)
+                .all(|parent| {
+                    fs::symlink_metadata(parent).is_ok_and(|m| !m.file_type().is_symlink())
+                });
+        if safe {
+            if let Ok(parsed) = reader::read(&path) {
+                if key_for(&root, &path, &parsed.id) == key {
+                    return Ok((path, parsed));
+                }
+            }
+        }
+    }
     for path in files(paths)? {
-        let parsed = read_or_warning(&path);
+        let parsed = read_or_warning(&path, true);
         if key_for(&root, &path, &parsed.id) == key {
+            let parsed = read_or_warning(&path, false);
+            ensure!(
+                key_for(&root, &path, &parsed.id) == key,
+                "Claude 会话身份已变化，请刷新列表"
+            );
             return Ok((path, parsed));
         }
     }
@@ -247,11 +304,6 @@ fn summary(
      */
     let read_error = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
     let read_warning = warning_reason;
-    let messages: Vec<_> = parsed
-        .events
-        .iter()
-        .filter(|e| matches!(e.kind.as_str(), "user_message" | "assistant_message"))
-        .collect();
     Ok(ClaudeSessionSummary {
         storage_size: None,
         id: parsed.id.clone(),
@@ -260,11 +312,8 @@ fn summary(
         cwd: parsed.cwd.clone(),
         path: path.to_owned(),
         updated_at: parsed.updated_at.clone(),
-        message_count: messages.len(),
-        last_message: messages
-            .last()
-            .and_then(|e| e.text.as_ref())
-            .map(|s| s.chars().take(240).collect()),
+        message_count: parsed.message_count,
+        last_message: parsed.last_message.clone(),
         status: status.into(),
         format_version: parsed.version.clone(),
         can_rename: reason.is_none(),
@@ -284,7 +333,7 @@ pub fn list_claude_sessions(
     let needle = query.unwrap_or("").trim().to_lowercase();
     let mut result = Vec::new();
     for path in files(paths)? {
-        let parsed = read_or_warning(&path);
+        let parsed = read_or_warning(&path, true);
         let s = summary(paths, &path, &parsed, &snapshot)?;
         if [&s.title, &s.id, &s.cwd]
             .iter()
@@ -360,7 +409,10 @@ pub fn claude_session_detail(
             .context("历史位置已变化，请刷新会话")?,
     };
     let start = end.saturating_sub(request.limit.unwrap_or(160).clamp(1, 500));
-    let mut events = parsed.events[start..end].to_vec();
+    let mut events: Vec<_> = parsed.events[start..end]
+        .iter()
+        .map(|event| (**event).clone())
+        .collect();
     for event in &mut events {
         if let Some(user) = &mut event.user_message {
             user.refresh_files(Some(&parsed.cwd));
@@ -369,6 +421,7 @@ pub fn claude_session_detail(
     let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
     attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
+        history: Some(parsed.history.metadata(None)),
         summary,
         events,
         total_events: parsed.events.len(),

@@ -147,6 +147,105 @@ fn grok_history_cache_reuses_unchanged_files_and_invalidates_updates() {
 }
 
 #[test]
+fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates() {
+    use base64::Engine as _;
+
+    let (paths, id, path) = fixture();
+    let history = path.join("updates.jsonl");
+    let attachment_path = paths.home.join("attachment.png");
+    let attachment = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=")
+        .unwrap();
+    fs::write(&attachment_path, attachment).unwrap();
+    let initial = [
+        serde_json::json!({"params":{"update":{"sessionUpdate":"tool_call","title":"Open file","toolCallId":"call-1"}}}),
+        serde_json::json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"prompt-1","content":[{"type":"text","text":"Inspect "},{"type":"local_image","path":attachment_path.to_string_lossy().into_owned()}]}}}),
+    ];
+    fs::write(
+        &history,
+        initial
+            .iter()
+            .map(|record| record.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
+
+    let previous = grok_session_detail(&paths, &id, None).unwrap();
+    assert_eq!(previous.events.len(), 2);
+    assert_eq!(previous.events[0].text.as_deref(), Some("Open file"));
+    assert_eq!(previous.events[1].text.as_deref(), Some("Inspect "));
+    let previous_user = previous.events[1].user_message.as_ref().unwrap();
+    assert_eq!(previous_user.attachments.len(), 1);
+    let previous_attachment = &previous_user.attachments[0];
+    assert_eq!(previous_attachment.reason, None);
+    assert_eq!(
+        previous_user
+            .read_attachment(&previous_attachment.id)
+            .unwrap()
+            .mime_type,
+        "image/png"
+    );
+
+    let appended = [
+        serde_json::json!({"params":{"update":{"sessionUpdate":"user_message_chunk","promptId":"prompt-1","content":{"type":"text","text":"the file"}}}}),
+        serde_json::json!({"params":{"update":{"sessionUpdate":"tool_call_update","title":"Open file.txt","toolCallId":"call-1","status":"completed"}}}),
+    ];
+    fs::remove_file(&attachment_path).unwrap();
+    let appended_text = appended
+        .iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let mut file = fs::OpenOptions::new().append(true).open(&history).unwrap();
+    std::io::Write::write_all(&mut file, appended_text.as_bytes()).unwrap();
+    drop(file);
+
+    let latest = grok_session_detail(&paths, &id, None).unwrap();
+    assert_eq!(previous.events[0].text.as_deref(), Some("Open file"));
+    assert_eq!(previous.events[0].status, None);
+    assert_eq!(previous.events[1].text.as_deref(), Some("Inspect "));
+    assert_eq!(
+        previous.events[1].user_message.as_ref().unwrap().text,
+        "Inspect "
+    );
+    assert_eq!(latest.events[0].text.as_deref(), Some("Open file.txt"));
+    assert_eq!(latest.events[0].status.as_deref(), Some("completed"));
+    assert_eq!(latest.events[1].text.as_deref(), Some("Inspect the file"));
+    assert_eq!(
+        latest.events[1].user_message.as_ref().unwrap().text,
+        "Inspect the file"
+    );
+    let latest_user = latest.events[1].user_message.as_ref().unwrap();
+    assert_eq!(latest_user.attachments.len(), 1);
+    let latest_attachment = &latest_user.attachments[0];
+    assert!(latest_attachment.reason.is_some());
+    assert_ne!(latest_attachment.id, previous_attachment.id);
+    assert!(latest_user.read_attachment(&latest_attachment.id).is_err());
+    assert_eq!(previous_attachment.reason, None);
+
+    let response = serde_json::to_value(&latest).unwrap();
+    assert!(response["events"].is_array());
+    assert!(response["events"][0].is_object());
+    assert_eq!(response["events"][0]["kind"], "tool_call");
+    assert_eq!(response["events"][0]["callId"], "call-1");
+    assert_eq!(response["events"][0]["text"], "Open file.txt");
+    assert_eq!(response["events"][0]["status"], "completed");
+    assert!(response["events"][0].get("call_id").is_none());
+    assert!(response["events"][1].is_object());
+    assert_eq!(response["events"][1]["kind"], "user_message_chunk");
+    assert_eq!(
+        response["events"][1]["userMessage"]["text"],
+        "Inspect the file"
+    );
+    assert!(response["events"][1]["userMessage"]["attachments"][0]["reason"].is_string());
+
+    fs::remove_dir_all(&paths.home).unwrap();
+}
+
+#[test]
 fn grok_delete_revalidates_content_and_does_not_touch_workspace() {
     let (paths, id, path) = fixture();
     let preview = preview_grok_delete(&paths, &id).unwrap();

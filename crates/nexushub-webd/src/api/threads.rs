@@ -31,7 +31,7 @@ pub(crate) async fn subagent_detail(
     Json(request): Json<nexushub_core::codex::subagents::SubagentDetailRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    let result = tokio::task::spawn_blocking(move || {
+    let result = nexushub_core::read_tasks::spawn_blocking(move || {
         NexusHubUseCases::new(state.platform())
             .threads()
             .subagent_detail(&state.codex_paths(), &request)
@@ -47,7 +47,11 @@ pub(crate) async fn list_threads(
     Query(query): Query<ThreadsQuery>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(linux_adapter::list_threads_read_model(&state, query)?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        linux_adapter::list_threads_read_model(&state, query)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }
 
 pub(crate) async fn thread_detail(
@@ -67,8 +71,12 @@ pub(crate) async fn thread_detail(
             before: query.before.clone(),
         })
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    match linux_adapter::window_thread_detail_read_model(&state, &plan.detail)
-        .map_err(api_error_for_thread_detail_load)?
+    match nexushub_core::read_tasks::spawn_blocking(move || {
+        linux_adapter::window_thread_detail_read_model(&state, &plan.detail)
+    })
+    .await
+    .map_err(anyhow::Error::from)?
+    .map_err(api_error_for_thread_detail_load)?
     {
         Some(detail) => ok(detail),
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),
@@ -92,8 +100,12 @@ pub(crate) async fn thread_blocks(
         .threads()
         .blocks(&id, query.limit, query.before.clone())
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    match linux_adapter::thread_blocks_read_model(&state, &plan)
-        .map_err(api_error_for_thread_detail_load)?
+    match nexushub_core::read_tasks::spawn_blocking(move || {
+        linux_adapter::thread_blocks_read_model(&state, &plan)
+    })
+    .await
+    .map_err(anyhow::Error::from)?
+    .map_err(api_error_for_thread_detail_load)?
     {
         Some(page) => ok(page),
         None => Err(api_error(StatusCode::NOT_FOUND, "thread not found")),

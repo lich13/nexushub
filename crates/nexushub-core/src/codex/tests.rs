@@ -2598,6 +2598,106 @@ fn window_thread_detail_ignores_invalid_before_cursor() {
 }
 
 #[test]
+fn thread_detail_page_resolves_stable_and_legacy_block_cursors() {
+    let fixture = ThreadDetailPageFixture::new(&(0..6).map(page_message).collect::<Vec<_>>());
+
+    for compact in [false, true] {
+        let latest = fixture.read(compact, Some(2), None);
+        assert_eq!(page_block_ids(&latest), vec!["message:4", "message:5"]);
+        assert_eq!(latest.before_cursor.as_deref(), Some("b:4"));
+
+        let stable_before = fixture.read(compact, Some(2), Some("b:999:message:3"));
+        assert_eq!(
+            page_block_ids(&stable_before),
+            vec!["message:1", "message:2"]
+        );
+        assert_eq!(stable_before.before_cursor.as_deref(), Some("b:1"));
+
+        let stable_after = fixture.read(compact, Some(2), Some("a:message:3"));
+        assert_eq!(
+            page_block_ids(&stable_after),
+            vec!["message:2", "message:3"]
+        );
+        assert_eq!(stable_after.before_cursor.as_deref(), Some("b:2"));
+
+        let legacy_before = fixture.read(compact, Some(2), Some("b:4"));
+        assert_eq!(
+            page_block_ids(&legacy_before),
+            vec!["message:2", "message:3"]
+        );
+
+        let missing = fixture.read(compact, Some(2), Some("b:999:missing"));
+        assert!(missing.blocks.is_empty());
+        assert!(!missing.has_more_blocks);
+        assert_eq!(missing.before_cursor, None);
+    }
+}
+
+#[test]
+fn stable_block_cursors_survive_appended_history_compaction_and_repeated_reads() {
+    let fixture = ThreadDetailPageFixture::new(&(0..80).map(page_message).collect::<Vec<_>>());
+    let initial = fixture.read(true, Some(3), None);
+    let before_cursor = format!(
+        "{}:{}",
+        initial.before_cursor.as_deref().unwrap(),
+        initial.blocks.first().unwrap().id
+    );
+    let after_cursor = format!("a:{}", initial.blocks.last().unwrap().id);
+
+    let initial_before = fixture.read(true, Some(3), Some(&before_cursor));
+    let initial_after = fixture.read(true, Some(3), Some(&after_cursor));
+    assert_eq!(
+        page_block_ids(&initial_before),
+        vec!["message:74", "message:75", "message:76"]
+    );
+    assert_eq!(
+        page_block_ids(&initial_after),
+        vec!["message:77", "message:78", "message:79"]
+    );
+
+    fixture.append(&(80..85).map(page_message).collect::<Vec<_>>());
+
+    let complete = fixture.read(true, None, None);
+    assert_eq!(complete.total_blocks, 81);
+    assert!(complete
+        .blocks
+        .iter()
+        .any(|block| block.kind == "chat_history_collapsed"));
+
+    let stable_before = fixture.read(true, Some(3), Some(&before_cursor));
+    assert_eq!(
+        page_block_ids(&stable_before),
+        vec!["message:74", "message:75", "message:76"]
+    );
+    assert_eq!(stable_before.before_cursor.as_deref(), Some("b:70"));
+
+    let stable_after = fixture.read(true, Some(3), Some(&after_cursor));
+    assert_eq!(
+        page_block_ids(&stable_after),
+        vec!["message:77", "message:78", "message:79"]
+    );
+    assert_eq!(stable_after.before_cursor.as_deref(), Some("b:73"));
+
+    let legacy = fixture.read(true, Some(3), Some("b:77"));
+    assert_eq!(
+        page_block_ids(&legacy),
+        vec!["message:78", "message:79", "message:80"]
+    );
+    assert_eq!(legacy.before_cursor.as_deref(), Some("b:74"));
+
+    for _ in 0..2 {
+        assert_eq!(
+            page_block_ids(&fixture.read(true, Some(3), Some(&before_cursor))),
+            page_block_ids(&stable_before)
+        );
+        assert_eq!(
+            page_block_ids(&fixture.read(true, Some(3), Some(&after_cursor))),
+            page_block_ids(&stable_after)
+        );
+    }
+}
+
+#[test]
 fn archived_thread_keeps_archived_status_despite_running_rollout() {
     let root = unique_temp_dir("archived-priority");
     fs::create_dir_all(&root).unwrap();
@@ -3256,6 +3356,90 @@ fn detail_fixture(events: &[serde_json::Value]) -> super::ThreadDetail {
         .unwrap();
     let _ = fs::remove_dir_all(root);
     detail
+}
+
+struct ThreadDetailPageFixture {
+    root: PathBuf,
+    summary: super::ThreadSummary,
+}
+
+impl ThreadDetailPageFixture {
+    fn new(events: &[serde_json::Value]) -> Self {
+        let root = unique_temp_dir("detail-page");
+        fs::create_dir_all(&root).unwrap();
+        let rollout = root.join("rollout-test-thread.jsonl");
+        let text = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&rollout, format!("{text}\n")).unwrap();
+        let summary = super::ThreadSummary {
+            storage_size: None,
+            id: "fixture-thread".to_string(),
+            title: "fixture history".to_string(),
+            status: super::ThreadStatus::Recent,
+            updated_at: None,
+            archived_at: None,
+            message_count: events.len(),
+            latest_message: None,
+            cwd: Some("/tmp".to_string()),
+            model: None,
+            rollout_path: Some(rollout),
+            active_turn_id: None,
+            active_job_id: None,
+            pending_elicitation: None,
+            last_event_kind: None,
+        };
+        Self { root, summary }
+    }
+
+    fn read(
+        &self,
+        compact: bool,
+        limit: Option<usize>,
+        before: Option<&str>,
+    ) -> super::ThreadDetail {
+        super::thread_detail_page_from_summary(self.summary.clone(), compact, limit, before, None)
+            .unwrap()
+    }
+
+    fn append(&self, events: &[serde_json::Value]) {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(self.summary.rollout_path.as_ref().unwrap())
+            .unwrap();
+        let text = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        writeln!(file, "{text}").unwrap();
+    }
+}
+
+impl Drop for ThreadDetailPageFixture {
+    fn drop(&mut self) {
+        if fs::remove_dir_all(&self.root).is_err() {
+            eprintln!("CODEX_DETAIL_PAGE_FIXTURE_CLEANUP_FAILED");
+        }
+    }
+}
+
+fn page_message(index: usize) -> serde_json::Value {
+    json!({
+        "type":"response_item",
+        "payload":{"type":"message","id":format!("message:{index}"),"role":"assistant","content":[{"text":format!("message-{index}")}]}
+    })
+}
+
+fn page_block_ids(detail: &super::ThreadDetail) -> Vec<&str> {
+    detail
+        .blocks
+        .iter()
+        .map(|block| block.id.as_str())
+        .collect()
 }
 
 fn write_thread_db(

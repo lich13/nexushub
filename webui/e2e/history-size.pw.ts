@@ -5,11 +5,28 @@ import type { ClaudeSessionSummary, GrokSessionSummary, MessageBlock, SessionSto
 const sizeFixtures: Array<{ key: string; label: string; tone: "success" | "warning" | "danger" | "muted"; size?: SessionStorageSize }> = [
   { key: "zero", label: "0K", tone: "success", size: { bytes: 0, scope: "file", status: "complete" } },
   { key: "kilobytes", label: "2K", tone: "success", size: { bytes: 2048, scope: "file", status: "complete" } },
-  { key: "megabytes", label: "1M", tone: "warning", size: { bytes: 1024 ** 2, scope: "directory", status: "complete" } },
+  { key: "megabytes", label: "1M", tone: "success", size: { bytes: 1024 ** 2, scope: "directory", status: "complete" } },
   { key: "gigabytes", label: "1G", tone: "danger", size: { bytes: 1024 ** 3, scope: "directory", status: "complete" } },
   { key: "unknown", label: "—", tone: "muted", size: { bytes: null, scope: "file", status: "unavailable" } },
-  { key: "partial", label: "≥1M", tone: "warning", size: { bytes: 1024 ** 2, scope: "directory", status: "partial" } }
+  { key: "pending", label: "—", tone: "muted", size: { bytes: 1024 ** 3, scope: "directory", status: "pending" } },
+  { key: "partial", label: "≥1M", tone: "success", size: { bytes: 1024 ** 2, scope: "directory", status: "partial" } }
 ];
+
+for (const status of ["complete", "partial"] as const) {
+  for (const [bytes, label, tone] of [
+    [100 * 1024 ** 2 - 1, "99.9M", "success"],
+    [100 * 1024 ** 2, "100M", "warning"],
+    [100 * 1024 ** 2 + 1, "100M", "warning"],
+    [300 * 1024 ** 2 - 1, "299.9M", "warning"],
+    [300 * 1024 ** 2, "300M", "danger"],
+    [300 * 1024 ** 2 + 1, "300M", "danger"]
+  ] as const) sizeFixtures.push({
+    key: `${status}-${bytes}`,
+    label: `${status === "partial" ? "≥" : ""}${label}`,
+    tone,
+    size: { bytes, scope: "directory", status }
+  });
+}
 
 const codexRows: ThreadSummary[] = sizeFixtures.map((fixture, index) => ({
   id: `size-codex-${index}`,

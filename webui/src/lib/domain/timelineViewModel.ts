@@ -35,10 +35,11 @@ export function userTimelineEntries(provider: "codex" | "claude_code" | "grok", 
 
 /** Keep the preceding instruction active throughout its assistant/tool replies. */
 export function activeUserTimelineId(anchors: readonly { id: string; top: number }[], viewportTop: number): string | null {
-  let active = anchors[0]?.id ?? null;
-  for (const anchor of anchors) {
-    if (anchor.top > viewportTop) break;
-    active = anchor.id;
+  let low = 0, high = anchors.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (anchors[middle].top <= viewportTop) low = middle + 1;
+    else high = middle;
   }
-  return active;
+  return anchors[Math.max(0, low - 1)]?.id ?? null;
 }

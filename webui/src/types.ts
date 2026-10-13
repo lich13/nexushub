@@ -1,3 +1,5 @@
+export type HistoryMetadata = { epoch: string; revision: string; changedIds?: string[]; reset?: boolean; changes?: { revision: string; changedIds: string[]; reset?: boolean }[] };
+
 export type UserAttachment = { id: string; name: string; kind: "image" | "file"; path?: string | null; reason?: string | null };
 export type UserMessageContent = { id: string; text: string; attachments: UserAttachment[] };
 
@@ -18,6 +20,7 @@ export type GrokSessionSummary = {
 };
 
 export type GrokHistoryEvent = {
+  id?: string;
   userMessage?: UserMessageContent | null;
   callId?: string;
   status?: string;
@@ -28,7 +31,7 @@ export type GrokHistoryEvent = {
   method?: string | null;
 };
 
-export type GrokSessionDetail = { summary: GrokSessionSummary; events: GrokHistoryEvent[] };
+export type GrokSessionDetail = { history?: HistoryMetadata | null; totalEvents?: number; hasMore?: boolean; beforeCursor?: string | null; summary: GrokSessionSummary; events: GrokHistoryEvent[] };
 export type GrokDeletePreview = { id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
 export type GrokDeleteRequest = { id: string; confirmed: boolean; fingerprint: string };
 export type GrokDeleteResult = { id: string; deleted: boolean; bytes: number };
@@ -54,7 +57,7 @@ export type ClaudeSessionSummary = {
 };
 export type ClaudeHistoryEvent = { id: string; turnId?: string | null; result?: string | null; userMessage?: UserMessageContent | null; timestamp?: string | null; kind: string; role?: string | null; text?: string | null; callId?: string | null; status?: string | null; detail?: string | null };
 export type ClaudeDetailRequest = { sessionKey: string; limit?: number; before?: string };
-export type ClaudeSessionDetail = { summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
+export type ClaudeSessionDetail = { history?: HistoryMetadata | null; summary: ClaudeSessionSummary; events: ClaudeHistoryEvent[]; totalEvents: number; hasMore: boolean; beforeCursor?: string | null };
 export type ClaudeDeletePreview = { sessionKey: string; id: string; title: string; path: string; fingerprint: string; fileCount: number; bytes: number };
 export type ClaudeDeleteRequest = { sessionKey: string; confirmed: boolean; fingerprint: string };
 export type ClaudeDeleteResult = { sessionKey: string; deleted: boolean; bytes: number };
@@ -187,6 +190,7 @@ export type UserInputAnswer = {
 };
 
 export type ThreadDetail = {
+  history?: HistoryMetadata | null;
   subagents?: SubagentCollection | null;
   subagent_updates?: Record<string, SubagentActivity>;
   summary: ThreadSummary;
@@ -199,6 +203,7 @@ export type ThreadDetail = {
 };
 
 export type ThreadBlockPage = {
+  history?: HistoryMetadata | null;
   thread_id: string;
   blocks: MessageBlock[];
   total_blocks: number;

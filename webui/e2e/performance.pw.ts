@@ -1,0 +1,368 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { mockApi, mockCommand } from "./fixtures";
+import type { ClaudeHistoryEvent, ClaudeSessionSummary, GrokHistoryEvent, GrokSessionSummary, HistoryMetadata, MessageBlock, SubagentActivity, ThreadDetail, ThreadSummary } from "../src/types";
+
+const pageMessages = 24;
+const totalMessages = pageMessages * 3;
+const interactionBudgetMs = 100;
+const instructions = "Follow the isolated fixture rules with **formatting** and `example` code.\n\n".repeat(64);
+const output = "Tool output payload for the isolated performance fixture.\n".repeat(512);
+const summaries: ThreadSummary[] = ["a", "b"].map(key => ({
+  id: `performance-${key}`, title: `Performance fixture ${key.toUpperCase()}`,
+  status: "Recent", message_count: totalMessages, cwd: "/fixture/workspace"
+}));
+
+type Provider = "codex" | "claude" | "grok" | "subagent";
+type Request = { before: string | null; id: string };
+
+function historyBlockId(id: string, blockIndex: number) {
+  const messageIndex = Math.floor(blockIndex / 2);
+  return `${id}-${blockIndex % 2 === 0 ? "reply" : "tool"}-${messageIndex}`;
+}
+
+function grokEventId(eventIndex: number) {
+  return `grok:${eventIndex}`;
+}
+
+function blockIndexFromId(id: string, candidate: string, messageCount: number): number {
+  const prefix = `${id}-`;
+  if (!candidate.startsWith(prefix)) return -1;
+  const match = /^(reply|tool)-(\d+)$/.exec(candidate.slice(prefix.length));
+  if (!match) return -1;
+  const messageIndex = Number(match[2]);
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= messageCount) return -1;
+  return messageIndex * 2 + (match[1] === "tool" ? 1 : 0);
+}
+
+function pageEnd(id: string, before: string | null | undefined, provider: Provider, messageCount: number): number {
+  if (!before) return messageCount;
+  if (provider === "codex" || provider === "subagent") {
+    if (before.startsWith("a:")) {
+      const anchor = blockIndexFromId(id, before.slice(2), messageCount);
+      if (anchor < 0) throw new Error("Invalid stable fixture block anchor");
+      return Math.min(messageCount, Math.floor(anchor / 2) + 1);
+    }
+    const [kind, rawIndex, ...idParts] = before.split(":");
+    const blockIndex = Number(rawIndex);
+    if (kind !== "b" || !Number.isInteger(blockIndex) || blockIndex <= 0 || blockIndex % 2 !== 0 || blockIndex > messageCount * 2 || idParts.join(":") !== historyBlockId(id, blockIndex)) {
+      throw new Error("Invalid stable fixture history cursor");
+    }
+    return blockIndex / 2;
+  }
+  const anchor = blockIndexFromId(id, before, messageCount);
+  if (anchor < 0) throw new Error("Invalid native fixture event cursor");
+  return Math.ceil(anchor / 2);
+}
+
+function message(id: string, text: string): MessageBlock {
+  return { id, kind: "message", role: "assistant", text, questions: [] };
+}
+
+function historyBlocks(id: string, start: number, end: number, revision: number, messageCount: number): MessageBlock[] {
+  return Array.from({ length: end - start }, (_, offset) => {
+    const index = start + offset;
+    return [
+      message(historyBlockId(id, index * 2), `History fixture ${index}.\n\n## AGENTS.md\n${instructions}\n## Reply\n${"Visible history fixture. ".repeat(24)}${index === messageCount - 1 ? `\n\nLatest poll update ${revision}.` : ""}`),
+      {
+        id: historyBlockId(id, index * 2 + 1), call_id: `${id}-call-${index}`, kind: "function_call_output", role: "tool",
+        tool_name: "exec_command", input: `printf fixture-${index}`, text: `Tool output fixture ${index}.\n${output}`,
+        status: "completed", questions: []
+      }
+    ];
+  }).flat();
+}
+
+function grokEvents(id: string, start: number, end: number, revision: number, messageCount: number): GrokHistoryEvent[] {
+  return Array.from({ length: end - start }, (_, offset) => {
+    const index = start + offset;
+    const callId = `${id}-call-${index}`;
+    return [
+      {
+        id: grokEventId(index * 3), kind: "agent_message_chunk",
+        text: `History fixture ${index}.${index === messageCount - 1 ? `\n\nLatest poll update ${revision}.` : ""}`
+      },
+      { id: grokEventId(index * 3 + 1), callId, kind: "tool_call", method: "exec_command", detail: `printf fixture-${index}`, status: "completed" },
+      {
+        id: grokEventId(index * 3 + 2), callId, kind: "tool_result", method: "exec_command", status: "completed",
+        text: `Tool output fixture ${index}.\n${output}`
+      }
+    ];
+  }).flat();
+}
+
+function detail(summary: ThreadSummary, blocks: MessageBlock[], start = 0, history?: HistoryMetadata, messageCount = totalMessages): ThreadDetail {
+  return {
+    summary: { ...summary, message_count: messageCount }, blocks, history, messages: [], raw_event_count: messageCount * 2, total_blocks: messageCount * 2,
+    has_more_blocks: start > 0, before_cursor: start > 0 ? `b:${start * 2}` : null
+  };
+}
+
+async function installHistory(page: Page, provider: Provider) {
+  await mockApi(page);
+  const requests: Request[] = [];
+  let revision = 0;
+  let messageCount = totalMessages;
+  const changedEventId = (id: string) => provider === "grok" ? grokEventId((messageCount - 1) * 3) : historyBlockId(id, messageCount * 2 - 2);
+  const historyFor = (id: string): HistoryMetadata => ({
+    epoch: `performance:${id}`, revision: `revision:${revision}`,
+    changes: Array.from({ length: revision + 1 }, (_, index) => ({
+      revision: `revision:${index}`, changedIds: index ? [changedEventId(id)] : []
+    }))
+  });
+  const pageFor = (id: string, before?: string | null) => {
+    requests.push({ id, before: before ?? null });
+    if (provider === "grok") {
+      const events = grokEvents(id, 0, messageCount, revision, messageCount);
+      const end = before ? events.findIndex(event => event.id === before) : events.length;
+      if (end < 0) throw new Error("Invalid native Grok fixture event cursor");
+      const start = Math.max(0, end - pageMessages * 3);
+      return { start, end, blocks: [] as MessageBlock[], events: events.slice(start, end), history: historyFor(id), hasMore: start > 0, beforeCursor: start > 0 ? events[start].id : null };
+    }
+    const end = pageEnd(id, before, provider, messageCount);
+    const start = Math.max(0, end - pageMessages);
+    return {
+      start, end, blocks: historyBlocks(id, start, end, revision, messageCount), events: [] as GrokHistoryEvent[], history: historyFor(id),
+      hasMore: start > 0, beforeCursor: start > 0 ? historyBlockId(id, start * 2) : null
+    };
+  };
+  await mockCommand(page, "threads.list", () => summaries.map(summary => ({ ...summary, message_count: messageCount })));
+  if (provider === "codex") {
+    await mockCommand(page, "threads.detail", args => {
+      const summary = summaries.find(row => row.id === args.id)!;
+      const window = pageFor(summary.id, args.options?.before);
+      return detail(summary, window.blocks, window.start, window.history, messageCount);
+    });
+    await mockCommand(page, "threads.blocks", args => {
+      const window = pageFor(args.id, args.options?.before);
+      return {
+        threadId: args.id, blocks: window.blocks, history: window.history, totalBlocks: messageCount * 2,
+        hasMoreBlocks: window.start > 0, beforeCursor: window.start > 0 ? `b:${window.start * 2}` : null
+      };
+    });
+  } else if (provider === "claude") {
+    const summary: ClaudeSessionSummary = {
+      id: "performance-claude", sessionKey: "claude:performance", title: "Claude performance fixture",
+      cwd: "/fixture/workspace", path: "/fixture/session.jsonl", status: "recent", formatVersion: "2.1.284",
+      messageCount, canRename: true, canDelete: true
+    };
+    await mockCommand(page, "claude.list", () => [{ ...summary, messageCount }]);
+    await mockCommand(page, "claude.detail", args => {
+      const window = pageFor(summary.id, args.before);
+      const events: ClaudeHistoryEvent[] = window.blocks.map(block => block.role === "tool"
+        ? { id: block.id, callId: block.call_id, kind: "tool_call", role: "Bash", detail: block.input, result: block.text, status: "completed" }
+        : { id: block.id, kind: "assistant_message", text: block.text });
+      return { summary: { ...summary, messageCount }, events, history: window.history, totalEvents: messageCount * 2, hasMore: window.start > 0, beforeCursor: window.start > 0 ? historyBlockId(summary.id, window.start * 2) : null };
+    });
+  } else if (provider === "grok") {
+    const summary: GrokSessionSummary = {
+      id: "performance-grok", title: "Grok performance fixture", cwd: "/fixture/workspace",
+      path: "/fixture/session.jsonl", messageCount, status: "recent"
+    };
+    await mockCommand(page, "grok.list", () => [{ ...summary, messageCount }]);
+    await mockCommand(page, "grok.detail", args => {
+      const window = pageFor(summary.id, args.before);
+      return {
+        summary: { ...summary, messageCount }, events: window.events,
+        history: window.history, totalEvents: messageCount * 3, hasMore: window.hasMore,
+        beforeCursor: window.beforeCursor
+      };
+    });
+  } else {
+    const agent: SubagentActivity = { agentId: "performance-child", name: "Performance child fixture", available: true, status: "running" };
+    const root = detail(summaries[0], [
+      message("root-message", "Parent fixture remains independently scrollable."),
+      { id: "child-activity", role: "tool", kind: "function_call", tool_name: "spawn_agent", questions: [], subagent: agent }
+    ], 0, historyFor(summaries[0].id), messageCount);
+    await mockCommand(page, "threads.detail", () => root);
+    await mockCommand(page, "threads.subagentDetail", args => {
+      const window = pageFor(agent.agentId!, args.request.before);
+      return {
+        rootThreadId: summaries[0].id, parentThreadId: summaries[0].id, agent,
+        detail: detail({ ...summaries[0], id: agent.agentId!, title: agent.name }, window.blocks, window.start, window.history, messageCount)
+      };
+    });
+  }
+  const stream = page.locator(provider === "claude" || provider === "grok" ? ".provider-events" : provider === "subagent" ? ".subagent-stream" : ".conversation-main .message-stream");
+  return {
+    requests, stream,
+    updateLatest: () => { revision += 1; },
+    appendLatest: () => { messageCount += 1; revision += 1; },
+    open: async () => {
+      await page.goto("/");
+      if (provider === "claude" || provider === "grok") await page.locator(".side-nav").getByRole("button", { name: provider === "claude" ? "Claude Code" : "Grok Build", exact: true }).click();
+      else {
+        await page.locator(".thread-item").filter({ hasText: summaries[0].title }).click();
+        if (provider === "subagent") await page.getByRole("button", { name: /Performance child fixture/ }).click();
+      }
+      await expect(stream.locator("details.execution-group")).toHaveCount(pageMessages);
+      await expect.poll(() => stream.evaluate(node => node.scrollTop >= node.scrollHeight - node.clientHeight - 1)).toBe(true);
+    }
+  };
+}
+
+function historyId(provider: Provider) {
+  if (provider === "claude") return "performance-claude";
+  if (provider === "grok") return "performance-grok";
+  if (provider === "subagent") return "performance-child";
+  return summaries[0].id;
+}
+
+function expectedOlderCursors(provider: Provider): string[] {
+  const id = historyId(provider);
+  const starts = [totalMessages - pageMessages, totalMessages - pageMessages * 2];
+  return starts.map(start => provider === "codex" || provider === "subagent"
+    ? `b:${start * 2}:${historyBlockId(id, start * 2)}`
+    : provider === "grok" ? grokEventId(start * 3) : historyBlockId(id, start * 2));
+}
+
+async function loadRemainingPages(stream: Locator) {
+  for (const count of [pageMessages * 2, totalMessages]) {
+    await stream.evaluate(node => {
+      node.scrollTop = Math.max(201, node.scrollHeight - node.clientHeight);
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+      node.scrollTop = 120;
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(stream.locator("details.execution-group")).toHaveCount(count);
+    await expect(stream.locator(".history-loading")).toHaveCount(0);
+  }
+}
+
+for (const provider of ["codex", "claude", "grok", "subagent"] as const) {
+  test(`${provider} polling refreshes only the latest page after loading three long history pages`, async ({ page }) => {
+    await page.clock.install();
+    const fixture = await installHistory(page, provider);
+    await fixture.open();
+    expect(fixture.requests.filter(request => request.before)).toEqual([]);
+    await loadRemainingPages(fixture.stream);
+    expect(fixture.requests.filter(request => request.before).map(request => request.before)).toEqual(expectedOlderCursors(provider));
+    expect(fixture.requests.filter(request => request.before)).toHaveLength(2);
+    if (provider === "codex") {
+      await fixture.stream.getByRole("button", { name: "显示全部历史", exact: true }).first().click();
+      await expect(fixture.stream.getByText("History fixture 0.", { exact: true })).toHaveCount(1);
+    }
+    const group = fixture.stream.locator("details.execution-group").first();
+    await group.locator(":scope > summary").click();
+    const command = group.locator("details.execution-command").first();
+    await command.locator(":scope > summary").click();
+    await expect(command.locator(".execution-section").last()).toContainText("Tool output fixture 0.");
+    for (let revision = 1; revision <= 2; revision++) {
+      const latestReads = fixture.requests.filter(request => !request.before).length;
+      fixture.updateLatest();
+      await page.clock.fastForward(6000);
+      await expect.poll(() => fixture.requests.filter(request => !request.before).length).toBeGreaterThan(latestReads);
+      await expect(fixture.stream.getByText(`Latest poll update ${revision}.`, { exact: true })).toHaveCount(1);
+      expect(fixture.requests.filter(request => request.before).map(request => request.before)).toEqual(expectedOlderCursors(provider));
+      expect(fixture.requests.filter(request => request.before)).toHaveLength(2);
+      await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages);
+      await expect(fixture.stream.getByText("History fixture 0.", { exact: true })).toHaveCount(1);
+      await expect(command).toHaveAttribute("open", "");
+    }
+  });
+}
+
+test("Grok polling appends a new event without refetching the loaded older pages", async ({ page }) => {
+  await page.clock.install();
+  const fixture = await installHistory(page, "grok");
+  await fixture.open();
+  await loadRemainingPages(fixture.stream);
+  const oldPageCursors = expectedOlderCursors("grok");
+  const latestReads = fixture.requests.filter(request => !request.before).length;
+  fixture.appendLatest();
+  await page.clock.fastForward(6000);
+  await expect.poll(() => fixture.requests.filter(request => !request.before).length).toBeGreaterThan(latestReads);
+  await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages + 1);
+  expect(fixture.requests.filter(request => request.before).map(request => request.before)).toEqual(oldPageCursors);
+  expect(fixture.requests.filter(request => request.before)).toHaveLength(2);
+  const appendedMessageId = `grok:${grokEventId(totalMessages * 3)}:0`;
+  const appendedMessage = fixture.stream.locator(`[data-timeline-id="${appendedMessageId}"]`);
+  await expect(appendedMessage).toHaveCount(1);
+  await expect(appendedMessage).toContainText(`History fixture ${totalMessages}.`);
+  const appendedGroup = fixture.stream.locator("details.execution-group").last();
+  await expect(appendedGroup).toHaveCount(1);
+  const messageIndex = await appendedMessage.evaluate(element => Array.from(element.parentElement!.children).indexOf(element));
+  const groupIndex = await appendedGroup.evaluate(element => Array.from(element.parentElement!.children).indexOf(element));
+  expect(messageIndex).toBeLessThan(groupIndex);
+  await appendedGroup.locator(":scope > summary").click();
+  const command = appendedGroup.locator("details.execution-command").first();
+  await expect(command.locator(".command-preview")).toContainText(`printf fixture-${totalMessages}`);
+  await command.locator(":scope > summary").click();
+  await expect(command.locator(".execution-section").last()).toContainText(`Tool output fixture ${totalMessages}.`);
+});
+
+async function measureToggle(summary: Locator, open: boolean) {
+  await summary.scrollIntoViewIfNeeded();
+  return summary.evaluate(async (element, expectedOpen) => {
+    const started = performance.now();
+    (element as HTMLElement).click();
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    if ((element.parentElement as HTMLDetailsElement).open !== expectedOpen) throw new Error("Disclosure did not reach its expected state");
+    return performance.now() - started;
+  }, open);
+}
+
+function p95(samples: number[]) {
+  return [...samples].sort((left, right) => left - right)[Math.ceil(samples.length * 0.95) - 1];
+}
+
+test("long history expansion, scrolling and cached thread switching stay within the local interaction budget", async ({ page }, info) => {
+  test.setTimeout(60000);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const fixture = await installHistory(page, "codex");
+  await fixture.open();
+  await loadRemainingPages(fixture.stream);
+  const samples: Record<"expand" | "scroll" | "switch", number[]> = { expand: [], scroll: [], switch: [] };
+  const group = fixture.stream.locator("details.execution-group").first();
+  const groupSummary = group.locator(":scope > summary");
+  const instruction = fixture.stream.locator("details.instruction-file").first();
+  for (let sample = 0; sample < 10; sample++) {
+    samples.expand.push(await measureToggle(groupSummary, true));
+    const command = group.locator("details.execution-command").first();
+    await expect(command.locator(".execution-section")).toHaveCount(0);
+    samples.expand.push(await measureToggle(command.locator(":scope > summary"), true));
+    await expect(command.locator(".execution-section").last()).toContainText("Tool output fixture 0.");
+    samples.expand.push(await measureToggle(command.locator(":scope > summary"), false));
+    await expect(command.locator(".execution-section")).toHaveCount(0);
+    samples.expand.push(await measureToggle(groupSummary, false));
+    await expect(instruction.locator(".instruction-file-body")).toHaveCount(0);
+    samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), true));
+    await expect(instruction.locator(".instruction-file-body")).toContainText("Follow the isolated fixture rules");
+    samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), false));
+  }
+  for (let sample = 0; sample < 20; sample++) {
+    samples.scroll.push(await fixture.stream.evaluate(async (element, index) => {
+      const started = performance.now();
+      element.scrollTop = (element.scrollHeight - element.clientHeight) * (index % 2 ? 0.25 : 0.75);
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return performance.now() - started;
+    }, sample));
+  }
+  const second = page.locator(".thread-item").filter({ hasText: summaries[1].title });
+  await second.click();
+  await expect(page.locator(".conversation-title")).toHaveText(summaries[1].title);
+  await expect(fixture.stream.locator("details.execution-group")).toHaveCount(pageMessages);
+  await loadRemainingPages(fixture.stream);
+  for (let sample = 0; sample < 20; sample++) {
+    const title = summaries[sample % 2].title;
+    const row = page.locator(".thread-item").filter({ hasText: title });
+    samples.switch.push(await row.evaluate(async (element, expectedTitle) => {
+      const started = performance.now();
+      (element as HTMLElement).click();
+      await new Promise<void>((resolve, reject) => {
+        const ready = () => requestAnimationFrame(() => {
+          if (document.querySelector(".conversation-title")?.textContent === expectedTitle) requestAnimationFrame(() => resolve());
+          else if (performance.now() - started > 5000) reject(new Error("Thread did not switch to its expected title"));
+          else ready();
+        });
+        ready();
+      });
+      return performance.now() - started;
+    }, title));
+    await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages);
+  }
+  const measurements = Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, { samples: values.length, p95Ms: Number(p95(values).toFixed(1)), maxMs: Number(Math.max(...values).toFixed(1)) }]));
+  info.annotations.push({ type: "performance", description: JSON.stringify({ browser: info.project.name, historyMessages: totalMessages, ...measurements }) });
+  console.log(`Local interaction measurements: ${JSON.stringify({ browser: info.project.name, historyMessages: totalMessages, ...measurements })}`);
+  for (const [name, values] of Object.entries(samples)) expect(p95(values), `${name} event-to-paint p95`).toBeLessThanOrEqual(interactionBudgetMs);
+});

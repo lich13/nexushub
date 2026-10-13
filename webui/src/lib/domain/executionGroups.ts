@@ -67,13 +67,15 @@ function activityPreview(...sources: Array<string | null | undefined>): string |
   for (const source of sources) {
     if (!source?.trim()) continue;
     let text = source;
-    try {
-      const value: unknown = JSON.parse(source);
-      if (value && typeof value === "object") {
-        const fields = value as Record<string, unknown>;
-        text = ["cmd", "command", "title", "path", "file_path", "query", "code"].map(key => fields[key]).find(value => typeof value === "string") as string || source;
-      }
-    } catch { /* Native commands and titles may already be plain text. */ }
+    if (source.trimStart().startsWith("{")) {
+      try {
+        const value: unknown = JSON.parse(source);
+        if (value && typeof value === "object") {
+          const fields = value as Record<string, unknown>;
+          text = ["cmd", "command", "title", "path", "file_path", "query", "code"].map(key => fields[key]).find(value => typeof value === "string") as string || source;
+        }
+      } catch { /* Native commands and titles may already be plain text. */ }
+    }
     const cleaned = visibleMarkdown(text).replace(/\s+/g, " ").trim();
     if (cleaned) return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
   }
@@ -168,13 +170,13 @@ export function groupCodexCommandBlocks(blocks: MessageBlock[]): ExecutionRender
       callId: block.call_id,
       turnId: block.turn_id,
       tool,
-      instructionFile: isInstructionFileActivity(block.tool_name, block.input, block.summary, toolBlockDetailText(block)),
+      instructionFile: tool && isInstructionFileActivity(block.tool_name, block.input, block.summary, toolBlockDetailText(block)),
       command: tool && (isCommandText(block.tool_name) || isCommandText(block.kind)),
       title: commandTitle(block.tool_name, block.kind),
-      preview: activityPreview(block.input),
+      preview: tool ? activityPreview(block.input) : undefined,
       phase: result ? "result" : "call",
       status: block.status,
-      sections: [{ label: result ? "结果" : "命令详情", text: toolBlockDetailText(block) }]
+      sections: tool ? [{ label: result ? "结果" : "命令详情", text: toolBlockDetailText(block) }] : []
     };
   }), "Codex");
 }
@@ -184,8 +186,8 @@ export function groupGrokCommandEvents(events: GrokHistoryEvent[]): ExecutionRen
     const command = event.kind.startsWith("tool_") && (isCommandText(event.method) || isCommandText(event.text));
     return {
       item: event,
-      key: `grok:${event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
-      sourceIds: [`event:${index}`, event.callId].filter((value): value is string => Boolean(value)),
+      key: `grok:${event.id ?? event.userMessage?.id ?? event.callId ?? `${event.timestamp ?? ""}:${event.kind}:${activityFingerprint(event.kind.startsWith("tool_") ? event.text ?? event.detail ?? "" : "")}`}`,
+      sourceIds: [event.id, `event:${index}`, event.callId].filter((value): value is string => Boolean(value)),
       callId: event.callId,
       tool: event.kind.startsWith("tool_"),
       instructionFile: isInstructionFileActivity(event.method, event.text, event.detail),

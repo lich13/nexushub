@@ -192,6 +192,14 @@ impl GrokUseCases {
     pub fn detail(&self, id: &str) -> Result<crate::grok::GrokSessionDetail> {
         crate::grok::grok_session_detail(&self.paths, id, None)
     }
+    pub fn page(
+        &self,
+        id: &str,
+        limit: Option<usize>,
+        before: Option<&str>,
+    ) -> Result<crate::grok::GrokSessionDetail> {
+        crate::grok::grok_session_page(&self.paths, id, None, limit, before, None)
+    }
     pub async fn rename(&self, id: &str, title: &str) -> Result<crate::grok::GrokSessionSummary> {
         crate::grok::rename_grok_session(&self.paths, id, title).await
     }

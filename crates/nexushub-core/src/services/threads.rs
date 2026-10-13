@@ -89,6 +89,8 @@ pub struct ThreadDetailReadPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadBlocksPage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::jsonl_cache::HistoryMetadata>,
     pub thread_id: String,
     pub blocks: Vec<MessageBlock>,
     pub total_blocks: usize,
@@ -293,6 +295,7 @@ pub fn thread_blocks_page_for_plan(
 ) -> ThreadBlocksPage {
     let window = window_thread_detail_for_plan(detail, plan);
     ThreadBlocksPage {
+        history: window.history,
         thread_id: plan.thread_id.clone(),
         blocks: window.blocks,
         total_blocks: window.total_blocks,
@@ -760,6 +763,8 @@ mod tests {
     #[test]
     fn detail_runtime_state_applies_running_job_once_in_core() {
         let detail = ThreadDetail {
+            history_subagent_blocks: Vec::new(),
+            history: None,
             subagents: None,
             subagent_updates: Default::default(),
             summary: thread(

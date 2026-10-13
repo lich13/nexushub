@@ -647,6 +647,8 @@ fn thread_detail_with_blocks(thread_id: &str, block_count: usize) -> ThreadDetai
         .collect::<Vec<_>>();
 
     ThreadDetail {
+        history_subagent_blocks: Vec::new(),
+        history: None,
         subagents: None,
         subagent_updates: Default::default(),
         summary: ThreadSummary {

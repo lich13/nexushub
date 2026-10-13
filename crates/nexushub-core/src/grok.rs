@@ -6,9 +6,10 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::Read,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
     time::Duration,
 };
 
@@ -54,13 +55,23 @@ pub struct GrokSessionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokSessionDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::jsonl_cache::HistoryMetadata>,
+    #[serde(default)]
+    pub total_events: usize,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub before_cursor: Option<String>,
     pub summary: GrokSessionSummary,
-    pub events: Vec<GrokHistoryEvent>,
+    pub events: Vec<Arc<GrokHistoryEvent>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokHistoryEvent {
+    #[serde(default)]
+    pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message: Option<crate::user_message::UserMessage>,
     pub timestamp: Option<String>,
@@ -214,6 +225,17 @@ pub fn grok_session_detail(
     id: &str,
     cwd: Option<&str>,
 ) -> Result<GrokSessionDetail> {
+    grok_session_page(paths, id, cwd, None, None, None)
+}
+
+pub fn grok_session_page(
+    paths: &GrokPaths,
+    id: &str,
+    cwd: Option<&str>,
+    limit: Option<usize>,
+    before: Option<&str>,
+    since: Option<&str>,
+) -> Result<GrokSessionDetail> {
     let mut summary = resolve_session(paths, id)?;
     ensure!(
         cwd.is_none_or(|cwd| summary.cwd == cwd),
@@ -225,68 +247,119 @@ pub fn grok_session_detail(
         None,
         &summary.id,
     ));
-    let history = summary.path.join("updates.jsonl");
-    static CACHE: crate::read_cache::ReadCache<Vec<GrokHistoryEvent>> =
-        crate::read_cache::ReadCache::new(8 * 1024 * 1024);
-    let mut events = CACHE.read(
-        &history,
-        |events, _| {
-            events
-                .iter()
-                .map(|event| {
-                    256 + event
-                        .user_message
-                        .as_ref()
-                        .map_or(0, crate::user_message::UserMessage::weight)
-                        + event.text.as_ref().map_or(0, String::len) as u64
-                        + event.detail.as_ref().map_or(0, String::len) as u64
-                })
-                .sum()
-        },
-        || read_history(&history),
-    )?;
-    for message in events
-        .iter_mut()
-        .filter_map(|event| event.user_message.as_mut())
-    {
-        message.refresh_files(Some(&summary.cwd));
+    let path = summary.path.join("updates.jsonl");
+    if !path.exists() {
+        return Ok(GrokSessionDetail {
+            summary,
+            events: Vec::new(),
+            total_events: 0,
+            has_more: false,
+            before_cursor: None,
+            history: None,
+        });
     }
-    Ok(GrokSessionDetail { summary, events })
+    static CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
+        crate::jsonl_cache::JsonlCache::new(192 * 1024 * 1024);
+    CACHE.read(
+        &path,
+        |size| Ok(size.saturating_sub(64 * 1024 * 1024)),
+        true,
+        |state, line, _, start| {
+            if let Ok(value) = serde_json::from_slice::<Value>(line) {
+                state.push(value, start);
+            }
+            Ok(())
+        },
+        |state, info| {
+            if info.changed {
+                #[cfg(test)]
+                HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
+                state.journal.record(
+                    &info,
+                    std::mem::take(&mut state.events.dirty)
+                        .into_iter()
+                        .collect(),
+                );
+                state.weight = state
+                    .events
+                    .events
+                    .iter()
+                    .map(|event| {
+                        256 + event
+                            .user_message
+                            .as_ref()
+                            .map_or(0, crate::user_message::UserMessage::weight)
+                            + event.text.as_ref().map_or(0, String::len) as u64
+                            + event.detail.as_ref().map_or(0, String::len) as u64
+                    })
+                    .sum::<u64>();
+            }
+            let source = &state.events.events;
+            let total_events = source.len();
+            let end = match before {
+                Some(id) => source
+                    .iter()
+                    .position(|event| event.id == id)
+                    .context("历史位置已变化，请刷新会话")?,
+                None => total_events,
+            };
+            let start = limit.map_or(0, |n| end.saturating_sub(n.clamp(1, 500)));
+            let mut events = source[start..end].to_vec();
+            for event in &mut events {
+                if event
+                    .user_message
+                    .as_ref()
+                    .is_some_and(|message| !message.attachments.is_empty())
+                {
+                    if let Some(message) = Arc::make_mut(event).user_message.as_mut() {
+                        message.refresh_files(Some(&summary.cwd));
+                    }
+                }
+            }
+            Ok(GrokSessionDetail {
+                summary,
+                events,
+                total_events,
+                has_more: start > 0,
+                before_cursor: (start > 0).then(|| source[start].id.clone()),
+                history: Some(state.journal.metadata(since)),
+            })
+        },
+        |state| state.weight,
+    )
 }
 
 #[cfg(test)]
 thread_local! { static HISTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
-fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
-    #[cfg(test)]
-    HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
-    let mut events = Vec::new();
-    let mut tool_indices: HashMap<String, usize> = HashMap::new();
-    if history.is_file() {
-        let mut file = fs::File::open(history)?;
-        let offset = file.metadata()?.len().saturating_sub(64 * 1024 * 1024);
-        file.seek(SeekFrom::Start(offset))?;
-        let mut reader = BufReader::new(file);
-        let mut position = offset;
-        if offset > 0 {
-            let mut partial = String::new();
-            position += reader.read_line(&mut partial)? as u64;
-        }
-        let mut user_parts = Vec::new();
-        let mut user_native_key = None;
-        let mut user_start = 0;
-        let mut seen_user_updates = HashSet::new();
-        loop {
-            let mut line = String::new();
-            let bytes = reader.read_line(&mut line)?;
-            if bytes == 0 {
-                break;
-            }
-            let line_start = position;
-            position += bytes as u64;
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
+#[derive(Default)]
+struct GrokReader {
+    events: GrokEvents,
+    journal: crate::jsonl_cache::HistoryJournal,
+    weight: u64,
+}
+#[derive(Default)]
+struct GrokEvents {
+    events: Vec<Arc<GrokHistoryEvent>>,
+    tool_indices: HashMap<String, usize>,
+    user_parts: Vec<Value>,
+    user_native_key: Option<String>,
+    user_start: u64,
+    seen_user_updates: HashSet<String>,
+    dirty: std::collections::BTreeSet<String>,
+}
+impl GrokReader {
+    fn push(&mut self, value: Value, line_start: u64) {
+        let GrokEvents {
+            mut events,
+            mut tool_indices,
+            mut user_parts,
+            mut user_native_key,
+            mut user_start,
+            mut seen_user_updates,
+            mut dirty,
+        } = std::mem::take(&mut self.events);
+        for value in std::iter::once(value) {
             let params = value.get("params").unwrap_or(&value);
             let update = params.get("update").unwrap_or(params);
             let kind = update
@@ -348,7 +421,7 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                 let same = !user_parts.is_empty()
                     && events
                         .last()
-                        .is_some_and(|event: &GrokHistoryEvent| event.kind == kind)
+                        .is_some_and(|event: &Arc<GrokHistoryEvent>| event.kind == kind)
                     && user_native_key == native_key;
                 if !same {
                     user_parts.clear();
@@ -367,11 +440,13 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                     &Value::Array(user_parts.clone()),
                 );
                 if same {
-                    let previous = events.last_mut().unwrap();
+                    let previous = Arc::make_mut(events.last_mut().unwrap());
+                    dirty.insert(previous.id.clone());
                     previous.text = Some(message.text.clone());
                     previous.user_message = Some(message);
                 } else {
-                    events.push(GrokHistoryEvent {
+                    events.push(Arc::new(GrokHistoryEvent {
+                        id: format!("grok:{line_start}"),
                         user_message: Some(message.clone()),
                         timestamp: value
                             .get("timestamp")
@@ -386,14 +461,15 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                         call_id,
                         status,
                         detail,
-                    });
+                    }));
                 }
                 continue;
             }
             user_parts.clear();
             if kind.starts_with("tool_") {
                 if let Some(index) = call_id.as_ref().and_then(|id| tool_indices.get(id)) {
-                    let previous: &mut GrokHistoryEvent = &mut events[*index];
+                    let previous = Arc::make_mut(&mut events[*index]);
+                    dirty.insert(previous.id.clone());
                     if text.is_some() {
                         previous.text = text;
                     }
@@ -412,8 +488,10 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
             if kind.ends_with("message_chunk") {
                 if let Some(previous) = events
                     .last_mut()
-                    .filter(|event: &&mut GrokHistoryEvent| event.kind == kind)
+                    .filter(|event: &&mut Arc<GrokHistoryEvent>| event.kind == kind)
                 {
+                    let previous = Arc::make_mut(previous);
+                    dirty.insert(previous.id.clone());
                     previous
                         .text
                         .get_or_insert_with(String::new)
@@ -421,7 +499,8 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                     continue;
                 }
             }
-            events.push(GrokHistoryEvent {
+            events.push(Arc::new(GrokHistoryEvent {
+                id: format!("grok:{line_start}"),
                 user_message: None,
                 timestamp: value.get("timestamp").map(|value| {
                     value
@@ -438,10 +517,43 @@ fn read_history(history: &Path) -> Result<Vec<GrokHistoryEvent>> {
                 call_id,
                 status,
                 detail,
-            });
+            }));
         }
+        self.events = GrokEvents {
+            events,
+            tool_indices,
+            user_parts,
+            user_native_key,
+            user_start,
+            seen_user_updates,
+            dirty,
+        };
     }
-    Ok(events)
+}
+
+#[cfg(test)]
+fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
+    let cache = crate::jsonl_cache::JsonlCache::<GrokReader>::new(192 * 1024 * 1024);
+    cache.read(
+        path,
+        |size| Ok(size.saturating_sub(64 * 1024 * 1024)),
+        true,
+        |state, line, _, start| {
+            if let Ok(value) = serde_json::from_slice::<Value>(line) {
+                state.push(value, start);
+            }
+            Ok(())
+        },
+        |state, _| {
+            Ok(state
+                .events
+                .events
+                .iter()
+                .map(|event| (**event).clone())
+                .collect())
+        },
+        |_| 0,
+    )
 }
 
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {

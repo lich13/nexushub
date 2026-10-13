@@ -37,6 +37,10 @@ pub struct ThreadSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDetail {
+    #[serde(skip)]
+    pub history_subagent_blocks: Vec<MessageBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::jsonl_cache::HistoryMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<super::subagents::SubagentCollection>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]

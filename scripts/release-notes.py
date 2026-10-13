@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.17": [
+        "减少长线程重复读取和历史轮询开销，改善页面切换、工具展开与滚动响应",
+        "Grok 支持上滚分页，三种 Provider 按 100M／300M 统一线程大小颜色。",
+    ],
     "1.2.16": [
         "向上滚动自动加载较早消息，保留当前阅读位置，搜索与分页协同工作。",
         "Codex、Claude Code、Grok 线程列表显示 K／M／G 大小，支持本机和远程服务器。",
@@ -135,6 +139,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.17":
+        sections = {
+            "版本概览": ["本版优化长线程与多会话列表的读取、页面切换和滚动，统一线程大小颜色分级。"],
+            "功能调整": [
+                "Codex、Claude Code、Grok 和子智能体详情分开刷新最新内容与加载较早历史；Grok 现在也支持持续上滚自动分页。",
+                "三种 Provider 在本机与远程服务器统一按实际字节分色：小于 100M 为绿色，100M 至不足 300M 为琥珀色，300M 及以上为红色，1M = 1024² 字节。",
+                "K／M／G 数值格式、准确字节提示和卡片布局保持原有规则；未知为灰色，部分结果保留 ≥ 和统计不完整提示。",
+            ],
+            "问题修复": [
+                "减少未变化会话的重复解析、详情查询连带扫描列表，以及多会话列表反复淘汰正文缓存的开销。",
+                "静态旧页不再随每次轮询重复请求；较早工具结果、待回答问题和子智能体状态仍会更新。机器或线程切换后丢弃迟到响应。",
+                "线程首击立即选择，工作区按需加载，折叠正文展开时再渲染；缓存 Markdown 解析与时间线位置，保留搜索定位、复制、导出和滚动锚点。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，不新增公共命令或数据库表；分页和历史变更信息均为可选扩展，旧客户端与旧服务继续兼容。",
+                "保留 Codex、Claude Code、Grok、Probe、设置、通知、附件和管理保护；文件替换、截断、原地改写及身份变化会使相应缓存失效。",
+                "窗口隐藏时暂停界面轮询，后台 monitor 独立运行。整理当前文档和重复实现，原生会话、连接、凭据及 Bark 配置继续保留。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG 安装包与 SHA-256 校验文件、updater 压缩包与签名。",
+                "Linux x86_64：API 服务包与 SHA-256 校验文件；latest.json 仅映射 darwin-aarch64，共七项资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App。首次打开大文件仍需读取正文，后续刷新和历史阅读会复用缓存。",
+                "安装前核对校验和及 updater 签名。macOS 包没有 Developer ID 签名或 Apple 公证，Minisign 不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.16":
         sections = {

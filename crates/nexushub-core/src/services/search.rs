@@ -214,10 +214,13 @@ impl SearchUseCases {
             for (index, event) in detail.events.into_iter().enumerate() {
                 let corpus = json_corpus(&event)?;
                 if let Some(snippet) = find_snippet(&corpus, needle) {
-                    let position = event
-                        .call_id
-                        .clone()
-                        .unwrap_or_else(|| format!("event:{index}"));
+                    let position = event.call_id.clone().unwrap_or_else(|| {
+                        if event.id.is_empty() {
+                            format!("event:{index}")
+                        } else {
+                            event.id.clone()
+                        }
+                    });
                     push_result(
                         output,
                         &summary.id,

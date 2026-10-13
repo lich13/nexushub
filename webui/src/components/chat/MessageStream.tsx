@@ -1,4 +1,5 @@
 import { UserMessage } from "../common/UserMessage";
+import { memo } from "react";
 import { ToolOutput } from "../common/FilePathLink";
 import { MarkdownContent } from "../common/MarkdownContent";
 import { CopyReplyButton } from "../common/CopyReplyButton";
@@ -29,7 +30,7 @@ import { extractPlanText } from "../../lib/domain/codexViewModel";
 import type { MessageBlock } from "../../types";
 import { SubagentActivityRow, type OpenSubagent } from "./SubagentActivity";
 
-export function MessageBlockView({
+export const MessageBlockView = memo(function MessageBlockView({
   block,
   onShowHistory,
   historyExpanded = false,
@@ -77,7 +78,7 @@ export function MessageBlockView({
       </div>
     </article>
   );
-}
+});
 
 function ToolBlockView({ block }: { block: MessageBlock }) {
   const summary = toolBlockSummary(block);

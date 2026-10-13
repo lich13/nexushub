@@ -122,7 +122,22 @@ pub(super) async fn rpc_dispatch(
         }
         rpc_commands::GROK_DETAIL => {
             let id = rpc_required_string(&args, "id")?;
-            grok_detail(State(state), headers, axum::extract::Path(id)).await
+            grok_detail(
+                State(state),
+                headers,
+                axum::extract::Path(id),
+                axum::extract::Query(super::grok::GrokDetailQuery {
+                    limit: args
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
+                    before: args
+                        .get("before")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                }),
+            )
+            .await
         }
         rpc_commands::GROK_RENAME => {
             grok_rename(State(state), headers, Json(rpc_payload(&args)?)).await

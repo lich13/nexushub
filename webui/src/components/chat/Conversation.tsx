@@ -2,7 +2,7 @@ import { UserMessageScope } from "../common/UserMessage";
 import { MarkdownPathScope } from "../common/FilePathLink";
 import { DisclosureScope } from "../common/ActivityDetails";
 import { Archive, ArchiveRestore, Check, ChevronLeft, Copy, Pencil, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageBlockView } from "./MessageStream";
 import { ExecutionGroupView } from "../common/ExecutionGroupView";
 import { useSessionSelection } from "../../lib/query/sessions";
@@ -60,18 +60,18 @@ export function Conversation(props: {
   const selectedAgent = agentSelection?.root === props.threadId && agentSelection.machine === machine ? agentSelection : null;
   useEffect(() => { setAgentSelection(null); }, [props.threadId, machine]);
   const viewportAnchor = useRef<{ element: HTMLElement; offset: number } | null>(null);
-  const captureViewport = () => {
+  const captureViewport = useCallback(() => {
     const element = stream.current;
     if (!element) return;
     const top = element.getBoundingClientRect().top;
     const anchor = Array.from(element.querySelectorAll<HTMLElement>("[data-timeline-id]"))
       .find(item => item.getBoundingClientRect().bottom > top);
     viewportAnchor.current = anchor ? { element: anchor, offset: anchor.getBoundingClientRect().top - top } : null;
-  };
-  const openAgent = (agent: SubagentActivity, trigger: HTMLButtonElement) => {
+  }, []);
+  const openAgent = useCallback((agent: SubagentActivity, trigger: HTMLButtonElement) => {
     captureViewport();
     setAgentSelection({ root: props.threadId, machine: machineScope(), agent, trigger });
-  };
+  }, [captureViewport, props.threadId]);
   const closeAgent = () => {
     captureViewport();
     const trigger = selectedAgent?.trigger;
@@ -79,13 +79,13 @@ export function Conversation(props: {
     requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }); });
   };
   const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
-  const visibleBlocks = visibleConversationBlocksForHistory(blocks, historyExpanded);
-  const visibleItems = groupCodexCommandBlocks(visibleBlocks);
+  const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded), [blocks, historyExpanded]);
+  const visibleItems = useMemo(() => groupCodexCommandBlocks(visibleBlocks), [visibleBlocks]);
   const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
     && props.capabilities.threadSubagents !== true
     && visibleBlocks.some(block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent");
-  const timelineEntries = userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : []));
+  const timelineEntries = useMemo(() => userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : [])), [visibleItems]);
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
     if (keys.includes(props.threadId)) props.onSelect(null);
   });
@@ -100,6 +100,11 @@ export function Conversation(props: {
       return { cursor: page.before_cursor, hasMore: page.has_more_blocks };
     }
   });
+  const showHistory = useCallback(() => {
+    history.follow.current = false;
+    history.capture();
+    setHistoryExpanded(true);
+  }, [history.follow, history.capture]);
   useEffect(() => {
     setHistoryExpanded(false);
     setRenaming(false);
@@ -179,11 +184,7 @@ export function Conversation(props: {
       <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
         <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
-        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={() => {
-          history.follow.current = false;
-          history.capture();
-          setHistoryExpanded(true);
-        }} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+        <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={showHistory} />)}</DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
     </main>

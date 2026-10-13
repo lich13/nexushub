@@ -42,7 +42,7 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
     for (const page of [...(query.data?.pages ?? [])].reverse()) for (const block of page.detail.blocks) map.set(block.id, block);
     return mergeSubagentUpdates([...map.values()], query.data?.pages[0]?.detail.subagent_updates);
   }, [query.data]);
-  const items = groupCodexCommandBlocks(blocks);
+  const items = useMemo(() => groupCodexCommandBlocks(blocks), [blocks]);
   const oldestPage = query.data?.pages[query.data.pages.length - 1];
   const history = useHistoryScroll({
     scopeKey: `${machineScope()}:subagent:${rootThreadId}:${frameKey}`, streamRef: stream,
