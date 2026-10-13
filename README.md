@@ -70,7 +70,7 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 
 ## 发布资产
 
-[查看 v1.2.18 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.18)。发布页包含七项资产：
+[查看 v1.2.19 发布说明](https://github.com/lich13/nexushub/releases/tag/v1.2.19)。发布页包含七项资产：
 
 - macOS ARM64 DMG 与校验文件；
 - macOS updater 压缩包与签名；
