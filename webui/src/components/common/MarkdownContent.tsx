@@ -12,34 +12,44 @@ type Element = { tagName?: string; children?: Element[] };
 
 type RemarkPlugin = Extract<NonNullable<Options["remarkPlugins"]>[number], (...args: never[]) => unknown>;
 type MarkdownParser = NonNullable<ThisParameterType<RemarkPlugin>["parser"]>;
-const parsedMarkdown = new Map<string, { json: string; bytes: number }>();
-let parsedMarkdownBytes = 0;
-const parsedMarkdownLimit = 8 * 1024 * 1024;
+const compiledMarkdown = new Map<string, { json: string; bytes: number }>();
+let compiledMarkdownBytes = 0;
+const compiledMarkdownLimit = 8 * 1024 * 1024;
 
-// Reuse parsing across thread remounts, but give each transform its own tree.
-// Serialized syntax contains no React owner, component state, or path context.
+// Cache the complete, context-free syntax pipeline across thread remounts.
+// react-markdown's URL handling and React components still run per render on
+// a fresh tree; no React owner, component state, or resolved path is retained.
 const reuseMarkdownParse: RemarkPlugin = function () {
   const parse = this.parser!;
-  this.parser = (text, file) => {
-    const cached = parsedMarkdown.get(text);
+  this.parser = (text, file) => compiledMarkdown.has(text)
+    ? { type: "root", children: [] } as ReturnType<MarkdownParser>
+    : parse(text, file);
+};
+
+// On a hit the ordinary transforms receive an empty root, then this final
+// transform restores an independent copy of the complete compiled tree.
+const reuseMarkdownTree: RemarkPlugin = function () {
+  return (tree, file) => {
+    const text = typeof file.value === "string" ? file.value : null;
+    if (text === null) return tree;
+    const cached = compiledMarkdown.get(text);
     if (cached) {
-      parsedMarkdown.delete(text);
-      parsedMarkdown.set(text, cached);
-      return JSON.parse(cached.json) as ReturnType<MarkdownParser>;
+      compiledMarkdown.delete(text);
+      compiledMarkdown.set(text, cached);
+      return JSON.parse(cached.json) as typeof tree;
     }
-    const tree = parse(text, file);
-    if (text.length * 2 > parsedMarkdownLimit) return tree;
+    if (text.length * 2 > compiledMarkdownLimit) return tree;
     const json = JSON.stringify(tree);
     const bytes = (text.length + json.length) * 2;
-    if (bytes <= parsedMarkdownLimit) {
-      while (parsedMarkdown.size >= 512 || parsedMarkdownBytes + bytes > parsedMarkdownLimit) {
-        const key = parsedMarkdown.keys().next().value;
+    if (bytes <= compiledMarkdownLimit) {
+      while (compiledMarkdown.size >= 512 || compiledMarkdownBytes + bytes > compiledMarkdownLimit) {
+        const key = compiledMarkdown.keys().next().value;
         if (key === undefined) break;
-        parsedMarkdownBytes -= parsedMarkdown.get(key)!.bytes;
-        parsedMarkdown.delete(key);
+        compiledMarkdownBytes -= compiledMarkdown.get(key)!.bytes;
+        compiledMarkdown.delete(key);
       }
-      parsedMarkdown.set(text, { json, bytes });
-      parsedMarkdownBytes += bytes;
+      compiledMarkdown.set(text, { json, bytes });
+      compiledMarkdownBytes += bytes;
     }
     return tree;
   };
@@ -67,7 +77,7 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
 }
 
 const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }) {
-  return <Markdown remarkPlugins={[remarkGfm, reuseMarkdownParse]} rehypePlugins={[omitMemoryElements]} urlTransform={(url, key, node) => key === "href" && node.tagName === "a" && fileLinkTarget(url) ? url : defaultUrlTransform(url)} components={{
+  return <Markdown remarkPlugins={[remarkGfm, reuseMarkdownParse]} rehypePlugins={[omitMemoryElements, reuseMarkdownTree]} urlTransform={(url, key, node) => key === "href" && node.tagName === "a" && fileLinkTarget(url) ? url : defaultUrlTransform(url)} components={{
     pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
     a: ({ node: _node, href, children, ...props }) => href && fileLinkTarget(href)
       ? <FilePathLink href={href}>{children}</FilePathLink>
