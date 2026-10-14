@@ -13,6 +13,9 @@ use std::{
     sync::Mutex,
 };
 
+mod preview_context;
+pub(crate) use preview_context::PreviewContext;
+
 static MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +28,7 @@ pub struct SelectedCodexPreview {
     pub fingerprint: String,
 }
 
-fn open(paths: &CodexPaths, writable: bool) -> Result<Connection> {
+pub(crate) fn open(paths: &CodexPaths, writable: bool) -> Result<Connection> {
     ensure_safe_path(&paths.home, &paths.state_db())?;
     let conn = Connection::open_with_flags(
         paths.state_db(),
@@ -49,6 +52,7 @@ pub fn preview_delete(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPrevi
     snapshot(paths, &open(paths, false)?, id, None)
 }
 
+#[cfg(test)]
 pub(crate) fn preview_hidden(paths: &CodexPaths, id: &str) -> Result<SelectedCodexPreview> {
     let conn = open(paths, false)?;
     ensure!(
@@ -64,8 +68,34 @@ fn snapshot(
     id: &str,
     expected_archived: Option<bool>,
 ) -> Result<SelectedCodexPreview> {
-    let columns = crate::archive::table_columns(conn, "threads")?;
-    let row = row_value(conn, "threads", "id", id)?.context("线程不存在")?;
+    snapshot_with_context(
+        paths,
+        conn,
+        id,
+        expected_archived,
+        None,
+        &crate::scan_work::ScanWork::default(),
+    )
+}
+
+fn snapshot_with_context(
+    paths: &CodexPaths,
+    conn: &Connection,
+    id: &str,
+    expected_archived: Option<bool>,
+    shared: Option<&PreviewContext>,
+    work: &crate::scan_work::ScanWork,
+) -> Result<SelectedCodexPreview> {
+    use std::borrow::Cow;
+    work.check()?;
+    let columns = match shared {
+        Some(context) => Cow::Borrowed(&context.columns),
+        None => Cow::Owned(crate::archive::table_columns(conn, "threads")?),
+    };
+    let row = match shared {
+        Some(context) => Cow::Borrowed(context.rows.get(id).context("线程不存在")?),
+        None => Cow::Owned(row_value(conn, "threads", "id", id)?.context("线程不存在")?),
+    };
     let archived = row.get("archived").and_then(Value::as_i64).unwrap_or(0) != 0
         || row.get("archived_at").and_then(Value::as_i64).unwrap_or(0) > 0;
     if let Some(expected_archived) = expected_archived {
@@ -124,21 +154,34 @@ fn snapshot(
             "线程仍在运行，暂不能删除"
         );
     }
-    for (table, key) in [
-        ("jobs", "thread_id"),
-        ("agent_job_items", "assigned_thread_id"),
-    ] {
-        let cols = crate::archive::table_columns(conn, table)?;
-        if cols.contains(key) && cols.contains("status") {
-            let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
-            ensure!(!active, "线程仍有关联的运行任务，暂不能删除");
+    if let Some(context) = shared {
+        ensure!(
+            !context.active.contains(id),
+            "线程仍有关联的运行任务，暂不能删除"
+        );
+    } else {
+        for (table, key) in [
+            ("jobs", "thread_id"),
+            ("agent_job_items", "assigned_thread_id"),
+        ] {
+            let cols = crate::archive::table_columns(conn, table)?;
+            if cols.contains(key) && cols.contains("status") {
+                let active: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {key}=?1 AND lower(status) IN ('running','active','in_progress','pending','submitting'))"), [id], |r| r.get(0))?;
+                ensure!(!active, "线程仍有关联的运行任务，暂不能删除");
+            }
         }
     }
-    let index = read_index(paths)?;
-    let index_rows = index
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect::<Vec<_>>();
+    let owned_index;
+    let empty_index = Vec::new();
+    let index_rows = if let Some(context) = shared {
+        context.index.get(id).unwrap_or(&empty_index)
+    } else {
+        owned_index = read_index(paths)?
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>();
+        &owned_index
+    };
     let mut files = BTreeSet::new();
     if let Some(path) = row
         .get("rollout_path")
@@ -147,7 +190,7 @@ fn snapshot(
     {
         files.insert(PathBuf::from(path));
     }
-    for entry in &index_rows {
+    for entry in index_rows {
         if entry.get("id").and_then(Value::as_str) == Some(id) {
             if let Some(path) = entry
                 .get("path")
@@ -158,17 +201,23 @@ fn snapshot(
             }
         }
     }
-    // Only known native stores and exact filename suffixes may supply additional files.
-    for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
-        if !root.exists() {
-            continue;
+    if let Some(context) = shared {
+        if let Some(discovered) = context.files.get(id) {
+            files.extend(discovered.iter().cloned());
         }
-        ensure_safe_path(&paths.home, &root)?;
-        for entry in walkdir::WalkDir::new(&root).follow_links(false) {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy();
-            if name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl")) {
-                files.insert(entry.path().to_path_buf());
+    } else {
+        // Only known native stores and exact filename suffixes may supply additional files.
+        for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
+            if !root.exists() {
+                continue;
+            }
+            ensure_safe_path(&paths.home, &root)?;
+            for entry in walkdir::WalkDir::new(&root).follow_links(false) {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy();
+                if name.starts_with("rollout-") && name.ends_with(&format!("-{id}.jsonl")) {
+                    files.insert(entry.path().to_path_buf());
+                }
             }
         }
     }
@@ -176,7 +225,7 @@ fn snapshot(
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(&row)?);
     let mut bytes = 0;
-    for entry in &index_rows {
+    for entry in index_rows {
         if entry.get("id").and_then(Value::as_str) == Some(id) {
             digest.update(serde_json::to_vec(entry)?);
         }
@@ -189,42 +238,54 @@ fn snapshot(
         );
         ensure_safe_path(&paths.home, file)?;
         let actual = fs::canonicalize(file)?;
-        ensure!(
-            session_header_id(file)?.as_deref() == Some(id),
-            "线程文件身份与选中 ID 不一致"
-        );
-        ensure!(
-            !rollout_has_running_signal(file)?,
-            "线程文件仍有运行信号，暂不能删除"
-        );
-        ensure!(
-            rollout_has_confirmed_inactive_state(file)?,
-            "线程终态无法确认，暂不能删除"
-        );
-        if columns.contains("rollout_path") {
-            let mut stmt = conn.prepare(
-                "SELECT rollout_path FROM threads WHERE id != ?1 AND rollout_path IS NOT NULL",
-            )?;
-            for path in stmt.query_map([id], |r| r.get::<_, String>(0))? {
-                ensure!(
-                    !fs::canonicalize(path?).is_ok_and(|p| p == actual),
-                    "文件仍被其他线程引用"
-                );
-            }
+        if shared.is_none() {
+            ensure!(
+                session_header_id(file)?.as_deref() == Some(id),
+                "线程文件身份与选中 ID 不一致"
+            );
+            ensure!(
+                !rollout_has_running_signal(file)?,
+                "线程文件仍有运行信号，暂不能删除"
+            );
+            ensure!(
+                rollout_has_confirmed_inactive_state(file)?,
+                "线程终态无法确认，暂不能删除"
+            );
         }
-        for entry in &index_rows {
-            if entry.get("id").and_then(Value::as_str) == Some(id) {
-                continue;
+        if let Some(context) = shared {
+            ensure!(
+                context
+                    .references
+                    .get(&actual)
+                    .is_none_or(|ids| ids.iter().all(|other| other == id)),
+                "文件仍被其他线程引用"
+            );
+        } else {
+            if columns.contains("rollout_path") {
+                let mut stmt = conn.prepare(
+                    "SELECT rollout_path FROM threads WHERE id != ?1 AND rollout_path IS NOT NULL",
+                )?;
+                for path in stmt.query_map([id], |r| r.get::<_, String>(0))? {
+                    ensure!(
+                        !fs::canonicalize(path?).is_ok_and(|p| p == actual),
+                        "文件仍被其他线程引用"
+                    );
+                }
             }
-            if let Some(path) = entry
-                .get("path")
-                .or_else(|| entry.get("rollout_path"))
-                .and_then(Value::as_str)
-            {
-                ensure!(
-                    !fs::canonicalize(path).is_ok_and(|p| p == actual),
-                    "文件仍被其他线程索引引用"
-                );
+            for entry in index_rows {
+                if entry.get("id").and_then(Value::as_str) == Some(id) {
+                    continue;
+                }
+                if let Some(path) = entry
+                    .get("path")
+                    .or_else(|| entry.get("rollout_path"))
+                    .and_then(Value::as_str)
+                {
+                    ensure!(
+                        !fs::canonicalize(path).is_ok_and(|p| p == actual),
+                        "文件仍被其他线程索引引用"
+                    );
+                }
             }
         }
         let metadata = fs::metadata(file)?;
@@ -239,7 +300,30 @@ fn snapshot(
             digest.update(metadata.ctime_nsec().to_le_bytes());
         }
         digest.update(file.as_os_str().as_encoded_bytes());
-        digest.update(content_hash(file)?);
+        let hash = if shared.is_some() {
+            crate::codex::rollout_delete_evidence(file, id, work)?
+        } else {
+            content_hash(file)?
+        };
+        let after = fs::metadata(file)?;
+        ensure!(
+            metadata.len() == after.len() && metadata.modified()? == after.modified()?,
+            "线程文件在扫描期间变化，请重新扫描"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            ensure!(
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.ctime(),
+                    metadata.ctime_nsec()
+                ) == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec()),
+                "线程文件在扫描期间变化，请重新扫描"
+            );
+        }
+        digest.update(hash);
         bytes += metadata.len();
     }
     Ok(SelectedCodexPreview {
@@ -375,21 +459,23 @@ fn row_value(conn: &Connection, table: &str, key: &str, id: &str) -> Result<Opti
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
     Ok(stmt
-        .query_row([id], |r| {
-            let mut values = serde_json::Map::new();
-            for (i, name) in names.iter().enumerate() {
-                let value = match r.get_ref(i)? {
-                    ValueRef::Null => Value::Null,
-                    ValueRef::Integer(n) => Value::from(n),
-                    ValueRef::Real(n) => Value::from(n),
-                    ValueRef::Text(s) => Value::from(String::from_utf8_lossy(s).into_owned()),
-                    ValueRef::Blob(b) => serde_json::json!({"hex":hex::encode(b)}),
-                };
-                values.insert(name.clone(), value);
-            }
-            Ok(Value::Object(values))
-        })
+        .query_row([id], |r| read_row_value(r, &names))
         .optional()?)
+}
+
+fn read_row_value(row: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result<Value> {
+    let mut values = serde_json::Map::new();
+    for (i, name) in names.iter().enumerate() {
+        let value = match row.get_ref(i)? {
+            ValueRef::Null => Value::Null,
+            ValueRef::Integer(n) => Value::from(n),
+            ValueRef::Real(n) => Value::from(n),
+            ValueRef::Text(s) => Value::from(String::from_utf8_lossy(s).into_owned()),
+            ValueRef::Blob(b) => serde_json::json!({"hex":hex::encode(b)}),
+        };
+        values.insert(name.clone(), value);
+    }
+    Ok(Value::Object(values))
 }
 
 // SQLite triggers must not turn a selected deletion into a cascade. Compare
@@ -1132,5 +1218,39 @@ mod tests {
         assert!(f.file("one").is_file());
         assert!(f.file("child").is_file());
         assert_eq!(read_index(&f.paths).unwrap(), index_before);
+    }
+
+    #[test]
+    fn shared_hidden_preview_preserves_terminal_rules_and_fingerprints() {
+        let f = Fixture::new();
+        let conn = f.conn();
+        conn.execute("UPDATE threads SET archived=0 WHERE id='child'", [])
+            .unwrap();
+        let header = json!({"type":"session_meta","payload":{"id":"child"}}).to_string();
+        let start = json!({"type":"turn_started","turn_id":"turn"}).to_string();
+        let end = json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}})
+            .to_string();
+        let cases = [
+            (format!("{header}\n{start}\n{end}\n"), true),
+            (format!("{header}\n{start}\n"), false),
+            (format!("{header}\n"), false),
+            (format!("{header}\n{start}\n{end}\n{start}\n"), false),
+            (format!("{header}\n{start}\n{end}\n{{broken\n"), false),
+            (format!("{header}\n{start}\n{end}\n{{\"type\":"), false),
+        ];
+        for (content, allowed) in cases {
+            fs::write(f.file("child"), content).unwrap();
+            let previous = preview_hidden(&f.paths, "child");
+            let work = crate::scan_work::ScanWork::default();
+            let context = PreviewContext::load(&f.paths, &conn, &work).unwrap();
+            let shared = context.preview(&f.paths, &conn, "child", &work);
+            assert_eq!(previous.is_ok(), allowed);
+            assert_eq!(shared.is_ok(), allowed);
+            if let (Ok(previous), Ok(shared)) = (previous, shared) {
+                assert_eq!(shared.fingerprint, previous.fingerprint);
+                assert_eq!(shared.paths, previous.paths);
+                assert_eq!(shared.bytes, previous.bytes);
+            }
+        }
     }
 }

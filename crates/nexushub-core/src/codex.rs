@@ -34,7 +34,7 @@ use rollout_events::{
     should_repair_thread_title_from_local_metadata,
 };
 pub(crate) use rollout_events::{
-    hidden_thread_metadata_category, rollout_has_confirmed_inactive_state,
+    hidden_thread_metadata_category, rollout_delete_evidence, rollout_has_confirmed_inactive_state,
     rollout_has_running_signal, ThreadVisibilityMetadata,
 };
 pub use rollout_events::{

@@ -57,15 +57,18 @@ fn status_needs_live_native_owner_and_unfinished_primary_turn() {
     let active = f.snapshot(Some(live()));
     assert_eq!(active.status(&f.1), "running");
     assert!(active.ensure_not_open(&f.1).is_err());
+    assert!(active.ensure_deletable(&f.1).is_err());
     assert_eq!(f.snapshot(None).status(&f.1), "unknown");
     for end in [END, "{\"type\":\"turn_ended\",\"outcome\":\"cancelled\"}\n"] {
         f.events(&(f.start() + end));
         assert_eq!(active.status(&f.1), "recent");
         // An idle but open native session must still block deletion.
         assert!(active.ensure_not_open(&f.1).is_err());
+        assert!(active.ensure_deletable(&f.1).is_err());
         let exited = f.snapshot(None);
         assert_eq!(exited.status(&f.1), "recent");
         assert!(exited.ensure_not_open(&f.1).is_ok());
+        assert!(exited.ensure_deletable(&f.1).is_ok());
     }
     f.events(&(f.start() + END + &f.start()));
     assert_eq!(active.status(&f.1), "running");
@@ -101,19 +104,36 @@ fn process_identity_start_time_and_permissions_gate_ownership() {
             ..live()
         },
     ] {
-        assert_eq!(
-            f.snapshot(Some(process)).ownership(&f.1),
-            Ownership::Unknown
-        );
+        let snapshot = f.snapshot(Some(process));
+        assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
+        assert!(snapshot.ensure_deletable(&f.1).is_err());
     }
     let mut snapshot = f.snapshot(Some(live()));
     snapshot.processes = None;
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
+    assert!(snapshot.ensure_deletable(&f.1).is_err());
     snapshot = f.snapshot(Some(live()));
     snapshot.registrations.as_mut().unwrap()[0].cwd = Some("/different-workspace".into());
     assert_eq!(snapshot.ownership(&f.1), Ownership::Unknown);
     snapshot.registrations = None;
     assert!(snapshot.ensure_not_open(&f.1).is_err());
+}
+
+#[test]
+fn valid_running_activity_without_a_native_owner_is_deletable_while_status_stays_unknown() {
+    let f = Fixture::new();
+    f.events(&f.start());
+    let exited = f.snapshot(None);
+
+    assert_eq!(exited.status(&f.1), "unknown");
+    assert_eq!(
+        exited.deletion_eligibility(&f.1),
+        GrokDeletionEligibility {
+            allowed: true,
+            reason: None,
+        }
+    );
+    assert!(exited.ensure_deletable(&f.1).is_ok());
 }
 
 #[test]

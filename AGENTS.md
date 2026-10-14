@@ -4,7 +4,7 @@
 
 - Work from the six current Markdown documents and the checked-in contract registry. Keep implementation, tests and acceptance evidence in source or the current status document; do not add release-specific Markdown or backups.
 - Preserve user sessions, credentials, configuration and provider-specific behavior. Deployment hosts, domains, private paths and acceptance evidence are explicit runtime inputs and never repository data.
-- For code delivery, run the affected Rust, WebUI, Tauri, contract, install and privacy gates before committing. Report real entrypoint evidence separately from fixtures.
+- For code delivery, select only the build, type, static, contract and privacy checks and targeted automated tests needed for affected code and concrete hard failures; keep full regression in existing CI. Complete authorized deployment/install with only necessary success or startup checks. Functional, UI, native-app and end-to-end acceptance defaults to the user from concise entrypoint, steps, expected results and coverage notes, unless explicitly requested or needed to reproduce/verify a concrete code failure. Mark it pending user acceptance without blocking assistant delivery, and report automated evidence separately. Routine rule maintenance does not trigger a release.
 
 ## Architecture
 
@@ -17,7 +17,7 @@
 - The macOS App is the sole UI. Remote management uses an independent `x-api-key` stored in Keychain and a fixed allowlisted Rust HTTP bridge; never send keys from browser fetch, log them or permit redirects. API protocol and connection revisions gate requests. Switching machines cannot reuse previews, selection or cached responses; mutations are never replayed automatically.
 - Old web authentication, static assets and EventSource are retired. Preserve API authentication throttling, business audit, Bark encryption and notification state. Database erasure is limited to NexusHub's own retired web credentials, Pi integration and Gotify records; never migrate native provider databases.
 
-Grok display activity and deletion protection are separate: use one native-process snapshot per list, validate PID identity/start time and read primary-turn events through the bounded incremental cache. Ended turns do not spin, but native ownership still blocks deletion. Never fix stale registration by editing native files or terminating user processes.
+Grok display activity and deletion protection are separate: use one native-process snapshot per list or batch preview, validate PID identity/start time and read primary-turn events through the bounded incremental cache. A valid complete history with no verified native owner may enter deletion preview even when its last turn lacks an ending. Open ownership, unverifiable identity, corrupt records and partial writes remain protected. Menus and batch previews use the optional deletion eligibility, with the old status fallback for older servers. Recheck ownership and fingerprints before execution and after quarantine; never edit native registration or terminate user processes to release protection.
 
 ## UI and safety
 
@@ -46,6 +46,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 线程右键、省略号和键盘菜单共用动作模型；右键目标独立于当前详情。保留焦点返回、边缘避让、双击改名和批量模式。
 - Codex 普通与归档线程永久删除必须绑定预览指纹。复核明确终态、原生身份、关联、符号链接及共享引用；不级联删除其他线程。
 - 隐藏清理只接受预览返回的候选和指纹。项目级阻止或失败继续下一项，公共数据库、索引或存储错误回滚整批。新出现的隐藏线程不得加入执行。
+- 隐藏扫描共用一次发现的数据库、索引和文件引用，固定候选集合；逐项流式核验明确终态、身份和内容指纹。分批接口复用 `cleanup.hiddenDryRun`，每页最多 100 项；同源只允许一个活动扫描，进程最多两个上下文、共用 64MiB 预算，五分钟无请求取消释放。停止后的结果不可执行清理，旧服务回退不得伪造进度或取消结果。
 - Pi 活动契约、读取、管理、界面和监测全部退役，旧命令只能返回 unavailable。先删除自有队列中的 Pi JSON，再移除 Pi 提供方/流/投递/事件及专属设置；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
 - 发布前检查当前树、索引、可达历史和资产。仅发现可达历史敏感值时才按授权重写；平台保留的不可达对象另行记录，不声称已完全擦除。

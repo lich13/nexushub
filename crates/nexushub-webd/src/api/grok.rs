@@ -77,9 +77,13 @@ pub(crate) async fn grok_delete_preview(
     Path(id): Path<String>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(NexusHubUseCases::new(&http_update_platform())
-        .grok()
-        .delete_preview(&id)?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&http_update_platform())
+            .grok()
+            .delete_preview(&id)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }
 
 pub(crate) async fn grok_delete_execute(
@@ -88,7 +92,11 @@ pub(crate) async fn grok_delete_execute(
     Json(request): Json<GrokDeleteRequest>,
 ) -> ApiResponse {
     require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
-    ok(NexusHubUseCases::new(&http_update_platform())
-        .grok()
-        .delete_execute(request)?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&http_update_platform())
+            .grok()
+            .delete_execute(request)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }

@@ -138,6 +138,31 @@ pub struct AsyncQuestionCall {
 }
 
 impl AsyncQuestionCall {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        512 + self.session_id.as_ref().map_or(0, String::len)
+            + self.turn_id.len()
+            + self.call_id.len()
+            + self.content_hash.len()
+            + self.answered.capacity() * 32
+            + self
+                .questions
+                .iter()
+                .map(|question| {
+                    256 + question.id.len()
+                        + question.header.as_ref().map_or(0, String::len)
+                        + question.question.len()
+                        + question
+                            .options
+                            .iter()
+                            .map(|option| {
+                                128 + option.label.len()
+                                    + option.description.as_ref().map_or(0, String::len)
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+    }
+
     pub fn pending(&self) -> Option<PendingElicitation> {
         let questions: Vec<_> = self
             .questions

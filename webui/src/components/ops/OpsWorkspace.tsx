@@ -32,6 +32,8 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
   const [hiddenDeleteResult, setHiddenDeleteResult] = useState<HiddenThreadDeleteResult | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [hiddenDeleteArmed, setHiddenDeleteArmed] = useState(false);
+  const [candidatePage, setCandidatePage] = useState(0);
+  const [resultPage, setResultPage] = useState(0);
   const opsActions = useOpsActions({
     capabilities,
     onArchiveDryRun: (nextPlan) => {
@@ -60,6 +62,10 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
   const executeDelete = opsActions.archiveExecute;
   const hiddenDryRun = opsActions.hiddenDryRun;
   const executeHiddenDelete = opsActions.hiddenExecute;
+  const hiddenScan = hiddenPlan?.scan;
+  const scanLabels = { preparing: "正在准备", scanning: "正在扫描", complete: "扫描完成", stopping: "正在停止", stopped: "已停止", failed: "扫描失败" };
+  const visibleCandidates = hiddenPlan?.candidates.slice(candidatePage * 100, (candidatePage + 1) * 100) ?? [];
+  const unsuccessful = hiddenDeleteResult?.items.filter(item => item.status !== "deleted") ?? [];
   const archiveCleanupError = executeDelete.error
     ? cleanupErrorMessage("归档清理失败", executeDelete.error)
     : dryRun.error
@@ -122,7 +128,7 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
       </Panel>}
       {capabilities.threadCleanup && <Panel title={OPS_PANEL_TITLES.hiddenCleanup} icon={<Database size={18} />}>
         <div className="cleanup-panel-head">
-          <span className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{opsView.hiddenCleanupStage.label}</span>
+          <span role="status" className={`status-chip ${opsView.hiddenCleanupStage.tone ? `tone-${opsView.hiddenCleanupStage.tone}` : "tone-muted"}`}>{hiddenScan ? `${scanLabels[hiddenScan.phase]} · ${hiddenScan.processed} / ${hiddenScan.total}` : opsView.hiddenCleanupStage.label}</span>
         </div>
         <div className="archive-plan">
           <Metric label="visible" value={hiddenPlan ? String(opsView.hiddenStats.visible) : "dry-run 未执行"} />
@@ -132,16 +138,19 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
           <Metric label="rollout 删除结果" value={hiddenRolloutDeleteResultText(hiddenDeleteResult)} tone={hiddenDeleteResult ? "success" : undefined} />
         </div>
         {hiddenPlan && <ul className="hidden-cleanup-candidates">
-          {hiddenPlan.candidates.map(item => <li key={item.id}><strong>{item.title || item.id}</strong><span>{item.allowed ? "可清理" : item.reason || "受保护"}</span></li>)}
+          {visibleCandidates.map(item => <li key={item.id}><strong>{item.title || item.id}</strong><span>{item.allowed ? "可清理" : item.reason || "受保护"}</span></li>)}
         </ul>}
-        {hiddenPlan && !hiddenPlan.candidates.some(item => item.allowed) && <p role="status">无可清理项目</p>}
+        {hiddenPlan && hiddenPlan.candidates.length > 100 && <CleanupPagination page={candidatePage} count={hiddenPlan.candidates.length} onChange={setCandidatePage} label="候选" />}
+        {hiddenPlan && !hiddenDryRun.isPending && !hiddenPlan.candidates.some(item => item.allowed) && <p role="status">无可清理项目</p>}
         {hiddenDeleteResult && <div role="status">
           <p>已删除 {hiddenDeleteResult.deleted_threads}，已跳过 {hiddenDeleteResult.skipped_threads}，失败 {hiddenDeleteResult.failed_threads}，剩余 {hiddenDeleteResult.hidden_threads}</p>
-          {hiddenDeleteResult.items.filter(item => item.status !== "deleted").map(item => <p key={item.id}>{item.id}：{item.reason}</p>)}
+          {unsuccessful.slice(resultPage * 100, (resultPage + 1) * 100).map(item => <p key={item.id}>{item.id}：{item.reason}</p>)}
+          {unsuccessful.length > 100 && <CleanupPagination page={resultPage} count={unsuccessful.length} onChange={setResultPage} label="清理结果" />}
         </div>}
         {hiddenCleanupError && <div className="form-error cleanup-error">{hiddenCleanupError}</div>}
         <div className="button-row ops-action-row cleanup-actions">
-          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => { executeHiddenDelete.reset(); hiddenDryRun.mutate(); }}><Database size={17} />扫描隐藏线程</button>
+          <button className="secondary-button" disabled={hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => { executeHiddenDelete.reset(); setHiddenPlan(null); setHiddenDeleteResult(null); setHiddenDeleteArmed(false); setCandidatePage(0); setResultPage(0); hiddenDryRun.mutate(); }}><Database size={17} />扫描隐藏线程</button>
+          {hiddenDryRun.isPending && capabilities.hiddenCleanupScan && <button className="secondary-button" disabled={hiddenScan?.phase === "stopping"} onClick={() => { setHiddenPlan(current => current?.scan ? { ...current, scan: { ...current.scan, phase: "stopping" } } : current); void opsActions.stopHiddenScan(); }}>停止扫描</button>}
           {!hiddenDeleteArmed ? (
             <button className="danger-button soft" disabled={!canStartHiddenThreadDelete(hiddenPlan) || hiddenDryRun.isPending || executeHiddenDelete.isPending} onClick={() => setHiddenDeleteArmed(true)}><Trash2 size={17} />清理隐藏线程</button>
           ) : (
@@ -162,4 +171,13 @@ export function OpsWorkspace({ capabilities }: { capabilities: RuntimeCapability
 
 function cleanupErrorMessage(prefix: string, error: unknown): string {
   return `${prefix}: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+export function CleanupPagination({ page, count, onChange, label }: { page: number; count: number; onChange: (page: number) => void; label: string }) {
+  const pages = Math.ceil(count / 100);
+  return <nav className="button-row" aria-label={`${label}分页`}>
+    <button className="secondary-button" disabled={page === 0} onClick={() => onChange(page - 1)}>上一页</button>
+    <span>{page + 1} / {pages}</span>
+    <button className="secondary-button" disabled={page + 1 >= pages} onClick={() => onChange(page + 1)}>下一页</button>
+  </nav>;
 }

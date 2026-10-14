@@ -409,7 +409,7 @@
       "tauriCommand": "commands::settings::dryRunHiddenThreadDelete",
       "webuiWrapper": "dryRunHiddenThreadDelete",
       "dtoOwner": "cleanup",
-      "requestDto": "NoRequest",
+      "requestDto": "HiddenScanRequest",
       "responseDto": "CleanupHiddenDryRunResponse"
     },
     {
@@ -933,6 +933,10 @@
     "CleanupExecuteRequest": {
       "core": "CleanupExecuteRequest",
       "webui": "CleanupExecuteRequest"
+    },
+    "HiddenScanRequest": {
+      "core": "HiddenScanRequest",
+      "webui": "HiddenScanRequest"
     },
     "SubagentDetailRequest": {
       "core": "SubagentDetailRequest",

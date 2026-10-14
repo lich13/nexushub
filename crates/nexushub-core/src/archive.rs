@@ -9,6 +9,8 @@ use std::{
 };
 use walkdir::WalkDir;
 
+pub mod hidden_scan;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveDeletePlan {
     pub total_threads: u64,
@@ -54,6 +56,8 @@ pub struct HiddenThreadItemResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HiddenThreadDeletePlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<hidden_scan::HiddenScanProgress>,
     pub total_threads: u64,
     pub visible_threads: u64,
     pub hidden_threads: u64,
@@ -202,18 +206,47 @@ fn count_threads(conn: &Connection) -> Result<(u64, u64, u64)> {
 }
 
 fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
-    let db = paths.state_db();
-    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("open {}", db.display()))?;
+    let work = crate::scan_work::ScanWork::default();
+    hidden_delete_plan_with_work(paths, &work)
+}
+
+pub(crate) fn hidden_delete_plan_with_work(
+    paths: &CodexPaths,
+    work: &crate::scan_work::ScanWork,
+) -> Result<HiddenThreadDeletePlan> {
+    let mut candidates = Vec::new();
+    let mut memory = work.lease();
+    let mut plan = scan_hidden(paths, work, |_, candidate| {
+        if let Some(candidate) = candidate {
+            memory.grow(hidden_scan::candidate_memory(&candidate))?;
+            candidates.push(candidate);
+        }
+        Ok(())
+    })?;
+    plan.candidates = candidates;
+    Ok(plan)
+}
+
+pub(crate) fn scan_hidden(
+    paths: &CodexPaths,
+    work: &crate::scan_work::ScanWork,
+    mut emit: impl FnMut(&HiddenThreadDeletePlan, Option<HiddenThreadCandidate>) -> Result<()>,
+) -> Result<HiddenThreadDeletePlan> {
+    work.check()?;
+    let conn = crate::selected_codex::open(paths, false)?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    let cancellation = work.clone();
+    conn.progress_handler(1000, Some(move || cancellation.check().is_err()));
+    conn.execute_batch("BEGIN DEFERRED")?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
         anyhow::bail!("sqlite integrity check failed: {integrity}");
     }
 
-    let rows = hidden_visibility_rows(&conn)?;
+    let mut memory = work.lease();
+    let rows = hidden_visibility_rows_with_budget(&conn, Some((work, &mut memory)))?;
     let mut visible_threads = 0;
     let mut hidden_ids = Vec::new();
-    let mut candidates = Vec::new();
     let mut source_counts = BTreeMap::new();
     let mut archived_threads = 0;
     for row in &rows {
@@ -221,40 +254,59 @@ fn hidden_delete_plan(paths: &CodexPaths) -> Result<HiddenThreadDeletePlan> {
             archived_threads += 1;
         } else if let Some(category) = &row.hidden_category {
             hidden_ids.push(row.id.clone());
-            let candidate = match crate::selected_codex::preview_hidden(paths, &row.id) {
-                Ok(preview) => HiddenThreadCandidate {
-                    id: row.id.clone(),
-                    title: preview.title,
-                    fingerprint: Some(preview.fingerprint),
-                    allowed: true,
-                    reason: None,
-                },
-                Err(error) => HiddenThreadCandidate {
-                    id: row.id.clone(),
-                    title: row.title.clone(),
-                    fingerprint: None,
-                    allowed: false,
-                    reason: Some(error.to_string()),
-                },
-            };
-            candidates.push(candidate);
             *source_counts.entry(category.clone()).or_insert(0) += 1;
         } else {
             visible_threads += 1;
         }
     }
-    Ok(HiddenThreadDeletePlan {
+    let mut plan = HiddenThreadDeletePlan {
+        scan: None,
         total_threads: rows.len() as u64,
         visible_threads,
         hidden_threads: hidden_ids.len() as u64,
         archived_threads,
-        session_index_lines: count_lines(&paths.session_index())?,
-        rollout_files: count_rollout_files(&paths.sessions_dir())?,
+        session_index_lines: 0,
+        rollout_files: 0,
         hidden_ids,
-        candidates,
+        candidates: Vec::new(),
         source_counts,
         integrity,
-    })
+    };
+    emit(&plan, None)?;
+    let shared = crate::selected_codex::PreviewContext::load(paths, &conn, work)?;
+    plan.session_index_lines = shared.index_lines;
+    plan.rollout_files = shared.rollout_files;
+    emit(&plan, None)?;
+    for row in rows
+        .iter()
+        .filter(|row| !row.archived && row.hidden_category.is_some())
+    {
+        work.check()?;
+        let candidate = match shared.preview(paths, &conn, &row.id, work) {
+            Ok(preview) => HiddenThreadCandidate {
+                id: row.id.clone(),
+                title: preview.title,
+                fingerprint: Some(preview.fingerprint),
+                allowed: true,
+                reason: None,
+            },
+            Err(error) => {
+                work.check()?;
+                if error.is::<crate::scan_work::MemoryLimit>() {
+                    return Err(error);
+                }
+                HiddenThreadCandidate {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    fingerprint: None,
+                    allowed: false,
+                    reason: Some(error.to_string()),
+                }
+            }
+        };
+        emit(&plan, Some(candidate))?;
+    }
+    Ok(plan)
 }
 
 #[derive(Debug)]
@@ -266,6 +318,16 @@ struct HiddenVisibilityRow {
 }
 
 fn hidden_visibility_rows(conn: &Connection) -> Result<Vec<HiddenVisibilityRow>> {
+    hidden_visibility_rows_with_budget(conn, None)
+}
+
+fn hidden_visibility_rows_with_budget(
+    conn: &Connection,
+    mut budget: Option<(
+        &crate::scan_work::ScanWork,
+        &mut crate::scan_work::MemoryLease,
+    )>,
+) -> Result<Vec<HiddenVisibilityRow>> {
     let columns = table_columns(conn, "threads")?;
     let archived_condition = archived_sql_condition(&columns);
     let updated_expr = first_existing(&columns, &["updated_at", "last_activity_at", "created_at"])
@@ -343,8 +405,16 @@ fn hidden_visibility_rows(conn: &Connection) -> Result<Vec<HiddenVisibilityRow>>
             hidden_category,
         })
     })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    let mut result = Vec::new();
+    for row in rows {
+        let row = row?;
+        if let Some((work, memory)) = budget.as_mut() {
+            work.check()?;
+            memory.grow(512 + (row.id.len() + row.title.len()) * 8)?;
+        }
+        result.push(row);
+    }
+    Ok(result)
 }
 
 pub(crate) fn prepare_delete_threads(conn: &Connection, ids: &[String]) -> Result<()> {

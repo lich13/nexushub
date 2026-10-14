@@ -378,6 +378,19 @@ impl<'a> CleanupUseCases<'a> {
         cleanup::dry_run_hidden_with_capability(self.platform, paths)
     }
 
+    pub async fn scan_hidden(
+        self,
+        paths: crate::codex::CodexPaths,
+        owner: String,
+        request: crate::archive::hidden_scan::HiddenScanRequest,
+    ) -> Result<crate::archive::HiddenThreadDeletePlan> {
+        self.operation(
+            cleanup::CleanupTarget::Hidden,
+            cleanup::CleanupOperationKind::DryRun,
+        )?;
+        crate::archive::hidden_scan::request(paths, owner, request).await
+    }
+
     pub fn execute_hidden(
         self,
         paths: &crate::codex::CodexPaths,

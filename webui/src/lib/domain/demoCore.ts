@@ -23,6 +23,7 @@ const capabilityFields = {
   linux_update_job: { "linux-api": true, "macos-tauri": false },
   prune_backups: { "linux-api": true, "macos-tauri": false },
   thread_cleanup: { "linux-api": true, "macos-tauri": true },
+  hidden_cleanup_scan: { "linux-api": false, "macos-tauri": false },
   thread_archive_actions: { "linux-api": true, "macos-tauri": true },
 } satisfies Record<keyof SystemCapabilities, CapabilityFieldValues>;
 

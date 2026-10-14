@@ -35,6 +35,11 @@ export async function invokeNative<T = unknown>(command: string, args?: RpcArgs)
 }
 
 const listeners = new Set<() => void>();
+const readCleanups = new Set<() => Promise<void>>();
+export function beforeMachineChange(cleanup: () => Promise<void>): () => void {
+  readCleanups.add(cleanup);
+  return () => { readCleanups.delete(cleanup); };
+}
 let connection = { target: "local" as MachineTarget, revision: 0, baseUrl: null as string | null, configured: false, ready: false, writes: 0, changing: false, error: "", notice: "" };
 function publish(patch: Partial<typeof connection>) { connection = { ...connection, ...patch }; listeners.forEach(listener => listener()); }
 export function connectionSnapshot() { return connection; }
@@ -50,6 +55,15 @@ export function initializeConnection() {
 export function remoteGet() { return invokeNative<RemoteConnectionView>("remote.get"); }
 async function changeConnection<T>(command: string, request: unknown): Promise<T> {
   if (connection.writes || connection.changing) throw new Error("操作进行中，请稍后切换");
+  if (command !== "remote.verify" && readCleanups.size > 0) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled([...readCleanups].map(cleanup => cleanup())),
+      new Promise(resolve => { timeout = setTimeout(resolve, 1000); })
+    ]);
+    clearTimeout(timeout);
+    if (connection.writes || connection.changing) throw new Error("操作进行中，请稍后切换");
+  }
   publish({ changing: true });
   try {
     const result = await invokeNative<T>(command, { request });
@@ -76,7 +90,7 @@ export async function remoteSelect(target: MachineTarget) {
 }
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
-const reads = new Set(["system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
+const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
 const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");

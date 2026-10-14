@@ -133,6 +133,7 @@ pub fn is_mutating_rpc_command(command: &str) -> bool {
             | PROBE_SETTINGS_GET
             | PROBE_EVENTS
             | UPDATES_STATUS
+            | CLEANUP_HIDDEN_DRY_RUN
             | GROK_LIST
             | GROK_DETAIL
             | GROK_DELETE_PREVIEW

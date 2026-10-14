@@ -18,6 +18,7 @@ export const contractDtoNames = [
   "SessionBatchExecuteRequest",
   "SessionBatchResult",
   "CleanupExecuteRequest",
+  "HiddenScanRequest",
   "CleanupArchiveDryRunResponse",
   "CleanupArchiveExecuteResponse",
   "CleanupHiddenDryRunResponse",

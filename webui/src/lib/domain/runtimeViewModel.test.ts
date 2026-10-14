@@ -1,11 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type {
   ArchiveDeletePlan,
+  GrokSessionSummary,
+  HiddenScanProgress,
   HiddenThreadDeletePlan,
   HiddenThreadDeleteResult,
   UpdateStatus
 } from "../../types";
 import type { RuntimeCapabilityMatrix } from "./capabilities";
+import { canPreviewGrokDelete } from "../../components/grok/GrokWorkspace";
 import {
   canStartHiddenThreadDelete,
   failureCategoryLabel,
@@ -85,6 +88,18 @@ function hiddenPlan(): HiddenThreadDeletePlan {
   };
 }
 
+function grokSession(overrides: Partial<GrokSessionSummary> = {}): GrokSessionSummary {
+  return {
+    id: "grok-fixture",
+    title: "Fixture session",
+    cwd: "/tmp/fixture",
+    path: "/tmp/fixture/session.jsonl",
+    messageCount: 1,
+    status: "unknown",
+    ...overrides
+  };
+}
+
 describe("runtime view-model helpers", () => {
   test("arms hidden deletion only when integrity is sound and a preview candidate is allowed", () => {
     expect(canStartHiddenThreadDelete(hiddenPlan())).toBe(true);
@@ -98,6 +113,63 @@ describe("runtime view-model helpers", () => {
     }));
     expect(canStartHiddenThreadDelete(blocked)).toBe(false);
     expect(canStartHiddenThreadDelete({ ...hiddenPlan(), integrity: "corrupt" })).toBe(false);
+  });
+
+  test("requires a complete, non-stopped scan before allowing hidden deletion", () => {
+    const base = hiddenPlan();
+    const incompleteCandidates = base.candidates.slice(0, 1);
+    const scan = (overrides: Partial<HiddenScanProgress>): HiddenScanProgress => ({
+      id: "scan-fixture",
+      phase: "scanning",
+      processed: 1,
+      total: 2,
+      cursor: 0,
+      nextCursor: 1,
+      hasMore: true,
+      error: null,
+      ...overrides
+    });
+    const incomplete = {
+      ...base,
+      hidden_ids: incompleteCandidates.map(item => item.id),
+      candidates: incompleteCandidates,
+      scan: scan({})
+    };
+    const stopped = { ...base, scan: scan({
+      phase: "stopped",
+      processed: 2,
+      cursor: 2,
+      nextCursor: 2,
+      hasMore: false
+    }) };
+    const completedWithMissingCandidates = {
+      ...incomplete,
+      scan: scan({
+        phase: "complete",
+        processed: 2,
+        cursor: 0,
+        nextCursor: 2,
+        hasMore: false
+      })
+    };
+
+    expect(canStartHiddenThreadDelete(incomplete)).toBe(false);
+    expect(canStartHiddenThreadDelete(stopped)).toBe(false);
+    expect(canStartHiddenThreadDelete(completedWithMissingCandidates)).toBe(false);
+  });
+
+  test("Grok deletion eligibility overrides status and legacy records fall back to recent", () => {
+    expect(canPreviewGrokDelete(grokSession({
+      status: "running",
+      deletionEligibility: { allowed: true, reason: null }
+    }))).toBe(true);
+    expect(canPreviewGrokDelete(grokSession({
+      status: "recent",
+      deletionEligibility: { allowed: false, reason: "fixture active task" }
+    }))).toBe(false);
+    expect(canPreviewGrokDelete(grokSession({ status: "recent" }))).toBe(true);
+    expect(canPreviewGrokDelete(grokSession({ status: "running" }))).toBe(false);
+    expect(canPreviewGrokDelete(grokSession({ status: "recent", deletionEligibility: null }))).toBe(true);
   });
 
   test("derives Ops workspace copy and gating from capabilities without leaking Linux labels to macOS", () => {

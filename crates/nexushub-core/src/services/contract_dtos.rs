@@ -17,6 +17,7 @@ pub const CONTRACT_DTO_NAMES: &[&str] = &[
     "SessionSearchRequest",
     "SessionSearchResponse",
     "CleanupExecuteRequest",
+    "HiddenScanRequest",
     "CleanupArchiveDryRunResponse",
     "CleanupArchiveExecuteResponse",
     "CleanupHiddenDryRunResponse",

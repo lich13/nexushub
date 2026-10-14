@@ -8,6 +8,7 @@ export type ThreadStatus = "Recent" | "Running" | "ReplyNeeded" | "Recoverable" 
 export type SessionStorageSize = { bytes: number | null; scope: "file" | "directory"; status: "complete" | "partial" | "pending" | "unavailable" };
 
 export type GrokSessionSummary = {
+  deletionEligibility?: { allowed: boolean; reason: string | null } | null;
   storageSize?: SessionStorageSize | null;
   id: string;
   title: string;
@@ -259,6 +260,7 @@ export type SystemCapabilities = {
   linux_update_job: boolean;
   prune_backups: boolean;
   thread_cleanup?: boolean;
+  hidden_cleanup_scan?: boolean;
   thread_archive_actions?: boolean;
   thread_subagents?: boolean;
 };
@@ -343,6 +345,7 @@ export type HiddenThreadItemResult = { id: string; status: "deleted" | "skipped"
 export type CleanupExecuteRequest = { confirmed: boolean; expectedCount: number; candidates?: HiddenThreadSelection[] };
 
 export type HiddenThreadDeletePlan = {
+  scan?: HiddenScanProgress | null;
   total_threads: number;
   visible_threads: number;
   hidden_threads: number;
@@ -353,6 +356,12 @@ export type HiddenThreadDeletePlan = {
   candidates: HiddenThreadCandidate[];
   hidden_source_counts: Record<string, number>;
   integrity: string;
+};
+
+export type HiddenScanRequest = { mode?: "start" | "poll" | "cancel"; scanId?: string; cursor?: number; limit?: number };
+export type HiddenScanProgress = {
+  id: string; phase: "preparing" | "scanning" | "complete" | "stopping" | "stopped" | "failed";
+  processed: number; total: number; cursor: number; nextCursor: number; hasMore: boolean; error: string | null;
 };
 
 export type HiddenThreadDeleteResult = {

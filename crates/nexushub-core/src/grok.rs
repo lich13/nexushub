@@ -41,6 +41,8 @@ impl GrokPaths {
 #[serde(rename_all = "camelCase")]
 pub struct GrokSessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_eligibility: Option<GrokDeletionEligibility>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_size: Option<crate::session_storage::SessionStorageSize>,
     pub id: String,
     pub title: String,
@@ -50,6 +52,13 @@ pub struct GrokSessionSummary {
     pub message_count: usize,
     pub last_message: Option<String>,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GrokDeletionEligibility {
+    pub allowed: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -126,7 +135,7 @@ pub fn list_grok_sessions(
     result.truncate(limit.clamp(1, 200));
     let active = activity::Snapshot::capture(paths);
     for summary in &mut result {
-        summary.status = active.status(summary).to_string();
+        active.update_summary(summary);
         summary.storage_size = Some(crate::session_storage::directory_size(
             &root,
             &summary.path,
@@ -612,6 +621,7 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize;
     Ok(Some(GrokSessionSummary {
+        deletion_eligibility: None,
         storage_size: None,
         id,
         title,
@@ -662,7 +672,7 @@ fn resolve_session_with_activity(
         );
         if let Some(mut summary) = read_summary(&canonical)? {
             ensure!(found.is_none(), "ambiguous Grok session ID");
-            summary.status = active.status(&summary).to_string();
+            active.update_summary(&mut summary);
             found = Some(summary);
         }
     }
@@ -745,29 +755,46 @@ fn directory_fingerprint(path: &Path) -> Result<(String, usize, u64)> {
 }
 
 pub fn preview_grok_delete(paths: &GrokPaths, id: &str) -> Result<GrokDeletePreview> {
-    let active = activity::Snapshot::capture(paths);
-    let session = resolve_session_with_activity(paths, id, &active)?;
-    active.ensure_not_open(&session)?;
-    ensure!(
-        session.status == "recent",
-        "Grok task is running or its activity cannot be confirmed"
-    );
-    ensure_grok_storage_writable(
-        session
-            .path
-            .parent()
-            .context("invalid Grok session parent")?,
-        "delete the selected session directory",
-    )?;
-    let (fingerprint, file_count, bytes) = directory_fingerprint(&session.path)?;
-    Ok(GrokDeletePreview {
-        id: session.id,
-        title: session.title,
-        path: session.path,
-        fingerprint,
-        file_count,
-        bytes,
-    })
+    DeletionContext::new(paths).preview(id)
+}
+
+pub(crate) struct DeletionContext<'a> {
+    paths: &'a GrokPaths,
+    active: activity::Snapshot,
+}
+
+impl<'a> DeletionContext<'a> {
+    pub(crate) fn new(paths: &'a GrokPaths) -> Self {
+        Self {
+            paths,
+            active: activity::Snapshot::capture(paths),
+        }
+    }
+
+    pub(crate) fn summary(&self, id: &str) -> Result<GrokSessionSummary> {
+        resolve_session_with_activity(self.paths, id, &self.active)
+    }
+
+    pub(crate) fn preview(&self, id: &str) -> Result<GrokDeletePreview> {
+        let session = self.summary(id)?;
+        self.active.ensure_deletable(&session)?;
+        ensure_grok_storage_writable(
+            session
+                .path
+                .parent()
+                .context("invalid Grok session parent")?,
+            "delete the selected session directory",
+        )?;
+        let (fingerprint, file_count, bytes) = directory_fingerprint(&session.path)?;
+        Ok(GrokDeletePreview {
+            id: session.id,
+            title: session.title,
+            path: session.path,
+            fingerprint,
+            file_count,
+            bytes,
+        })
+    }
 }
 
 pub fn execute_grok_delete(
@@ -793,11 +820,7 @@ pub fn execute_grok_delete(
     let check = (|| -> Result<()> {
         session.path = retired.clone();
         let active = activity::Snapshot::capture(paths);
-        active.ensure_not_open(&session)?;
-        ensure!(
-            active.status(&session) == "recent",
-            "Grok task activity changed"
-        );
+        active.ensure_deletable(&session)?;
         ensure!(
             directory_fingerprint(&retired)?.0 == preview.fingerprint,
             "Grok task files changed during deletion"

@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.20": [
+        "修复 Grok 闲置线程因历史回合未闭合而被误保护的问题",
+        "隐藏线程自动分批扫描，显示进度、支持停止，并限制每页显示数量。",
+    ],
     "1.2.19": [
         "已回答问题保留原提问、选项和回答，搜索命中的提问文字可直接阅读",
         "延续长线程性能优化、历史分页和 100M／300M 线程颜色规则。",
@@ -147,6 +151,38 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.20":
+        sections = {
+            "版本概览": ["本版修复 Grok 闲置线程误保护与隐藏线程数量较多时的扫描卡顿。"],
+            "功能调整": [
+                "隐藏线程自动分批扫描，显示准备、扫描、完成或停止状态；候选与逐项结果每页最多显示 100 项。",
+                "扫描可随时停止，保留已显示结果；全部扫描完成后才能确认清理，重新扫描会建立新快照。",
+            ],
+            "问题修复": [
+                "Grok 在原生登记与进程身份确认无占用、记录完整有效时，允许历史回合未闭合的线程进入删除预览；仍打开、状态无法核验或记录损坏的线程继续受保护。",
+                "隐藏扫描共用数据库元数据、索引和文件引用，流式验证历史；扫描及删除预览移入有界后台执行，减少重复读取与界面阻塞。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，不新增数据库表；旧客户端仍可单次扫描，新客户端连接旧服务时沿用旧行为。",
+                "删除继续绑定预览候选与指纹，并在执行前复核身份、占用和文件变化；保留现有会话、连接、Bark 与通知状态。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包与校验文件；共七项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App。安装前核对校验和与 updater 签名。",
+                "安装后可在 Grok 打开原先误保护线程的删除预览，并在“更新与维护”检查扫描进度、翻页、停止和重新扫描。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.19":
         sections = {

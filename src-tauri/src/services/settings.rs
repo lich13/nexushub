@@ -1,5 +1,7 @@
 use crate::{overview::DesktopState, services::actions::DesktopActionResponse};
 use anyhow::Result;
+#[cfg(test)]
+use nexushub_core::services::cleanup::HiddenThreadDeletePlan;
 use nexushub_core::services::use_cases::NexusHubUseCases;
 use nexushub_core::{
     config::{patch_probe_config_toml, Config},
@@ -7,7 +9,7 @@ use nexushub_core::{
     services::{
         cleanup::{
             self as cleanup_service, ArchiveDeletePlan, ArchiveDeleteResult,
-            HiddenThreadDeletePlan, HiddenThreadDeleteResult,
+            HiddenThreadDeleteResult,
         },
         jobs as job_service, probe as probe_service,
         settings::{self as settings_service, ProbeSettingsSaveRequest},
@@ -187,6 +189,7 @@ pub(crate) fn archive_delete_execute_with_state(
     cleanup.execute_archived(&paths)
 }
 
+#[cfg(test)]
 pub(crate) fn hidden_delete_dry_run_with_state(
     state: &DesktopState,
 ) -> Result<HiddenThreadDeletePlan> {

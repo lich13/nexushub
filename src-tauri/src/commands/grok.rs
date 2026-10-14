@@ -48,17 +48,25 @@ pub async fn renameGrokSession(
 }
 
 #[tauri::command(rename = "grok.deletePreview")]
-pub fn previewGrokSessionDelete(id: String) -> Result<GrokDeletePreview, String> {
-    NexusHubUseCases::new(&PlatformPaths::desktop_current())
-        .grok()
-        .delete_preview(&id)
-        .map_err(|err| err.to_string())
+pub async fn previewGrokSessionDelete(id: String) -> Result<GrokDeletePreview, String> {
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+            .grok()
+            .delete_preview(&id)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command(rename = "grok.deleteExecute")]
-pub fn deleteGrokSession(request: GrokDeleteRequest) -> Result<GrokDeleteResult, String> {
-    NexusHubUseCases::new(&PlatformPaths::desktop_current())
-        .grok()
-        .delete_execute(request)
-        .map_err(|err| err.to_string())
+pub async fn deleteGrokSession(request: GrokDeleteRequest) -> Result<GrokDeleteResult, String> {
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        NexusHubUseCases::new(&PlatformPaths::desktop_current())
+            .grok()
+            .delete_execute(request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }

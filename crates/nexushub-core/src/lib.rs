@@ -14,6 +14,7 @@ pub mod probe_error_monitor;
 pub mod providers;
 mod read_cache;
 pub mod read_tasks;
+mod scan_work;
 pub mod security;
 mod selected_codex;
 pub mod services;
