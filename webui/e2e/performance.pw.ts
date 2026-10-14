@@ -330,6 +330,62 @@ type EntryDiagnostics = {
 type FrameBaseline =
   | { status: "measured"; samples: number; p95Ms: number; maxMs: number }
   | { status: "error"; samples: 0; p95Ms: null; maxMs: null };
+type SwitchTiming = {
+  clickReturnMs: number;
+  observerTitleMs: number | null;
+  firstRafMs: number | null;
+  readyRafMs: number | null;
+  readyPostFrameTaskMs: number | null;
+  totalRafMs: number;
+  waitFrames: number;
+};
+type SwitchMetric = {
+  samples: number;
+  unknown: number;
+  p95: number | null;
+  max: number | null;
+  slowest: Array<{ sample: number; value: number }>;
+};
+
+function summarizeSwitchMetric(values: Array<number | null>): SwitchMetric {
+  const measured: Array<{ sample: number; value: number }> = [];
+  values.forEach((value, index) => {
+    if (value !== null) measured.push({ sample: index + 1, value });
+  });
+  if (!measured.length) return { samples: 0, unknown: values.length, p95: null, max: null, slowest: [] };
+  return {
+    samples: measured.length,
+    unknown: values.length - measured.length,
+    p95: Number(p95(measured.map(sample => sample.value)).toFixed(1)),
+    max: Number(Math.max(...measured.map(sample => sample.value)).toFixed(1)),
+    slowest: [...measured]
+      .sort((left, right) => right.value - left.value || left.sample - right.sample)
+      .slice(0, 5)
+      .map(({ sample, value }) => ({ sample, value: Number(value.toFixed(1)) }))
+  };
+}
+
+function summarizeSwitchMilliseconds(values: Array<number | null>) {
+  const summary = summarizeSwitchMetric(values);
+  return {
+    samples: summary.samples,
+    unknown: summary.unknown,
+    p95Ms: summary.p95,
+    maxMs: summary.max,
+    slowest: summary.slowest.map(({ sample, value }) => ({ sample, ms: value }))
+  };
+}
+
+function summarizeSwitchFrames(values: number[]) {
+  const summary = summarizeSwitchMetric(values);
+  return {
+    samples: summary.samples,
+    unknown: summary.unknown,
+    p95Frames: summary.p95,
+    maxFrames: summary.max,
+    slowest: summary.slowest.map(({ sample, value }) => ({ sample, frames: value }))
+  };
+}
 
 function unavailableEntryDiagnostics(): EntryDiagnostics {
   return {
@@ -483,6 +539,7 @@ test("long history expansion, scrolling and cached thread switching stay within 
   await loadRemainingPages(fixture.stream);
   const entryCaptureStarted = await startPerformanceEntryCapture(page);
   const samples: Record<"expand" | "scroll" | "switch", number[]> = { expand: [], scroll: [], switch: [] };
+  const switchTimings: SwitchTiming[] = [];
   const group = fixture.stream.locator("details.execution-group").first();
   const groupSummary = group.locator(":scope > summary");
   const instruction = fixture.stream.locator("details.instruction-file").first();
@@ -519,19 +576,57 @@ test("long history expansion, scrolling and cached thread switching stay within 
     for (let sample = 0; sample < 20; sample++) {
       const title = summaries[sample % 2].title;
       const row = page.locator(".thread-item").filter({ hasText: title });
-      samples.switch.push(await row.evaluate(async (element, expectedTitle) => {
-        const started = performance.now();
-        (element as HTMLElement).click();
-        await new Promise<void>((resolve, reject) => {
-          const ready = () => requestAnimationFrame(() => {
-            if (document.querySelector(".conversation-title")?.textContent === expectedTitle) requestAnimationFrame(() => resolve());
-            else if (performance.now() - started > 5000) reject(new Error("Thread did not switch to its expected title"));
-            else ready();
-          });
-          ready();
+      const timing = await row.evaluate(async (element, expectedTitle) => {
+        const titleElement = document.querySelector(".conversation-title");
+        if (!titleElement) throw new Error("Conversation title is missing");
+        let started = 0;
+        let observerTitleMs: number | null = null;
+        let firstRafMs: number | null = null;
+        let readyRafMs: number | null = null;
+        let readyPostFrameTaskMs: number | null = null;
+        let readyPostFrameTaskTimer: number | undefined;
+        let waitFrames = 0;
+        const observer = new MutationObserver(() => {
+          if (observerTitleMs === null && titleElement.textContent === expectedTitle) {
+            observerTitleMs = performance.now() - started;
+            observer.disconnect();
+          }
         });
-        return performance.now() - started;
-      }, title));
+        try {
+          observer.observe(titleElement, { childList: true, characterData: true, subtree: true });
+          started = performance.now();
+          (element as HTMLElement).click();
+          const clickReturnMs = performance.now() - started;
+          await new Promise<void>((resolve, reject) => {
+            const ready = () => requestAnimationFrame(() => {
+              waitFrames += 1;
+              if (firstRafMs === null) firstRafMs = performance.now() - started;
+              if (document.querySelector(".conversation-title")?.textContent === expectedTitle) {
+                readyRafMs = performance.now() - started;
+                readyPostFrameTaskTimer = window.setTimeout(() => {
+                  readyPostFrameTaskMs = performance.now() - started;
+                  readyPostFrameTaskTimer = undefined;
+                }, 0);
+                requestAnimationFrame(() => {
+                  waitFrames += 1;
+                  resolve();
+                });
+              } else if (performance.now() - started > 5000) reject(new Error("Thread did not switch to its expected title"));
+              else ready();
+            });
+            ready();
+          });
+          return {
+            clickReturnMs, observerTitleMs, firstRafMs, readyRafMs, readyPostFrameTaskMs,
+            totalRafMs: performance.now() - started, waitFrames
+          } satisfies SwitchTiming;
+        } finally {
+          observer.disconnect();
+          if (readyPostFrameTaskTimer !== undefined) window.clearTimeout(readyPostFrameTaskTimer);
+        }
+      }, title);
+      samples.switch.push(timing.totalRafMs);
+      switchTimings.push(timing);
       await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages);
     }
   } finally {
@@ -539,9 +634,18 @@ test("long history expansion, scrolling and cached thread switching stay within 
   }
   const appFrameBaseline = await measureDoubleRafBaseline(page);
   const measurements = Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, { samples: values.length, p95Ms: Number(p95(values).toFixed(1)), maxMs: Number(Math.max(...values).toFixed(1)) }]));
+  const switchDiagnostics = {
+    clickReturnMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.clickReturnMs)),
+    observerTitleMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.observerTitleMs)),
+    firstRafMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.firstRafMs)),
+    readyRafMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.readyRafMs)),
+    readyPostFrameTaskMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.readyPostFrameTaskMs)),
+    totalRafMs: summarizeSwitchMilliseconds(switchTimings.map(timing => timing.totalRafMs)),
+    waitFrames: summarizeSwitchFrames(switchTimings.map(timing => timing.waitFrames))
+  };
   const result = {
     browser: info.project.name, historyMessages: totalMessages, ...measurements,
-    diagnostics: { doubleRafMs: { aboutBlank: blankFrameBaseline, appIdle: appFrameBaseline }, performanceEntries: entryDiagnostics }
+    diagnostics: { doubleRafMs: { aboutBlank: blankFrameBaseline, appIdle: appFrameBaseline }, performanceEntries: entryDiagnostics, switch: switchDiagnostics }
   };
   info.annotations.push({ type: "performance", description: JSON.stringify(result) });
   console.log(`Local interaction measurements and frame diagnostics: ${JSON.stringify(result)}`);
