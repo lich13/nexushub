@@ -34,13 +34,22 @@ impl MemoryLease {
     pub(crate) fn resize(&mut self, bytes: usize) -> Result<()> {
         if bytes > self.bytes {
             let extra = bytes - self.bytes;
-            self.budget
-                .0
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                    used.checked_add(extra)
-                        .filter(|next| *next <= SCAN_MEMORY_LIMIT)
-                })
-                .map_err(|_| MemoryLimit)?;
+            let mut used = self.budget.0.load(Ordering::Acquire);
+            loop {
+                let next = used
+                    .checked_add(extra)
+                    .filter(|next| *next <= SCAN_MEMORY_LIMIT)
+                    .ok_or(MemoryLimit)?;
+                match self.budget.0.compare_exchange_weak(
+                    used,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(current) => used = current,
+                }
+            }
         } else {
             self.budget
                 .0
