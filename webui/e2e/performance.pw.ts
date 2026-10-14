@@ -305,64 +305,245 @@ function p95(samples: number[]) {
   return [...samples].sort((left, right) => left - right)[Math.ceil(samples.length * 0.95) - 1];
 }
 
+type DiagnosticEntryType = "longtask" | "long-animation-frame";
+type DiagnosticSupport = "supported" | "unsupported" | "error";
+type DiagnosticEntry = {
+  type: DiagnosticEntryType;
+  durationMs: number;
+  blockingDurationMs?: number;
+  scriptCount?: number;
+  scriptDurationMs?: number;
+  forcedStyleAndLayoutDurationMs?: number;
+};
+type DiagnosticCaptureState = {
+  support: Record<DiagnosticEntryType, DiagnosticSupport>;
+  counts: Record<DiagnosticEntryType, number>;
+  records: DiagnosticEntry[];
+  observers: Array<{ type: DiagnosticEntryType; observer: PerformanceObserver }>;
+  collect: (type: DiagnosticEntryType, entries: PerformanceEntry[]) => void;
+};
+type DiagnosticWindow = Window & { __desktopPerformanceCapture?: DiagnosticCaptureState };
+type EntryDiagnostics = {
+  observers: Record<DiagnosticEntryType, { status: DiagnosticSupport; count: number | null }>;
+  records: { collected: number; retained: number; dropped: number; truncated: boolean; slowest: DiagnosticEntry[] };
+};
+type FrameBaseline =
+  | { status: "measured"; samples: number; p95Ms: number; maxMs: number }
+  | { status: "error"; samples: 0; p95Ms: null; maxMs: null };
+
+function unavailableEntryDiagnostics(): EntryDiagnostics {
+  return {
+    observers: {
+      longtask: { status: "error", count: null },
+      "long-animation-frame": { status: "error", count: null }
+    },
+    records: { collected: 0, retained: 0, dropped: 0, truncated: false, slowest: [] }
+  };
+}
+
+async function measureDoubleRafBaseline(page: Page): Promise<FrameBaseline> {
+  try {
+    const samples = await page.evaluate(async () => {
+      const values: number[] = [];
+      for (let sample = 0; sample < 20; sample++) {
+        const started = performance.now();
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        values.push(performance.now() - started);
+      }
+      return values;
+    });
+    if (!samples.length) return { status: "error", samples: 0, p95Ms: null, maxMs: null };
+    return {
+      status: "measured", samples: samples.length,
+      p95Ms: Number(p95(samples).toFixed(1)), maxMs: Number(Math.max(...samples).toFixed(1))
+    };
+  } catch {
+    return { status: "error", samples: 0, p95Ms: null, maxMs: null };
+  }
+}
+
+async function startPerformanceEntryCapture(page: Page): Promise<boolean> {
+  try {
+    await page.evaluate(() => {
+      const diagnosticWindow = window as DiagnosticWindow;
+      const entryTypes: DiagnosticEntryType[] = ["longtask", "long-animation-frame"];
+      const support: Record<DiagnosticEntryType, DiagnosticSupport> = {
+        longtask: "unsupported", "long-animation-frame": "unsupported"
+      };
+      const counts: Record<DiagnosticEntryType, number> = { longtask: 0, "long-animation-frame": 0 };
+      const records: DiagnosticEntry[] = [];
+      const observers: DiagnosticCaptureState["observers"] = [];
+      const round = (value: number) => Math.round(value * 10) / 10;
+      const numeric = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+      const capture: DiagnosticCaptureState = {
+        support, counts, records, observers,
+        collect: (type, entries) => {
+          for (const entry of entries) {
+            counts[type] += 1;
+            const duration = numeric(entry.duration);
+            if (duration === undefined) continue;
+            const record: DiagnosticEntry = { type, durationMs: round(duration) };
+            const candidate = entry as PerformanceEntry & {
+              blockingDuration?: unknown;
+              scripts?: Array<{ duration?: unknown; forcedStyleAndLayoutDuration?: unknown }>;
+            };
+            const blockingDuration = numeric(candidate.blockingDuration);
+            if (blockingDuration !== undefined) record.blockingDurationMs = round(blockingDuration);
+            if (Array.isArray(candidate.scripts)) {
+              record.scriptCount = candidate.scripts.length;
+              const scriptDurations = candidate.scripts.map(script => numeric(script.duration)).filter((value): value is number => value !== undefined);
+              const layoutDurations = candidate.scripts.map(script => numeric(script.forcedStyleAndLayoutDuration)).filter((value): value is number => value !== undefined);
+              if (scriptDurations.length) record.scriptDurationMs = round(scriptDurations.reduce((sum, value) => sum + value, 0));
+              if (layoutDurations.length) record.forcedStyleAndLayoutDurationMs = round(layoutDurations.reduce((sum, value) => sum + value, 0));
+            }
+            const insertionIndex = records.findIndex(existing => record.durationMs > existing.durationMs);
+            if (insertionIndex >= 0) {
+              records.splice(insertionIndex, 0, record);
+              if (records.length > 100) records.pop();
+            } else if (records.length < 100) {
+              records.push(record);
+            }
+          }
+        }
+      };
+      diagnosticWindow.__desktopPerformanceCapture = capture;
+      const supportedTypes = typeof PerformanceObserver !== "undefined" && Array.isArray(PerformanceObserver.supportedEntryTypes)
+        ? PerformanceObserver.supportedEntryTypes : [];
+      for (const type of entryTypes) {
+        if (!supportedTypes.includes(type)) continue;
+        try {
+          const observer = new PerformanceObserver(list => capture.collect(type, list.getEntries()));
+          observer.observe({ type, buffered: false });
+          observers.push({ type, observer });
+          support[type] = "supported";
+        } catch {
+          support[type] = "error";
+        }
+      }
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopPerformanceEntryCapture(page: Page, started: boolean): Promise<EntryDiagnostics> {
+  if (!started) return unavailableEntryDiagnostics();
+  try {
+    return await page.evaluate(() => {
+      const diagnosticWindow = window as DiagnosticWindow;
+      const capture = diagnosticWindow.__desktopPerformanceCapture;
+      if (!capture) return {
+        observers: {
+          longtask: { status: "error", count: null },
+          "long-animation-frame": { status: "error", count: null }
+        },
+        records: { collected: 0, retained: 0, dropped: 0, truncated: false, slowest: [] }
+      } satisfies EntryDiagnostics;
+      for (const { type, observer } of capture.observers) {
+        try {
+          capture.collect(type, observer.takeRecords());
+        } catch {
+          capture.support[type] = "error";
+        } finally {
+          try {
+            observer.disconnect();
+          } catch {
+            capture.support[type] = "error";
+          }
+        }
+      }
+      const countFor = (type: DiagnosticEntryType) => capture.support[type] === "supported" ? capture.counts[type] : null;
+      const collected = capture.counts.longtask + capture.counts["long-animation-frame"];
+      const result: EntryDiagnostics = {
+        observers: {
+          longtask: { status: capture.support.longtask, count: countFor("longtask") },
+          "long-animation-frame": { status: capture.support["long-animation-frame"], count: countFor("long-animation-frame") }
+        },
+        records: {
+          collected, retained: capture.records.length, dropped: Math.max(0, collected - capture.records.length),
+          truncated: collected > capture.records.length, slowest: capture.records.slice(0, 5)
+        }
+      };
+      delete diagnosticWindow.__desktopPerformanceCapture;
+      return result;
+    });
+  } catch {
+    return unavailableEntryDiagnostics();
+  }
+}
+
 test("long history expansion, scrolling and cached thread switching stay within the local interaction budget", { tag: "@desktop-performance" }, async ({ page }, info) => {
   test.setTimeout(60000);
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("about:blank");
+  const blankFrameBaseline = await measureDoubleRafBaseline(page);
   const fixture = await installHistory(page, "codex");
   await fixture.open();
   await loadRemainingPages(fixture.stream);
+  const entryCaptureStarted = await startPerformanceEntryCapture(page);
   const samples: Record<"expand" | "scroll" | "switch", number[]> = { expand: [], scroll: [], switch: [] };
   const group = fixture.stream.locator("details.execution-group").first();
   const groupSummary = group.locator(":scope > summary");
   const instruction = fixture.stream.locator("details.instruction-file").first();
-  for (let sample = 0; sample < 10; sample++) {
-    samples.expand.push(await measureToggle(groupSummary, true));
-    const command = group.locator("details.execution-command").first();
-    await expect(command.locator(".execution-section")).toHaveCount(0);
-    samples.expand.push(await measureToggle(command.locator(":scope > summary"), true));
-    await expect(command.locator(".execution-section").last()).toContainText("Tool output fixture 0.");
-    samples.expand.push(await measureToggle(command.locator(":scope > summary"), false));
-    await expect(command.locator(".execution-section")).toHaveCount(0);
-    samples.expand.push(await measureToggle(groupSummary, false));
-    await expect(instruction.locator(".instruction-file-body")).toHaveCount(0);
-    samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), true));
-    await expect(instruction.locator(".instruction-file-body")).toContainText("Follow the isolated fixture rules");
-    samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), false));
-  }
-  for (let sample = 0; sample < 20; sample++) {
-    samples.scroll.push(await fixture.stream.evaluate(async (element, index) => {
-      const started = performance.now();
-      element.scrollTop = (element.scrollHeight - element.clientHeight) * (index % 2 ? 0.25 : 0.75);
-      element.dispatchEvent(new Event("scroll", { bubbles: true }));
-      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      return performance.now() - started;
-    }, sample));
-  }
-  const second = page.locator(".thread-item").filter({ hasText: summaries[1].title });
-  await second.click();
-  await expect(page.locator(".conversation-title")).toHaveText(summaries[1].title);
-  await expect(fixture.stream.locator("details.execution-group")).toHaveCount(pageMessages);
-  await loadRemainingPages(fixture.stream);
-  for (let sample = 0; sample < 20; sample++) {
-    const title = summaries[sample % 2].title;
-    const row = page.locator(".thread-item").filter({ hasText: title });
-    samples.switch.push(await row.evaluate(async (element, expectedTitle) => {
-      const started = performance.now();
-      (element as HTMLElement).click();
-      await new Promise<void>((resolve, reject) => {
-        const ready = () => requestAnimationFrame(() => {
-          if (document.querySelector(".conversation-title")?.textContent === expectedTitle) requestAnimationFrame(() => resolve());
-          else if (performance.now() - started > 5000) reject(new Error("Thread did not switch to its expected title"));
-          else ready();
+  let entryDiagnostics = unavailableEntryDiagnostics();
+  try {
+    for (let sample = 0; sample < 10; sample++) {
+      samples.expand.push(await measureToggle(groupSummary, true));
+      const command = group.locator("details.execution-command").first();
+      await expect(command.locator(".execution-section")).toHaveCount(0);
+      samples.expand.push(await measureToggle(command.locator(":scope > summary"), true));
+      await expect(command.locator(".execution-section").last()).toContainText("Tool output fixture 0.");
+      samples.expand.push(await measureToggle(command.locator(":scope > summary"), false));
+      await expect(command.locator(".execution-section")).toHaveCount(0);
+      samples.expand.push(await measureToggle(groupSummary, false));
+      await expect(instruction.locator(".instruction-file-body")).toHaveCount(0);
+      samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), true));
+      await expect(instruction.locator(".instruction-file-body")).toContainText("Follow the isolated fixture rules");
+      samples.expand.push(await measureToggle(instruction.locator(":scope > summary"), false));
+    }
+    for (let sample = 0; sample < 20; sample++) {
+      samples.scroll.push(await fixture.stream.evaluate(async (element, index) => {
+        const started = performance.now();
+        element.scrollTop = (element.scrollHeight - element.clientHeight) * (index % 2 ? 0.25 : 0.75);
+        element.dispatchEvent(new Event("scroll", { bubbles: true }));
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        return performance.now() - started;
+      }, sample));
+    }
+    const second = page.locator(".thread-item").filter({ hasText: summaries[1].title });
+    await second.click();
+    await expect(page.locator(".conversation-title")).toHaveText(summaries[1].title);
+    await expect(fixture.stream.locator("details.execution-group")).toHaveCount(pageMessages);
+    await loadRemainingPages(fixture.stream);
+    for (let sample = 0; sample < 20; sample++) {
+      const title = summaries[sample % 2].title;
+      const row = page.locator(".thread-item").filter({ hasText: title });
+      samples.switch.push(await row.evaluate(async (element, expectedTitle) => {
+        const started = performance.now();
+        (element as HTMLElement).click();
+        await new Promise<void>((resolve, reject) => {
+          const ready = () => requestAnimationFrame(() => {
+            if (document.querySelector(".conversation-title")?.textContent === expectedTitle) requestAnimationFrame(() => resolve());
+            else if (performance.now() - started > 5000) reject(new Error("Thread did not switch to its expected title"));
+            else ready();
+          });
+          ready();
         });
-        ready();
-      });
-      return performance.now() - started;
-    }, title));
-    await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages);
+        return performance.now() - started;
+      }, title));
+      await expect(fixture.stream.locator("details.execution-group")).toHaveCount(totalMessages);
+    }
+  } finally {
+    entryDiagnostics = await stopPerformanceEntryCapture(page, entryCaptureStarted);
   }
+  const appFrameBaseline = await measureDoubleRafBaseline(page);
   const measurements = Object.fromEntries(Object.entries(samples).map(([name, values]) => [name, { samples: values.length, p95Ms: Number(p95(values).toFixed(1)), maxMs: Number(Math.max(...values).toFixed(1)) }]));
-  info.annotations.push({ type: "performance", description: JSON.stringify({ browser: info.project.name, historyMessages: totalMessages, ...measurements }) });
-  console.log(`Local interaction measurements: ${JSON.stringify({ browser: info.project.name, historyMessages: totalMessages, ...measurements })}`);
+  const result = {
+    browser: info.project.name, historyMessages: totalMessages, ...measurements,
+    diagnostics: { doubleRafMs: { aboutBlank: blankFrameBaseline, appIdle: appFrameBaseline }, performanceEntries: entryDiagnostics }
+  };
+  info.annotations.push({ type: "performance", description: JSON.stringify(result) });
+  console.log(`Local interaction measurements and frame diagnostics: ${JSON.stringify(result)}`);
   for (const [name, values] of Object.entries(samples)) expect(p95(values), `${name} event-to-paint p95`).toBeLessThanOrEqual(interactionBudgetMs);
 });
