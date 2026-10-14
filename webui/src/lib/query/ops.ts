@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import {
   dryRunArchiveDelete,
   dryRunHiddenThreadDelete,
@@ -12,7 +13,8 @@ import {
 } from "../api";
 import type { ArchiveDeletePlan, ArchiveDeleteResult, HiddenThreadDeletePlan, HiddenThreadDeleteResult } from "../../types";
 import { backgroundJobKey } from "./jobs";
-import { machineScope } from "../runtime";
+import { beforeMachineChange, connectionSnapshot, machineScope } from "../runtime";
+import { HiddenScanRunner } from "./hiddenScan";
 
 export const opsQueryKeys = {
   updateStatus: ["update-status"] as const,
@@ -46,6 +48,13 @@ export function useOpsActions(input: {
 }) {
   const qc = useQueryClient();
   const { capabilities } = input;
+  const scan = useRef<HiddenScanRunner | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    const abandon = async () => { generation.current += 1; await scan.current?.stop(); };
+    const unsubscribe = beforeMachineChange(abandon);
+    return () => { unsubscribe(); void abandon(); };
+  }, []);
   const invalidateJobs = () => qc.invalidateQueries({ queryKey: opsQueryKeys.jobs });
   const invalidateThreads = () => qc.invalidateQueries({ queryKey: opsQueryKeys.threads });
   const requireThreadCleanup = () => {
@@ -55,6 +64,7 @@ export function useOpsActions(input: {
   };
 
   return {
+    stopHiddenScan: () => scan.current?.stop(),
     updateJob: useMutation({
       mutationKey: backgroundJobKey,
       gcTime: Infinity,
@@ -90,11 +100,26 @@ export function useOpsActions(input: {
       }
     }),
     hiddenDryRun: useMutation({
-      mutationFn: () => {
+      mutationFn: async () => {
         requireThreadCleanup();
-        return dryRunHiddenThreadDelete();
-      },
-      onSuccess: input.onHiddenDryRun
+        const current = ++generation.current;
+        const revision = connectionSnapshot().revision;
+        const valid = () => generation.current === current && connectionSnapshot().revision === revision;
+        await scan.current?.stop();
+        if (!valid()) throw new Error("连接已变化，已停止旧扫描");
+        const runner = new HiddenScanRunner(dryRunHiddenThreadDelete, plan => {
+          if (valid()) input.onHiddenDryRun(plan);
+        });
+        scan.current = runner;
+        try {
+          const result = await runner.run(capabilities.hiddenCleanupScan === true);
+          if (valid()) input.onHiddenDryRun(result);
+          return result;
+        } catch (error) {
+          void runner.stop();
+          throw error;
+        }
+      }
     }),
     hiddenExecute: useMutation({
       mutationFn: ({ expectedCount, candidates }: { expectedCount: number; candidates: import("../../types").HiddenThreadSelection[] }) => {

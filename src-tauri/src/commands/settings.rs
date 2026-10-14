@@ -71,17 +71,31 @@ pub fn startArchiveDelete(
 }
 
 #[tauri::command(rename = "cleanup.hiddenDryRun")]
-pub fn dryRunHiddenThreadDelete(
+pub async fn dryRunHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
+    request: Option<nexushub_core::archive::hidden_scan::HiddenScanRequest>,
 ) -> Result<nexushub_core::archive::HiddenThreadDeletePlan, String> {
-    settings_service::hidden_delete_dry_run_with_state(&state).map_err(|err| err.to_string())
+    nexushub_core::services::use_cases::NexusHubUseCases::new(state.platform())
+        .cleanup()
+        .scan_hidden(
+            state.codex_paths(),
+            "desktop".into(),
+            request.unwrap_or_default(),
+        )
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command(rename = "cleanup.hiddenExecute")]
-pub fn startHiddenThreadDelete(
+pub async fn startHiddenThreadDelete(
     state: tauri::State<'_, DesktopState>,
     request: DesktopCleanupExecuteRequest,
 ) -> Result<nexushub_core::archive::HiddenThreadDeleteResult, String> {
-    settings_service::hidden_delete_execute_with_state(&state, request)
-        .map_err(|err| err.to_string())
+    let state = state.inner().clone();
+    nexushub_core::read_tasks::spawn_blocking(move || {
+        settings_service::hidden_delete_execute_with_state(&state, request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }

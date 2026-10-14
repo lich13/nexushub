@@ -29,8 +29,8 @@ describe("machine demo fixtures", () => {
   test("remote API fixture retains Linux service, update and backup capabilities", () => {
     const view = buildDemoSystemCapabilities("linux-api");
     expect(view.host_surface).toBe("linux_server_api");
-    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups"].sort());
-    expect(view.capabilities).toMatchObject({ systemd: true, linux_update_job: true, prune_backups: true });
+    expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "hidden_cleanup_scan"].sort());
+    expect(view.capabilities).toMatchObject({ systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
     expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/nexushub-demo", config_file: "/srv/nexushub-demo/config.toml", log_dir: "/srv/nexushub-demo/logs", service_kind: "systemd", service_name: "nexushub-webd" });
   });
 

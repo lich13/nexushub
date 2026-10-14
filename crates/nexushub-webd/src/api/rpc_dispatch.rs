@@ -248,7 +248,12 @@ pub(super) async fn rpc_dispatch(
             .await
         }
         rpc_commands::CLEANUP_HIDDEN_DRY_RUN => {
-            hidden_threads_delete_dry_run(State(state), headers).await
+            hidden_threads_delete_dry_run(
+                State(state),
+                headers,
+                Json(rpc_wrapped_payload(&args, &["request"])?),
+            )
+            .await
         }
         rpc_commands::CLEANUP_HIDDEN_EXECUTE => {
             hidden_threads_delete_execute(

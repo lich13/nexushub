@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use nexushub_core::services::{
-    cleanup::{CleanupExecuteRequest, CleanupOperationKind, CleanupTarget},
+    cleanup::{CleanupExecuteRequest, CleanupTarget},
     use_cases::NexusHubUseCases,
 };
 use serde::Deserialize;
@@ -58,14 +58,14 @@ pub(crate) async fn archive_delete_execute(
 pub(crate) async fn hidden_threads_delete_dry_run(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Json(request): Json<nexushub_core::archive::hidden_scan::HiddenScanRequest>,
 ) -> ApiResponse {
     let auth = require_auth(&headers, &state).map_err(|s| api_error(s, "unauthorized"))?;
     let platform = http_update_platform();
-    let plan = NexusHubUseCases::new(&platform)
+    ok(NexusHubUseCases::new(&platform)
         .cleanup()
-        .operation(CleanupTarget::Hidden, CleanupOperationKind::DryRun)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)?)
+        .scan_hidden(state.codex_paths(), auth.admin_id.to_string(), request)
+        .await?)
 }
 
 pub(crate) async fn hidden_threads_delete_execute(
@@ -86,6 +86,9 @@ pub(crate) async fn hidden_threads_delete_execute(
             },
         )
         .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?;
-    ok(linux_adapter::execute_cleanup_plan(&state, &auth, plan)
-        .map_err(|err| api_error(StatusCode::BAD_REQUEST, &err.to_string()))?)
+    ok(nexushub_core::read_tasks::spawn_blocking(move || {
+        linux_adapter::execute_cleanup_plan(&state, &auth, plan)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }

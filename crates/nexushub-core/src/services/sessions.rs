@@ -163,13 +163,20 @@ impl SessionUseCases {
             crate::services::system::Capability::ThreadCleanup,
         )?;
         validate(request.provider, request.operation, &request.session_keys)?;
+        let grok = (request.provider == SessionProvider::Grok)
+            .then(|| grok::DeletionContext::new(&self.grok));
         let items = request
             .session_keys
             .iter()
             .map(|key| {
-                self.preview_one(request.provider, request.operation, key)
+                self.preview_one(request.provider, request.operation, key, grok.as_ref())
                     .unwrap_or_else(|error| {
-                        self.blocked_item(request.provider, key, format!("{error:#}"))
+                        self.blocked_item(
+                            request.provider,
+                            key,
+                            format!("{error:#}"),
+                            grok.as_ref(),
+                        )
                     })
             })
             .collect();
@@ -185,6 +192,7 @@ impl SessionUseCases {
         provider: SessionProvider,
         key: &str,
         reason: String,
+        grok: Option<&grok::DeletionContext<'_>>,
     ) -> SessionBatchItem {
         let mut item = SessionBatchItem {
             session_key: key.to_string(),
@@ -210,7 +218,11 @@ impl SessionUseCases {
                         s.rollout_path.into_iter().collect::<Vec<_>>(),
                     )
                 }),
-            SessionProvider::Grok => grok::grok_session_summary(&self.grok, key)
+            SessionProvider::Grok => grok
+                .map_or_else(
+                    || grok::grok_session_summary(&self.grok, key),
+                    |context| context.summary(key),
+                )
                 .ok()
                 .map(|s| (s.id, s.title, vec![s.path])),
         };
@@ -242,6 +254,7 @@ impl SessionUseCases {
         provider: SessionProvider,
         operation: SessionOperation,
         key: &str,
+        grok: Option<&grok::DeletionContext<'_>>,
     ) -> Result<SessionBatchItem> {
         let (id, title, paths, bytes, fingerprint) = match provider {
             SessionProvider::Claude => {
@@ -266,7 +279,10 @@ impl SessionUseCases {
                 }
             }
             SessionProvider::Grok => {
-                let p = grok::preview_grok_delete(&self.grok, key)?;
+                let p = grok.map_or_else(
+                    || grok::preview_grok_delete(&self.grok, key),
+                    |context| context.preview(key),
+                )?;
                 (p.id, p.title, vec![p.path], p.bytes, p.fingerprint)
             }
         };
@@ -307,7 +323,7 @@ impl SessionUseCases {
         let mut results = Vec::with_capacity(request.items.len());
         for item in &request.items {
             let check = self
-                .preview_one(request.provider, request.operation, &item.session_key)
+                .preview_one(request.provider, request.operation, &item.session_key, None)
                 .and_then(|current| {
                     ensure!(
                         current.fingerprint.as_deref() == Some(&item.fingerprint),

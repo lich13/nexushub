@@ -150,6 +150,8 @@ pub struct SystemCapabilities {
     pub job_history: bool,
     pub app_updater: bool,
     pub thread_cleanup: bool,
+    #[serde(default)]
+    pub hidden_cleanup_scan: bool,
     pub thread_archive_actions: bool,
     pub systemd: bool,
     pub linux_update_job: bool,
@@ -245,6 +247,8 @@ pub fn system_capabilities_for_surface(
         job_history: Capability::JobHistory.is_supported_on_surface(platform, host_surface),
         app_updater: Capability::AppUpdater.is_supported_on_surface(platform, host_surface),
         thread_cleanup: Capability::ThreadCleanup.is_supported_on_surface(platform, host_surface),
+        hidden_cleanup_scan: Capability::ThreadCleanup
+            .is_supported_on_surface(platform, host_surface),
         thread_archive_actions: Capability::ThreadArchiveActions
             .is_supported_on_surface(platform, host_surface),
         systemd: Capability::Systemd.is_supported_on_surface(platform, host_surface),

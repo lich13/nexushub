@@ -135,6 +135,37 @@ describe("native machine connection", () => {
     expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, writes: 0 });
   });
 
+  test("waits for registered read cleanup before switching and skips it during verification", async () => {
+    const cleanup = deferred<void>();
+    const runtime = await loadRuntime(command => command === "remote.verify" ? {} : remote);
+    const beforeChange = vi.fn(() => cleanup.promise);
+    const unsubscribe = runtime.beforeMachineChange(beforeChange);
+
+    await runtime.remoteVerify({ revision: 0, baseUrl: remote.baseUrl!, apiKey: "" });
+    expect(beforeChange).not.toHaveBeenCalled();
+
+    const switching = runtime.remoteSelect("remote");
+    expect(beforeChange).toHaveBeenCalledOnce();
+    expect(runtime.invoke.mock.calls.map(([command]) => command)).not.toContain("remote.select");
+    cleanup.resolve();
+    await switching;
+    expect(runtime.invoke.mock.calls.map(([command]) => command)).toContain("remote.select");
+    unsubscribe();
+  });
+
+  test("hidden cleanup dry-run is read-only and its stale response is discarded after switching", async () => {
+    const dryRun = deferred<unknown>();
+    const runtime = await loadRuntime(command => command === "cleanup.hiddenDryRun" ? dryRun.promise : remote);
+    const pending = runtime.runtimeRpc("cleanup.hiddenDryRun", { mode: "start" });
+    expect(runtime.connectionSnapshot().writes).toBe(0);
+    const discarded = expect(pending).rejects.toThrow("连接已变化，已丢弃旧响应");
+
+    await runtime.remoteSelect("remote");
+    dryRun.resolve({ candidates: [] });
+    await discarded;
+    expect(runtime.connectionSnapshot()).toMatchObject({ ...remote, writes: 0 });
+  });
+
   test("an uninitialized browser refuses business calls without a native bridge", async () => {
     vi.resetModules(); vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", undefined);
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);

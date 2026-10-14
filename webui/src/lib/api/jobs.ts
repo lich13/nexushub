@@ -38,11 +38,11 @@ export async function startArchiveDelete(request: {
   );
 }
 
-export async function dryRunHiddenThreadDelete(): Promise<HiddenThreadDeletePlan> {
+export async function dryRunHiddenThreadDelete(request?: import("../../types").HiddenScanRequest): Promise<HiddenThreadDeletePlan> {
   if (USE_DEMO) {
     return demoHiddenThreadDeletePlan();
   }
-  return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", {});
+  return callCommand<HiddenThreadDeletePlan>("cleanup.hiddenDryRun", request ? { request } : {});
 }
 
 export async function startHiddenThreadDelete(request: {

@@ -1,4 +1,4 @@
-use super::{GrokPaths, GrokSessionSummary};
+use super::{GrokDeletionEligibility, GrokPaths, GrokSessionSummary};
 use chrono::{DateTime, NaiveDateTime};
 use serde_json::Value;
 use std::{
@@ -103,9 +103,13 @@ impl Snapshot {
         Ownership::Open
     }
 
+    #[cfg(test)]
     pub(super) fn status(&self, session: &GrokSessionSummary) -> &'static str {
-        let owner = self.ownership(session);
-        match lifecycle(&session.path.join("events.jsonl"), &session.id) {
+        Self::display_status(self.ownership(session), lifecycle(session).0)
+    }
+
+    fn display_status(owner: Ownership, phase: Phase) -> &'static str {
+        match phase {
             Phase::Ended => "recent",
             Phase::Running if owner == Ownership::Open => "running",
             Phase::Empty if owner == Ownership::Inactive => "recent",
@@ -113,6 +117,48 @@ impl Snapshot {
         }
     }
 
+    pub(super) fn update_summary(&self, session: &mut GrokSessionSummary) {
+        let owner = self.ownership(session);
+        let (phase, complete) = lifecycle(session);
+        session.status = Self::display_status(owner, phase).into();
+        session.deletion_eligibility = Some(Self::eligibility(owner, phase, complete));
+    }
+
+    fn eligibility(owner: Ownership, phase: Phase, complete: bool) -> GrokDeletionEligibility {
+        let reason = match owner {
+            Ownership::Open => Some("会话仍在原生 Grok 中打开，请先关闭该会话"),
+            Ownership::Unknown => Some("无法核验原生会话占用状态，请稍后重试"),
+            Ownership::Inactive if !complete => Some("会话记录尚未读取完整或正在写入，请稍后重试"),
+            Ownership::Inactive if phase == Phase::Unknown => {
+                Some("会话记录损坏或活动格式无法确认")
+            }
+            Ownership::Inactive => None,
+        };
+        GrokDeletionEligibility {
+            allowed: reason.is_none(),
+            reason: reason.map(str::to_owned),
+        }
+    }
+
+    pub(super) fn deletion_eligibility(
+        &self,
+        session: &GrokSessionSummary,
+    ) -> GrokDeletionEligibility {
+        let (phase, complete) = lifecycle(session);
+        Self::eligibility(self.ownership(session), phase, complete)
+    }
+
+    pub(super) fn ensure_deletable(&self, session: &GrokSessionSummary) -> anyhow::Result<()> {
+        let eligibility = self.deletion_eligibility(session);
+        anyhow::ensure!(
+            eligibility.allowed,
+            "{}",
+            eligibility.reason.unwrap_or_default()
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(super) fn ensure_not_open(&self, session: &GrokSessionSummary) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.ownership(session) == Ownership::Inactive,
@@ -328,6 +374,8 @@ struct Stamp {
     modified: SystemTime,
     #[cfg(unix)]
     identity: (u64, u64),
+    #[cfg(unix)]
+    changed: (i64, i64),
 }
 
 impl Stamp {
@@ -343,6 +391,8 @@ impl Stamp {
             modified: metadata.modified().ok()?,
             #[cfg(unix)]
             identity: (metadata.dev(), metadata.ino()),
+            #[cfg(unix)]
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
         })
     }
     fn same_file(&self, other: &Self) -> bool {
@@ -373,16 +423,21 @@ static TURN_CACHE: TurnCache = TurnCache(Mutex::new(VecDeque::new()));
 const READ_BUDGET: u64 = 8 * 1024 * 1024;
 const LINE_LIMIT: u64 = 256 * 1024;
 
-fn lifecycle(path: &Path, id: &str) -> Phase {
-    match TURN_CACHE.read(path, id) {
+fn lifecycle(session: &GrokSessionSummary) -> (Phase, bool) {
+    match TURN_CACHE.read_state(&session.path.join("events.jsonl"), &session.id) {
         Ok(phase) => phase,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Phase::Empty,
-        Err(_) => Phase::Unknown,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Phase::Empty, true),
+        Err(_) => (Phase::Unknown, false),
     }
 }
 
 impl TurnCache {
+    #[cfg(test)]
     fn read(&self, path: &Path, id: &str) -> std::io::Result<Phase> {
+        self.read_state(path, id).map(|state| state.0)
+    }
+
+    fn read_state(&self, path: &Path, id: &str) -> std::io::Result<(Phase, bool)> {
         let mut file = File::open(path)?;
         let stamp =
             Stamp::read(&file).ok_or_else(|| std::io::Error::other("invalid activity file"))?;
@@ -394,9 +449,9 @@ impl TurnCache {
         });
         let mut cursor = match old {
             Some(cursor) if cursor.stamp == stamp && cursor.caught_up => {
-                let phase = cursor.turns.phase();
+                let state = (cursor.turns.phase(), cursor.offset == stamp.len);
                 self.publish(cursor);
-                return Ok(phase);
+                return Ok(state);
             }
             Some(cursor)
                 if cursor.stamp.same_file(&stamp)
@@ -450,12 +505,13 @@ impl TurnCache {
             Phase::Unknown
         };
         if Stamp::read(&file).as_ref() != Some(&stamp) {
-            return Ok(Phase::Unknown);
+            return Ok((Phase::Unknown, false));
         }
         cursor.anchor = anchor(&mut file, cursor.offset)?;
+        let complete = cursor.caught_up && cursor.offset == stamp.len;
         cursor.stamp = stamp;
         self.publish(cursor);
-        Ok(phase)
+        Ok((phase, complete))
     }
     fn publish(&self, cursor: Cursor) {
         if let Ok(mut entries) = self.0.lock() {

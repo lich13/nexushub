@@ -32,6 +32,8 @@ Batch actions use explicit provider keys and return per-item preview/execute res
 
 The shared Grok activity snapshot validates array/object registry entries against one process table, native executable identity and process start time. Exited, zombie and reused PIDs cannot prove execution. A bounded cache incrementally consumes complete native primary-turn events, retaining file identity and a prefix anchor to detect replacement/truncation; unread or corrupt state stays unknown. Display requires both a live owner and an unfinished primary turn. Deletion separately rechecks native ownership and file fingerprints before and after quarantine, including idle open sessions.
 
+The optional `deletionEligibility` summary field separates preview permission from display status. Complete valid records without a native owner may be previewed despite a missing turn ending. Unknown registration/process identity, corruption and incomplete final records stay protected. Lists and batch previews share their process snapshot; execution captures fresh ownership. The lifecycle cache includes change time so in-place edits cannot reuse stale eligibility.
+
 ## Activity timeline
 
 Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. The timeline rail is outside the document flow and contains only recognized user-message entries; tools, plans, assistant replies and activity groups keep stable anchors for search and focus without creating rail entries. Activity aliases still locate a command inside a closed group without changing its disclosure state. No native file format or database migration is added.
@@ -93,6 +95,10 @@ Claude notification cursors and atomic delivery claims reuse the provider monito
 `selected_codex` 为普通和归档线程生成安全快照；身份、明确终态、DB/索引关联、共享引用和文件指纹全部通过才允许删除。文件先进入私有暂存，数据库事务与索引原子替换配合；失败恢复文件和索引，不删除未选中的子线程。
 
 `cleanup.hiddenDryRun` 返回候选、指纹、允许状态和阻止原因。`cleanup.hiddenExecute` 的 `candidates` 是本次执行边界，`expectedCount` 校验其长度，不与全局隐藏数比较。每项重新检查后用 savepoint 执行；项目级错误记录并继续，公共数据库/索引/存储故障回滚整批。提交前复核暂存文件和数据库完整性。
+
+隐藏扫描使用一次只读数据库快照、索引解析与原生目录遍历，建立文件引用映射；固定候选逐项流式核验终态、身份和完整内容指纹，读取取消检查间隔最多 64KiB。Linux 与 Tauri 共用有界后台执行。`cleanup.hiddenDryRun` 可选 `start/poll/cancel`、扫描 ID 和游标，每页最多 100 项；不带新参数时保留完整响应。扫描中只发布完整页，完成或停止后发布尾页，重复游标不改变已发布候选。
+
+`hidden_cleanup_scan` 为协议 2 的可选能力。任务仅驻留内存，同源最多一个活动任务、进程最多两个上下文，共用 64MiB 预算；无请求五分钟后取消并释放。前端顺序取页、限制渲染行数，只有完整快照才能进入清理确认；停止或机器切换隔离迟到结果。旧服务沿用单次扫描，无新表或客户端路径参数。
 
 `system.capabilities.api_version` 为 2，桌面桥接校验版本后才转发业务请求。旧无候选请求不能进入隐藏清理。Pi 只保留 retired tombstone；迁移在解码待投递 JSON 前清除 NexusHub 自有 Pi 数据，使用 secure_delete、VACUUM 和 WAL 截断清理遗留页；其他提供方、密钥和业务记录不变。
 

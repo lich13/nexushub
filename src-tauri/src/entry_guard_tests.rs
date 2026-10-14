@@ -333,6 +333,7 @@ mod tests {
         for command in ["startArchiveDelete", "startHiddenThreadDelete"] {
             let start = source
                 .find(&format!("pub fn {command}("))
+                .or_else(|| source.find(&format!("pub async fn {command}(")))
                 .unwrap_or_else(|| panic!("cleanup execute command must exist: {command}"));
             let body = &source[start..];
             let signature = body.split(") ->").next().unwrap_or_else(|| {

@@ -277,6 +277,152 @@ fn grok_delete_revalidates_content_and_does_not_touch_workspace() {
 }
 
 #[test]
+fn grok_delete_preview_rejects_unterminated_activity_tail_without_modifying_native_files() {
+    let (paths, id, path) = fixture();
+    let events = path.join("events.jsonl");
+    let complete_turn = [
+        serde_json::json!({
+            "type": "turn_started",
+            "session_id": id.clone(),
+            "session_relationship": "primary",
+            "schema_version": "1.0"
+        }),
+        serde_json::json!({"type": "turn_ended", "outcome": "completed"}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    let original = format!("{complete_turn}\n{{\"type\":\"turn_started\"");
+    fs::write(&events, &original).unwrap();
+
+    // The activity display may retain the last complete turn's status while the
+    // deletion boundary must reject an incomplete final native record.
+    let listed = list_grok_sessions(&paths, 10, None).unwrap();
+    assert_eq!(listed[0].status, "recent");
+    let eligibility = listed[0].deletion_eligibility.as_ref().unwrap();
+    assert!(!eligibility.allowed);
+    assert!(eligibility.reason.is_some());
+    let before = directory_fingerprint(&path).unwrap();
+    assert!(preview_grok_delete(&paths, &id).is_err());
+    assert_eq!(fs::read(&events).unwrap(), original.as_bytes());
+    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn grok_delete_preview_allows_unowned_running_activity_and_preserves_native_files() {
+    let (paths, id, path) = fixture();
+    let events = path.join("events.jsonl");
+    let running = serde_json::json!({
+        "type": "turn_started",
+        "session_id": id.clone(),
+        "session_relationship": "primary",
+        "schema_version": "1.0"
+    })
+    .to_string()
+        + "\n";
+    fs::write(&events, &running).unwrap();
+
+    let listed = list_grok_sessions(&paths, 10, None).unwrap();
+    assert_eq!(listed[0].status, "unknown");
+    assert_eq!(
+        listed[0].deletion_eligibility,
+        Some(GrokDeletionEligibility {
+            allowed: true,
+            reason: None,
+        })
+    );
+    let before = directory_fingerprint(&path).unwrap();
+    let preview = preview_grok_delete(&paths, &id).unwrap();
+    let sessions = crate::services::sessions::SessionUseCases {
+        codex: crate::codex::CodexPaths {
+            home: paths.home.join("unused-codex"),
+        },
+        claude: crate::claude::ClaudePaths {
+            config: paths.home.join("unused-claude"),
+            projects: paths.home.join("unused-claude-projects"),
+        },
+        grok: paths.clone(),
+        platform: crate::platform::PlatformPaths::for_kind(crate::platform::PlatformKind::Macos),
+    };
+    let batch = sessions
+        .bulk_preview(crate::services::sessions::SessionBatchRequest {
+            provider: crate::services::sessions::SessionProvider::Grok,
+            operation: crate::services::sessions::SessionOperation::Delete,
+            session_keys: vec![id.clone()],
+        })
+        .unwrap();
+    assert!(batch.items[0].allowed);
+    assert_eq!(
+        batch.items[0].fingerprint.as_deref(),
+        Some(preview.fingerprint.as_str())
+    );
+    assert_eq!(preview.id, id);
+    assert_eq!(fs::read(&events).unwrap(), running.as_bytes());
+    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn grok_delete_preview_allows_a_valid_abnormal_terminal_turn() {
+    let (paths, id, path) = fixture();
+    let events = path.join("events.jsonl");
+    let records = [
+        serde_json::json!({
+            "type": "turn_started",
+            "session_id": id.clone(),
+            "session_relationship": "primary",
+            "schema_version": "1.0"
+        }),
+        serde_json::json!({"type": "turn_ended", "outcome": "failed"}),
+    ];
+    let native = records
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&events, &native).unwrap();
+
+    let listed = list_grok_sessions(&paths, 10, None).unwrap();
+    assert_eq!(listed[0].status, "recent");
+    assert_eq!(
+        listed[0].deletion_eligibility,
+        Some(GrokDeletionEligibility {
+            allowed: true,
+            reason: None,
+        })
+    );
+    let before = directory_fingerprint(&path).unwrap();
+    assert!(preview_grok_delete(&paths, &id).is_ok());
+    assert_eq!(fs::read(&events).unwrap(), native.as_bytes());
+    assert_eq!(directory_fingerprint(&path).unwrap(), before);
+
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn grok_delete_preview_rejects_corrupt_activity_records() {
+    let (paths, id, path) = fixture();
+    let events = path.join("events.jsonl");
+    let corrupt = b"not-json\n";
+    fs::write(&events, corrupt).unwrap();
+
+    let listed = list_grok_sessions(&paths, 10, None).unwrap();
+    assert_eq!(listed[0].status, "unknown");
+    let eligibility = listed[0].deletion_eligibility.as_ref().unwrap();
+    assert!(!eligibility.allowed);
+    assert!(eligibility.reason.is_some());
+    assert!(preview_grok_delete(&paths, &id).is_err());
+    assert_eq!(fs::read(&events).unwrap(), corrupt);
+
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
 fn grok_delete_rejects_active_and_unconfirmed_sessions() {
     let (paths, id, path) = fixture();
     let preview = preview_grok_delete(&paths, &id).unwrap();
