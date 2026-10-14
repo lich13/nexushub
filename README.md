@@ -96,7 +96,7 @@ corepack pnpm@11.0.8 --dir webui typecheck
 corepack pnpm@11.0.8 --dir webui test
 corepack pnpm@11.0.8 --dir webui build:tauri
 NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui exec playwright test --grep-invert @desktop-performance
-NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off
+NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
 bash scripts/test-install-script.sh
 python3 scripts/privacy-check.py --git-objects
 git diff --check
@@ -104,7 +104,7 @@ git diff --check
 
 `src-tauri` 是独立 Cargo workspace。测试使用虚构 Provider 数据，不删除本机用户会话。
 
-交互预算使用生产前端构建，两种浏览器依次运行，测量期间关闭 trace 录制，避免其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
+交互预算使用生产前端构建，在 macOS 可见窗口中依次运行两种浏览器，测量期间关闭 trace 录制，避免无头窗口调度、其他测试和采集工作干扰绝对耗时。功能回归保留失败 trace；诊断性能问题时可单独加 `--trace=on`，录制结果不能直接作为预算验收。
 
 ## 当前文档
 
