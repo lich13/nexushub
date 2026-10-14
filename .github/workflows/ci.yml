@@ -104,8 +104,9 @@ jobs:
       - run: corepack pnpm@11.0.8 --dir webui build:tauri
       - run: corepack pnpm@11.0.8 --dir webui exec playwright install chromium webkit
       - name: Check desktop interaction budget on macOS production build
-        # Absolute latency measurements need an idle renderer and no trace recording.
-        run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off
+        # Measure visible desktop windows. Headless Chromium's hosted-macOS
+        # frame scheduler can exceed this budget even on about:blank.
+        run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance
