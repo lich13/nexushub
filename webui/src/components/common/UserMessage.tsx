@@ -4,6 +4,7 @@ import type { SessionProvider } from "../../lib/api/sessions";
 import type { UserAttachment, UserMessageContent } from "../../types";
 import { readAttachment } from "../../lib/query/attachments";
 import { userMessageSegments } from "../../lib/domain/userMessageViewModel";
+import { projectUserMessage, visibleContextText } from "../../lib/domain/userContext";
 import { ActivityDetails, DisclosureRevealContext } from "./ActivityDetails";
 import { matchesTimelinePosition } from "../../lib/domain/timelineViewModel";
 import { CopyReplyButton } from "./CopyReplyButton";
@@ -13,18 +14,18 @@ export const UserMessageScope = createContext<{ provider: SessionProvider; sessi
 
 export function UserMessage({ message, text = "", activityId = "user-message", timelineId, timelineAliases = [] }: { message?: UserMessageContent | null; text?: string; activityId?: string; timelineId?: string; timelineAliases?: string[] }) {
   const body = message?.text ?? text;
-  const segments = useMemo(() => userMessageSegments(body), [body]);
+  const projection = useMemo(() => projectUserMessage(body, message?.contextBlocks), [body, message?.contextBlocks]);
+  const segments = useMemo(() => userMessageSegments(projection.text, projection.contextBlocks), [projection]);
   const identity = message?.id ?? activityId;
   const positionKey = useContext(DisclosureRevealContext);
   const reveal = matchesTimelinePosition(positionKey, timelineId ?? identity, timelineAliases);
-  if (!segments.length && !message?.attachments.length) return null;
+  if (!segments.length && !message?.attachments.length && !projection.contextBlocks.length) return null;
   return <article className="user-message" data-timeline-id={timelineId ?? identity} data-timeline-aliases={timelineAliases.length ? timelineAliases.join(" ") : undefined}>
     {!!message?.attachments.length && <div className="user-attachments" aria-label="消息附件">{message.attachments.map(attachment => <Attachment key={attachment.id} messageId={message.id} attachment={attachment} />)}</div>}
-    {segments.map(segment => segment.kind === "instructions"
-      ? <ActivityDetails key={segment.id} className="user-instructions instruction-file execution-command" stateKey={`${identity}:${segment.id}`} initiallyOpen={false} reveal={reveal} summary={<><span className="tool-title">AGENTS.md</span><small>{segment.lines} 行 · {segment.bytes} 字节</small></>}>
-        {() => <div className="user-instructions-body instruction-file-body">{segment.text}</div>}
-      </ActivityDetails>
-      : segment.kind === "reply" ? <div className="user-question-reply" key={segment.id}>
+    {!!projection.contextBlocks.length && <ActivityDetails className="user-instructions instruction-file execution-command" stateKey={`${identity}:context`} initiallyOpen={false} reveal={reveal} summary={<span className="tool-title">上下文</span>}>
+      {() => <div className="user-instructions-body instruction-file-body">{projection.contextBlocks.map(block => visibleContextText(block.text)).join("\n\n")}</div>}
+    </ActivityDetails>}
+    {segments.map(segment => segment.kind === "reply" ? <div className="user-question-reply" key={segment.id}>
         <CopyReplyButton text={segment.answer} label="复制回答" copiedLabel="已复制回答" />
         <div className="user-message-bubble user-answer-bubble">
           {!!segment.question.trim() && <ActivityDetails className="user-question-context" stateKey={`${identity}:${segment.id}:question`} initiallyOpen={false} reveal={reveal} summary={<span>{segment.question}</span>}>

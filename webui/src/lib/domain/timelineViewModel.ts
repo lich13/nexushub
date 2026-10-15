@@ -27,11 +27,11 @@ export function userTimelineEntries(provider: "codex" | "claude_code" | "grok", 
     const identity = source.userMessage?.id || source.id;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    const text = userMessageSegments(source.userMessage?.text ?? source.text ?? "")
+    const text = userMessageSegments(source.userMessage?.text ?? source.text ?? "", source.userMessage?.contextBlocks)
       .flatMap(segment => segment.kind === "text" ? [segment.text] : segment.kind === "reply" ? [segment.answer] : [])
       .join("\n").trim();
     const attachments = source.userMessage?.attachments ?? [];
-    // Injected instructions have their own disclosure, not a human-input marker.
+    // Automatic context has a disclosure but no human-input marker.
     if (!text && !attachments.length) continue;
     const compact = text.replace(/\s+/g, " ");
     entries.push({ id: source.id, title: compact.slice(0, 80) || "附件", preview: compact.length > 80 ? compact.slice(80, 260) : undefined });

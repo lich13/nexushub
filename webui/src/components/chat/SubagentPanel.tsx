@@ -16,6 +16,11 @@ import { RunningIndicator } from "../common/RunningIndicator";
 import { MessageBlockView } from "./MessageStream";
 import { subagentStatusLabel } from "./SubagentActivity";
 import { SubagentSummary } from "./SubagentSummary";
+import { TimelineRail } from "../common/TimelineRail";
+import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
+import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
+import { codexTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
+import { getSubagentDetail } from "../../lib/api/threads";
 
 type Frame = { kind: "detail"; agent: SubagentActivity } | { kind: "list"; agent?: SubagentActivity };
 const priority: Record<SubagentActivity["status"], number> = { running: 0, creating: 1, failed: 2, interrupted: 3, unknown: 4, completed: 5 };
@@ -31,25 +36,40 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
   const panel = useRef<HTMLElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const stream = useRef<HTMLDivElement>(null);
-  const positions = useRef(new Map<string, { top: number; follow: boolean; returnTo?: string }>());
+  const positions = useRef(new Map<string, { top: number; follow: boolean; returnTo?: string; windowId?: string }>());
   const restore = useRef<{ top: number; returnTo?: string } | null>(null);
+  const restoreWindow = useRef<string | null>(null);
   const query = useSubagentDetail(rootThreadId, agent?.agentId);
   const detail = agent ? query.data?.pages[0]?.detail : undefined;
   const current = (agent ? query.data?.pages[0]?.agent : undefined) ?? agent;
   const collection = agent ? detail?.subagents : rootSubagents;
-  const blocks = useMemo(() => {
+  const loadedBlocks = useMemo(() => {
     const map = new Map<string, MessageBlock>();
     for (const page of [...(query.data?.pages ?? [])].reverse()) for (const block of page.detail.blocks) map.set(block.id, block);
     return mergeSubagentUpdates([...map.values()], query.data?.pages[0]?.detail.subagent_updates);
   }, [query.data]);
+  const navigation = useTimelineWindow({
+    scope: `${machineScope()}:subagent:${rootThreadId}:${frameKey}`, streamRef: stream, history: detail?.history, latestId: detail?.blocks[detail.blocks.length - 1]?.id,
+    id: (block: MessageBlock) => block.id,
+    read: async cursor => {
+      const response = await getSubagentDetail({ rootThreadId, agentId: agent!.agentId!, limit: 120, before: cursor });
+      if (response.rootThreadId !== rootThreadId || response.agent.agentId !== agent?.agentId) throw new Error("子智能体关联已变化，请重新打开");
+      return codexTimelinePage(response.detail);
+    },
+    onNavigate: () => { history.follow.current = false; },
+    onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
+  });
+  const blocks = navigation.items ?? loadedBlocks;
+  const timelineEntries = useMemo(() => detail?.timeline ?? userTimelineEntries("codex", blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message }))), [detail?.timeline, blocks]);
   const items = useMemo(() => groupCodexCommandBlocks(blocks), [blocks]);
   const oldestPage = query.data?.pages[query.data.pages.length - 1];
   const history = useHistoryScroll({
-    scopeKey: `${machineScope()}:subagent:${rootThreadId}:${frameKey}`, streamRef: stream,
-    cursor: oldestPage?.detail.before_cursor, hasMore: frame.kind === "detail" && Boolean(query.hasNextPage),
-    ready: frame.kind === "list" || Boolean(detail), busy: query.isFetching,
-    initialPosition: positions.current.get(frameKey) ?? (frame.kind === "list" ? { top: 0, follow: false } : undefined),
-    loadPage: async () => {
+    scopeKey: `${machineScope()}:subagent:${rootThreadId}:${frameKey}:${navigation.generation}`, streamRef: stream,
+    cursor: navigation.active ? navigation.before : oldestPage?.detail.before_cursor, hasMore: frame.kind === "detail" && (navigation.active ? navigation.hasMore : Boolean(query.hasNextPage)),
+    ready: frame.kind === "list" || Boolean(detail), busy: navigation.busy || (!navigation.active && query.isFetching),
+    initialPosition: navigation.active ? { top: 0, follow: false } : positions.current.get(frameKey) ?? (frame.kind === "list" ? { top: 0, follow: false } : undefined),
+    loadPage: async (cursor, isCurrent) => {
+      if (navigation.active) return navigation.loadOlder(cursor, isCurrent);
       const result = await query.fetchNextPage({ cancelRefetch: false });
       if (result.isError) throw result.error;
       const page = result.data?.pages[result.data.pages.length - 1]?.detail;
@@ -58,8 +78,12 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
     }
   });
   const savePosition = (trigger?: HTMLButtonElement) => {
+    const viewport = stream.current?.getBoundingClientRect();
+    const anchor = trigger?.closest<HTMLElement>("[data-timeline-id]")
+      ?? Array.from(stream.current?.querySelectorAll<HTMLElement>("[data-timeline-id]") ?? []).find(element => viewport && element.getBoundingClientRect().bottom > viewport.top);
     if (stream.current) positions.current.set(frameKey, {
       top: stream.current.scrollTop, follow: history.follow.current,
+      windowId: navigation.active ? anchor?.dataset.timelineId : undefined,
       returnTo: trigger?.closest<HTMLElement>("[data-timeline-id], [data-agent-key]")?.getAttribute("data-timeline-id")
         ?? trigger?.getAttribute("data-agent-key") ?? (trigger ? "summary" : undefined)
     });
@@ -72,11 +96,18 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
   useLayoutEffect(() => {
     const saved = positions.current.get(frameKey);
     restore.current = saved ?? null;
+    restoreWindow.current = saved?.windowId ?? null;
     close.current?.focus({ preventScroll: true });
   }, [frameKey, frame.kind]);
   useLayoutEffect(() => {
     const element = stream.current;
     if (!element) return;
+    if (restoreWindow.current && detail && frame.kind === "detail" && !navigation.busy) {
+      const id = restoreWindow.current;
+      restoreWindow.current = null;
+      navigation.select(id);
+      return;
+    }
     if (restore.current && (detail || frame.kind === "list")) {
       const id = restore.current.returnTo;
       const target = Array.from(panel.current?.querySelectorAll<HTMLElement>("[data-timeline-id], [data-agent-key]") ?? [])
@@ -87,7 +118,7 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
       restore.current = null;
     }
     history.capture();
-  }, [blocks, detail, frame.kind, query.isFetchingNextPage, history.capture]);
+  }, [blocks, detail, frame.kind, query.isFetchingNextPage, history.capture, navigation.busy, navigation.select]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !document.querySelector("dialog[open]")) { event.preventDefault(); onClose(); }
@@ -114,7 +145,7 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
       {frame.kind === "detail" && detail && <SubagentSummary collection={collection} onOpen={trigger => {
         savePosition(trigger); setStack(items => [...items, { kind: "list", agent: current }]);
       }} />}
-      <div ref={stream} className="subagent-stream message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+      <div className="timeline-reading-shell">{frame.kind === "detail" && <TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail?.timeline ? navigation.select : undefined} loadOlder={!detail?.timeline && query.hasNextPage ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} />}<div ref={stream} className="subagent-stream message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {agent && query.isLoading && <div role="status" className="muted-row">正在读取子智能体…</div>}
         {agent && query.error && !query.isFetchNextPageError && <div className="form-error" role="alert">{query.error.message}<button className="file-path-label" onClick={() => void query.refetch()}>重试</button></div>}
         {frame.kind === "list" ? <>
@@ -138,9 +169,10 @@ export function SubagentPanel({ rootThreadId, initialAgent, rootSubagents, onClo
                 : <MessageBlockView key={entry.item.id} block={entry.item} planFallbackTitle={detail?.summary.title ?? agent.name} onOpenSubagent={openAgent} />)}
             </DisclosureScope.Provider></MarkdownPathScope.Provider>
           </UserMessageScope.Provider>
+          <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
           {detail && !blocks.length && <div className="muted-row">暂无子智能体消息</div>}
         </>}
-      </div>
+      </div></div>
     </aside>
   </>;
 }

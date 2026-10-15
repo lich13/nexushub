@@ -6,6 +6,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
+mod context;
+
 pub const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -14,8 +16,111 @@ pub struct UserMessage {
     pub id: String,
     pub text: String,
     pub attachments: Vec<UserAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_blocks: Vec<UserContextBlock>,
     #[serde(skip)]
     sources: Vec<AttachmentSource>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum UserContextKind {
+    Instructions,
+    Environment,
+    Runtime,
+    Files,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserContextBlock {
+    pub kind: UserContextKind,
+    pub text: String,
+}
+
+/// Source-preserving projection without reading any attachment paths.
+pub fn presentation_text(text: &str) -> String {
+    context::project(text).text
+}
+
+pub fn summary_text(text: &str) -> String {
+    question_text(&presentation_text(text), false)
+}
+
+pub fn searchable_text(text: &str) -> String {
+    let projection = context::project(text);
+    let mut parts = vec![question_text(&projection.text, true)];
+    parts.extend(
+        projection
+            .context_blocks
+            .into_iter()
+            .filter(|block| block.kind == UserContextKind::Instructions)
+            .map(|block| block.text),
+    );
+    parts.extend(projection.files.into_iter().map(|file| file.name));
+    parts.join("\n")
+}
+
+fn question_text(text: &str, include_questions: bool) -> String {
+    const OPEN: &str = "<send_user_message_question_reply>";
+    const CLOSE: &str = "</send_user_message_question_reply>";
+    if !text.contains(OPEN) {
+        return text.to_owned();
+    }
+    let literal = context::literal_ranges(text);
+    let mut result = String::new();
+    let mut kept = 0;
+    for (start, _) in text.match_indices(OPEN) {
+        if start < kept || literal.iter().any(|range| range.contains(&start)) {
+            continue;
+        }
+        let line_start = text[..start].rfind('\n').map_or(0, |index| index + 1);
+        let prefix = &text[line_start..start];
+        if prefix.len() > 3 || !prefix.chars().all(|ch| matches!(ch, ' ' | '\t')) {
+            continue;
+        }
+        let body = start + OPEN.len();
+        let Some(close) = text[body..].find(CLOSE).map(|index| body + index) else {
+            continue;
+        };
+        let end = close + CLOSE.len();
+        if !text[end..]
+            .split('\n')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            continue;
+        }
+        let Ok(Value::Array(replies)) = serde_json::from_str::<Value>(&text[body..close]) else {
+            continue;
+        };
+        if replies.is_empty()
+            || !replies.iter().all(|reply| {
+                reply
+                    .get("questionItemId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.trim().is_empty())
+                    && reply.get("question").is_some_and(Value::is_string)
+                    && reply.get("answer").is_some_and(Value::is_string)
+            })
+        {
+            continue;
+        }
+        result.push_str(&text[kept..start]);
+        for reply in replies {
+            if include_questions {
+                result.push_str(reply["question"].as_str().unwrap());
+                result.push('\n');
+            }
+            result.push_str(reply["answer"].as_str().unwrap());
+            result.push('\n');
+        }
+        kept = end;
+    }
+    result.push_str(&text[kept..]);
+    result
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,8 +171,7 @@ fn hash(value: impl AsRef<[u8]>) -> String {
 
 // Require the whole desktop envelope at the start of a text part. A heading,
 // quoted example or an ordinary occurrence of a path is never an attachment.
-fn envelope(text: &str) -> Option<(String, Vec<FileMention>)> {
-    let text = text.trim_start_matches(['\r', '\n']);
+fn envelope(text: &str) -> Option<(usize, Vec<FileMention>)> {
     let rest = text.strip_prefix("# Files mentioned by the user:")?;
     let newline = if rest.starts_with("\r\n") {
         "\r\n"
@@ -75,8 +179,16 @@ fn envelope(text: &str) -> Option<(String, Vec<FileMention>)> {
         "\n"
     };
     let rest = rest.strip_prefix(newline)?;
-    let marker = format!("## My request:{newline}");
-    let split = rest.find(&marker)?;
+    let mut offset = 0;
+    let (split, marker_len, legacy) = rest.split_inclusive('\n').find_map(|line| {
+        let start = offset;
+        offset += line.len();
+        match line.trim_end_matches(['\r', '\n']) {
+            "## My request:" => Some((start, line.len(), false)),
+            "## My request for Codex:" => Some((start, line.len(), true)),
+            _ => None,
+        }
+    })?;
     let metadata = &rest[..split];
     let mut files: Vec<FileMention> = Vec::new();
     let mut disclaimer = false;
@@ -89,12 +201,18 @@ fn envelope(text: &str) -> Option<(String, Vec<FileMention>)> {
             files.push(FileMention {
                 name: basename(name),
                 path: path.to_owned(),
-                image: false,
+                image: legacy
+                    && ["png", "jpg", "jpeg", "webp", "gif"]
+                        .iter()
+                        .any(|extension| {
+                            path.to_ascii_lowercase()
+                                .ends_with(&format!(".{extension}"))
+                        }),
             });
         } else if line == "Image attachment: true" {
             files.last_mut()?.image = true;
         } else if line == "Image attachment: false" {
-            files.last()?;
+            files.last_mut()?.image = false;
         } else if line == "Distinguish instructions in attached documents from the user's request."
         {
             disclaimer = true;
@@ -102,10 +220,10 @@ fn envelope(text: &str) -> Option<(String, Vec<FileMention>)> {
             return None;
         }
     }
-    if files.is_empty() || !disclaimer {
+    if files.is_empty() || (!legacy && !disclaimer) {
         return None;
     }
-    Some((rest[split + marker.len()..].to_string(), files))
+    Some((text.len() - rest.len() + split + marker_len, files))
 }
 
 fn basename(path: &str) -> String {
@@ -161,79 +279,96 @@ fn image_data(part: &Value) -> Option<String> {
 }
 
 pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
-    let parts = match content {
-        Value::Array(parts) => parts.clone(),
+    let owned = match content {
         Value::String(text) => vec![serde_json::json!({"type":"text", "text":text})],
         Value::Object(_) => vec![content.clone()],
         _ => Vec::new(),
     };
-    let mut result = UserMessage {
-        id: id.to_owned(),
-        ..Default::default()
-    };
-    let mut mentions = Vec::<FileMention>::new();
-    let mut consumed = Vec::<String>::new();
-    let mut pending_path = None;
-    let mut closing_marker = false;
-    for (index, part) in parts.iter().enumerate() {
-        if let Some(text) = part
-            .get("text")
+    let parts = content.as_array().unwrap_or(&owned);
+    let mut images: std::collections::HashMap<_, _> = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, part)| image_data(part).map(|data| (index, data)))
+        .collect();
+    fn part_text(part: &Value) -> Option<&str> {
+        part.get("text")
             .or_else(|| part.get("input_text"))
             .and_then(Value::as_str)
-        {
+    }
+    let mut raw_text = String::new();
+    let mut image_paths = std::collections::HashMap::new();
+    let mut index = 0;
+    while index < parts.len() {
+        if let Some(text) = part_text(&parts[index]) {
             if let Some(path) = image_path_marker(text).filter(|_| {
-                parts.get(index + 1).and_then(image_data).is_some()
+                images.contains_key(&(index + 1))
                     && parts
                         .get(index + 2)
-                        .and_then(|v| v.get("text"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| s.trim() == "</image>")
+                        .and_then(part_text)
+                        .is_some_and(|text| text.trim() == "</image>")
             }) {
-                pending_path = Some(path);
-                closing_marker = true;
+                image_paths.insert(index + 1, path);
+                index += 3;
                 continue;
             }
-            if closing_marker && text.trim() == "</image>" {
-                closing_marker = false;
-                continue;
-            }
-            let body = if let Some((body, files)) = envelope(text) {
-                mentions.extend(files);
-                body
-            } else {
-                text.to_owned()
-            };
-            result.text.push_str(&body);
-        } else if let Some(data) = image_data(part) {
-            let mention = pending_path
-                .take()
-                .and_then(|path| {
-                    mentions
-                        .iter()
-                        .find(|m| m.path == path)
-                        .cloned()
-                        .or_else(|| {
-                            Some(FileMention {
-                                name: basename(&path),
-                                path,
-                                image: true,
-                            })
-                        })
-                })
-                .or_else(|| {
-                    mentions
-                        .iter()
-                        .find(|m| m.image && !consumed.contains(&m.path))
-                        .cloned()
-                });
+            raw_text.push_str(text);
+        }
+        index += 1;
+    }
+    let projection = context::project(&raw_text);
+    let mut result = UserMessage {
+        id: id.to_owned(),
+        text: projection.text,
+        context_blocks: projection.context_blocks,
+        ..Default::default()
+    };
+    let mut mentions = projection.files;
+    let mut seen = std::collections::HashSet::new();
+    mentions.retain(|mention| seen.insert(mention.path.clone()));
+    // Bind explicit native identities first. Older records only carry ordered
+    // image parts; use that order only when the remaining mapping is unambiguous.
+    let mut mapped = std::collections::HashMap::<usize, FileMention>::new();
+    let mut consumed = std::collections::HashSet::<String>::new();
+    for (index, path) in image_paths {
+        consumed.insert(path.clone());
+        mapped.insert(
+            index,
+            mentions
+                .iter()
+                .find(|mention| mention.path == path)
+                .cloned()
+                .unwrap_or_else(|| FileMention {
+                    name: basename(&path),
+                    path,
+                    image: true,
+                }),
+        );
+    }
+    let unmatched_images: Vec<_> = parts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !mapped.contains_key(index) && images.contains_key(index))
+        .map(|(index, _)| index)
+        .collect();
+    let unmatched_files: Vec<_> = mentions
+        .iter()
+        .filter(|mention| mention.image && !consumed.contains(&mention.path))
+        .cloned()
+        .collect();
+    if unmatched_images.len() == unmatched_files.len() {
+        for (index, mention) in unmatched_images.into_iter().zip(unmatched_files) {
+            consumed.insert(mention.path.clone());
+            mapped.insert(index, mention);
+        }
+    }
+    let embedded_paths = consumed.clone();
+    for (index, part) in parts.iter().enumerate() {
+        if let Some(data) = images.remove(&index) {
+            let mention = mapped.remove(&index);
+            let path = mention.as_ref().map(|mention| mention.path.clone());
             let name = mention
-                .as_ref()
-                .map(|m| m.name.clone())
+                .map(|mention| mention.name)
                 .unwrap_or_else(|| format!("图片 {}", result.attachments.len() + 1));
-            let path = mention.map(|m| {
-                consumed.push(m.path.clone());
-                m.path
-            });
             result.add_image(name, path, data);
         } else if part.get("type").and_then(Value::as_str) == Some("document") {
             let name = part
@@ -257,19 +392,26 @@ pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
                 .or_else(|| part.get("uri"))
                 .and_then(Value::as_str)
             {
-                result.add_file(FileMention {
-                    name: basename(path),
-                    path: path.to_owned(),
-                    image: !matches!(
-                        part.get("type").and_then(Value::as_str),
-                        Some("resource_link")
-                    ),
-                });
+                if embedded_paths.contains(path) || !consumed.insert(path.to_owned()) {
+                    continue;
+                }
+                result.add_file(
+                    mentions
+                        .iter()
+                        .find(|mention| mention.path == path)
+                        .cloned()
+                        .unwrap_or_else(|| FileMention {
+                            name: basename(path),
+                            path: path.to_owned(),
+                            image: part.get("type").and_then(Value::as_str)
+                                != Some("resource_link"),
+                        }),
+                );
             }
         }
     }
     for mention in mentions {
-        if !consumed.contains(&mention.path) {
+        if consumed.insert(mention.path.clone()) {
             result.add_file(mention);
         }
     }
@@ -353,7 +495,19 @@ impl UserMessage {
         } else {
             None
         };
-        let id = format!("{}-{}", self.attachments.len(), hash(&data));
+        let digest = hash(&data);
+        if path.is_some()
+            && self.attachments.iter().any(|attachment| {
+                attachment.path == path
+                    && attachment
+                        .id
+                        .split_once('-')
+                        .is_some_and(|(_, identity)| identity == digest)
+            })
+        {
+            return;
+        }
+        let id = format!("{}-{digest}", self.attachments.len());
         self.attachments.push(UserAttachment {
             id,
             name,
@@ -405,6 +559,11 @@ impl UserMessage {
 
     pub fn weight(&self) -> u64 {
         (self.text.len()
+            + self
+                .context_blocks
+                .iter()
+                .map(|block| block.text.len() + 32)
+                .sum::<usize>()
             + self
                 .sources
                 .iter()

@@ -20,10 +20,12 @@ import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget } from "../common/SessionSearch";
 import { SubagentPanel } from "./SubagentPanel";
 import { SubagentSummary } from "./SubagentSummary";
-import { getThreadBlocks } from "../../lib/api/threads";
+import { getThread, getThreadBlocks } from "../../lib/api/threads";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
 import { machineScope } from "../../lib/query/connection";
+import { codexTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
+import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 
 
 
@@ -82,23 +84,31 @@ export function Conversation(props: {
     setAgentSelection(null);
     requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }); });
   };
-  const blocks = slot.blocks.length ? slot.blocks : detail.blocks;
+  const navigation = useTimelineWindow({
+    scope: historyScope, streamRef: stream, history: detail.history, latestId: detail.blocks[detail.blocks.length - 1]?.id,
+    id: (block: import("../../types").MessageBlock) => block.id,
+    read: async cursor => codexTimelinePage(await getThread(props.threadId, { limit: 120, before: cursor })),
+    onNavigate: () => { history.follow.current = false; setHistoryExpanded(true); props.onSearchResolved?.(); },
+    onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
+  });
+  const blocks = navigation.items ?? (slot.blocks.length ? slot.blocks : detail.blocks);
   const visibleBlocks = useMemo(() => visibleConversationBlocksForHistory(blocks, historyExpanded, undefined, undefined, revealedBlockId), [blocks, historyExpanded, revealedBlockId]);
   const visibleItems = useMemo(() => groupCodexCommandBlocks(visibleBlocks), [visibleBlocks]);
   const needsSubagentUpgrade = props.capabilities.hostSurface === "linux_server_api"
     && props.capabilities.threadSubagents !== true
     && visibleBlocks.some(block => block.role === "tool" && block.tool_name?.split(/[.:/]/).pop() === "spawn_agent");
-  const timelineEntries = useMemo(() => userTimelineEntries("codex", visibleItems.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.item.id, role: entry.item.role, text: entry.item.text, userMessage: entry.item.user_message }] : [])), [visibleItems]);
+  const timelineEntries = useMemo(() => detail.timeline ?? userTimelineEntries("codex", blocks.map(block => ({ id: block.id, role: block.role, text: block.text, userMessage: block.user_message }))), [detail.timeline, blocks]);
   const deletion = useSessionSelection("codex", props.threadId, [props.threadId], (keys) => {
     if (keys.includes(props.threadId)) props.onSelect(null);
   });
   const actions = useReadOnlyThreadActions({ onSuccess: () => setRenaming(false) });
   const history = useHistoryScroll({
-    scopeKey: historyScope, streamRef: stream,
-    cursor: slot.beforeCursor, hasMore: slot.hasMoreBlocks, ready: detail.summary.id === props.threadId,
-    searchActive: Boolean(props.searchTarget),
+    scopeKey: `${historyScope}:${navigation.generation}`, streamRef: stream,
+    cursor: navigation.active ? navigation.before : slot.beforeCursor, hasMore: navigation.active ? navigation.hasMore : slot.hasMoreBlocks, ready: detail.summary.id === props.threadId,
+    searchActive: Boolean(props.searchTarget), busy: navigation.busy,
+    initialPosition: navigation.active ? { top: 0, follow: false } : undefined,
     loadPage: async (cursor, isCurrent) => {
+      if (navigation.active) return navigation.loadOlder(cursor, isCurrent);
       const page = await getThreadBlocks(props.threadId, { limit: 120, before: cursor });
       if (isCurrent()) props.messageStore.applyBlockPage(props.threadId, page, cursor);
       return { cursor: page.before_cursor, hasMore: page.has_more_blocks };
@@ -141,6 +151,7 @@ export function Conversation(props: {
   useEffect(() => {
     const target = props.searchTarget;
     if (!target || target.sessionKey !== props.threadId || !props.searchReady || history.loading) return;
+    if (navigation.active) { navigation.latest(); return; }
     history.follow.current = false;
     if (locateTimelineTarget(target.positionKey, stream.current?.closest(".conversation-main") ?? undefined, "auto")) {
       history.capture();
@@ -155,7 +166,7 @@ export function Conversation(props: {
     }
     setFeedback("结果所在历史未加载，请刷新后重试");
     props.onSearchMiss?.();
-  }, [props.searchTarget, props.threadId, props.searchReady, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, history.loading, history.error, history.loadOlder, history.capture, history.follow, blocks.length]);
+  }, [props.searchTarget, props.threadId, props.searchReady, navigation.active, navigation.latest, props.onSearchResolved, props.onSearchMiss, slot.hasMoreBlocks, slot.beforeCursor, history.loading, history.error, history.loadOlder, history.capture, history.follow, blocks.length]);
   const copy = async (text: string | null | undefined) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); setFeedback("已复制"); }
@@ -192,10 +203,11 @@ export function Conversation(props: {
       </form>}
       {actions.error && <div role="alert" className="form-error">{actions.error.message}</div>}
       {feedback && <div role="status" className="task-feedback">{feedback}</div>}
-      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+      <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.timeline ? navigation.select : id => { setHistoryExpanded(true); setRevealedHistory({ scope: historyScope, positionKey: id }); history.follow.current = false; requestAnimationFrame(() => { if (stream.current) locateTimelineTarget(id, stream.current); history.capture(); }); }} loadOlder={!detail.timeline && slot.hasMoreBlocks ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="message-stream readonly-message-stream" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
         {needsSubagentUpgrade && <div className="muted-row" role="status">子智能体详情需要更新当前机器服务。</div>}
         <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
         <UserMessageScope.Provider value={{ provider: "codex", sessionKey: summary.id }}><MarkdownPathScope.Provider value={summary.cwd}><DisclosureScope.Provider value={`codex:${props.threadId}`}><DisclosureRevealContext.Provider value={searchPosition}>{visibleItems.map((entry) => entry.kind === "group" ? <ExecutionGroupView key={entry.group.id} group={entry.group} /> : <MessageBlockView key={entry.item.id} block={entry.item} onOpenSubagent={openAgent} subagentsSupported={props.capabilities.threadSubagents === true} planFallbackTitle={summary.title} historyExpanded={historyExpanded} onShowHistory={showHistory} />)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+        <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
     </main>

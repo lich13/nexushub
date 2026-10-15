@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { MessageBlockView } from "./MessageStream";
+import { DisclosureRevealContext, DisclosureScope } from "../common/ActivityDetails";
 import type { MessageBlock } from "../../types";
 
 test("questions retain their content and options without reply controls", () => {
@@ -95,6 +96,48 @@ test("metadata-only assistant content does not expose an empty copy action", () 
   }} />);
   expect(html).not.toContain('aria-label="复制回复"');
   expect(html).not.toContain("fixture metadata");
+});
+
+test("a search position reveals AGENTS context on its native user message only", () => {
+  const targetContext = [
+    "# AGENTS.md instructions",
+    "<INSTRUCTIONS>",
+    "<oai-mem-citation>synthetic memory field</oai-mem-citation>",
+    '<external_codex_apps_open_page>{"page_id":"fixture-page"}</external_codex_apps_open_page>',
+    "`<oai-mem-citation>literal code example</oai-mem-citation>`",
+    "`<external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>`",
+    "</INSTRUCTIONS>"
+  ].join("\n");
+  const target: MessageBlock = {
+    id: "search-hit-native-fixture", role: "user", kind: "message", questions: [],
+    text: targetContext + "\n\nVisible target request"
+  };
+  const unrelated: MessageBlock = {
+    id: "unrelated-native-fixture", role: "user", kind: "message", questions: [],
+    text: "# AGENTS.md instructions\n<INSTRUCTIONS>\nUnrelated AGENTS fixture.\n</INSTRUCTIONS>\n\nVisible unrelated request"
+  };
+  const html = renderToStaticMarkup(
+    <DisclosureScope.Provider value="codex:search-thread-fixture">
+      <DisclosureRevealContext.Provider value="search-hit-native-fixture">
+        <>
+          <MessageBlockView block={target} />
+          <MessageBlockView block={unrelated} />
+        </>
+      </DisclosureRevealContext.Provider>
+    </DisclosureScope.Provider>
+  );
+  const disclosures = Array.from(html.matchAll(/<details\b[^>]*>/g), match => match[0]);
+
+  expect(disclosures).toHaveLength(2);
+  expect(disclosures[0]).toMatch(/\bopen(?:=|>)/);
+  expect(disclosures[1]).not.toMatch(/\bopen(?:=|>)/);
+  expect(html).toContain('data-timeline-id="search-hit-native-fixture"');
+  expect(html).toContain("literal code example");
+  expect(html.match(/page_id/g) ?? []).toHaveLength(1);
+  expect(html).not.toContain("synthetic memory field");
+  expect(html).not.toContain("fixture-page");
+  expect(html).toContain("Visible target request");
+  expect(html).not.toContain("Unrelated AGENTS fixture.");
 });
 
 test("subagent activity takes precedence over the native tool wrapper", () => {

@@ -24,6 +24,9 @@ import { RenameableSession } from "../common/RenameableSession";
 import { groupClaudeEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
 import { TimelineRail } from "../common/TimelineRail";
+import { claudeTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
+import { getClaudeSession } from "../../lib/api/claude";
+import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
@@ -48,14 +51,22 @@ export function ClaudeWorkspace() {
   const detailVisible = !narrow || Boolean(selectedKey);
   const detail = useClaudeDetail(detailVisible ? listed?.sessionKey : undefined);
   const selected = detail.data?.pages[0]?.summary ?? listed;
-  const events = useMemo(() => {
+  const loadedEvents = useMemo(() => {
     const latest = new Map<string, ClaudeHistoryEvent>();
     for (const page of [...(detail.data?.pages ?? [])].reverse()) for (const event of page.events) latest.set(event.id, event);
     return [...latest.values()];
   }, [detail.data]);
+  const navigation = useTimelineWindow({
+    scope: `${machineScope()}:claude:${selected?.sessionKey ?? ""}`, streamRef: stream, history: detail.data?.pages[0]?.history, latestId: loadedEvents[loadedEvents.length - 1]?.id,
+    id: (event: ClaudeHistoryEvent) => event.id ?? "",
+    read: async cursor => claudeTimelinePage(await getClaudeSession(selected!.sessionKey, cursor)),
+    onNavigate: () => { history.follow.current = false; setPendingSearch(null); },
+    onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
+  });
+  const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupClaudeEvents(events), [events]);
-  const timelineEntries = useMemo(() => userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [groupedEvents]);
+  const timelineEntries = useMemo(() => detail.data?.pages[0]?.timeline ?? userTimelineEntries("claude_code", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [detail.data, groupedEvents]);
   const actions = useClaudeActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? (detail.isFetchNextPageError ? null : detail.error) ?? sessions.error;
   const selectSearchResult = useCallback((result: SessionSearchResult) => {
@@ -77,10 +88,12 @@ export function ClaudeWorkspace() {
 
   const oldestPage = detail.data?.pages[detail.data.pages.length - 1];
   const history = useHistoryScroll({
-    scopeKey: `${machineScope()}:claude:${selected?.sessionKey ?? ""}`, streamRef: stream,
-    cursor: oldestPage?.beforeCursor, hasMore: Boolean(detail.hasNextPage), ready: detailVisible && Boolean(detail.data),
-    busy: detail.isFetching, searchActive: Boolean(pendingSearch),
-    loadPage: async () => {
+    scopeKey: `${machineScope()}:claude:${selected?.sessionKey ?? ""}:${navigation.generation}`, streamRef: stream,
+    cursor: navigation.active ? navigation.before : oldestPage?.beforeCursor, hasMore: navigation.active ? navigation.hasMore : Boolean(detail.hasNextPage), ready: detailVisible && Boolean(detail.data),
+    initialPosition: navigation.active ? { top: 0, follow: false } : undefined,
+    busy: navigation.busy || (!navigation.active && detail.isFetching), searchActive: Boolean(pendingSearch),
+    loadPage: async (cursor, isCurrent) => {
+      if (navigation.active) return navigation.loadOlder(cursor, isCurrent);
       const result = await detail.fetchNextPage({ cancelRefetch: false });
       if (result.isError) throw result.error;
       const page = result.data?.pages[result.data.pages.length - 1];
@@ -90,11 +103,12 @@ export function ClaudeWorkspace() {
   });
   useEffect(() => {
     if (!pendingSearch || pendingSearch.sessionKey !== selected?.sessionKey || detail.isLoading || detail.isFetching || history.loading) return;
+    if (navigation.active) { navigation.latest(); return; }
     history.follow.current = false;
     if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setFeedback(""); setPendingSearch(null); }
     else if (detail.hasNextPage) { if (!history.error) void history.loadOlder("search"); }
     else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
-  }, [pendingSearch, selected?.sessionKey, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
+  }, [navigation.active, navigation.latest, pendingSearch, selected?.sessionKey, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
 
   const copyId = async () => {
     if (!selected) return;
@@ -152,9 +166,10 @@ export function ClaudeWorkspace() {
         {selected.readWarning && <div className="task-feedback" role="status">{selected.readWarning}</div>}
         {!selected.readError && !selected.readWarning && (selected.renameBlockReason || selected.deleteBlockReason) && <div className="task-feedback" role="status">{selected.renameBlockReason ?? selected.deleteBlockReason}</div>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.data?.pages[0]?.timeline ? navigation.select : undefined} loadOlder={!detail.data?.pages[0]?.timeline && detail.hasNextPage ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}>
           <HistoryLoading loading={history.loading} error={history.error} retry={history.retry} />
           <UserMessageScope.Provider value={{ provider: "claude_code", sessionKey: selected.sessionKey }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`claude:${selected.sessionKey}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.sessionKey ? pendingSearch.positionKey : null}>{renderClaudeEvents(groupedEvents, selected.title)}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>
+          <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
           {detail.isLoading && <div className="muted-row">正在读取消息...</div>}
           {!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}
         </div></div>

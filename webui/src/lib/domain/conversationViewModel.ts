@@ -178,7 +178,9 @@ export function shouldRenderConversationMessage(block: MessageBlock): boolean {
   if ((block.questions?.length ?? 0) > 0) return false;
   if (kind === "request_user_input" || kind === "requestuserinput") return false;
   if (isToolBlock(block) || isPlanBlock(block) || isApprovalBlock(block)) return false;
-  if (isInternalContextText(block.text)) return false;
+  if (block.role === "user") {
+    if (/^<(?:user_shell_command|turn_aborted)>|^========= memory_summary begins =========/i.test((block.text ?? "").trimStart())) return false;
+  } else if (isInternalContextText(block.text)) return false;
   return !["reasoning", "agent_reasoning", "session_meta"].includes(kind);
 }
 

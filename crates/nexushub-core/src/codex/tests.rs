@@ -811,11 +811,39 @@ fn thread_detail_blocks_hide_internal_context_and_keep_chat_messages() {
         json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"world"}]}}),
     ]);
 
-    assert_eq!(detail.blocks.len(), 2);
+    assert_eq!(detail.blocks.len(), 3);
     assert_eq!(detail.blocks[0].role, "user");
-    assert_eq!(detail.blocks[0].text.as_deref(), Some("hello"));
-    assert_eq!(detail.blocks[1].role, "assistant");
-    assert_eq!(detail.blocks[1].text.as_deref(), Some("world"));
+    assert_eq!(detail.blocks[0].text.as_deref(), Some(""));
+    let context_only = detail.blocks[0]
+        .user_message
+        .as_ref()
+        .expect("context-only user block keeps its structured message");
+    assert!(context_only.text.is_empty());
+    assert_eq!(context_only.context_blocks.len(), 1);
+    assert_eq!(
+        context_only.context_blocks[0].kind,
+        crate::user_message::UserContextKind::Environment
+    );
+    assert!(context_only.context_blocks[0]
+        .text
+        .contains("<environment_context>"));
+    assert_eq!(detail.blocks[1].role, "user");
+    assert_eq!(detail.blocks[1].text.as_deref(), Some("hello"));
+    assert_eq!(detail.blocks[2].role, "assistant");
+    assert_eq!(detail.blocks[2].text.as_deref(), Some("world"));
+    let visible_text = detail
+        .blocks
+        .iter()
+        .filter_map(|block| block.text.as_deref())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for hidden in [
+        "internal instructions",
+        "system context",
+        "hidden reasoning",
+    ] {
+        assert!(!visible_text.contains(hidden));
+    }
 }
 
 #[test]
@@ -841,11 +869,36 @@ fn thread_detail_blocks_hide_subagent_context_fragments() {
         json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"可见回复"}]}}),
     ]);
 
-    assert_eq!(detail.blocks.len(), 2);
-    assert_eq!(detail.blocks[0].role, "user");
-    assert_eq!(detail.blocks[0].text.as_deref(), Some("真实用户消息"));
-    assert_eq!(detail.blocks[1].role, "assistant");
-    assert_eq!(detail.blocks[1].text.as_deref(), Some("可见回复"));
+    assert_eq!(detail.blocks.len(), 4);
+    for (index, expected) in ["<subagent_notification>", "<subagent_context>"]
+        .into_iter()
+        .enumerate()
+    {
+        let block = &detail.blocks[index];
+        assert_eq!(block.role, "user");
+        assert_eq!(block.text.as_deref(), Some(""));
+        let message = block
+            .user_message
+            .as_ref()
+            .expect("context-only subagent block keeps its structured message");
+        assert!(message.text.is_empty());
+        assert_eq!(message.context_blocks.len(), 1);
+        assert_eq!(
+            message.context_blocks[0].kind,
+            crate::user_message::UserContextKind::Runtime
+        );
+        assert!(message.context_blocks[0].text.contains(expected));
+    }
+    assert_eq!(detail.blocks[2].role, "user");
+    assert_eq!(detail.blocks[2].text.as_deref(), Some("真实用户消息"));
+    assert_eq!(detail.blocks[3].role, "assistant");
+    assert_eq!(detail.blocks[3].text.as_deref(), Some("可见回复"));
+    assert!(detail.blocks.iter().all(|block| {
+        let text = block.text.as_deref().unwrap_or_default();
+        !text.contains("subagent_notification")
+            && !text.contains("subagent_context")
+            && !text.contains("/tmp/child")
+    }));
 }
 
 #[test]

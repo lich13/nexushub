@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.21": [
+        "自动上下文合并为一行默认收起，保留真实请求和附件，搜索排除自动字段",
+        "缩窄时间线预览，补齐全部用户记录的历史定位与双向分页。",
+    ],
     "1.2.20": [
         "修复 Grok 闲置线程因历史回合未闭合而被误保护的问题",
         "隐藏线程自动分批扫描，显示进度、支持停止，并限制每页显示数量。",
@@ -151,6 +155,40 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.21":
+        sections = {
+            "版本概览": ["本版整理自动注入上下文与附件说明，并修复时间线过宽、较早记录无法定位的问题。"],
+            "功能调整": [
+                "每条用户消息最多一行“上下文”，默认收起，展开时按原顺序显示；附件和真实请求正常保留，纯上下文不产生空气泡或时间线刻度。",
+                "主线程、子线程和三个 Provider 使用完整用户消息索引，可直接定位尚未加载的较早记录，再向前后分页或返回最新内容。",
+                "左侧刻度与悬停预览缩窄，移除重复提示；大量记录按需挂载，支持滚动和键盘访问。",
+            ],
+            "问题修复": [
+                "同时识别新旧附件请求标题，保留正文换行并按原生身份去重；临时附件失效不影响请求显示。",
+                "搜索排除环境及自动包装，保留真实正文、问题回答、附件名和 AGENTS.md 指令定位；代码、引用及不完整结构保持原文。",
+                "修复 Grok 大历史只读取末尾 64MiB 导致早期记录缺失的问题，冷读使用完整流式解析并复用增量缓存。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，详情新增字段均为可选；新客户端连接旧服务时整理原始包装并回退逐页加载，不新增 RPC、数据库表或客户端路径权限。",
+                "保留原生会话、管理保护、连接、附件、Plan、通知和 100M／300M 颜色规则；同步已批准的开发工具链与锁文件。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包与校验文件；共七项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App。安装前核对校验和与 updater 签名。",
+                "安装后检查上下文展开、AGENTS.md 搜索、最早时间线记录、双向分页与返回最新；真实视觉、滚动体验和日常操作待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.20":
         sections = {

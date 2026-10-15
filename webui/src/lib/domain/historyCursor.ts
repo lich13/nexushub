@@ -12,6 +12,7 @@ export function stableHistoryCursor(page: {
   blocks: MessageBlock[];
   before_cursor?: string | null;
 }): string | null | undefined {
+  if (page.before_cursor?.startsWith("p:")) return page.before_cursor;
   if (!page.history || !page.before_cursor || !page.blocks[0]) return page.before_cursor;
   return `b:${historyCursorIndex(page.before_cursor)}:${page.blocks[0].id}`;
 }

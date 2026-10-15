@@ -3,6 +3,7 @@ import type { MessageBlock, ThreadBlockPage, ThreadDetail, ThreadSummary } from 
 import { historyCursorIndex, stableHistoryCursor } from "./domain/historyCursor";
 
 export type ThreadMessageSlot = {
+  timeline?: ThreadDetail["timeline"];
   history?: ThreadDetail["history"];
   subagents?: ThreadDetail["subagents"];
   subagentUpdates?: ThreadDetail["subagent_updates"];
@@ -86,6 +87,7 @@ export function threadDetailFromMessageSlot(
     ? fallback ? { ...slot.summary, ...fallback } : slot.summary
     : fallback ?? fallbackThreadSummary(threadId);
   return {
+    timeline: slot.timeline,
     history: slot.history,
     subagents: slot.subagents,
     subagent_updates: slot.subagentUpdates,
@@ -226,6 +228,7 @@ export function applyThreadDetailToSlot(
   // identity/change metadata can discard already loaded messages.
   const reset = detail.history?.reset || (slot.history && detail.history && slot.history.epoch !== detail.history.epoch);
   if (reset) { slot.blocks = []; slot.beforeCursor = null; slot.hasMoreBlocks = false; }
+  slot.timeline = detail.timeline;
   slot.history = detail.history;
   const incomingBlocks = detail.blocks.length ? detail.blocks : legacyBlocks(detail);
   const previousBefore = slot.beforeCursor;

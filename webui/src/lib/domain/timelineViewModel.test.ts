@@ -21,13 +21,32 @@ describe("user instruction timeline", () => {
       { id: "chunk3", kind: "user_message_chunk", userMessage: { ...userMessage, id: "next" } }
     ]).map(entry => entry.id)).toEqual(["chunk1", "chunk3"]);
   });
-  it("previews answers and strips metadata and injected instructions", () => {
+  it("previews answers and omits legacy context-only messages", () => {
     const entries = userTimelineEntries("codex", [
       { id: "instructions", role: "user", text: "# AGENTS.md instructions\n<INSTRUCTIONS>\n# Fixture\nRead this.\n</INSTRUCTIONS>" },
       { id: "reply", role: "user", text: '<send_user_message_question_reply>\n[{"questionItemId":"fixture","question":"Ready?","answer":"Ready"}]\n</send_user_message_question_reply>' },
       { id: "request", role: "user", text: "Request<oai-mem-citation>private-metadata</oai-mem-citation>" }
     ]);
     expect(entries).toEqual([{ id: "reply", title: "Ready", preview: undefined }, { id: "request", title: "Request", preview: undefined }]);
+  });
+  it("uses the real request body for legacy and structured context messages", () => {
+    const legacyInstructions = "# AGENTS.md instructions\n<INSTRUCTIONS>\nSynthetic policy fixture.\n</INSTRUCTIONS>";
+    const entries = userTimelineEntries("codex", [
+      { id: "legacy-context-only", role: "user", text: legacyInstructions },
+      { id: "legacy-request", role: "user", text: `${legacyInstructions}\n<environment_context>synthetic environment</environment_context>\n\nRead sample.txt.` },
+      { id: "structured-context-only", role: "user", userMessage: {
+        id: "context-only-native", text: "", attachments: [],
+        contextBlocks: [{ kind: "environment", text: "Synthetic environment fixture." }]
+      } },
+      { id: "structured-request", role: "user", userMessage: {
+        id: "request-native", text: "Use the sample result.", attachments: [],
+        contextBlocks: [{ kind: "runtime", text: "Synthetic runtime fixture." }]
+      } }
+    ]);
+    expect(entries).toEqual([
+      { id: "legacy-request", title: "Read sample.txt.", preview: undefined },
+      { id: "structured-request", title: "Use the sample result.", preview: undefined }
+    ]);
   });
   it("does not create user anchors from internal page wrappers", () => {
     const page = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';

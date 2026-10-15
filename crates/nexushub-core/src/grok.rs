@@ -65,6 +65,10 @@ pub struct GrokDeletionEligibility {
 #[serde(rename_all = "camelCase")]
 pub struct GrokSessionDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::history_navigation::Timeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<crate::jsonl_cache::HistoryMetadata>,
     #[serde(default)]
     pub total_events: usize,
@@ -259,6 +263,8 @@ pub fn grok_session_page(
     let path = summary.path.join("updates.jsonl");
     if !path.exists() {
         return Ok(GrokSessionDetail {
+            timeline: Some(Default::default()),
+            after_cursor: None,
             summary,
             events: Vec::new(),
             total_events: 0,
@@ -271,7 +277,7 @@ pub fn grok_session_page(
         crate::jsonl_cache::JsonlCache::new(192 * 1024 * 1024);
     CACHE.read(
         &path,
-        |size| Ok(size.saturating_sub(64 * 1024 * 1024)),
+        |_| Ok(0),
         true,
         |state, line, _, start| {
             if let Ok(value) = serde_json::from_slice::<Value>(line) {
@@ -283,12 +289,26 @@ pub fn grok_session_page(
             if info.changed {
                 #[cfg(test)]
                 HISTORY_READS.with(|reads| reads.set(reads.get() + 1));
-                state.journal.record(
-                    &info,
-                    std::mem::take(&mut state.events.dirty)
-                        .into_iter()
-                        .collect(),
+                let dirty = std::mem::take(&mut state.events.dirty);
+                state.journal.record(&info, dirty.iter().cloned().collect());
+                state.timeline = crate::history_navigation::update_timeline(
+                    &state.timeline,
+                    state
+                        .events
+                        .events
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, event)| event.kind == "user_message_chunk")
+                        .map(|(index, event)| {
+                            (
+                                event.id.as_str(),
+                                event.user_message.as_ref(),
+                                event.text.as_deref(),
+                                index < state.previous_count && !dirty.contains(&event.id),
+                            )
+                        }),
                 );
+                state.previous_count = state.events.events.len();
                 state.weight = state
                     .events
                     .events
@@ -301,18 +321,31 @@ pub fn grok_session_page(
                             + event.text.as_ref().map_or(0, String::len) as u64
                             + event.detail.as_ref().map_or(0, String::len) as u64
                     })
-                    .sum::<u64>();
+                    .sum::<u64>()
+                    + crate::history_navigation::weight(&state.timeline);
             }
             let source = &state.events.events;
             let total_events = source.len();
-            let end = match before {
-                Some(id) => source
-                    .iter()
-                    .position(|event| event.id == id)
-                    .context("历史位置已变化，请刷新会话")?,
-                None => total_events,
+            let (start, end) = match crate::history_navigation::seek_window(
+                source.iter().map(|event| event.id.as_str()),
+                before,
+                limit.unwrap_or(160).clamp(1, 500),
+            )? {
+                Some(window) => window,
+                None => {
+                    let end = match before {
+                        Some(id) => source
+                            .iter()
+                            .position(|event| event.id == id)
+                            .context("历史位置已变化，请刷新会话")?,
+                        None => total_events,
+                    };
+                    (
+                        limit.map_or(0, |n| end.saturating_sub(n.clamp(1, 500))),
+                        end,
+                    )
+                }
             };
-            let start = limit.map_or(0, |n| end.saturating_sub(n.clamp(1, 500)));
             let mut events = source[start..end].to_vec();
             for event in &mut events {
                 if event
@@ -326,6 +359,14 @@ pub fn grok_session_page(
                 }
             }
             Ok(GrokSessionDetail {
+                timeline: before.is_none().then(|| state.timeline.clone()),
+                after_cursor: crate::history_navigation::after_cursor(
+                    end,
+                    total_events,
+                    source
+                        .get(end.saturating_sub(1))
+                        .map(|event| event.id.as_str()),
+                ),
                 summary,
                 events,
                 total_events,
@@ -343,6 +384,8 @@ thread_local! { static HISTORY_READS: std::cell::Cell<usize> = const { std::cell
 
 #[derive(Default)]
 struct GrokReader {
+    previous_count: usize,
+    timeline: crate::history_navigation::Timeline,
     events: GrokEvents,
     journal: crate::jsonl_cache::HistoryJournal,
     weight: u64,
@@ -545,7 +588,7 @@ fn read_history(path: &Path) -> Result<Vec<GrokHistoryEvent>> {
     let cache = crate::jsonl_cache::JsonlCache::<GrokReader>::new(192 * 1024 * 1024);
     cache.read(
         path,
-        |size| Ok(size.saturating_sub(64 * 1024 * 1024)),
+        |_| Ok(0),
         true,
         |state, line, _, start| {
             if let Ok(value) = serde_json::from_slice::<Value>(line) {

@@ -154,6 +154,23 @@ pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
                     .collect();
                 state.journal.record_changes(&info, changed, reset);
                 parsed.history = state.journal.clone();
+                parsed.timeline = crate::history_navigation::update_timeline(
+                    &state.snapshot.timeline,
+                    parsed
+                        .events
+                        .iter()
+                        .filter(|event| event.kind == "user_message")
+                        .map(|event| {
+                            (
+                                event.id.as_str(),
+                                event.user_message.as_ref(),
+                                event.text.as_deref(),
+                                previous
+                                    .get(&event.id)
+                                    .is_some_and(|old| Arc::ptr_eq(old, event)),
+                            )
+                        }),
+                );
                 state.weight = parsed
                     .events
                     .iter()
@@ -167,7 +184,8 @@ pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
                                 .map_or(0, crate::user_message::UserMessage::weight)
                     })
                     .sum::<u64>()
-                    + state.records as u64 * 256;
+                    + state.records as u64 * 256
+                    + crate::history_navigation::weight(&parsed.timeline);
                 state.snapshot = Arc::new(parsed);
             }
             Ok(state.snapshot.clone())
@@ -508,8 +526,11 @@ impl Parser {
                                 .collect(),
                         );
                         let user = crate::user_message::parse_user_message(&key, &user_parts);
-                        if first_user.is_none() && !user.text.trim().is_empty() {
-                            first_user = Some(user.text.chars().take(120).collect::<String>());
+                        if first_user.is_none() {
+                            let title = crate::user_message::summary_text(&user.text);
+                            if !title.trim().is_empty() {
+                                first_user = Some(title.chars().take(120).collect::<String>());
+                            }
                         }
                         let mut e = event(
                             key.clone(),

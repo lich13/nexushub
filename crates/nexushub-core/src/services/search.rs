@@ -336,7 +336,45 @@ fn validate_request(request: &SessionSearchRequest) -> Result<()> {
 fn json_corpus<T: Serialize>(value: &T) -> Result<String> {
     let value = serde_json::to_value(value)?;
     let mut strings = Vec::new();
-    collect_strings(&value, &mut strings);
+    if let Some(user) = value
+        .get("userMessage")
+        .or_else(|| value.get("user_message"))
+        .filter(|user| user.is_object())
+    {
+        strings.push(crate::user_message::searchable_text(
+            user.get("text").and_then(Value::as_str).unwrap_or(""),
+        ));
+        if let Some(blocks) = user.get("contextBlocks").and_then(Value::as_array) {
+            strings.extend(
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        block.get("kind").and_then(Value::as_str) == Some("instructions")
+                    })
+                    .filter_map(|block| block.get("text").and_then(Value::as_str))
+                    .map(str::to_owned),
+            );
+        }
+        if let Some(attachments) = user.get("attachments").and_then(Value::as_array) {
+            strings.extend(
+                attachments
+                    .iter()
+                    .filter_map(|attachment| attachment.get("name").and_then(Value::as_str))
+                    .map(str::to_owned),
+            );
+        }
+    } else if value.get("role").and_then(Value::as_str) == Some("user")
+        || value
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "user_message" | "user_message_chunk"))
+    {
+        strings.push(crate::user_message::searchable_text(
+            value.get("text").and_then(Value::as_str).unwrap_or(""),
+        ));
+    } else {
+        collect_strings(&value, &mut strings);
+    }
     Ok(strip_memory_metadata(&strings.join("\n")))
 }
 
@@ -368,7 +406,7 @@ fn push_warning(warnings: &mut Vec<String>) {
     }
 }
 
-fn strip_memory_metadata(input: &str) -> String {
+pub(crate) fn strip_memory_metadata(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut fence: Option<(u8, usize)> = None;
     let mut literal_line = false;
@@ -619,7 +657,8 @@ fn push_result(
 
 #[cfg(test)]
 mod tests {
-    use super::strip_memory_metadata;
+    use super::{json_corpus, strip_memory_metadata};
+    use serde_json::json;
 
     #[test]
     fn removes_memory_blocks_but_keeps_code_examples() {
@@ -671,6 +710,109 @@ mod tests {
         ] {
             assert_eq!(strip_memory_metadata(&source), source);
         }
+    }
+
+    #[test]
+    fn user_message_search_accepts_both_wire_keys_and_indexes_only_searchable_content() {
+        let body = "SEARCH_BODY_TOKEN";
+        let question = "SEARCH_QUESTION_TOKEN";
+        let answer = "SEARCH_ANSWER_TOKEN";
+        let text = format!(
+            "{body}\n<send_user_message_question_reply>\n[{{\"questionItemId\":\"fixture-question-id\",\"question\":\"{question}\",\"answer\":\"{answer}\"}}]\n</send_user_message_question_reply>"
+        );
+        let user_message = json!({
+            "id": "fixture-user-message",
+            "text": text,
+            "contextBlocks": [
+                {"kind":"instructions", "text":"AGENTS_INSTRUCTIONS_TOKEN"},
+                {"kind":"environment", "text":"AUTO_ENVIRONMENT_TOKEN"},
+                {"kind":"runtime", "text":"AUTO_PERMISSIONS_TOKEN"},
+                {"kind":"runtime", "text":"AUTO_RUNTIME_TOKEN"},
+                {"kind":"files", "text":"AUTO_FILE_CONTEXT_TOKEN"}
+            ],
+            "attachments": [{
+                "id":"fixture-attachment",
+                "name":"fixture-attachment-name.md",
+                "kind":"file",
+                "path":"/fixture/excluded-attachment-path",
+                "reason":null
+            }]
+        });
+
+        for key in ["userMessage", "user_message"] {
+            let mut value = json!({
+                "role":"user",
+                "text":text,
+                "duplicatePayload":"OUTER_ONLY_PAYLOAD_TOKEN"
+            });
+            value
+                .as_object_mut()
+                .expect("serialized event is an object")
+                .insert(key.to_owned(), user_message.clone());
+
+            let corpus = json_corpus(&value).unwrap();
+            for token in [body, question, answer] {
+                assert_eq!(
+                    corpus.matches(token).count(),
+                    1,
+                    "{token} should occur once for {key}"
+                );
+            }
+            assert!(corpus.contains("AGENTS_INSTRUCTIONS_TOKEN"));
+            assert!(corpus.contains("fixture-attachment-name.md"));
+            for excluded in [
+                "fixture-question-id",
+                "AUTO_ENVIRONMENT_TOKEN",
+                "AUTO_PERMISSIONS_TOKEN",
+                "AUTO_RUNTIME_TOKEN",
+                "AUTO_FILE_CONTEXT_TOKEN",
+                "excluded-attachment-path",
+                "OUTER_ONLY_PAYLOAD_TOKEN",
+            ] {
+                assert!(
+                    !corpus.contains(excluded),
+                    "{excluded} must not enter the searchable corpus for {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn context_only_environment_user_message_has_an_empty_search_corpus() {
+        let environment =
+            "<environment_context>ONLY_ENVIRONMENT_CONTEXT_TOKEN</environment_context>";
+        let value = json!({
+            "role":"user",
+            "text":environment,
+            "userMessage": {
+                "id":"fixture-context-only",
+                "text":environment,
+                "contextBlocks":[{"kind":"environment", "text":environment}],
+                "attachments":[]
+            }
+        });
+
+        let corpus = json_corpus(&value).unwrap();
+
+        assert!(corpus.trim().is_empty());
+    }
+
+    #[test]
+    fn legacy_user_text_fallback_still_excludes_memory_and_page_metadata() {
+        let value = json!({
+            "role":"user",
+            "text":concat!(
+                "LEGACY_VISIBLE_BODY_TOKEN\n",
+                "<oai-mem-citation>LEGACY_MEMORY_SECRET_TOKEN</oai-mem-citation>\n",
+                "<external_codex_apps_open_page>{\"page_id\":\"fixture-page-secret-token\"}</external_codex_apps_open_page>"
+            )
+        });
+
+        let corpus = json_corpus(&value).unwrap();
+
+        assert!(corpus.contains("LEGACY_VISIBLE_BODY_TOKEN"));
+        assert!(!corpus.contains("LEGACY_MEMORY_SECRET_TOKEN"));
+        assert!(!corpus.contains("fixture-page-secret-token"));
     }
 
     #[test]

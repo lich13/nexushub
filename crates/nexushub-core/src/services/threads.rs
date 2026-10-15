@@ -763,6 +763,8 @@ mod tests {
     #[test]
     fn detail_runtime_state_applies_running_job_once_in_core() {
         let detail = ThreadDetail {
+            timeline: None,
+            after_cursor: None,
             history_subagent_blocks: Vec::new(),
             history: None,
             subagents: None,

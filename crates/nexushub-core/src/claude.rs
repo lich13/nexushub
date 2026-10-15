@@ -80,6 +80,10 @@ pub struct ClaudeHistoryEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeSessionDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::history_navigation::Timeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<crate::jsonl_cache::HistoryMetadata>,
     pub summary: ClaudeSessionSummary,
     pub events: Vec<ClaudeHistoryEvent>,
@@ -122,6 +126,7 @@ pub struct ClaudeDeleteResult {
 
 #[derive(Clone, Default)]
 struct Parsed {
+    timeline: crate::history_navigation::Timeline,
     id: String,
     title: String,
     cwd: String,
@@ -400,15 +405,25 @@ pub fn claude_session_detail(
     request: &ClaudeDetailRequest,
 ) -> Result<ClaudeSessionDetail> {
     let (path, parsed) = resolve(paths, &request.session_key)?;
-    let end = match &request.before {
-        None => parsed.events.len(),
-        Some(id) => parsed
-            .events
-            .iter()
-            .position(|e| &e.id == id)
-            .context("历史位置已变化，请刷新会话")?,
+    let limit = request.limit.unwrap_or(160).clamp(1, 500);
+    let (start, end) = match crate::history_navigation::seek_window(
+        parsed.events.iter().map(|event| event.id.as_str()),
+        request.before.as_deref(),
+        limit,
+    )? {
+        Some(window) => window,
+        None => {
+            let end = match &request.before {
+                None => parsed.events.len(),
+                Some(id) => parsed
+                    .events
+                    .iter()
+                    .position(|event| &event.id == id)
+                    .context("历史位置已变化，请刷新会话")?,
+            };
+            (end.saturating_sub(limit), end)
+        }
     };
-    let start = end.saturating_sub(request.limit.unwrap_or(160).clamp(1, 500));
     let mut events: Vec<_> = parsed.events[start..end]
         .iter()
         .map(|event| (**event).clone())
@@ -421,6 +436,15 @@ pub fn claude_session_detail(
     let mut summary = summary(paths, &path, &parsed, &activity::Snapshot::capture())?;
     attach_storage_size(paths, &mut summary);
     Ok(ClaudeSessionDetail {
+        timeline: request.before.is_none().then(|| parsed.timeline.clone()),
+        after_cursor: crate::history_navigation::after_cursor(
+            end,
+            parsed.events.len(),
+            parsed
+                .events
+                .get(end.saturating_sub(1))
+                .map(|event| event.id.as_str()),
+        ),
         history: Some(parsed.history.metadata(None)),
         summary,
         events,
