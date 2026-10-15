@@ -1,4 +1,5 @@
-import ts from "typescript";
+import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/unstable/ast";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -73,18 +74,35 @@ const apiSources = import.meta.glob([
 function apiCommandLiterals(): Set<string> {
   const out = new Set<string>();
   const wrappers = new Set(["callCommand", "invokeNative", "changeConnection", "startProbeCommand", "runTypedUpdateCommand"]);
-  for (const [path, source] of Object.entries(apiSources)) {
-    const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && wrappers.has(node.expression.text)) {
-        const command = node.arguments[0];
-        if (command && ts.isStringLiteral(command)) out.add(command.text);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(ast);
+  const cwd = fileURLToPath(new URL("../../../", import.meta.url));
+  const configPath = fileURLToPath(new URL("../../../tsconfig.app.json", import.meta.url));
+  const api = new API({ cwd });
+  let snapshot: ReturnType<typeof api.updateSnapshot> | undefined;
+  try {
+    snapshot = api.updateSnapshot({ openProjects: [configPath] });
+    const project = snapshot.getProject(configPath);
+    if (!project) throw new Error(`TypeScript API did not open project ${configPath}`);
+    for (const path of Object.keys(apiSources)) {
+      const sourcePath = fileURLToPath(new URL(path, import.meta.url));
+      const sourceFile = project.program.getSourceFile(sourcePath);
+      if (!sourceFile) throw new Error(`TypeScript project did not include source ${sourcePath}`);
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && wrappers.has(node.expression.text)) {
+          const command = node.arguments[0];
+          if (command && ts.isStringLiteral(command)) out.add(command.text);
+        }
+        node.forEachChild(visit);
+      };
+      visit(sourceFile);
+    }
+    return out;
+  } finally {
+    try {
+      snapshot?.dispose();
+    } finally {
+      api.close();
+    }
   }
-  return out;
 }
 
 describe("contract registry", () => {

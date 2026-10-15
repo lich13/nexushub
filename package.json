@@ -3,14 +3,14 @@
   "private": true,
   "version": "1.2.20",
   "scripts": {
-    "build:ui": "corepack pnpm@11.0.8 --dir webui build:tauri",
-    "desktop:dev": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
-    "desktop:typecheck": "corepack pnpm@11.0.8 --dir webui typecheck",
-    "desktop:build": "corepack pnpm@11.0.8 --dir webui build:tauri",
+    "build:ui": "corepack pnpm@12.11.2 --dir webui build:tauri",
+    "desktop:dev": "corepack pnpm@12.11.2 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
+    "desktop:typecheck": "corepack pnpm@12.11.2 --dir webui typecheck",
+    "desktop:build": "corepack pnpm@12.11.2 --dir webui build:tauri",
     "tauri:dev": "./webui/node_modules/.bin/tauri dev --config src-tauri/tauri.conf.json",
     "tauri:build:macos": "bash scripts/package-darwin-arm64.sh",
     "tauri:build": "bash scripts/package-darwin-arm64.sh",
     "test:install": "bash scripts/test-install-script.sh",
-    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@11.0.8 --dir webui test && corepack pnpm@11.0.8 --dir webui build:tauri && npm run test:install"
+    "ci": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && corepack pnpm@12.11.2 --dir webui test && corepack pnpm@12.11.2 --dir webui build:tauri && npm run test:install"
   }
 }
