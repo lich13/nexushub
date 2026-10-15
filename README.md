@@ -88,15 +88,15 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 ## 开发
 
 ```bash
-corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
+corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-corepack pnpm@11.0.8 --dir webui typecheck
-corepack pnpm@11.0.8 --dir webui test
-corepack pnpm@11.0.8 --dir webui build:tauri
-NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui exec playwright test --grep-invert @desktop-performance
-NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
+corepack pnpm@12.11.2 --dir webui typecheck
+corepack pnpm@12.11.2 --dir webui test
+corepack pnpm@12.11.2 --dir webui build:tauri
+NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
+NEXUSHUB_BROWSER_PREVIEW=1 corepack pnpm@12.11.2 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
 bash scripts/test-install-script.sh
 python3 scripts/privacy-check.py --git-objects
 git diff --check

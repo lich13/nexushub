@@ -7,8 +7,8 @@
   "build": {
     "frontendDist": "../webui/dist",
     "devUrl": "http://localhost:5174",
-    "beforeDevCommand": "corepack pnpm@11.0.8 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
-    "beforeBuildCommand": "corepack pnpm@11.0.8 --dir webui build:tauri"
+    "beforeDevCommand": "corepack pnpm@12.11.2 --dir webui dev --host 127.0.0.1 --port 5174 --strictPort",
+    "beforeBuildCommand": "corepack pnpm@12.11.2 --dir webui build:tauri"
   },
   "app": {
     "windows": [

@@ -17,25 +17,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.0.8
+          version: 12.11.2
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.21.0
       - name: Get pnpm store path
         id: pnpm-store
         shell: bash
-        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
+        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
       - uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-v1-pnpm-
-      - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
-      - run: corepack pnpm@11.0.8 --dir webui typecheck
-      - run: corepack pnpm@11.0.8 --dir webui test
-      - run: corepack pnpm@11.0.8 --dir webui build:tauri
-      - run: corepack pnpm@11.0.8 --dir webui exec playwright install --with-deps chromium webkit
-      - run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep-invert @desktop-performance
+      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: corepack pnpm@12.11.2 --dir webui typecheck
+      - run: corepack pnpm@12.11.2 --dir webui test
+      - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - run: corepack pnpm@12.11.2 --dir webui exec playwright install --with-deps chromium webkit
+      - run: corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
@@ -53,7 +53,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.21.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -76,14 +76,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.0.8
+          version: 12.11.2
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.21.0
       - name: Get pnpm store path
         id: pnpm-store
         shell: bash
-        run: echo "path=$(corepack pnpm@11.0.8 store path --silent)" >> "${GITHUB_OUTPUT}"
+        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
       - uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
@@ -99,14 +99,14 @@ jobs:
           key: ${{ runner.os }}-v1-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-v1-cargo-tauri-
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: corepack pnpm@11.0.8 --dir webui install --frozen-lockfile
-      - run: corepack pnpm@11.0.8 --dir webui test
-      - run: corepack pnpm@11.0.8 --dir webui build:tauri
-      - run: corepack pnpm@11.0.8 --dir webui exec playwright install chromium webkit
+      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: corepack pnpm@12.11.2 --dir webui test
+      - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - run: corepack pnpm@12.11.2 --dir webui exec playwright install chromium webkit
       - name: Check desktop interaction budget on macOS production build
         # Measure visible desktop windows. Headless Chromium's hosted-macOS
         # frame scheduler can exceed this budget even on about:blank.
-        run: corepack pnpm@11.0.8 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
+        run: corepack pnpm@12.11.2 --dir webui exec playwright test --grep @desktop-performance --workers=1 --trace=off --headed
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance
