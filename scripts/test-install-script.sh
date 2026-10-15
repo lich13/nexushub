@@ -118,5 +118,7 @@ for title in ["版本概览", "功能调整", "问题修复", "兼容性与迁�
 print(f"NexusHub {version} install/release boundary checks: ok")
 PY
 
+python3 scripts/check-versions.py
+python3 scripts/test-check-versions.py
 python3 scripts/test-privacy-check.py
 python3 scripts/privacy-check.py --git-objects
