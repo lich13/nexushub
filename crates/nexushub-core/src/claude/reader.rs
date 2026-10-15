@@ -401,17 +401,17 @@ impl Parser {
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
         let Self {
             mut parsed,
-            mut custom_title,
-            mut auto_title,
-            mut first_user,
-            mut turn,
-            mut calls,
-            mut pending,
-            mut questions,
-            mut permission_calls,
+            custom_title,
+            auto_title,
+            first_user,
+            turn,
+            calls,
+            pending,
+            questions,
+            permission_calls,
             mut seen,
-            mut last_assistant_text,
-            mut last_stop_reason,
+            last_assistant_text,
+            last_stop_reason,
         } = std::mem::take(self);
         for (position, record) in std::iter::once((position, record)) {
             if record.get("isSidechain").and_then(Value::as_bool) == Some(true) {
@@ -464,552 +464,23 @@ impl Parser {
                     continue;
                 }
             }
-            match kind {
-                "custom-title" => {
-                    custom_title = record
-                        .get("customTitle")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.trim().is_empty())
-                        .map(bounded)
-                }
-                "ai-title" => {
-                    auto_title = record
-                        .get("aiTitle")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.trim().is_empty())
-                        .map(bounded)
-                }
-                "user" | "assistant" => {
-                    let Some(message) = record.get("message").filter(|m| m.is_object()) else {
-                        issue(&mut parsed, "消息格式未知，管理操作已禁用");
-                        continue;
-                    };
-                    let Some(content) = message.get("content") else {
-                        issue(&mut parsed, "消息正文缺失，管理操作已禁用");
-                        continue;
-                    };
-                    if !content.is_array() && !content.is_string() {
-                        issue(&mut parsed, "消息正文格式未知，管理操作已禁用");
-                        let mut e =
-                            event(key, record, "unknown", Some("未知消息正文".into()), &turn);
-                        e.detail = Some(printable(content));
-                        parsed.events.push(Arc::new(e));
-                        continue;
-                    }
-                    let parts = content.as_array().cloned().unwrap_or_else(|| {
-                    vec![serde_json::json!({"type":"text","text":content.as_str().unwrap_or("")})]
-                });
-                    let visible_user = kind == "user"
-                        && parts
-                            .iter()
-                            .any(|p| matches!(field(p, "type"), "text" | "image" | "document"));
-                    if visible_user {
-                        // A new request supersedes any undelivered event from the
-                        // previous turn. The persisted delivery ledger keeps history.
-                        parsed.native_events.clear();
-                        turn = Some(key.clone());
-                        parsed.turn_open = true;
-                        parsed.last_turn_at = millis(field(record, "timestamp"));
-                        pending.clear();
-                        questions.clear();
-                        permission_calls.clear();
-                        calls.clear();
-                        last_assistant_text = None;
-                        last_stop_reason.clear();
-                        if uuid.is_empty() {
-                            issue(&mut parsed, "原生消息身份缺失，通知和管理操作已禁用");
-                        }
-                        let user_parts = Value::Array(
-                            parts
-                                .iter()
-                                .filter(|p| field(p, "type") != "tool_result")
-                                .cloned()
-                                .collect(),
-                        );
-                        let user = crate::user_message::parse_user_message(&key, &user_parts);
-                        if first_user.is_none() {
-                            let title = crate::user_message::summary_text(&user.text);
-                            if !title.trim().is_empty() {
-                                first_user = Some(title.chars().take(120).collect::<String>());
-                            }
-                        }
-                        let mut e = event(
-                            key.clone(),
-                            record,
-                            "user_message",
-                            Some(bounded(&user.text)),
-                            &turn,
-                        );
-                        e.user_message = Some(user);
-                        parsed.events.push(Arc::new(e));
-                    }
-                    if kind == "user" {
-                        if let Some(plan) = record
-                            .get("planContent")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.trim().is_empty())
-                        {
-                            parsed.events.push(Arc::new(event(
-                                format!("{key}:plan"),
-                                record,
-                                "plan",
-                                Some(bounded(plan)),
-                                &turn,
-                            )));
-                        }
-                    }
-                    for (index, part) in parts.iter().enumerate() {
-                        let mut e = event(format!("{key}:{index}"), record, "", None, &turn);
-                        match field(part, "type") {
-                            "text" if kind == "assistant" => {
-                                e.kind = "assistant_message".into();
-                                e.text = Some(bounded(field(part, "text")));
-                            }
-                            "thinking" if kind == "assistant" => {
-                                e.kind = "thinking".into();
-                                e.text = Some(bounded(field(part, "thinking")));
-                            }
-                            "tool_reference" => {
-                                let name = if field(part, "tool_name").is_empty() {
-                                    field(part, "name")
-                                } else {
-                                    field(part, "tool_name")
-                                };
-                                e.kind = "tool_reference".into();
-                                e.text = Some(if name.is_empty() {
-                                    "工具引用".into()
-                                } else {
-                                    name.into()
-                                });
-                                e.role = (!name.is_empty()).then(|| name.into());
-                                e.detail = Some(printable(part));
-                                if name.is_empty() {
-                                    warning(&mut parsed, "工具引用缺少工具名称，已保留为警告");
-                                }
-                            }
-                            "tool_search_tool_result" => {
-                                e.kind = "tool_reference".into();
-                                e.text = Some("工具引用结果".into());
-                                e.detail = part.get("content").map(printable);
-                            }
-                            "redacted_thinking" => {
-                                continue;
-                            }
-                            "tool_use" if kind == "assistant" => {
-                                let call = field(part, "id");
-                                let name = field(part, "name");
-                                e.kind = "tool_call".into();
-                                e.text = Some(name.into());
-                                e.role = Some(name.into());
-                                e.call_id = Some(call.into());
-                                e.status = Some("in_progress".into());
-                                e.detail = part.get("input").map(printable);
-                                if call.is_empty() {
-                                    issue(&mut parsed, "工具调用身份缺失，管理操作已禁用");
-                                }
-                                pending.insert(call.into());
-                                calls.insert(call.into(), parsed.events.len());
-                                if name == "AskUserQuestion" && !call.is_empty() {
-                                    if let (Some(turn), Some(ts), Some(qs)) = (
-                                        &turn,
-                                        millis(field(record, "timestamp")),
-                                        part.pointer("/input/questions").and_then(Value::as_array),
-                                    ) {
-                                        let body = qs
-                                            .iter()
-                                            .filter_map(|q| {
-                                                let question = field(q, "question");
-                                                if question.is_empty() {
-                                                    return None;
-                                                }
-                                                let options = q
-                                                    .get("options")
-                                                    .and_then(Value::as_array)
-                                                    .map(|opts| {
-                                                        opts.iter()
-                                                            .filter_map(|o| {
-                                                                o.as_str().or_else(|| {
-                                                                    o.get("label")
-                                                                        .and_then(Value::as_str)
-                                                                })
-                                                            })
-                                                            .collect::<Vec<_>>()
-                                                            .join(" / ")
-                                                    })
-                                                    .unwrap_or_default();
-                                                Some(format!("{question}\n{options}"))
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("\n\n");
-                                        if !body.trim().is_empty() {
-                                            questions.insert(
-                                                call.into(),
-                                                crate::native_probe::NativeTurnEvent {
-                                                    position: position as u64 + 1,
-                                                    turn_id: format!("{turn}:{call}"),
-                                                    kind: "reply_needed".into(),
-                                                    body: bounded(&body),
-                                                    timestamp_ms: ts,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                if name == "ExitPlanMode" {
-                                    if let Some(plan) = part
-                                        .pointer("/input/plan")
-                                        .and_then(Value::as_str)
-                                        .filter(|p| !p.trim().is_empty())
-                                    {
-                                        e.kind = "plan".into();
-                                        e.text = Some(bounded(plan));
-                                        e.detail = None;
-                                    }
-                                }
-                            }
-                            "tool_result" => {
-                                let call = field(part, "tool_use_id");
-                                pending.remove(call);
-                                questions.remove(call);
-                                let result = part
-                                    .get("content")
-                                    .map(|c| {
-                                        if c.is_array() {
-                                            content_text(c)
-                                        } else {
-                                            printable(c)
-                                        }
-                                    })
-                                    .unwrap_or_default();
-                                let status = if part.get("is_error").and_then(Value::as_bool)
-                                    == Some(true)
-                                {
-                                    "failed"
-                                } else {
-                                    "completed"
-                                };
-                                if let Some(index) = calls.get(call) {
-                                    let prior = Arc::make_mut(&mut parsed.events[*index]);
-                                    prior.status = Some(status.into());
-                                    prior.result = Some(result);
-                                    continue;
-                                }
-                                e.kind = "tool_result".into();
-                                e.text = Some("工具结果".into());
-                                e.call_id = Some(call.into());
-                                e.status = Some(status.into());
-                                e.result = Some(result);
-                            }
-                            "text" | "image" | "document" if kind == "user" => continue,
-                            _ => {
-                                e.kind = "unknown".into();
-                                e.text = Some("未知内容块".into());
-                                e.detail = Some(printable(part));
-                                warning(&mut parsed, "存在未知内容块，已保留为警告");
-                            }
-                        }
-                        parsed.events.push(Arc::new(e));
-                    }
-                    if kind == "assistant" {
-                        let text = text_content_only(content);
-                        if !text.trim().is_empty() {
-                            last_assistant_text = Some(text);
-                        }
-                        last_stop_reason = field(message, "stop_reason").into();
-                        if !terminal_stop_reason(&last_stop_reason) || !pending.is_empty() {
-                            parsed.turn_open = turn.is_some();
-                            parsed.native_events.clear();
-                        }
-                    }
-                    let assistant_terminal = terminal_stop_reason(field(message, "stop_reason"));
-                    if kind == "assistant"
-                        && assistant_terminal
-                        && pending.is_empty()
-                        && questions.is_empty()
-                    {
-                        finish(
-                            &mut parsed,
-                            &turn,
-                            position,
-                            record,
-                            "completion",
-                            last_assistant_text.clone().unwrap_or_default(),
-                        );
-                    }
-                }
-                "result" => {
-                    let subtype = field(record, "subtype");
-                    let is_failure = record.get("is_error").and_then(Value::as_bool) == Some(true)
-                        && matches!(
-                            subtype,
-                            "error_during_execution"
-                                | "error_max_turns"
-                                | "error_max_budget_usd"
-                                | "error_max_structured_output_retries"
-                        );
-                    let stop_reason = record.get("stop_reason").and_then(Value::as_str);
-                    let explicit_terminal = stop_reason.is_some_and(terminal_stop_reason);
-                    let inferred_terminal = stop_reason.is_none()
-                        && (last_stop_reason.is_empty() || terminal_stop_reason(&last_stop_reason))
-                        && record.get("is_error").and_then(Value::as_bool) == Some(false);
-                    if subtype == "success"
-                        && stop_reason.is_some_and(|reason| !terminal_stop_reason(reason))
-                    {
-                        parsed
-                            .native_events
-                            .retain(|event| event.kind != "completion");
-                        parsed.turn_open = turn.is_some();
-                    }
-                    if subtype == "success"
-                        && record.get("is_error").and_then(Value::as_bool) != Some(true)
-                        && pending.is_empty()
-                        && questions.is_empty()
-                        && (explicit_terminal || inferred_terminal)
-                    {
-                        let result = bounded(field(record, "result"));
-                        finish(
-                            &mut parsed,
-                            &turn,
-                            position,
-                            record,
-                            "completion",
-                            if result.trim().is_empty() {
-                                last_assistant_text.clone().unwrap_or_default()
-                            } else {
-                                result
-                            },
-                        );
-                    } else if is_failure {
-                        questions.clear();
-                        pending.clear();
-                        finish(
-                            &mut parsed,
-                            &turn,
-                            position,
-                            record,
-                            "failure",
-                            record
-                                .get("errors")
-                                .map(printable)
-                                .unwrap_or_else(|| subtype.into()),
-                        );
-                    }
-                }
-                "system" => {
-                    let subtype = field(record, "subtype");
-                    if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
-                        parsed.turn_open = false;
-                        parsed.native_events.clear();
-                        turn = None;
-                        last_stop_reason.clear();
-                        last_assistant_text = None;
-                        questions.clear();
-                        for call in &pending {
-                            if let Some(index) = calls.get(call) {
-                                Arc::make_mut(&mut parsed.events[*index]).status =
-                                    Some("cancelled".into());
-                            }
-                        }
-                        pending.clear();
-                    }
-                    if subtype == "init" {
-                        // Identity/cwd/version were extracted above. Startup
-                        // configuration is metadata, not a conversation activity.
-                        continue;
-                    }
-                    if subtype == "compact_boundary" {
-                        parsed.events.push(Arc::new(event(
-                            key,
-                            record,
-                            "compaction",
-                            Some(content_text(record.get("content").unwrap_or(&Value::Null))),
-                            &turn,
-                        )));
-                    } else {
-                        let known = matches!(
-                            subtype,
-                            "init"
-                                | "turn_duration"
-                                | "stop_hook_summary"
-                                | "interrupted"
-                                | "cancelled"
-                                | "canceled"
-                                | "api_error"
-                        );
-                        let mut e = event(
-                            key,
-                            record,
-                            if known { "system" } else { "unknown" },
-                            Some(format!("系统活动：{subtype}")),
-                            &turn,
-                        );
-                        e.detail = Some(printable(record));
-                        parsed.events.push(Arc::new(e));
-                        if !known {
-                            warning(&mut parsed, "存在新格式系统活动，管理操作已禁用");
-                        }
-                    }
-                }
-                "permission_request" => {
-                    let call = field(record, "tool_use_id");
-                    let request = field(record, "request_id");
-                    let mut e = event(
-                        key,
-                        record,
-                        "permission_request",
-                        Some("权限请求".into()),
-                        &turn,
-                    );
-                    e.detail = Some(printable(record));
-                    parsed.events.push(Arc::new(e));
-                    // Only a pending primary call with explicit transcript identity
-                    // proves this is our permission request, not a remote subagent's.
-                    if !request.is_empty()
-                        && pending.contains(call)
-                        && field(record, "agent_id").is_empty()
-                        && alias_field(record, &["sessionId", "session_id"]) == parsed.id
-                    {
-                        if let (Some(turn), Some(ts)) = (&turn, millis(field(record, "timestamp")))
-                        {
-                            let body = format!(
-                                "{}\n{}",
-                                field(record, "description"),
-                                field(record, "tool_name")
-                            );
-                            if !body.trim().is_empty() {
-                                permission_calls.insert(request.into(), call.into());
-                                questions.entry(call.into()).or_insert(
-                                    crate::native_probe::NativeTurnEvent {
-                                        position: position as u64 + 1,
-                                        turn_id: format!("{turn}:permission:{request}"),
-                                        kind: "reply_needed".into(),
-                                        body: bounded(&body),
-                                        timestamp_ms: ts,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                "permission_response" => {
-                    if let Some(call) = permission_calls.remove(field(record, "request_id")) {
-                        questions.remove(&call);
-                    }
-                    let mut e = event(
-                        key,
-                        record,
-                        "permission_response",
-                        Some("权限回复".into()),
-                        &turn,
-                    );
-                    e.detail = Some(printable(record));
-                    parsed.events.push(Arc::new(e));
-                }
-                "summary" => parsed.events.push(Arc::new(event(
-                    key,
-                    record,
-                    "compaction",
-                    Some(bounded(field(record, "summary"))),
-                    &turn,
-                ))),
-                "tool_reference" | "tool_search_tool_result" => {
-                    let name = if field(record, "tool_name").is_empty() {
-                        field(record, "name")
-                    } else {
-                        field(record, "tool_name")
-                    };
-                    let mut e = event(
-                        key,
-                        record,
-                        "tool_reference",
-                        Some(if name.is_empty() {
-                            if kind == "tool_search_tool_result" {
-                                "工具引用结果".into()
-                            } else {
-                                "工具引用".into()
-                            }
-                        } else {
-                            name.into()
-                        }),
-                        &turn,
-                    );
-                    e.role = (!name.is_empty()).then(|| name.into());
-                    e.detail = Some(printable(record));
-                    parsed.events.push(Arc::new(e));
-                    let nested_reference = ["content", "tool_references"].iter().any(|key| {
-                        record
-                            .get(*key)
-                            .and_then(Value::as_array)
-                            .is_some_and(|parts| {
-                                parts.iter().any(|part| {
-                                    field(part, "type") == "tool_reference"
-                                        && !alias_field(part, &["tool_name", "name"]).is_empty()
-                                })
-                            })
-                    });
-                    if name.is_empty() && !nested_reference {
-                        warning(&mut parsed, "工具引用缺少工具名称，已保留为警告");
-                    }
-                }
-                "file-history-snapshot"
-                | "file-history-delta"
-                | "queue-operation"
-                | "attachment"
-                | "atis-latch"
-                | "cost-state" => {
-                    if kind == "attachment"
-                        && record.pointer("/attachment/type").and_then(Value::as_str)
-                            == Some("plan_file_reference")
-                    {
-                        if let Some(plan) = record
-                            .pointer("/attachment/planContent")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.trim().is_empty())
-                        {
-                            parsed.events.push(Arc::new(event(
-                                key,
-                                record,
-                                "plan",
-                                Some(bounded(plan)),
-                                &turn,
-                            )));
-                            continue;
-                        }
-                    }
-                    let mut e = event(
-                        key,
-                        record,
-                        kind,
-                        Some(
-                            match kind {
-                                "file-history-snapshot" | "file-history-delta" => "文件历史快照",
-                                "queue-operation" => "队列活动",
-                                "atis-latch" => "会话设置",
-                                "cost-state" => "用量记录",
-                                _ => "附件",
-                            }
-                            .into(),
-                        ),
-                        &turn,
-                    );
-                    e.detail = Some(printable(record));
-                    parsed.events.push(Arc::new(e));
-                }
-                "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
-                | "saved_hook_context" | "mode" | "permission-mode" => {}
-                _ => {
-                    let mut e = event(
-                        key,
-                        record,
-                        "unknown",
-                        Some(format!("未识别的活动：{kind}")),
-                        &turn,
-                    );
-                    e.detail = Some(printable(record));
-                    parsed.events.push(Arc::new(e));
-                    warning(&mut parsed, "存在新格式活动，管理操作已禁用");
-                }
-            }
+            *self = Self {
+                parsed,
+                custom_title,
+                auto_title,
+                first_user,
+                turn,
+                calls,
+                pending,
+                questions,
+                permission_calls,
+                seen,
+                last_assistant_text,
+                last_stop_reason,
+            };
+
+            self.read_kind(record, position, key, kind, uuid);
+            return;
         }
 
         *self = Self {
@@ -1026,6 +497,596 @@ impl Parser {
             last_assistant_text,
             last_stop_reason,
         };
+    }
+    fn read_kind(&mut self, record: &Value, position: usize, key: String, kind: &str, uuid: &str) {
+        for key in std::iter::once(key) {
+            match kind {
+                "custom-title" => {
+                    self.custom_title = record
+                        .get("customTitle")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .map(bounded)
+                }
+                "ai-title" => {
+                    self.auto_title = record
+                        .get("aiTitle")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .map(bounded)
+                }
+                "user" | "assistant" => {
+                    self.read_message(record, position, key, kind, uuid);
+                }
+                "result" => {
+                    self.read_result(record, position);
+                }
+                "system" => {
+                    self.read_system(record, key);
+                }
+                "permission_request" => {
+                    self.read_permission_request(record, position, key);
+                }
+                "permission_response" => {
+                    if let Some(call) = self.permission_calls.remove(field(record, "request_id")) {
+                        self.questions.remove(&call);
+                    }
+                    let mut e = event(
+                        key,
+                        record,
+                        "permission_response",
+                        Some("权限回复".into()),
+                        &self.turn,
+                    );
+                    e.detail = Some(printable(record));
+                    self.parsed.events.push(Arc::new(e));
+                }
+                "summary" => self.parsed.events.push(Arc::new(event(
+                    key,
+                    record,
+                    "compaction",
+                    Some(bounded(field(record, "summary"))),
+                    &self.turn,
+                ))),
+                "tool_reference" | "tool_search_tool_result" => {
+                    self.read_tool_reference(record, key, kind);
+                }
+                "file-history-snapshot"
+                | "file-history-delta"
+                | "queue-operation"
+                | "attachment"
+                | "atis-latch"
+                | "cost-state" => {
+                    self.read_auxiliary(record, key, kind);
+                }
+                "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
+                | "saved_hook_context" | "mode" | "permission-mode" => {}
+                _ => {
+                    let mut e = event(
+                        key,
+                        record,
+                        "unknown",
+                        Some(format!("未识别的活动：{kind}")),
+                        &self.turn,
+                    );
+                    e.detail = Some(printable(record));
+                    self.parsed.events.push(Arc::new(e));
+                    warning(&mut self.parsed, "存在新格式活动，管理操作已禁用");
+                }
+            }
+        }
+    }
+    fn read_message(
+        &mut self,
+        record: &Value,
+        position: usize,
+        key: String,
+        kind: &str,
+        uuid: &str,
+    ) {
+        for key in std::iter::once(key) {
+            let Some(message) = record.get("message").filter(|m| m.is_object()) else {
+                issue(&mut self.parsed, "消息格式未知，管理操作已禁用");
+                continue;
+            };
+            let Some(content) = message.get("content") else {
+                issue(&mut self.parsed, "消息正文缺失，管理操作已禁用");
+                continue;
+            };
+            if !content.is_array() && !content.is_string() {
+                issue(&mut self.parsed, "消息正文格式未知，管理操作已禁用");
+                let mut e = event(
+                    key,
+                    record,
+                    "unknown",
+                    Some("未知消息正文".into()),
+                    &self.turn,
+                );
+                e.detail = Some(printable(content));
+                self.parsed.events.push(Arc::new(e));
+                continue;
+            }
+            let parts = content.as_array().cloned().unwrap_or_else(|| {
+                vec![serde_json::json!({"type":"text","text":content.as_str().unwrap_or("")})]
+            });
+            let visible_user = kind == "user"
+                && parts
+                    .iter()
+                    .any(|p| matches!(field(p, "type"), "text" | "image" | "document"));
+            if visible_user {
+                // A new request supersedes any undelivered event from the
+                // previous turn. The persisted delivery ledger keeps history.
+                self.parsed.native_events.clear();
+                self.turn = Some(key.clone());
+                self.parsed.turn_open = true;
+                self.parsed.last_turn_at = millis(field(record, "timestamp"));
+                self.pending.clear();
+                self.questions.clear();
+                self.permission_calls.clear();
+                self.calls.clear();
+                self.last_assistant_text = None;
+                self.last_stop_reason.clear();
+                if uuid.is_empty() {
+                    issue(&mut self.parsed, "原生消息身份缺失，通知和管理操作已禁用");
+                }
+                let user_parts = Value::Array(
+                    parts
+                        .iter()
+                        .filter(|p| field(p, "type") != "tool_result")
+                        .cloned()
+                        .collect(),
+                );
+                let user = crate::user_message::parse_user_message(&key, &user_parts);
+                if self.first_user.is_none() {
+                    let title = crate::user_message::summary_text(&user.text);
+                    if !title.trim().is_empty() {
+                        self.first_user = Some(title.chars().take(120).collect::<String>());
+                    }
+                }
+                let mut e = event(
+                    key.clone(),
+                    record,
+                    "user_message",
+                    Some(bounded(&user.text)),
+                    &self.turn,
+                );
+                e.user_message = Some(user);
+                self.parsed.events.push(Arc::new(e));
+            }
+            if kind == "user" {
+                if let Some(plan) = record
+                    .get("planContent")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    self.parsed.events.push(Arc::new(event(
+                        format!("{key}:plan"),
+                        record,
+                        "plan",
+                        Some(bounded(plan)),
+                        &self.turn,
+                    )));
+                }
+            }
+            for (index, part) in parts.iter().enumerate() {
+                let mut e = event(format!("{key}:{index}"), record, "", None, &self.turn);
+                match field(part, "type") {
+                    "text" if kind == "assistant" => {
+                        e.kind = "assistant_message".into();
+                        e.text = Some(bounded(field(part, "text")));
+                    }
+                    "thinking" if kind == "assistant" => {
+                        e.kind = "thinking".into();
+                        e.text = Some(bounded(field(part, "thinking")));
+                    }
+                    "tool_reference" => {
+                        let name = if field(part, "tool_name").is_empty() {
+                            field(part, "name")
+                        } else {
+                            field(part, "tool_name")
+                        };
+                        e.kind = "tool_reference".into();
+                        e.text = Some(if name.is_empty() {
+                            "工具引用".into()
+                        } else {
+                            name.into()
+                        });
+                        e.role = (!name.is_empty()).then(|| name.into());
+                        e.detail = Some(printable(part));
+                        if name.is_empty() {
+                            warning(&mut self.parsed, "工具引用缺少工具名称，已保留为警告");
+                        }
+                    }
+                    "tool_search_tool_result" => {
+                        e.kind = "tool_reference".into();
+                        e.text = Some("工具引用结果".into());
+                        e.detail = part.get("content").map(printable);
+                    }
+                    "redacted_thinking" => {
+                        continue;
+                    }
+                    "tool_use" if kind == "assistant" => {
+                        let call = field(part, "id");
+                        let name = field(part, "name");
+                        e.kind = "tool_call".into();
+                        e.text = Some(name.into());
+                        e.role = Some(name.into());
+                        e.call_id = Some(call.into());
+                        e.status = Some("in_progress".into());
+                        e.detail = part.get("input").map(printable);
+                        if call.is_empty() {
+                            issue(&mut self.parsed, "工具调用身份缺失，管理操作已禁用");
+                        }
+                        self.pending.insert(call.into());
+                        self.calls.insert(call.into(), self.parsed.events.len());
+                        if name == "AskUserQuestion" && !call.is_empty() {
+                            if let (Some(turn), Some(ts), Some(qs)) = (
+                                &self.turn,
+                                millis(field(record, "timestamp")),
+                                part.pointer("/input/questions").and_then(Value::as_array),
+                            ) {
+                                let body = qs
+                                    .iter()
+                                    .filter_map(|q| {
+                                        let question = field(q, "question");
+                                        if question.is_empty() {
+                                            return None;
+                                        }
+                                        let options = q
+                                            .get("options")
+                                            .and_then(Value::as_array)
+                                            .map(|opts| {
+                                                opts.iter()
+                                                    .filter_map(|o| {
+                                                        o.as_str().or_else(|| {
+                                                            o.get("label").and_then(Value::as_str)
+                                                        })
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .join(" / ")
+                                            })
+                                            .unwrap_or_default();
+                                        Some(format!("{question}\n{options}"))
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n");
+                                if !body.trim().is_empty() {
+                                    self.questions.insert(
+                                        call.into(),
+                                        crate::native_probe::NativeTurnEvent {
+                                            position: position as u64 + 1,
+                                            turn_id: format!("{turn}:{call}"),
+                                            kind: "reply_needed".into(),
+                                            body: bounded(&body),
+                                            timestamp_ms: ts,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        if name == "ExitPlanMode" {
+                            if let Some(plan) = part
+                                .pointer("/input/plan")
+                                .and_then(Value::as_str)
+                                .filter(|p| !p.trim().is_empty())
+                            {
+                                e.kind = "plan".into();
+                                e.text = Some(bounded(plan));
+                                e.detail = None;
+                            }
+                        }
+                    }
+                    "tool_result" => {
+                        let call = field(part, "tool_use_id");
+                        self.pending.remove(call);
+                        self.questions.remove(call);
+                        let result = part
+                            .get("content")
+                            .map(|c| {
+                                if c.is_array() {
+                                    content_text(c)
+                                } else {
+                                    printable(c)
+                                }
+                            })
+                            .unwrap_or_default();
+                        let status = if part.get("is_error").and_then(Value::as_bool) == Some(true)
+                        {
+                            "failed"
+                        } else {
+                            "completed"
+                        };
+                        if let Some(index) = self.calls.get(call) {
+                            let prior = Arc::make_mut(&mut self.parsed.events[*index]);
+                            prior.status = Some(status.into());
+                            prior.result = Some(result);
+                            continue;
+                        }
+                        e.kind = "tool_result".into();
+                        e.text = Some("工具结果".into());
+                        e.call_id = Some(call.into());
+                        e.status = Some(status.into());
+                        e.result = Some(result);
+                    }
+                    "text" | "image" | "document" if kind == "user" => continue,
+                    _ => {
+                        e.kind = "unknown".into();
+                        e.text = Some("未知内容块".into());
+                        e.detail = Some(printable(part));
+                        warning(&mut self.parsed, "存在未知内容块，已保留为警告");
+                    }
+                }
+                self.parsed.events.push(Arc::new(e));
+            }
+            if kind == "assistant" {
+                let text = text_content_only(content);
+                if !text.trim().is_empty() {
+                    self.last_assistant_text = Some(text);
+                }
+                self.last_stop_reason = field(message, "stop_reason").into();
+                if !terminal_stop_reason(&self.last_stop_reason) || !self.pending.is_empty() {
+                    self.parsed.turn_open = self.turn.is_some();
+                    self.parsed.native_events.clear();
+                }
+            }
+            let assistant_terminal = terminal_stop_reason(field(message, "stop_reason"));
+            if kind == "assistant"
+                && assistant_terminal
+                && self.pending.is_empty()
+                && self.questions.is_empty()
+            {
+                finish(
+                    &mut self.parsed,
+                    &self.turn,
+                    position,
+                    record,
+                    "completion",
+                    self.last_assistant_text.clone().unwrap_or_default(),
+                );
+            }
+        }
+    }
+    fn read_result(&mut self, record: &Value, position: usize) {
+        for _ in std::iter::once(()) {
+            let subtype = field(record, "subtype");
+            let is_failure = record.get("is_error").and_then(Value::as_bool) == Some(true)
+                && matches!(
+                    subtype,
+                    "error_during_execution"
+                        | "error_max_turns"
+                        | "error_max_budget_usd"
+                        | "error_max_structured_output_retries"
+                );
+            let stop_reason = record.get("stop_reason").and_then(Value::as_str);
+            let explicit_terminal = stop_reason.is_some_and(terminal_stop_reason);
+            let inferred_terminal = stop_reason.is_none()
+                && (self.last_stop_reason.is_empty()
+                    || terminal_stop_reason(&self.last_stop_reason))
+                && record.get("is_error").and_then(Value::as_bool) == Some(false);
+            if subtype == "success"
+                && stop_reason.is_some_and(|reason| !terminal_stop_reason(reason))
+            {
+                self.parsed
+                    .native_events
+                    .retain(|event| event.kind != "completion");
+                self.parsed.turn_open = self.turn.is_some();
+            }
+            if subtype == "success"
+                && record.get("is_error").and_then(Value::as_bool) != Some(true)
+                && self.pending.is_empty()
+                && self.questions.is_empty()
+                && (explicit_terminal || inferred_terminal)
+            {
+                let result = bounded(field(record, "result"));
+                finish(
+                    &mut self.parsed,
+                    &self.turn,
+                    position,
+                    record,
+                    "completion",
+                    if result.trim().is_empty() {
+                        self.last_assistant_text.clone().unwrap_or_default()
+                    } else {
+                        result
+                    },
+                );
+            } else if is_failure {
+                self.questions.clear();
+                self.pending.clear();
+                finish(
+                    &mut self.parsed,
+                    &self.turn,
+                    position,
+                    record,
+                    "failure",
+                    record
+                        .get("errors")
+                        .map(printable)
+                        .unwrap_or_else(|| subtype.into()),
+                );
+            }
+        }
+    }
+    fn read_system(&mut self, record: &Value, key: String) {
+        for key in std::iter::once(key) {
+            let subtype = field(record, "subtype");
+            if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
+                self.parsed.turn_open = false;
+                self.parsed.native_events.clear();
+                self.turn = None;
+                self.last_stop_reason.clear();
+                self.last_assistant_text = None;
+                self.questions.clear();
+                for call in &self.pending {
+                    if let Some(index) = self.calls.get(call) {
+                        Arc::make_mut(&mut self.parsed.events[*index]).status =
+                            Some("cancelled".into());
+                    }
+                }
+                self.pending.clear();
+            }
+            if subtype == "init" {
+                // Identity/cwd/version were extracted above. Startup
+                // configuration is metadata, not a conversation activity.
+                continue;
+            }
+            if subtype == "compact_boundary" {
+                self.parsed.events.push(Arc::new(event(
+                    key,
+                    record,
+                    "compaction",
+                    Some(content_text(record.get("content").unwrap_or(&Value::Null))),
+                    &self.turn,
+                )));
+            } else {
+                let known = matches!(
+                    subtype,
+                    "init"
+                        | "turn_duration"
+                        | "stop_hook_summary"
+                        | "interrupted"
+                        | "cancelled"
+                        | "canceled"
+                        | "api_error"
+                );
+                let mut e = event(
+                    key,
+                    record,
+                    if known { "system" } else { "unknown" },
+                    Some(format!("系统活动：{subtype}")),
+                    &self.turn,
+                );
+                e.detail = Some(printable(record));
+                self.parsed.events.push(Arc::new(e));
+                if !known {
+                    warning(&mut self.parsed, "存在新格式系统活动，管理操作已禁用");
+                }
+            }
+        }
+    }
+    fn read_permission_request(&mut self, record: &Value, position: usize, key: String) {
+        for key in std::iter::once(key) {
+            let call = field(record, "tool_use_id");
+            let request = field(record, "request_id");
+            let mut e = event(
+                key,
+                record,
+                "permission_request",
+                Some("权限请求".into()),
+                &self.turn,
+            );
+            e.detail = Some(printable(record));
+            self.parsed.events.push(Arc::new(e));
+            // Only a pending primary call with explicit transcript identity
+            // proves this is our permission request, not a remote subagent's.
+            if !request.is_empty()
+                && self.pending.contains(call)
+                && field(record, "agent_id").is_empty()
+                && alias_field(record, &["sessionId", "session_id"]) == self.parsed.id
+            {
+                if let (Some(turn), Some(ts)) = (&self.turn, millis(field(record, "timestamp"))) {
+                    let body = format!(
+                        "{}\n{}",
+                        field(record, "description"),
+                        field(record, "tool_name")
+                    );
+                    if !body.trim().is_empty() {
+                        self.permission_calls.insert(request.into(), call.into());
+                        self.questions.entry(call.into()).or_insert(
+                            crate::native_probe::NativeTurnEvent {
+                                position: position as u64 + 1,
+                                turn_id: format!("{turn}:permission:{request}"),
+                                kind: "reply_needed".into(),
+                                body: bounded(&body),
+                                timestamp_ms: ts,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    fn read_tool_reference(&mut self, record: &Value, key: String, kind: &str) {
+        for key in std::iter::once(key) {
+            let name = if field(record, "tool_name").is_empty() {
+                field(record, "name")
+            } else {
+                field(record, "tool_name")
+            };
+            let mut e = event(
+                key,
+                record,
+                "tool_reference",
+                Some(if name.is_empty() {
+                    if kind == "tool_search_tool_result" {
+                        "工具引用结果".into()
+                    } else {
+                        "工具引用".into()
+                    }
+                } else {
+                    name.into()
+                }),
+                &self.turn,
+            );
+            e.role = (!name.is_empty()).then(|| name.into());
+            e.detail = Some(printable(record));
+            self.parsed.events.push(Arc::new(e));
+            let nested_reference = ["content", "tool_references"].iter().any(|key| {
+                record
+                    .get(*key)
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            field(part, "type") == "tool_reference"
+                                && !alias_field(part, &["tool_name", "name"]).is_empty()
+                        })
+                    })
+            });
+            if name.is_empty() && !nested_reference {
+                warning(&mut self.parsed, "工具引用缺少工具名称，已保留为警告");
+            }
+        }
+    }
+    fn read_auxiliary(&mut self, record: &Value, key: String, kind: &str) {
+        for key in std::iter::once(key) {
+            if kind == "attachment"
+                && record.pointer("/attachment/type").and_then(Value::as_str)
+                    == Some("plan_file_reference")
+            {
+                if let Some(plan) = record
+                    .pointer("/attachment/planContent")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    self.parsed.events.push(Arc::new(event(
+                        key,
+                        record,
+                        "plan",
+                        Some(bounded(plan)),
+                        &self.turn,
+                    )));
+                    continue;
+                }
+            }
+            let mut e = event(
+                key,
+                record,
+                kind,
+                Some(
+                    match kind {
+                        "file-history-snapshot" | "file-history-delta" => "文件历史快照",
+                        "queue-operation" => "队列活动",
+                        "atis-latch" => "会话设置",
+                        "cost-state" => "用量记录",
+                        _ => "附件",
+                    }
+                    .into(),
+                ),
+                &self.turn,
+            );
+            e.detail = Some(printable(record));
+            self.parsed.events.push(Arc::new(e));
+        }
     }
     fn snapshot(&self, path: &Path, issues: Vec<String>, record_count: u64) -> Parsed {
         let mut parsed = self.parsed.clone();
