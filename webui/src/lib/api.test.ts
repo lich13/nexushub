@@ -1819,7 +1819,7 @@ describe("archive delete API compatibility", () => {
     })).toBe(true);
   });
 
-  test("conversation message helper hides plan mode action and subagent context blocks", async () => {
+  test("conversation message helper retains complete user context and hides assistant internal context", async () => {
     const app = await import("../test/domain");
 
     expect(app.shouldRenderConversationMessage({
@@ -1833,14 +1833,21 @@ describe("archive delete API compatibility", () => {
       id: "subagent-1",
       role: "user",
       kind: "message",
-      text: "<subagent_notification>{\"agent_path\":\"/tmp/child\"}</subagent_notification>",
+      text: "<subagent_notification>{\"agent_id\":\"child-fixture\"}</subagent_notification>",
       questions: []
-    })).toBe(false);
+    })).toBe(true);
     expect(app.shouldRenderConversationMessage({
       id: "subagent-2",
       role: "user",
       kind: "message",
-      text: "<subagent_context>\n- /tmp/child: worker\n</subagent_context>",
+      text: "<subagent_context>\n- child-fixture: worker\n</subagent_context>",
+      questions: []
+    })).toBe(true);
+    expect(app.shouldRenderConversationMessage({
+      id: "assistant-subagent-context",
+      role: "assistant",
+      kind: "message",
+      text: "<subagent_context>\nInternal assistant metadata fixture.\n</subagent_context>",
       questions: []
     })).toBe(false);
   });

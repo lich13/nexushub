@@ -5,6 +5,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod grok;
+pub mod history_navigation;
 pub mod jobs;
 pub mod jsonl_cache;
 pub mod local;

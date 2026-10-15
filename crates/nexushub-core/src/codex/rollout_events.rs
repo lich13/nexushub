@@ -31,6 +31,7 @@ struct DetailState {
     blocks: Vec<Arc<MessageBlock>>,
     compacted: Vec<Arc<MessageBlock>>,
     journal: crate::jsonl_cache::HistoryJournal,
+    timeline: crate::history_navigation::Timeline,
 }
 
 pub fn thread_detail_from_summary(summary: ThreadSummary) -> Result<ThreadDetail> {
@@ -48,6 +49,8 @@ pub fn thread_detail_page_from_summary(
         crate::jsonl_cache::JsonlCache::new(384 * 1024 * 1024);
     let Some(path) = summary.rollout_path.clone() else {
         return Ok(ThreadDetail {
+            timeline: Some(Default::default()),
+            after_cursor: None,
             history_subagent_blocks: Vec::new(),
             summary,
             subagents: None,
@@ -119,10 +122,32 @@ pub fn thread_detail_page_from_summary(
                     .iter()
                     .any(|block| !current_ids.contains(&block.id));
                 state.journal.record_changes(&info, changed, removed);
+                state.timeline = crate::history_navigation::update_timeline(
+                    &state.timeline,
+                    blocks
+                        .iter()
+                        .filter(|block| block.role == "user")
+                        .map(|block| {
+                            (
+                                block.id.as_str(),
+                                block.user_message.as_ref(),
+                                block.text.as_deref(),
+                                previous
+                                    .get(&block.id)
+                                    .is_some_and(|old| Arc::ptr_eq(old, block)),
+                            )
+                        }),
+                );
                 state.compacted = compacted;
                 state.blocks = blocks;
             }
-            let source = if compact {
+            let seeking = before.is_some_and(|cursor| {
+                cursor.starts_with("j:")
+                    || cursor.starts_with("n:")
+                    || cursor.starts_with("w:")
+                    || cursor.starts_with("p:")
+            });
+            let source = if compact && !seeking {
                 &state.compacted
             } else {
                 &state.blocks
@@ -132,6 +157,12 @@ pub fn thread_detail_page_from_summary(
             let start = limit
                 .filter(|n| *n > 0)
                 .map_or(0, |n| end.saturating_sub(n));
+            let (start, end) = crate::history_navigation::seek_window(
+                source.iter().map(|block| block.id.as_str()),
+                before,
+                limit.unwrap_or(120).clamp(1, 500),
+            )?
+            .unwrap_or((start, end));
             let mut blocks: Vec<_> = source[start..end]
                 .iter()
                 .map(|block| (**block).clone())
@@ -143,6 +174,14 @@ pub fn thread_detail_page_from_summary(
                 message.refresh_files(summary.cwd.as_deref());
             }
             Ok(ThreadDetail {
+                timeline: before.is_none().then(|| state.timeline.clone()),
+                after_cursor: crate::history_navigation::after_cursor(
+                    end,
+                    total_blocks,
+                    source
+                        .get(end.saturating_sub(1))
+                        .map(|block| block.id.as_str()),
+                ),
                 history_subagent_blocks: if limit.is_some() {
                     source
                         .iter()
@@ -164,7 +203,13 @@ pub fn thread_detail_page_from_summary(
                 raw_event_count: state.raw_event_count,
                 total_blocks,
                 has_more_blocks: start > 0,
-                before_cursor: (start > 0).then(|| format!("b:{start}")),
+                before_cursor: (start > 0).then(|| {
+                    if seeking {
+                        format!("p:{}", source[start].id)
+                    } else {
+                        format!("b:{start}")
+                    }
+                }),
                 history: Some(state.journal.metadata(since)),
             })
         },
@@ -184,6 +229,7 @@ pub fn thread_detail_page_from_summary(
                 .sum::<u64>()
                 + state.blocks.iter().map(|block| weight(block)).sum::<u64>()
                 + state.blocks.len() as u64 * 64
+                + crate::history_navigation::weight(&state.timeline)
         },
     )
 }
@@ -231,10 +277,35 @@ pub fn window_thread_detail(
         .unwrap_or(total)
         .min(total);
     let start = end.saturating_sub(limit);
+    let (start, end) = crate::history_navigation::seek_window(
+        detail.blocks.iter().map(|block| block.id.as_str()),
+        before,
+        limit,
+    )
+    .unwrap_or(Some((0, 0)))
+    .unwrap_or((start, end));
+    detail.after_cursor = crate::history_navigation::after_cursor(
+        end,
+        total,
+        detail
+            .blocks
+            .get(end.saturating_sub(1))
+            .map(|block| block.id.as_str()),
+    );
     detail.blocks = detail.blocks[start..end].to_vec();
     detail.messages.clear();
     detail.has_more_blocks = start > 0;
-    detail.before_cursor = (start > 0).then(|| format!("b:{start}"));
+    detail.before_cursor = (start > 0).then(|| {
+        if before.is_some_and(|cursor| {
+            ["j:", "n:", "w:", "p:"]
+                .iter()
+                .any(|prefix| cursor.starts_with(prefix))
+        }) {
+            format!("p:{}", detail.blocks[0].id)
+        } else {
+            format!("b:{start}")
+        }
+    });
     detail
 }
 
@@ -1408,6 +1479,12 @@ pub(super) fn event_call_id(value: &Value) -> Option<String> {
 
 pub(crate) fn parse_message_event(value: &Value) -> Option<CodexMessage> {
     let mut message = parse_raw_message_event(value)?;
+    if message.role == "user" {
+        message.text = crate::user_message::summary_text(&message.text);
+        if message.text.trim().is_empty() {
+            return None;
+        }
+    }
     message.text = trim_text(&message.text, 4000);
     Some(message)
 }
@@ -1456,7 +1533,16 @@ pub(super) fn parse_raw_message_event(value: &Value) -> Option<CodexMessage> {
     if payload_type == "message" && !matches!(role, "user" | "assistant") {
         return None;
     }
-    if is_internal_display_kind(payload_type) || is_internal_context_message_text(&text) {
+    if is_internal_display_kind(payload_type)
+        || if role == "user" {
+            is_hidden_user_action_text(&text)
+                || crate::user_message::presentation_text(&text)
+                    .trim()
+                    .is_empty()
+        } else {
+            is_internal_context_message_text(&text)
+        }
+    {
         return None;
     }
     Some(CodexMessage {
@@ -2022,16 +2108,19 @@ fn parse_message_block(value: &Value, raw_index: usize) -> Option<MessageBlock> 
         .or_else(|| structured_text(payload))
         .or_else(|| structured_text(value))
         .or_else(|| parse_message_event(value).map(|message| message.text));
-    if text
-        .as_deref()
-        .is_some_and(is_internal_context_message_text)
-    {
+    if text.as_deref().is_some_and(|text| {
+        if role == "user" {
+            is_hidden_user_action_text(text)
+        } else {
+            is_internal_context_message_text(text)
+        }
+    }) {
         return None;
     }
     if text.as_deref().unwrap_or("").trim().is_empty()
-        && user_message
-            .as_ref()
-            .is_none_or(|message| message.attachments.is_empty())
+        && user_message.as_ref().is_none_or(|message| {
+            message.attachments.is_empty() && message.context_blocks.is_empty()
+        })
         && !is_action_display_kind(payload_type)
     {
         return None;
@@ -2653,6 +2742,17 @@ fn is_internal_context_message_text(text: &str) -> bool {
     .any(|prefix| lower.starts_with(prefix))
 }
 
+fn is_hidden_user_action_text(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    [
+        "<turn_aborted>",
+        "<user_shell_command>",
+        "========= memory_summary begins =========",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix))
+}
+
 fn contains_proposed_plan(text: &str) -> bool {
     text.contains("<proposed_plan>")
 }
@@ -2676,7 +2776,7 @@ fn rollout_metadata_title(payload: &Value) -> Option<String> {
 }
 
 pub(crate) fn first_user_message_title(text: &str) -> Option<String> {
-    let value = trim_text(text, 80);
+    let value = trim_text(&crate::user_message::summary_text(text), 80);
     is_usable_thread_title(&value).then_some(value)
 }
 

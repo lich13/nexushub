@@ -245,6 +245,19 @@ pub fn app_server_detail_from_read(value: &Value) -> Option<ThreadDetail> {
         if !events.is_empty() {
             detail.raw_event_count = events.len();
             detail.blocks = codex::message_blocks_from_events(events.iter());
+            detail.timeline = Some(crate::history_navigation::timeline(
+                detail
+                    .blocks
+                    .iter()
+                    .filter(|block| block.role == "user")
+                    .map(|block| {
+                        (
+                            block.id.as_str(),
+                            block.user_message.as_ref(),
+                            block.text.as_deref(),
+                        )
+                    }),
+            ));
             detail.total_blocks = detail.blocks.len();
             detail.has_more_blocks = false;
             detail.before_cursor = None;

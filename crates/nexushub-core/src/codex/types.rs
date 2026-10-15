@@ -37,6 +37,10 @@ pub struct ThreadSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::history_navigation::Timeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_cursor: Option<String>,
     #[serde(skip)]
     pub history_subagent_blocks: Vec<MessageBlock>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

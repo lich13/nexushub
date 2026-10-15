@@ -21,13 +21,13 @@ export function literalMarkdownRanges(text: string): Range[] {
 }
 
 // Keep source slices, rather than serializing Markdown and changing its formatting.
-export function memoryMetadataRanges(text: string): Range[] {
+export function memoryMetadataRanges(text: string, protectedRanges?: Range[]): Range[] {
   if (!/oai-mem-citation|citation_entries|rollout_ids|memory_citation/i.test(text)) return [];
   try {
     const value = JSON.parse(text);
     if (value && typeof value === "object" && Object.keys(value).length === 1 && Object.prototype.hasOwnProperty.call(value, "memory_citation")) return [{ start: 0, end: text.length }];
   } catch { /* Ordinary Markdown is not a JSON metadata envelope. */ }
-  const code = codeRanges(text);
+  const code = protectedRanges ?? codeRanges(text);
   const protectedAt = (offset: number) => code.some(range => range.start <= offset && offset < range.end);
   const ranges: Range[] = [];
   const stack: Array<{ name: string; start: number }> = [];
@@ -74,9 +74,9 @@ export function memoryMetadataRanges(text: string): Range[] {
   return ranges.sort((a, b) => a.start - b.start || b.end - a.end);
 }
 
-function pageMetadataRanges(text: string): Range[] {
+function pageMetadataRanges(text: string, protectedRanges?: Range[]): Range[] {
   if (!text.includes("external_codex_apps_open_page")) return [];
-  const literal = literalMarkdownRanges(text);
+  const literal = protectedRanges ?? literalMarkdownRanges(text);
   const ranges: Range[] = [];
   const envelopes = /<external_codex_apps_open_page>([\s\S]*?)<\/external_codex_apps_open_page>/g;
   for (const match of text.matchAll(envelopes)) {
@@ -94,8 +94,8 @@ function pageMetadataRanges(text: string): Range[] {
   return ranges;
 }
 
-export function visibleMarkdown(text: string): string {
-  const ranges = [...memoryMetadataRanges(text), ...pageMetadataRanges(text)]
+export function visibleMarkdown(text: string, protectedRanges?: Range[]): string {
+  const ranges = [...memoryMetadataRanges(text, protectedRanges), ...pageMetadataRanges(text, protectedRanges)]
     .sort((a, b) => a.start - b.start || b.end - a.end);
   if (!ranges.length) return text;
   let result = "";

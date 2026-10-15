@@ -31,7 +31,7 @@ describe("native user question replies", () => {
     envelope([reply]).split("\n").map(line => `> ${line}`).join("\n"),
     `Example: ${envelope([reply])}`
   ])("leaves malformed or literal envelope unchanged: %s", source => {
-    expect(userMessageSegments(source)).toEqual([{ kind: "text", id: "text:text:0", text: source }]);
+    expect(userMessageSegments(source)).toEqual([{ kind: "text", id: "text:0", text: source }]);
   });
 
   test("cleans memory metadata inside parsed values without corrupting JSON", () => {
@@ -42,57 +42,25 @@ describe("native user question replies", () => {
   test("accepts CRLF wrappers and does not discard an invalid entry from a batch", () => {
     expect(userMessageSegments(envelope([reply]).replaceAll("\n", "\r\n"))[0]).toMatchObject({ kind: "reply", answer: reply.answer });
     const source = envelope([reply, { ...reply, answer: null }]);
-    expect(userMessageSegments(source)).toEqual([{ kind: "text", id: "text:text:0", text: source }]);
+    expect(userMessageSegments(source)).toEqual([{ kind: "text", id: "text:0", text: source }]);
   });
 });
 
-describe("user instruction sections", () => {
+describe("ordinary user body and legacy context boundary", () => {
   const instructions = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nThese instructions replace previous instructions.\n# Rules\n## Checks\nKeep tests.\n</INSTRUCTIONS>";
-  const adjacentInstructions = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Rules\nKeep checks.\n# Notes\n保留格式🙂\n</INSTRUCTIONS>";
-  test("keeps all native headings inside one disclosure and ordinary tail outside", () => {
-    const result = userMessageSegments(instructions + "\n\nActual request");
-    expect(result.map(s => s.kind)).toEqual(["instructions", "text"]);
-    expect(result[0]).toMatchObject({ text: instructions, lines: 8, bytes: new TextEncoder().encode(instructions).length });
-    expect(result[1]).toMatchObject({ text: "\n\nActual request" });
-  });
-  test.each([
-    "<environment_context>fixture</environment_context>\n\nActual request",
-    "Actual request on the closing line"
-  ])("keeps a same-line tail outside the complete instruction view model: %s", tail => {
-    const result = userMessageSegments(adjacentInstructions + tail);
-    expect(result.map(segment => segment.kind)).toEqual(["instructions", "text"]);
-    expect(result[0]).toMatchObject({ text: adjacentInstructions, lines: 8, bytes: 102 });
-    expect(result[1]).toMatchObject({ text: tail });
-    expect(userMessageSegments(adjacentInstructions + tail + "\nContinue.")[0].id).toBe(result[0].id);
-  });
-  test("preserves multiple native envelopes and a reply adjacent to an instruction close", () => {
-    const tail = "<environment_context>fixture</environment_context>\n\nVisible request";
-    const source = `${adjacentInstructions}${envelope([reply])}\n\n${instructions}${tail}`;
+  test("projects legacy context before forming ordinary body segments", () => {
+    const source = instructions + "\n\nActual request";
     const result = userMessageSegments(source);
-    expect(result.map(segment => segment.kind)).toEqual(["instructions", "reply", "instructions", "text"]);
-    expect(result[0]).toMatchObject({ text: adjacentInstructions, lines: 8, bytes: 102 });
-    expect(result[1]).toMatchObject({ question: reply.question, answer: reply.answer });
-    expect(result[2]).toMatchObject({ text: instructions, lines: 8 });
-    expect(result[3]).toMatchObject({ text: tail });
-    expect(new Set(result.map(segment => segment.id)).size).toBe(4);
+    expect(result.map(segment => segment.kind)).toEqual(["text"]);
+    expect(result[0].text).not.toContain("AGENTS.md");
+    expect(result[0].text.trim()).toBe("Actual request");
   });
-  test("keeps instruction samples literal and preserves adjacent question order", () => {
-    const result = userMessageSegments(`${instructions}\n\n${envelope([reply])}\n\n${instructions}`);
-    expect(result.map(s => s.kind)).toEqual(["instructions", "reply", "instructions"]);
-    expect(new Set(result.map(s => s.id)).size).toBe(3);
-    for (const source of [`\`\`\`md\n${instructions}\n\`\`\``, instructions.split("\n").map(line => `> ${line}`).join("\n"), "Please read AGENTS.md."])
-      expect(userMessageSegments(source).every(s => s.kind === "text")).toBe(true);
-  });
-  test.each([
-    ["fenced", "```xml\n</INSTRUCTIONS>\n```"],
-    ["inline", "`example\n</INSTRUCTIONS>\nend`"],
-    ["quoted", "> </INSTRUCTIONS>"]
-  ])("ignores a %s closing-tag example before a same-line tail", (_name, example) => {
-    const wrapped = `# AGENTS.md instructions\n<INSTRUCTIONS>\n\n${example}\n\n# More rules\nPreserve\n</INSTRUCTIONS>`;
-    const tail = "<environment_context>fixture</environment_context>\n\nRequest";
-    const result = userMessageSegments(wrapped + tail);
-    expect(result.map(s => s.kind)).toEqual(["instructions", "text"]);
-    expect(result[0]).toMatchObject({ text: wrapped });
-    expect(result[1]).toMatchObject({ text: tail });
+  test("keeps question replies and visible body around extracted context in order", () => {
+    const source = `Before\n\n${envelope([reply])}\n\n${instructions}\n\nAfter`;
+    const result = userMessageSegments(source);
+    expect(result.map(segment => segment.kind)).toEqual(["text", "reply", "text"]);
+    expect(result[0].text.trim()).toBe("Before");
+    expect(result[1]).toMatchObject({ kind: "reply", question: reply.question, answer: reply.answer });
+    expect(result[2].text.trim()).toBe("After");
   });
 });

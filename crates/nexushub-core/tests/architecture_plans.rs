@@ -92,6 +92,8 @@ fn core_thread_read_model_merges_running_jobs_without_autosubmit_effects() {
 fn core_thread_detail_read_model_returns_updated_detail_without_autosubmit_effect() {
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
     let detail = ThreadDetail {
+        timeline: None,
+        after_cursor: None,
         history_subagent_blocks: Vec::new(),
         history: None,
         subagents: None,

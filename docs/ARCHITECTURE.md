@@ -38,6 +38,8 @@ The optional `deletionEligibility` summary field separates preview permission fr
 
 Codex retains completed tool blocks and positions paired results at the native call position. Existing detail/block pagination bounds responses; chat/action compaction preserves separators around tools. WebUI normalizes all providers into adjacent activity groups with stable session/call identities. Completion closes default disclosures, while explicit choices survive polling and remounts. Legacy history summaries remain readable. The timeline rail is outside the document flow and contains only recognized user-message entries; tools, plans, assistant replies and activity groups keep stable anchors for search and focus without creating rail entries. Activity aliases still locate a command inside a closed group without changing its disclosure state. No native file format or database migration is added.
 
+The shared history_navigation index covers every recognized user message before body pagination or compaction, omits pure automatic context/metadata and preserves distinct native identities even when text repeats. Cached indices contribute to the memory budget and reuse unchanged entries. Latest detail responses may include timeline; older windows omit it. Existing before parameters accept stable j:/p:/n:/w: cursors for jump, older, newer and changed-window refresh, while legacy cursors remain valid. Codex jump windows use uncompressed blocks; Claude and Grok preserve native event order. useTimelineWindow reads the selected bounded window without fetching the intervening gap, reuses the latest history change journal and rejects late responses across source, thread or machine changes. Old services retain sequential history loading.
+
 ## Visible Markdown
 
 `visibleMarkdown.ts` removes structured memory metadata by source range before rendering and export. CommonMark code positions protect literal examples; a rendering guard also removes metadata elements. Copy buttons, thread previews and Plan filenames/downloads use the same cleaner. Instruction-file recognition feeds native disclosures and execution groups. A bounded in-memory map scoped by provider, session and activity preserves explicit disclosure choices; no database or native session file stores this UI state.
@@ -46,7 +48,7 @@ Codex retains completed tool blocks and positions paired results at the native c
 
 Provider readers retain a presentation-only user message with a stable native identity, literal request text and attachment descriptors. The Codex reader pairs native image parts with attachment markers; Grok groups chunks within a user-message boundary; Claude groups native text/image parts in the same message. Native files are never rewritten.
 
-The shared frontend user-message view model splits confirmed native question replies and AGENTS.md sections from ordinary literal text. Native question IDs remain internal keys; answer-copy and question disclosure operate independently. All three renderers supply the original event/block identity for legacy messages without a user-message DTO. Instruction and question disclosures reuse the bounded session-scoped choice store. This is a presentation change without a new backend contract or migration.
+The shared Rust user-message projection separates request text, attachments and optional contextBlocks with fixed kinds instructions/environment/runtime/files. It recognizes only complete allowlisted envelopes outside code and quotations, including both native attachment request headings. The frontend uses the same conservative projection for old-service raw messages. Embedded image identity takes precedence, duplicate native attachments merge, and an expired file never hides the request. Native question replies, user shell events and interruptions keep their dedicated interpretation. The single lazy context disclosure reuses machine/session/message choices; protocol 2 gains optional fields without a new RPC, path permission or database table. Context text contributes to cache weight. Search uses actual text, question/answer content, attachment names and instruction blocks; automatic wrappers never duplicate search hits.
 
 `sessions.attachmentRead` is an authenticated shared read through `NexusHubUseCases`, with thin HTTP/Tauri adapters. It accepts provider, session key, message ID and attachment ID, re-resolves the source and checks file identity. PNG/JPEG/WebP/GIF previews are limited to 20 MiB each. Images are loaded near the viewport; the frontend cache is bounded and isolated by machine and cleared when the active connection changes. Remote-only references are not fetched. Polling contains descriptors, not image data.
 
@@ -166,7 +168,7 @@ React 使用机器、主线程和子线程身份隔离查询、分页及折叠�
 
 ## 增量读取与界面刷新
 
-`jsonl_cache` 按文件身份、大小与时间戳复用不可变结果，追加前核对已消费前后锚点。每个来源独立串行，解析和分页不持有全局缓存锁；缓存同时限制 64 个来源和各读取模型的内存。完整记录经流式 reducer 建立快照，半写入尾行留待下一次读取。Codex 详情按原生 ID 直接定位；Claude 的定位缓存只保存服务端发现的身份并重新检查来源；Grok 继续保留原有有界尾部读取范围。
+`jsonl_cache` 按文件身份、大小与时间戳复用不可变结果，追加前核对已消费前后锚点。每个来源独立串行，解析和分页不持有全局缓存锁；缓存同时限制 64 个来源和各读取模型的内存。完整记录经流式 reducer 建立快照，半写入尾行留待下一次读取。Codex 详情按原生 ID 直接定位；Claude 的定位缓存只保存服务端发现的身份并重新检查来源；Grok 冷读流式消费完整会话，避免尾部截取丢失最早记录，随后复用有界增量缓存。
 
 Claude 列表另用最多 2,000 条、8MiB 的轻量摘要缓存，避免多会话列表轮询挤出正文并触发重复解析。macOS 与 Linux 的派生摘要沿用正文缓存的 dev／ino、大小、mtime／ctime 校验，避免重复打开与哈希；其他缓存保留原有边缘校验。Grok 详情和分页共享不可变事件；带附件的响应按需复制并重新核验文件，旧响应不会被后续原生追加改写。
 

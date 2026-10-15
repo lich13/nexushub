@@ -23,6 +23,9 @@ import { RenameableSession } from "../common/RenameableSession";
 import { groupGrokCommandEvents } from "../../lib/domain/executionGroups";
 import type { ExecutionRenderItem } from "../../lib/domain/executionGroups";
 import { TimelineRail } from "../common/TimelineRail";
+import { grokTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
+import { getGrokSession } from "../../lib/api/grok";
+import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
 import { userTimelineEntries } from "../../lib/domain/timelineViewModel";
 import { locateTimelineTarget, useSearchWorkspace } from "../common/SessionSearch";
 
@@ -42,14 +45,22 @@ export function GrokWorkspace({}: { }) {
   const selected = sessions.data?.find((item) => item.id === selectedId) ?? sessions.data?.[0];
   const detailVisible = !narrow || Boolean(selectedId);
   const detail = useGrokDetail(detailVisible ? selected?.id : undefined);
-  const events = useMemo(() => {
+  const loadedEvents = useMemo(() => {
     const rows = new Map<string, GrokHistoryEvent>();
     for (const [pageIndex, page] of [...(detail.data?.pages ?? [])].reverse().entries()) for (const [index, event] of page.events.entries()) rows.set(event.id ?? `${pageIndex}:${index}`, event);
     return [...rows.values()];
   }, [detail.data]);
+  const navigation = useTimelineWindow({
+    scope: `${machineScope()}:grok:${selected?.id ?? ""}`, streamRef: stream, history: detail.data?.pages[0]?.history, latestId: loadedEvents[loadedEvents.length - 1]?.id,
+    id: (event: GrokHistoryEvent) => event.id ?? "",
+    read: async cursor => grokTimelinePage(await getGrokSession(selected!.id, { limit: 120, before: cursor })),
+    onNavigate: () => { history.follow.current = false; setPendingSearch(null); },
+    onLocated: follow => { history.follow.current = Boolean(follow); history.capture(); }
+  });
+  const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupGrokCommandEvents(events), [events]);
-  const timelineEntries = useMemo(() => userTimelineEntries("grok", groupedEvents.flatMap(entry => entry.kind === "item"
-    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [groupedEvents]);
+  const timelineEntries = useMemo(() => detail.data?.pages[0]?.timeline ?? userTimelineEntries("grok", groupedEvents.flatMap(entry => entry.kind === "item"
+    ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [detail.data, groupedEvents]);
   const actions = useGrokActions();
   const error = actions.rename.error ?? actions.preview.error ?? actions.remove.error ?? (detail.isFetchNextPageError ? null : detail.error) ?? sessions.error;
   const selectSearchResult = useCallback((result: SessionSearchResult) => {
@@ -78,10 +89,12 @@ export function GrokWorkspace({}: { }) {
   }, []);
   const oldestPage = detail.data?.pages[detail.data.pages.length - 1];
   const history = useHistoryScroll({
-    scopeKey: `${machineScope()}:grok:${selected?.id ?? ""}`, streamRef: stream,
-    cursor: oldestPage?.beforeCursor, hasMore: Boolean(detail.hasNextPage), ready: detailVisible && Boolean(detail.data),
-    busy: detail.isFetching, searchActive: Boolean(pendingSearch),
-    loadPage: async () => {
+    scopeKey: `${machineScope()}:grok:${selected?.id ?? ""}:${navigation.generation}`, streamRef: stream,
+    cursor: navigation.active ? navigation.before : oldestPage?.beforeCursor, hasMore: navigation.active ? navigation.hasMore : Boolean(detail.hasNextPage), ready: detailVisible && Boolean(detail.data),
+    initialPosition: navigation.active ? { top: 0, follow: false } : undefined,
+    busy: navigation.busy || (!navigation.active && detail.isFetching), searchActive: Boolean(pendingSearch),
+    loadPage: async (cursor, isCurrent) => {
+      if (navigation.active) return navigation.loadOlder(cursor, isCurrent);
       const result = await detail.fetchNextPage({ cancelRefetch: false });
       if (result.isError) throw result.error;
       const page = result.data?.pages[result.data.pages.length - 1];
@@ -91,11 +104,12 @@ export function GrokWorkspace({}: { }) {
   });
   useEffect(() => {
     if (!pendingSearch || pendingSearch.sessionKey !== selected?.id || detail.isLoading || detail.isFetching || history.loading) return;
+    if (navigation.active) { navigation.latest(); return; }
     history.follow.current = false;
     if (locateTimelineTarget(pendingSearch.positionKey, stream.current?.closest(".provider-detail") ?? undefined, "auto")) { history.capture(); setFeedback(""); setPendingSearch(null); }
     else if (detail.hasNextPage) { if (!history.error) void history.loadOlder("search"); }
     else { setFeedback("结果所在历史未加载，请刷新后重试"); setPendingSearch(null); }
-  }, [pendingSearch, selected?.id, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
+  }, [navigation.active, navigation.latest, pendingSearch, selected?.id, detail.isLoading, detail.isFetching, detail.hasNextPage, history.loadOlder, history.loading, history.error, history.follow, history.capture, events]);
   return <div className={`provider-workspace ${selectedId ? "has-selection" : ""}`}>
     <aside className="provider-list">
       <header className="workspace-heading"><h1>Grok Build</h1><button className="icon-button" onClick={() => { void sessions.refetch(); if (selected && detailVisible) void detail.refetch(); }} title="刷新任务"><RefreshCw size={16} /></button></header>
@@ -138,7 +152,7 @@ export function GrokWorkspace({}: { }) {
         {feedback && <div role="status" className="task-feedback">{feedback}</div>}
         {renaming && <form className="inline-rename" onSubmit={(event) => { event.preventDefault(); actions.rename.mutate({ id: selected.id, title }, { onSuccess: () => setRenaming(false) }); }}><input aria-label="Grok 任务名称" maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus /><button className="icon-button" title="保存名称" disabled={actions.rename.isPending || !title.trim()}><Check size={17} /></button><button className="icon-button" type="button" title="取消改名" onClick={() => setRenaming(false)}><X size={17} /></button></form>}
         {error && <div className="form-error" role="alert">{error.message}</div>}
-        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}><HistoryLoading loading={history.loading} error={history.error} retry={history.retry} /><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.id ? pendingSearch.positionKey : null}>{renderGrokEvents(groupedEvents, grokSessionLabel(selected))}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider>{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}</div></div>
+        <div className="timeline-reading-shell"><TimelineRail entries={timelineEntries} streamRef={stream} onSelect={detail.data?.pages[0]?.timeline ? navigation.select : undefined} loadOlder={!detail.data?.pages[0]?.timeline && detail.hasNextPage ? () => { void history.loadOlder("search"); } : undefined} loading={history.loading} /><div ref={stream} className="provider-events" onScroll={history.onScroll} onScrollCapture={history.onScrollCapture} onWheel={history.onWheel} onTouchStart={history.onTouchStart} onTouchMove={history.onTouchMove} onKeyDown={history.onKeyDown} tabIndex={0}><HistoryLoading loading={history.loading} error={history.error} retry={history.retry} /><UserMessageScope.Provider value={{ provider: "grok", sessionKey: selected.id }}><MarkdownPathScope.Provider value={selected.cwd}><DisclosureScope.Provider value={`grok:${selected.id}`}><DisclosureRevealContext.Provider value={pendingSearch?.sessionKey === selected.id ? pendingSearch.positionKey : null}>{renderGrokEvents(groupedEvents, grokSessionLabel(selected))}</DisclosureRevealContext.Provider></DisclosureScope.Provider></MarkdownPathScope.Provider></UserMessageScope.Provider><TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />{detail.isLoading && <div className="muted-row">正在读取消息...</div>}{!detail.isLoading && !events.length && <div className="muted-row">暂无历史活动</div>}</div></div>
       </>}
     </main>
     {preview && <ConfirmDialog labelledBy="grok-delete-title" busy={actions.remove.isPending} onCancel={() => setPreview(null)} returnFocus={menuTrigger}>
