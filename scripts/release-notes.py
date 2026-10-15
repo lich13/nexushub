@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.2.22": [
+        "加固迁移、管理操作和安装回滚，保留现有会话与兼容行为",
+        "整理读取模块、资源预算与文档，统一远程机器文案并补强契约检查。",
+    ],
     "1.2.21": [
         "自动上下文合并为一行默认收起，保留真实请求和附件，搜索排除自动字段",
         "缩窄时间线预览，补齐全部用户记录的历史定位与双向分页。",
@@ -155,6 +159,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.2.22":
+        sections = {
+            "版本概览": ["本版集中维护与加固现有能力，改善工程可维护性与升级可靠性。"],
+            "功能调整": [
+                "远程机器与服务使用中性名称；保留 Codex、Claude Code、Grok、Probe、设置及现有阅读和管理入口。",
+                "整理 Provider 读取、CLI、Hook 和 Probe 展示模块，集中资源预算并补充兼容说明。",
+            ],
+            "问题修复": [
+                "退役数据迁移使用版本守门及跨进程锁，重复开库不再重复扫描退役记录；中断后保留安全接续。",
+                "管理操作在隔离后重新核验文件身份与指纹，补充索引、数据库提交和进程终止故障覆盖。",
+                "部署校验传输内容，安装拒绝危险归档并原子替换程序；普通安装失败恢复本轮替换文件。",
+                "补强真实 DTO、适配层、版本与隐私检查，固定 CI Action 引用并输出非阻塞依赖审计报告。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，现有 DTO 语义不变；不新增 RPC、数据库表、设置项或 UI 入口。",
+                "保留协议 tombstone、旧服务回退、连接、Bark、通知状态和原生会话；仅迁移 NexusHub 自有数据。",
+                "缓存预算不等于进程 RSS 硬上界；安装回滚不回滚业务数据库，也不新增崩溃自动恢复。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包与校验文件；共七项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装本机 App；安装前核对 SHA-256 与 updater 签名。保留现有连接、凭据及会话。",
+                "安装后检查本机与远程的阅读、分页、搜索、附件、Probe 与管理预览。真实功能、视觉及日常体感待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证 updater 来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.21":
         sections = {
