@@ -7,6 +7,7 @@ import jobListSource from "./components/jobs/JobList.tsx?raw";
 import messageStreamSource from "./components/chat/MessageStream.tsx?raw";
 import opsWorkspaceSource from "./components/ops/OpsWorkspace.tsx?raw";
 import probeWorkspaceSource from "./components/probe/ProbeWorkspace.tsx?raw";
+import probeCardsSource from "./components/probe/ProbeCards.tsx?raw";
 import conversationControllerSource from "./hooks/useConversationController.ts?raw";
 import codexViewModelSource from "./lib/domain/codexViewModel.ts?raw";
 import runtimeViewModelSource from "./lib/domain/runtimeViewModel.ts?raw";
@@ -47,7 +48,8 @@ function extractProbeWorkspaceSource(): string {
   const start = source.indexOf("function ProbeWorkspace(");
 
   expect(start).toBeGreaterThanOrEqual(0);
-  return source.slice(start);
+  // Probe cards now own the markup formerly declared in ProbeWorkspace.
+  return `${source.slice(start)}\n${probeCardsSource}`;
 }
 
 function extractFunctionSource(name: string): string {
