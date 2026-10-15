@@ -25,7 +25,7 @@ test("one update panel follows the current machine and only checks its selected 
   await picker(page).selectOption("remote");
   await settings(page);
   await expect(panel).toHaveCount(1);
-  await expect(panel).toContainText("远程服务器服务更新");
+  await expect(panel).toContainText("远程服务更新");
   await expect(panel).not.toContainText("本机 App 更新");
   await expect(panel).not.toContainText("已是最新版本");
   await expect(panel.getByRole("button", { name: "清理更新备份" })).toBeVisible();
