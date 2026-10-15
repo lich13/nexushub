@@ -137,7 +137,7 @@ describe("contract registry", () => {
     const audit = repositoryFile("docs/ARCHITECTURE.md");
     for (const required of [
       "macOS ARM64",
-      "Linux x86_64 headless webd",
+      "Linux x86_64",
       "nexushub-webd-linux-x86_64.tar.gz",
       "darwin-aarch64",
       "contracts/nexushub-contract.json"
