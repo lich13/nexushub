@@ -187,6 +187,7 @@ fn retirement_removes_only_gotify_and_preserves_bark_delivery_and_private_state(
         .iter()
         .map(|sql| snapshot(&connection, sql))
         .collect();
+    connection.pragma_update(None, "user_version", 0).unwrap();
     drop(connection);
     drop(db);
 
@@ -260,6 +261,10 @@ fn an_interrupted_retirement_marker_is_finished_idempotently() {
     let db = fixture.open();
     db.set_setting("gotify_retirement_pending", "true").unwrap();
     db.set_setting("fixture_keep", "unchanged").unwrap();
+    fixture
+        .connection()
+        .pragma_update(None, "user_version", 0)
+        .unwrap();
     drop(db);
     for _ in 0..2 {
         let db = fixture.open();

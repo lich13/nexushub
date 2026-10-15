@@ -13,3 +13,5 @@ pub mod system;
 pub mod threads;
 pub mod updates;
 pub mod use_cases;
+
+mod retired_commands;

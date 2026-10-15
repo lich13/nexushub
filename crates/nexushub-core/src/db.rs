@@ -1,3 +1,6 @@
+mod migration_lock;
+#[cfg(test)]
+mod migration_tests;
 use crate::{crypto::SecretBox, security::hash_token};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
@@ -137,7 +140,25 @@ impl PanelDb {
     }
 
     fn migrate(&self) -> Result<()> {
+        // Schema 1 records completion of the protocol-2 retirements. Successful
+        // reopens do not traverse event JSON or repeat schema/data migrations.
+        const SCHEMA_VERSION: i64 = 1;
+        {
+            let conn = self.conn.lock().expect("db mutex");
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+            let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if version >= SCHEMA_VERSION {
+                return Ok(());
+            }
+        }
+        // VACUUM must run outside a SQL transaction. Hold an OS advisory lock
+        // across all retirement transactions and recheck after waiting.
+        let _migration = migration_lock::MigrationLock::acquire(&self.path)?;
         let conn = self.conn.lock().expect("db mutex");
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version >= SCHEMA_VERSION {
+            return Ok(());
+        }
         conn.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
@@ -332,6 +353,12 @@ impl PanelDb {
         }
         drop(conn);
         self.migrate_notification_channels()?;
+        // Mark complete only after secure erasure, WAL truncation and all
+        // channel migrations succeed. An interrupted attempt remains resumable.
+        self.conn
+            .lock()
+            .expect("db mutex")
+            .pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     }
 
@@ -1244,6 +1271,11 @@ mod tests {
         ] {
             db.set_setting(key, "preserve-fixture").unwrap();
         }
+        db.conn
+            .lock()
+            .unwrap()
+            .pragma_update(None, "user_version", 0)
+            .unwrap();
         db.migrate().unwrap();
         for key in [
             "probe_logs_db_last_maintain",
@@ -1273,6 +1305,11 @@ mod tests {
         .unwrap();
         db.create_job("keep", "probe_bark_test", "keep").unwrap();
 
+        db.conn
+            .lock()
+            .unwrap()
+            .pragma_update(None, "user_version", 0)
+            .unwrap();
         db.migrate().unwrap();
 
         let jobs = db.list_jobs(20).unwrap();
@@ -1348,7 +1385,10 @@ mod tests {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         assert!(!columns.iter().any(|column| column == "recovery_status"));
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let mut migration_lock = path.as_os_str().to_owned();
+        migration_lock.push(".migration.lock");
+        std::fs::remove_file(migration_lock).unwrap();
     }
 
     #[test]
@@ -1592,6 +1632,7 @@ mod retired_provider_tests {
         {
             let conn = db.conn.lock().unwrap();
             conn.execute_batch(r#"
+                PRAGMA user_version=0;
                 INSERT INTO native_probe_providers VALUES('pi',1,1,1,1,0),('grok',1,1,1,1,0);
                 INSERT INTO native_probe_streams VALUES('pi','old','identity',7,1),('grok','kept','identity',7,1);
                 INSERT INTO native_probe_deliveries VALUES('retired','pi','not valid JSON','pending',1,1),

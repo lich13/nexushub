@@ -1093,6 +1093,10 @@ fn migration_stops_old_pending_work_and_preserves_old_terminal_claims() {
     }
     stage(&db, &fixture, NotificationChannel::Bark, "new-pending");
     drop(db);
+    fixture
+        .connection()
+        .pragma_update(None, "user_version", 0)
+        .unwrap();
     let db = fixture.open();
     for status in [
         "pending",
@@ -1212,6 +1216,10 @@ fn migration_preserves_legacy_bark_claims_without_replaying_deliveries() {
             .unwrap();
     }
     drop(connection);
+    fixture
+        .connection()
+        .pragma_update(None, "user_version", 0)
+        .unwrap();
 
     let db = fixture.open();
     db.sync_notification_channels(&fixture.config).unwrap();

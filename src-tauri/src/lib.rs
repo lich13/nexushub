@@ -67,15 +67,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(move |invoke| {
-            if nexushub_core::services::commands::is_retired_command(invoke.message.command())
-                || matches!(
-                    invoke.message.command(),
-                    "listPiSessions"
-                        | "getPiSession"
-                        | "renamePiSession"
-                        | "previewPiSessionDelete"
-                        | "deletePiSession"
-                )
+            if nexushub_core::services::commands::is_retired_tauri_command(invoke.message.command())
             {
                 invoke.resolver.reject("unavailable: retired command");
                 return true;

@@ -19,6 +19,10 @@ impl TestDatabase {
         let path = directory.join("nexushub.sqlite");
         Self { directory, path }
     }
+
+    fn connection(&self) -> Connection {
+        Connection::open(&self.path).unwrap()
+    }
 }
 
 impl Drop for TestDatabase {
@@ -127,6 +131,7 @@ fn upgrade_erases_retired_auth_pages_and_wal_but_preserves_encrypted_business_st
     drop(db);
 
     let legacy = Connection::open(&fixture.path).unwrap();
+    legacy.pragma_update(None, "user_version", 0).unwrap();
     legacy.execute_batch(
         "PRAGMA secure_delete=OFF; PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
          CREATE TABLE admins(id TEXT PRIMARY KEY, username TEXT, password_hash TEXT);
@@ -277,6 +282,10 @@ fn upgrade_removes_retired_cookie_settings_even_without_legacy_auth_tables() {
         db.set_setting("probe_error_monitor_cursor", "keep-fixture")
             .unwrap();
         drop(db);
+        fixture
+            .connection()
+            .pragma_update(None, "user_version", 0)
+            .unwrap();
         let upgraded = PanelDb::open(&fixture.path).unwrap();
         assert!(
             upgraded.get_setting(key).unwrap().is_none(),
@@ -309,7 +318,8 @@ fn pending_web_retirement_resumes_erasure_after_legacy_tables_are_gone() {
     let legacy = Connection::open(&fixture.path).unwrap();
     legacy
         .execute_batch(
-            "PRAGMA secure_delete=OFF;
+            "PRAGMA user_version=0;
+             PRAGMA secure_delete=OFF;
              CREATE TABLE sessions(id TEXT PRIMARY KEY, token_hash TEXT);",
         )
         .unwrap();
