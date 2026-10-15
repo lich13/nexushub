@@ -1,0 +1,13 @@
+{"type":"session_meta","timestamp":"2026-01-02T03:04:05Z","payload":{"id":"codex-refactor-snapshot","cwd":"/synthetic/provider-refactor/workspace","source":"cli","model":"fixture-model"}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:06Z","payload":{"type":"message","id":"codex-user-1","role":"user","content":[{"type":"input_text","text":"Inspect the synthetic sample."}]}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:07Z","payload":{"type":"message","id":"codex-assistant-1","role":"assistant","content":[{"type":"output_text","text":"I will inspect the sample."}]}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:08Z","payload":{"type":"function_call","name":"exec_command","call_id":"codex-call-read","arguments":{"cmd":"read synthetic fixture"}}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:09Z","payload":{"type":"function_call_output","call_id":"codex-call-read","output":"Synthetic file contents"}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:10Z","payload":{"type":"function_call","name":"request_user_input","call_id":"codex-call-question","arguments":{"questions":[{"id":"keep","question":"Keep the synthetic result?","options":[{"label":"Keep","description":"Retain the sample result."},{"label":"Discard","description":"Remove the sample result."}]}]}}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:11Z","payload":{"type":"function_call_output","call_id":"codex-call-question","output":"{\"keep\":[\"Keep\"]}"}}
+{"type":"response_item","turn_id":"turn-1","timestamp":"2026-01-02T03:04:12Z","payload":{"type":"message","id":"codex-assistant-2","role":"assistant","content":[{"type":"output_text","text":"The sample result is retained."}]}}
+{"type":"task_complete","turn_id":"turn-1","status":"completed","last_agent_message":"The sample result is retained."}
+{"type":"response_item","turn_id":"turn-2","timestamp":"2026-01-02T03:04:13Z","payload":{"type":"message","id":"codex-user-2","role":"user","content":[{"type":"input_text","text":"Confirm the final state."}]}}
+{"type":"response_item","turn_id":"turn-2","timestamp":"2026-01-02T03:04:14Z","payload":{"type":"message","id":"codex-assistant-3","role":"assistant","content":[{"type":"output_text","text":"Confirmed."}]}}
+{"type":"task_complete","turn_id":"turn-2","status":"completed","last_agent_message":"Confirmed."}
+{"type":"response_item","payload":
