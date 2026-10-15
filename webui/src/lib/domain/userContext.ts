@@ -24,6 +24,8 @@ export function visibleContextText(text: string): string {
 
 /** Old servers supply raw envelopes; new servers supply the same projection. */
 export function projectUserMessage(text: string, contextBlocks?: UserContextBlock[]): Projection {
+  // contextBlocks was introduced in 1.2.21; older protocol-2 responses still
+  // need the same conservative projection from their native text wrappers.
   if (contextBlocks !== undefined) return { text, contextBlocks };
   const cached = cache.get(text);
   if (cached) return cached.projection;

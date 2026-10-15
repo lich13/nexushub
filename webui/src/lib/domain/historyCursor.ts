@@ -5,6 +5,8 @@ export function historyCursorIndex(cursor?: string | null): number {
   return Number.isFinite(index) ? index : Number.POSITIVE_INFINITY;
 }
 
+// History metadata and stable cursors were introduced in 1.2.17. This is a
+// capability introduction, not a minimum supported protocol-2 service version.
 // New readers accept a stable anchor alongside the legacy positional hint.
 // Only responses advertising history metadata opt into this capability.
 export function stableHistoryCursor(page: {

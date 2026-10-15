@@ -39,6 +39,8 @@ export class HiddenScanRunner {
   }
 
   async run(progressSupported: boolean): Promise<HiddenThreadDeletePlan> {
+    // Progress arrived in 1.2.20. Older protocol-2 services keep the single-call
+    // path; cancellation there only discards client results.
     let response = await this.send(progressSupported ? { mode: "start", limit: 100 } : undefined);
     while (true) {
       if (this.controller.signal.aborted) {
