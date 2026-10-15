@@ -18,6 +18,7 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
   const remote = status.host_surface === "linux_server_api";
   return { runtimeKind: "desktop", hostSurface: status.host_surface ?? fallback.hostSurface,
     codexStatePaths: remote && core.systemd, updatePrune: remote && core.prune_backups,
+    // Subagent collection arrived in 1.2.11; absent capability still means unsupported.
     threadSubagents: core.thread_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
     threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,

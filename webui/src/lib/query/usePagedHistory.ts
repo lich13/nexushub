@@ -39,6 +39,8 @@ export async function refreshHistory<Page>(previous: HistoryData<Page> | undefin
   const rewritten = Boolean(version?.reset || (priorRevision >= 0 && version?.changes?.slice(priorRevision + 1).some(change => change.reset)));
   if (rewritten || (oldVersion && version && oldVersion.epoch !== version.epoch) || (oldTotal !== undefined && total !== undefined && total < oldTotal)) return single(adapter.invalidate?.(head) ?? head);
 
+  // Pre-1.2.17 protocol-2 services omit history metadata; refresh loaded pages
+  // conservatively. Keep until a separately approved minimum-version change.
   const changed = historicalChanges(oldVersion, version);
   const known = new Set(previous.pages.flatMap(adapter.ids));
   let combined = head;

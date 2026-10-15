@@ -59,6 +59,7 @@ export function GrokWorkspace({}: { }) {
   });
   const events = navigation.items ?? loadedEvents;
   const groupedEvents = useMemo(() => groupGrokCommandEvents(events), [events]);
+  // Full timeline index arrived in 1.2.21; older services retain sequential history loading.
   const timelineEntries = useMemo(() => detail.data?.pages[0]?.timeline ?? userTimelineEntries("grok", groupedEvents.flatMap(entry => entry.kind === "item"
     ? [{ id: entry.key, kind: entry.item.kind, text: entry.item.text, userMessage: entry.item.userMessage }] : [])), [detail.data, groupedEvents]);
   const actions = useGrokActions();
@@ -186,5 +187,7 @@ function renderGrokEvent(event: GrokHistoryEvent, key: string, sessionTitle: str
 export function grokSessionLabel(session: GrokSessionSummary): string { return session.title || session.id; }
 
 export function canPreviewGrokDelete(session: GrokSessionSummary): boolean {
+  // Introduced in 1.2.20; protocol-2 servers without eligibility keep their
+  // original conservative recent-status fallback until the support floor changes.
   return session.deletionEligibility?.allowed ?? session.status === "recent";
 }

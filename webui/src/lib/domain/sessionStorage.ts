@@ -4,6 +4,7 @@ export function formatSessionStorage(size?: SessionStorageSize | null): { label:
   const scope = size?.scope === "directory" ? "会话目录" : "会话文件";
   const unknown = { label: "—", tone: "muted" as const, title: "会话大小暂不可用" };
   if (size?.status === "pending") return { ...unknown, title: `${scope} · 正在统计` };
+  // storageSize was introduced in 1.2.16; older protocol-2 services still report unknown.
   if (!size || !["complete", "partial"].includes(size.status) || size.bytes === null || !Number.isSafeInteger(size.bytes) || size.bytes < 0) return unknown;
   const bytes = size.bytes;
   const unit = bytes >= 1024 ** 3 ? "G" : bytes >= 1024 ** 2 ? "M" : "K";
