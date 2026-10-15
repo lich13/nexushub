@@ -34,6 +34,8 @@ jobs:
           key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-v1-pnpm-
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - run: node scripts/check-wire-types.mjs
+      - run: node --test scripts/test-wire-types.mjs
       - run: corepack pnpm@12.11.2 --dir webui typecheck
       - run: corepack pnpm@12.11.2 --dir webui test
       - run: corepack pnpm@12.11.2 --dir webui build:tauri
