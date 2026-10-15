@@ -19,7 +19,7 @@ describe("selected-machine update panel", () => {
       expect(html).toContain("检查更新");
       expect(html).not.toContain("更新至");
       expect(html).not.toContain("已是最新版本");
-      expect(html).not.toContain("腾讯云服务更新");
+      expect(html).not.toContain("远程服务更新");
     }
     expect(render({ status, action: "check", finished: true })).toContain("已是最新版本");
     expect(render({ status: { ...status, latest_version: "unknown" }, action: "check", finished: true })).not.toContain("已是最新版本");
@@ -36,7 +36,7 @@ describe("selected-machine update panel", () => {
   test("remote panel uses the same layout and preserves server backup cleanup", () => {
     const capabilities = { ...runtimeCapabilitiesForRuntime("desktop"), updateServiceLabels: true, updatePrune: true };
     const html = render({ capabilities, status });
-    expect(html).toContain("腾讯云服务更新");
+    expect(html).toContain("远程服务更新");
     expect(html).toContain("清理更新备份");
     expect(html).not.toContain("本机 App 更新");
     expect(html).not.toMatch(/Precheck|Latest|Current/);

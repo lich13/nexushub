@@ -658,7 +658,7 @@ describe("conversation helpers", () => {
       "Job History"
     ]);
     expect(app.opsWorkspacePanelTitles?.(remoteCapabilities)).toEqual([
-      "腾讯云服务更新",
+      "远程服务更新",
       "归档线程清理",
       "隐藏线程清理",
       "Job History"

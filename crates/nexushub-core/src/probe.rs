@@ -106,7 +106,7 @@ pub fn bark_test_body() -> &'static str {
     if cfg!(target_os = "macos") {
         "来自本机的测试通知。"
     } else {
-        "来自腾讯云的测试通知。"
+        "来自远程机器的测试通知。"
     }
 }
 

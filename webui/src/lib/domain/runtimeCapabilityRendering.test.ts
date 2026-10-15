@@ -97,7 +97,7 @@ describe("runtime capability rendering", () => {
     const visibleCopy = opsWorkspaceVisibleCopy(remoteCapabilities).join("\n");
     expect(contract.remoteApiOnly).toEqual(expect.arrayContaining(["服务更新", "清理更新备份"]));
     expect(contract.updateActions).toEqual(["检查更新", "清理更新备份"]);
-    expect(visibleCopy).toMatch(/腾讯云服务更新|检查更新|清理更新备份/);
+    expect(visibleCopy).toMatch(/远程服务更新|检查更新|清理更新备份/);
     expect(appSource).not.toMatch(/WebAuthGate|SecurityWorkspace/);
     expect(contract.remoteApiOnly.join(" ")).not.toMatch(/Turnstile|Public endpoint|Nginx|安全/);
   });

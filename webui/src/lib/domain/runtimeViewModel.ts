@@ -89,7 +89,7 @@ export function displayVersion(version?: string | null): string {
 }
 
 export function updatePanelTitle(input?: RuntimeCapabilityInput): string {
-  return capabilitiesForInput(input).updateServiceLabels ? "腾讯云服务更新" : "本机 App 更新";
+  return capabilitiesForInput(input).updateServiceLabels ? "远程服务更新" : "本机 App 更新";
 }
 
 export function opsUpdateActionView(
