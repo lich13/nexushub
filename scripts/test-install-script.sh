@@ -118,6 +118,8 @@ for title in ["版本概览", "功能调整", "问题修复", "兼容性与迁�
 print(f"NexusHub {version} install/release boundary checks: ok")
 PY
 
+shellcheck deploy/nexushub-webd/install.sh deploy/nexushub-webd/update.sh deploy/nexushub-webd/rollback.sh scripts/deploy-cloud.sh
+python3 scripts/test-install-safety.py
 python3 scripts/check-workspaces.py
 python3 scripts/test-check-workspaces.py
 python3 scripts/check-versions.py

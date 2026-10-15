@@ -80,10 +80,14 @@ check_layout() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --archive|--binary|--domain|--path-prefix)
+        [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "option requires a value"
+        case "$1" in
       --archive) ARCHIVE_PATH="${2:-}"; shift 2 ;;
       --binary) BINARY_PATH="${2:-}"; shift 2 ;;
       --domain) DOMAIN="${2:-}"; INSTALL_NGINX=1; shift 2 ;;
       --path-prefix) PATH_PREFIX="${2:-}"; shift 2 ;;
+        esac ;;
       --force-config) FORCE_CONFIG=1; shift ;;
       --no-enable) ENABLE_SERVICE=0; shift ;;
       --check) CHECK_ONLY=1; shift ;;
@@ -118,10 +122,10 @@ install_dirs() {
 
 copy_legacy_runtime_once() {
   if [[ -f "${LEGACY_DIR}/config.toml" && ! -f "${CONFIG_FILE}" ]]; then
-    install -m 0640 -o root -g root "${LEGACY_DIR}/config.toml" "${CONFIG_FILE}"
+    replace_file "${LEGACY_DIR}/config.toml" "${CONFIG_FILE}" 0640
   fi
   if [[ -f "${LEGACY_DIR}/env" && ! -f "${ENV_FILE}" ]]; then
-    install -m 0640 -o root -g root "${LEGACY_DIR}/env" "${ENV_FILE}"
+    replace_file "${LEGACY_DIR}/env" "${ENV_FILE}" 0640
   fi
   if [[ -f "${LEGACY_DIR}/nexushub.sqlite" && ! -f "${DATA_DIR}/nexushub.sqlite" ]]; then
     install -m 0640 -o root -g root "${LEGACY_DIR}/nexushub.sqlite" "${DATA_DIR}/nexushub.sqlite"
@@ -146,28 +150,20 @@ install_payload() {
   if [[ -n "${BINARY_PATH}" ]]; then
     [[ -f "${BINARY_PATH}" ]] || die "binary not found: ${BINARY_PATH}"
     assert_api_version "${BINARY_PATH}"
-    install -m 0755 -o root -g root "${BINARY_PATH}" "${INSTALL_BIN}"
+    replace_file "${BINARY_PATH}" "${INSTALL_BIN}" 0755
     return
   fi
   [[ -f "${ARCHIVE_PATH}" ]] || die "archive not found: ${ARCHIVE_PATH}"
-  local tmp root
-  tmp="$(mktemp -d)"
-  trap '[[ -n "${tmp}" && -d "${tmp}" ]] && rm -r -- "${tmp}"' RETURN
-  tar -xzf "${ARCHIVE_PATH}" -C "${tmp}"
-  root="$(find "${tmp}" -maxdepth 1 -type d -name 'nexushub-webd-linux-*' | head -n 1)"
-  [[ -n "${root}" ]] || die "archive root nexushub-webd-linux-* not found"
+  local root
+  PAYLOAD_TMP="$(mktemp -d)"
+  python3 "${SAFETY}" extract "${ARCHIVE_PATH}" "${PAYLOAD_TMP}"
+  root="${PAYLOAD_TMP}/nexushub-webd-linux-x86_64"
   [[ -x "${root}/bin/${BIN_NAME}" ]] || die "archive missing bin/${BIN_NAME}"
-
   assert_api_version "${root}/bin/${BIN_NAME}"
-  install -m 0755 -o root -g root "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}"
+  replace_file "${root}/bin/${BIN_NAME}" "${INSTALL_BIN}" 0755
   if [[ -d "${root}/deploy" ]]; then
-    [[ -f "${root}/deploy/update.sh" ]] && install -m 0755 -o root -g root "${root}/deploy/update.sh" "${UPDATE_BIN}"
-    [[ -f "${root}/deploy/nexushub-codex-precheck" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
-    [[ -f "${root}/deploy/nexushub-codex-update" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
-    [[ -f "${root}/deploy/nexushub-codex-prune" ]] && install -m 0755 -o root -g root "${root}/deploy/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
+    [[ ! -f "${root}/deploy/update.sh" ]] || replace_file "${root}/deploy/update.sh" "${UPDATE_BIN}" 0755
   fi
-  rm -r -- "${tmp}"
-  trap - RETURN
 }
 
 retire_web_payload() {
@@ -186,9 +182,9 @@ PYWEB
 install_codex_wrappers() {
   local source_dir
   source_dir="$(script_dir)"
-  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}"
-  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}"
-  install -m 0755 -o root -g root "${source_dir}/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}"
+  replace_file "${source_dir}/nexushub-codex-precheck" "${CODEX_PRECHECK_WRAPPER_BIN}" 0755
+  replace_file "${source_dir}/nexushub-codex-update" "${CODEX_UPDATE_WRAPPER_BIN}" 0755
+  replace_file "${source_dir}/nexushub-codex-prune" "${CODEX_PRUNE_WRAPPER_BIN}" 0755
 }
 
 install_codex_home_write_paths() {
@@ -211,12 +207,14 @@ install_config() {
   source_dir="$(script_dir)"
   copy_legacy_runtime_once
   if [[ ! -f "${CONFIG_FILE}" || "${FORCE_CONFIG}" -eq 1 ]]; then
-    install -m 0640 -o root -g root "${source_dir}/config.example.toml" "${CONFIG_FILE}"
+    replace_file "${source_dir}/config.example.toml" "${CONFIG_FILE}" 0640
 
   fi
   if [[ ! -f "${ENV_FILE}" ]]; then
-    install -m 0640 -o root -g root "${source_dir}/env.example" "${ENV_FILE}"
+    replace_file "${source_dir}/env.example" "${ENV_FILE}" 0640
   fi
+  snapshot_file "${ENV_FILE}"
+  snapshot_file "${CONFIG_FILE}"
   ensure_secret_key
   python3 - "${ENV_FILE}" <<'PYENV'
 from pathlib import Path
@@ -460,8 +458,9 @@ install_provider_session_write_paths() {
   fi
   if [[ -s "${rendered}" ]]; then
     install -d -m 0755 -o root -g root "${SYSTEMD_DROPIN_DIR}"
-    install -m 0644 -o root -g root "${rendered}" "${PROVIDER_PATHS_DROPIN}"
+    replace_file "${rendered}" "${PROVIDER_PATHS_DROPIN}" 0644
   elif [[ -f "${PROVIDER_PATHS_DROPIN}" ]]; then
+    snapshot_file "${PROVIDER_PATHS_DROPIN}"
     rm -- "${PROVIDER_PATHS_DROPIN}"
   fi
   rm -- "${rendered}"
@@ -474,7 +473,7 @@ install_systemd() {
     systemctl stop "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
     systemctl disable "${LEGACY_SERVICE}.service" >/dev/null 2>&1 || true
   fi
-  install -m 0644 -o root -g root "${source_dir}/systemd.service" "${SYSTEMD_UNIT}"
+  replace_file "${source_dir}/systemd.service" "${SYSTEMD_UNIT}" 0644
   install_provider_session_write_paths
   systemctl daemon-reload
   if [[ "${ENABLE_SERVICE}" -eq 1 ]]; then
@@ -490,10 +489,12 @@ install_nginx() {
   source_dir="$(script_dir)"
   snippet="$(mktemp)"
   sed -e "s#/nexushub/#${PATH_PREFIX}#g" -e "s#= /nexushub #= ${PATH_PREFIX%/} #g" "${source_dir}/nginx.conf" > "${snippet}"
-  install -m 0644 -o root -g root "${snippet}" "${NGINX_SNIPPET}"
+  replace_file "${snippet}" "${NGINX_SNIPPET}" 0644
   rm -- "${snippet}"
   target="$(grep -Rsl "server_name .*${DOMAIN}" /etc/nginx/sites-enabled /etc/nginx/sites-available 2>/dev/null | head -n 1 || true)"
   if [[ -n "${target}" ]] && ! grep -Fq "${NGINX_SNIPPET}" "${target}"; then
+    target="$(readlink -f "${target}")"
+    snapshot_file "${target}"
     cp "${target}" "${NGINX_BACKUP_DIR}/$(basename "${target}").bak-$(date +%Y%m%d%H%M%S)"
     python3 - "$target" "$NGINX_SNIPPET" <<'PY'
 from pathlib import Path
@@ -513,6 +514,31 @@ PY
   systemctl reload nginx
 }
 
+SAFETY="$(script_dir)/install-safety.py"
+TRANSACTION=""
+PAYLOAD_TMP=""
+INSTALL_SUCCEEDED=0
+WAS_ACTIVE=0
+
+snapshot_file() { python3 "${SAFETY}" snapshot "${TRANSACTION}" "$1"; }
+replace_file() { python3 "${SAFETY}" replace "${TRANSACTION}" "$1" "$2" "$3"; }
+finish_install() {
+  local status=$?
+  trap - EXIT
+  if [[ "${INSTALL_SUCCEEDED}" -eq 0 && -n "${TRANSACTION}" ]]; then
+    if python3 "${SAFETY}" rollback "${TRANSACTION}"; then
+      systemctl daemon-reload || true
+      if [[ "${WAS_ACTIVE}" -eq 1 ]]; then systemctl restart "${SERVICE_NAME}.service" || true; fi
+    else
+      log "rollback incomplete; installation backup retained"
+      return 1
+    fi
+  fi
+  [[ -z "${PAYLOAD_TMP}" ]] || rm -r -- "${PAYLOAD_TMP}"
+  [[ -z "${TRANSACTION}" ]] || rm -r -- "${TRANSACTION}"
+  return "${status}"
+}
+
 main() {
   parse_args "$@"
   if [[ "${CHECK_ONLY}" -eq 1 ]]; then
@@ -520,16 +546,24 @@ main() {
     return
   fi
   require_root
-  require_command tar
+  require_command python3
+  TRANSACTION="$(mktemp -d)"
+  trap finish_install EXIT
+  if systemctl is-active --quiet "${SERVICE_NAME}.service"; then WAS_ACTIVE=1; fi
   install_dirs
   install_payload
   retire_web_payload
   install_codex_wrappers
+  replace_file "${SAFETY}" "${SHARE_DIR}/install-safety.py" 0644
   install_config
   install_codex_home_write_paths
   install_systemd
   install_nginx
+  if [[ "${ENABLE_SERVICE}" -eq 1 ]]; then
+    systemctl is-active --quiet "${SERVICE_NAME}.service"
+  fi
+  INSTALL_SUCCEEDED=1
   log "installed ${INSTALL_BIN}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

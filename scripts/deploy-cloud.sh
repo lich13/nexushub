@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Validated deployment arguments intentionally expand on the client before SSH.
+# shellcheck disable=SC2029
 set -Eeuo pipefail
 
 HOST="${1:?Usage: deploy-cloud.sh HOST [ARCHIVE]; set NEXUSHUB_DOMAIN explicitly}"
@@ -37,6 +39,10 @@ trap 'echo "Deployment staging retained for diagnosis: ${STAGE} and ${REMOTE_STA
 scp "${ARCHIVE}" "${HOST}:${REMOTE_STAGE}/release.tar.gz"
 tar -C deploy -czf "${STAGE}/deploy.tar.gz" nexushub-webd
 scp "${STAGE}/deploy.tar.gz" "${HOST}:${REMOTE_STAGE}/deploy.tar.gz"
+ARCHIVE_SHA="$(shasum -a 256 -- "${ARCHIVE}" | cut -d ' ' -f 1)"
+DEPLOY_SHA="$(shasum -a 256 -- "${STAGE}/deploy.tar.gz" | cut -d ' ' -f 1)"
+[[ "${ARCHIVE_SHA}" =~ ^[a-f0-9]{64}$ && "${DEPLOY_SHA}" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid local checksum" >&2; exit 1; }
+ssh "${HOST}" "cd '${REMOTE_STAGE}' && printf '%s  %s\\n' '${ARCHIVE_SHA}' release.tar.gz '${DEPLOY_SHA}' deploy.tar.gz | sha256sum -c -"
 ssh "${HOST}" "tar -xzf '${REMOTE_STAGE}/deploy.tar.gz' -C '${REMOTE_STAGE}'"
 ssh "${HOST}" "sudo -n bash '${REMOTE_STAGE}/nexushub-webd/install.sh' --archive '${REMOTE_STAGE}/release.tar.gz' --domain '${DOMAIN}' --path-prefix '${PATH_PREFIX}'"
 ssh "${HOST}" "sudo -n systemctl is-active --quiet nexushub-webd && test \"\$(sudo -n /usr/local/bin/nexushub-webd --version)\" = \"nexushub-webd ${EXPECTED_VERSION}\" && curl -fsS http://127.0.0.1:15742/healthz >/dev/null"

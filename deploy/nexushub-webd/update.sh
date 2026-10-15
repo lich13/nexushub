@@ -26,6 +26,7 @@ Options:
 USAGE
 }
 
+ORIGINAL_ARGS=("$@")
 PRECHECK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +40,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "${REPO}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || { echo "invalid repository" >&2; exit 2; }
+[[ "${VERSION}" == latest || "${VERSION}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid version" >&2; exit 2; }
+[[ "${ARCH}" == x86_64 ]] || { echo "unsupported architecture" >&2; exit 2; }
 ASSET="nexushub-webd-linux-${ARCH}.tar.gz"
 
 # The API service is intentionally mounted with ProtectSystem=full. Run the
@@ -67,7 +71,7 @@ if [[ "${PRECHECK}" -eq 0 && "${NEXUSHUB_WEBD_UPDATE_TRANSIENT:-0}" != "1" ]]; t
     --property=ReadWritePaths=/var/log/nexushub-webd \
     --property=ReadWritePaths=/root/.codex \
     --property=ReadWritePaths=/home/ubuntu/.codex \
-    /usr/bin/env NEXUSHUB_WEBD_UPDATE_TRANSIENT=1 "$0" "$@"
+    /usr/bin/env NEXUSHUB_WEBD_UPDATE_TRANSIENT=1 "$0" "${ORIGINAL_ARGS[@]}"
 fi
 
 if [[ "${PRECHECK}" -eq 1 ]]; then
@@ -94,10 +98,12 @@ fi
 
 curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"
 curl -fL "${BASE_URL}/${ASSET}.sha256" -o "${TMP_DIR}/${ASSET}.sha256"
-(cd "${TMP_DIR}" && sha256sum -c "${ASSET}.sha256")
-tar -xzf "${TMP_DIR}/${ASSET}" -C "${TMP_DIR}"
+SAFETY="/usr/share/nexushub-webd/install-safety.py"
+python3 "${SAFETY}" verify "${TMP_DIR}/${ASSET}" "${TMP_DIR}/${ASSET}.sha256"
+mkdir "${TMP_DIR}/payload"
+python3 "${SAFETY}" extract "${TMP_DIR}/${ASSET}" "${TMP_DIR}/payload"
 
-ROOT="$(find "${TMP_DIR}" -maxdepth 1 -type d -name 'nexushub-webd-linux-*' | head -n 1)"
+ROOT="${TMP_DIR}/payload/nexushub-webd-linux-${ARCH}"
 if [[ -z "${ROOT}" ]]; then
   echo "extracted archive root not found" >&2
   exit 1
