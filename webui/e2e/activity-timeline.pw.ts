@@ -172,9 +172,17 @@ for (const provider of ["codex", "claude", "grok"] as const) {
     const markers = page.locator(".timeline-rail-item");
     await expect(markers).toHaveCount(2);
     await expect(markers.nth(0)).toHaveAccessibleName("时间线：First fixture instruction");
+    const stream = page.locator(provider === "codex" ? ".message-stream" : ".provider-events");
     await markers.nth(0).focus(); await page.keyboard.press("Enter");
     await expect(markers.nth(0)).toHaveClass(/active/);
-    const stream = page.locator(provider === "codex" ? ".message-stream" : ".provider-events");
+    await expect.poll(() => stream.evaluate(node => {
+      const root = node as HTMLElement;
+      const first = root.querySelector<HTMLElement>("[data-timeline-id]");
+      if (!first?.textContent?.includes("First fixture instruction")) return false;
+      const viewport = root.getBoundingClientRect();
+      const target = first.getBoundingClientRect();
+      return root.scrollTop <= 1 && target.bottom > viewport.top && target.top < viewport.bottom;
+    })).toBe(true);
     await stream.evaluate(node => { node.scrollTop += 500; });
     await expect(markers.nth(0)).toHaveClass(/active/);
     await stream.evaluate(node => { node.scrollTop = node.scrollHeight; });
