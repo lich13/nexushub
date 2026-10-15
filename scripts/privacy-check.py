@@ -5,6 +5,7 @@ import ipaddress
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 PUBLIC_HOSTS = {
@@ -70,10 +71,10 @@ def problems(data, private_values, scan_endpoint_literals=True):
 
 
 def git(root, *args):
-    return subprocess.check_output(["git", "-C", str(root), *args])
+    return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL)
 
 
-def main():
+def scan():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--git-objects", action="store_true", help="Scan every reachable blob and commit/tag identity")
@@ -117,6 +118,8 @@ def main():
                     if not email.endswith(b"@users.noreply.github.com"):
                         failures.append({"source": "git:" + oid, "rule": "commit_identity"})
     for directory in args.payload:
+        if not directory.is_dir():
+            raise ValueError("invalid payload directory")
         for path in sorted(directory.resolve().rglob("*")):
             if path.is_file() and not path.is_symlink():
                 generated_frontend = path.suffix.lower() in {".js", ".css"}
@@ -127,6 +130,16 @@ def main():
                 )
     print(json.dumps({"checked": count, "failures": failures}, ensure_ascii=False))
     return bool(failures)
+
+
+def main():
+    try:
+        return scan()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # Inputs can contain private paths and secrets. Never print exception
+        # messages, subprocess stderr or a traceback, and never report success.
+        print("privacy check failed: unable to read scan inputs", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
