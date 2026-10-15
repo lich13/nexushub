@@ -2347,16 +2347,33 @@ fn app_server_detail_from_read_builds_blocks_from_turn_items_without_rollout_pat
 
     assert_eq!(detail.summary.status, ThreadStatus::ReplyNeeded);
     assert_eq!(detail.summary.active_turn_id.as_deref(), Some("turn-plan"));
-    assert_eq!(detail.blocks.len(), 4);
+    assert_eq!(detail.blocks.len(), 5);
+    assert_eq!(detail.blocks[0].id, "user-1");
     assert_eq!(detail.blocks[0].role, "user");
     assert_eq!(detail.blocks[0].text.as_deref(), Some("帮我修复"));
-    assert_eq!(detail.blocks[1].role, "assistant");
-    assert_eq!(detail.blocks[1].text.as_deref(), Some("我先检查。"));
-    assert_eq!(detail.blocks[2].kind, "plan");
-    assert_eq!(detail.blocks[2].item_id.as_deref(), Some("plan-1"));
-    assert_eq!(detail.blocks[3].kind, "request_user_input");
-    assert_eq!(detail.blocks[3].call_id.as_deref(), Some("choice-1"));
-    assert_eq!(detail.blocks[3].questions[0].question, "选择方案");
+    assert_eq!(detail.blocks[1].id, "subagent-context");
+    assert_eq!(detail.blocks[1].role, "user");
+    let context_message = detail.blocks[1].user_message.as_ref().unwrap();
+    assert_eq!(context_message.text, "");
+    assert_eq!(context_message.context_blocks.len(), 1);
+    assert_eq!(
+        context_message.context_blocks[0].kind,
+        nexushub_core::user_message::UserContextKind::Runtime
+    );
+    assert_eq!(
+        context_message.context_blocks[0].text,
+        "<subagent_notification>{\"agent_path\":\"/tmp/child\"}</subagent_notification>"
+    );
+    let timeline = detail.timeline.as_ref().unwrap();
+    assert_eq!(timeline.len(), 1);
+    assert_eq!(timeline[0].id, "user-1");
+    assert_eq!(detail.blocks[2].role, "assistant");
+    assert_eq!(detail.blocks[2].text.as_deref(), Some("我先检查。"));
+    assert_eq!(detail.blocks[3].kind, "plan");
+    assert_eq!(detail.blocks[3].item_id.as_deref(), Some("plan-1"));
+    assert_eq!(detail.blocks[4].kind, "request_user_input");
+    assert_eq!(detail.blocks[4].call_id.as_deref(), Some("choice-1"));
+    assert_eq!(detail.blocks[4].questions[0].question, "选择方案");
     assert_eq!(detail.total_blocks, detail.blocks.len());
 }
 

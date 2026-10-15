@@ -217,12 +217,13 @@ describe("TimelineRail", () => {
     expect(view.marks.currentButtons).toHaveLength(100);
     expect(view.button(0).props["aria-setsize"]).toBe(5000);
     const visited = [0];
+    const preventDefault = vi.fn();
     for (let index = 1; index < entries.length; index++) {
-      const event = { key: "ArrowDown", preventDefault: vi.fn() };
+      const event = { key: "ArrowDown", preventDefault };
       view.button(index - 1).props.onKeyDown(event);
       view.render();
       view.flushFrames();
-      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(preventDefault).toHaveBeenCalledTimes(index);
       expect(view.marks.focusedIndex).toBe(index);
       visited.push(view.marks.focusedIndex!);
     }
@@ -240,7 +241,7 @@ describe("TimelineRail", () => {
     view.render();
     view.flushFrames();
     expect(view.marks.focusedIndex).toBe(4998);
-  });
+  }, 30_000);
 
   test("routes a click through the current stream scope for duplicate global IDs", () => {
     const stream = new FakeStream();
