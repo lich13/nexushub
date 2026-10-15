@@ -452,28 +452,27 @@ mod tests {
 
     #[tokio::test]
     async fn retired_rpc_commands_are_rejected_even_when_authenticated() {
-        for command in [
-            "startProbeJob",
-            "runUpdateAction",
-            "getDesktopOverview",
-            "getDesktopPlatformStatus",
-            "stopThread",
-            "archiveThread",
-            "restoreThread",
-            "renameThread",
-            "listFollowUps",
-            "enqueueFollowUp",
-            "cancelFollowUp",
-            "listJobs",
-            "getJob",
-            "deleteArchivedThreadsDryRun",
-            "deleteArchivedThreadsExecute",
-            "deleteHiddenThreadsDryRun",
-            "deleteHiddenThreadsExecute",
-        ] {
+        for command in nexushub_core::services::commands::RETIRED_COMMANDS {
             let (state, api_key) = authenticated_test_state();
-            let status = request_rpc_status(router(state), command, "{}", Some(&api_key)).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{command}");
+            let response = router(state)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/rpc/{command}"))
+                        .header("content-type", "application/json")
+                        .header("x-api-key", api_key)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{command}");
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({"error": format!("unavailable: retired rpc command: {command}")})
+            );
         }
     }
 
