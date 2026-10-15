@@ -9,23 +9,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 12.11.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
       - name: Get pnpm store path
         id: pnpm-store
         shell: bash
         run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
@@ -39,22 +42,32 @@ jobs:
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-browser
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: frontend-browser-failures
           path: ${{ runner.temp }}/nexushub-browser
 
+      - name: Report pnpm advisories (non-blocking)
+        continue-on-error: true
+        run: corepack pnpm@12.11.2 --dir webui audit --json > "${RUNNER_TEMP}/pnpm-audit.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pnpm-audit
+          path: ${{ runner.temp }}/pnpm-audit.json
+          if-no-files-found: ignore
+
   backend:
     name: Backend checks
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -67,29 +80,42 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: bash scripts/test-install-script.sh
+      - name: Report Rust advisories (non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --json --file Cargo.lock > "${RUNNER_TEMP}/cargo-audit-core.json" || true
+          cargo audit --json --file src-tauri/Cargo.lock > "${RUNNER_TEMP}/cargo-audit-desktop.json" || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: cargo-audit
+          path: ${{ runner.temp }}/cargo-audit-*.json
+          if-no-files-found: ignore
 
   tauri:
     name: macOS Tauri checks
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 12.11.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.21.0
       - name: Get pnpm store path
         id: pnpm-store
         shell: bash
         run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-v1-pnpm-
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -110,7 +136,7 @@ jobs:
         env:
           NEXUSHUB_BROWSER_PREVIEW: "1"
           NEXUSHUB_TEST_OUTPUT: ${{ runner.temp }}/nexushub-desktop-performance
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: desktop-performance-failures
