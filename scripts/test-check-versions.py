@@ -2,9 +2,13 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
+
+# Dynamic source imports must not persist interpreter paths in repository bytecode.
+sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("check_versions", Path(__file__).with_name("check-versions.py"))
 check_versions = importlib.util.module_from_spec(spec)
