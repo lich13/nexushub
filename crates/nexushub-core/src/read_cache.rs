@@ -79,7 +79,7 @@ impl<T: Clone> ReadCache<T> {
         Self {
             entries: Mutex::new(VecDeque::new()),
             max_bytes,
-            max_entries: 64,
+            max_entries: crate::resource_limits::SOURCE_CACHE_ENTRIES,
             hash_edges: true,
         }
     }

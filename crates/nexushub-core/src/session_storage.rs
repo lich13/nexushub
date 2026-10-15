@@ -5,7 +5,7 @@ use std::{
     fs::{self, Metadata},
     path::{Component, Path, PathBuf},
     sync::{mpsc, Arc, Mutex, OnceLock},
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -153,17 +153,18 @@ struct Cache {
     entries: Arc<Mutex<VecDeque<Entry>>>,
     queue: mpsc::SyncSender<Source>,
 }
-const TTL: Duration = Duration::from_secs(30);
-const CACHE_ENTRIES: usize = 512;
-const SCAN_ENTRIES: usize = 10_000;
-const SCAN_DEPTH: usize = 16;
+use crate::resource_limits::{
+    STORAGE_CACHE_ENTRIES as CACHE_ENTRIES, STORAGE_CACHE_TTL as TTL,
+    STORAGE_SCAN_DEPTH as SCAN_DEPTH, STORAGE_SCAN_ENTRIES as SCAN_ENTRIES,
+};
 
 impl Cache {
     fn new() -> Self {
         let entries = Arc::new(Mutex::new(VecDeque::<Entry>::new()));
-        let (queue, receiver) = mpsc::sync_channel::<Source>(128);
+        let (queue, receiver) =
+            mpsc::sync_channel::<Source>(crate::resource_limits::STORAGE_QUEUE_ENTRIES);
         let receiver = Arc::new(Mutex::new(receiver));
-        for _ in 0..2 {
+        for _ in 0..crate::resource_limits::STORAGE_WORKERS {
             let receiver = receiver.clone();
             let entries = entries.clone();
             let pending = queue.clone();
@@ -327,7 +328,7 @@ fn scan(source: &Source) -> SessionStorageSize {
         .into_iter()
         .enumerate()
     {
-        if count >= SCAN_ENTRIES || started.elapsed() > Duration::from_millis(250) {
+        if count >= SCAN_ENTRIES || started.elapsed() > crate::resource_limits::STORAGE_SCAN_TIME {
             partial = true;
             break;
         }

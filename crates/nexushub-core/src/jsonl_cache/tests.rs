@@ -437,6 +437,108 @@ fn replacement_starts_new_epoch_even_with_same_size_and_timestamp() {
     assert_eq!(count.load(Ordering::SeqCst), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn cached_file_replaced_with_symlink_cannot_return_its_snapshot_or_target() {
+    let fixture = Fixture::new();
+    let path = fixture.file("history.jsonl", b"{\"id\":1}\n");
+    let target = fixture.file("other-history.jsonl", b"{\"id\":9}\n");
+    let original = fixture.root.join("original.jsonl");
+    let cache = JsonlCache::new(CACHE_BYTES);
+    let count = AtomicUsize::new(0);
+    read(&cache, &path, &count).unwrap();
+
+    fs::rename(&path, &original).unwrap();
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    let finish_count = AtomicUsize::new(0);
+    let result = cache.read(
+        &path,
+        |_| Ok(0),
+        false,
+        |state, line, _, _| consume(state, line, &count),
+        |state, info| {
+            finish_count.fetch_add(1, Ordering::SeqCst);
+            view(state, info)
+        },
+        |_| 0,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(finish_count.load(Ordering::SeqCst), 0);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    fs::remove_file(&path).unwrap();
+    fs::rename(&original, &path).unwrap();
+    assert_eq!(read(&cache, &path, &count).unwrap().ids, vec![1]);
+}
+
+#[cfg(unix)]
+#[test]
+fn source_replaced_during_parse_is_not_published_and_retry_uses_new_identity() {
+    for warm_cache in [false, true] {
+        for replace_with_symlink in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.file("history.jsonl", b"{\"id\":1}\n");
+            let cache = JsonlCache::new(CACHE_BYTES);
+            let count = AtomicUsize::new(0);
+            let initial = warm_cache.then(|| read(&cache, &path, &count).unwrap());
+            append(&path, b"{\"id\":2}\n");
+            let replacement = fixture.file("replacement.jsonl", b"{\"id\":7}\n{\"id\":8}\n");
+            File::options()
+                .write(true)
+                .open(&replacement)
+                .unwrap()
+                .set_modified(fs::metadata(&path).unwrap().modified().unwrap())
+                .unwrap();
+            let mut replaced = false;
+            let finish_count = AtomicUsize::new(0);
+
+            let result = cache.read(
+                &path,
+                |_| Ok(0),
+                false,
+                |state, line, _, _| {
+                    consume(state, line, &count)?;
+                    if !replaced {
+                        if replace_with_symlink {
+                            fs::rename(&path, fixture.root.join("original.jsonl"))?;
+                            std::os::unix::fs::symlink(&replacement, &path)?;
+                        } else {
+                            fs::rename(&replacement, &path)?;
+                        }
+                        replaced = true;
+                    }
+                    Ok(())
+                },
+                |state, info| {
+                    finish_count.fetch_add(1, Ordering::SeqCst);
+                    view(state, info)
+                },
+                |_| 0,
+            );
+
+            assert!(replaced);
+            assert!(result.is_err());
+            assert_eq!(finish_count.load(Ordering::SeqCst), 0);
+            if replace_with_symlink {
+                assert!(read(&cache, &path, &count).is_err());
+                fs::remove_file(&path).unwrap();
+                fs::rename(&replacement, &path).unwrap();
+            }
+            let recovered = read(&cache, &path, &count).unwrap();
+            assert_eq!(recovered.ids, vec![7, 8]);
+            assert_eq!(recovered.lines, 2);
+            assert!(!recovered.partial);
+            if let Some(initial) = initial {
+                assert_ne!(recovered.epoch, initial.epoch);
+            }
+            let warm = read(&cache, &path, &count).unwrap();
+            assert_eq!(warm.revision, recovered.revision);
+            assert_eq!(warm.ids, recovered.ids);
+            assert!(!warm.changed);
+        }
+    }
+}
+
 #[test]
 fn truncation_discards_cached_records_and_starts_new_epoch() {
     let fixture = Fixture::new();
@@ -636,6 +738,73 @@ fn byte_budget_evicts_cached_state_before_entry_limit() {
     assert_ne!(rebuilt.epoch, first.epoch);
     assert_eq!(rebuilt.ids, vec![1]);
     assert_eq!(count.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn byte_budget_preserves_in_use_snapshot_and_evicts_it_after_release() {
+    let fixture = Fixture::new();
+    let active_path = fixture.file("active.jsonl", b"{\"id\":1}\n");
+    let other_path = fixture.file("other.jsonl", b"{\"id\":2}\n");
+    let budget = 5 * 1024;
+    let weight = 4 * 1024;
+    let cache = JsonlCache::new(budget);
+    let count = AtomicUsize::new(0);
+    let initial = read_weighted(&cache, &active_path, &count, false, weight).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        let cache_ref = &cache;
+        let path_ref = &active_path;
+        let count_ref = &count;
+        let active = scope.spawn(move || {
+            cache_ref.read(
+                path_ref,
+                |_| Ok(0),
+                false,
+                |state, line, _, _| consume(state, line, count_ref),
+                |state, info| {
+                    entered_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(WAIT)
+                        .expect("release active snapshot");
+                    view(state, info)
+                },
+                |_| weight,
+            )
+        });
+        entered_rx.recv_timeout(WAIT).expect("snapshot is in use");
+        let other = read_weighted(&cache, &other_path, &count, false, weight);
+        let retained_while_active = {
+            let entries = cache.entries.lock().unwrap();
+            (
+                entries.iter().any(|entry| entry.path == active_path),
+                entries
+                    .iter()
+                    .map(|entry| entry.weight.load(Ordering::Relaxed))
+                    .sum::<u64>(),
+            )
+        };
+        release_tx.send(()).unwrap();
+        let active = active.join().expect("active reader thread").unwrap();
+
+        assert_eq!(other.unwrap().ids, vec![2]);
+        assert!(retained_while_active.0);
+        // This is a retention budget: in-use snapshots may exceed it temporarily.
+        assert!(retained_while_active.1 > budget);
+        assert_eq!(active.epoch, initial.epoch);
+        assert_eq!(active.ids, initial.ids);
+        assert!(!active.changed);
+    });
+
+    let retained = read_weighted(&cache, &active_path, &count, false, weight).unwrap();
+    assert_eq!(retained.epoch, initial.epoch);
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    read_weighted(&cache, &other_path, &count, false, weight).unwrap();
+    let rebuilt = read_weighted(&cache, &active_path, &count, false, weight).unwrap();
+    assert_eq!(rebuilt.ids, initial.ids);
+    assert_ne!(rebuilt.epoch, initial.epoch);
+    assert_eq!(count.load(Ordering::SeqCst), 4);
 }
 
 #[test]

@@ -274,7 +274,7 @@ pub fn grok_session_page(
         });
     }
     static CACHE: crate::jsonl_cache::JsonlCache<GrokReader> =
-        crate::jsonl_cache::JsonlCache::new(192 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::GROK_DETAIL_CACHE_BYTES);
     CACHE.read(
         &path,
         |_| Ok(0),
@@ -622,7 +622,7 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
         "Grok summary exceeds size limit"
     );
     static CACHE: crate::read_cache::ReadCache<Value> =
-        crate::read_cache::ReadCache::new(2 * 1024 * 1024);
+        crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES);
     let value = CACHE.read(
         &file,
         |_, size| size.saturating_mul(4),

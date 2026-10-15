@@ -31,7 +31,7 @@ pub(crate) fn read_session_index(
     paths: &CodexPaths,
 ) -> Result<Arc<HashMap<String, SessionIndexEntry>>> {
     static CACHE: crate::jsonl_cache::JsonlCache<Arc<HashMap<String, SessionIndexEntry>>> =
-        crate::jsonl_cache::JsonlCache::new(16 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_INDEX_CACHE_BYTES);
     CACHE.read(
         &paths.session_index(),
         |_| Ok(0),

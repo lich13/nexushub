@@ -1,7 +1,67 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test } from "vitest";
+import type { Options } from "react-markdown";
+import { describe, expect, test, vi } from "vitest";
 import { MarkdownContent } from "./MarkdownContent";
 import { MarkdownPathScope } from "./FilePathLink";
+
+type RemarkPlugin = Extract<NonNullable<Options["remarkPlugins"]>[number], (...args: never[]) => unknown>;
+
+const { cacheBudget, parseCounts } = vi.hoisted(() => ({
+  cacheBudget: { entries: 8, instructionsBytes: 8 * 1024 * 1024, contextBytes: 8 * 1024 * 1024, markdownBytes: 64 * 1024 },
+  parseCounts: new Map<string, number>()
+}));
+
+vi.mock("../../lib/domain/resourceBudgets", () => ({ RENDER_CACHE_BUDGET: cacheBudget }));
+vi.mock("remark-gfm", async importOriginal => {
+  const actual = await importOriginal<typeof import("remark-gfm")>();
+  const observeParse: RemarkPlugin = function () {
+    actual.default.call(this);
+    const parse = this.parser!;
+    this.parser = (text, file) => {
+      parseCounts.set(text, (parseCounts.get(text) ?? 0) + 1);
+      return parse(text, file);
+    };
+  };
+  return { ...actual, default: observeParse };
+});
+
+const cacheSemantics = [
+  "[Guide](./guide.md)",
+  "",
+  "| Format | Value |",
+  "| --- | --- |",
+  "| GFM | retained |",
+  "",
+  "- [x] Completed task",
+  "",
+  "~~Removed text~~ and a note[^footnote].",
+  "",
+  "[^footnote]: Footnote body.",
+  "",
+  "[Unsafe](javascript:alert%281%29)",
+  "",
+  "```ts",
+  "const fixture = 1;",
+  "```"
+].join("\n");
+
+function renderScoped(text: string, cwd: string | null) {
+  return renderToStaticMarkup(
+    <MarkdownPathScope.Provider value={cwd}><MarkdownContent text={text} /></MarkdownPathScope.Provider>
+  );
+}
+
+function expectCacheSemantics(html: string) {
+  expect(html).toContain("<table>");
+  expect(html).toContain("GFM");
+  expect(html).toContain("type=\"checkbox\"");
+  expect(html).toContain("checked");
+  expect(html).toContain("<del>Removed text</del>");
+  expect(html).toContain("Footnote body.");
+  expect(html).toContain("class=\"markdown-code\"");
+  expect(html).toContain("const fixture = 1;");
+  expect(html).not.toMatch(/href=[\"']javascript:/i);
+}
 
 describe("user-visible Markdown", () => {
   test("does not display trailing Codex memory citation metadata", () => {
@@ -108,5 +168,50 @@ describe("user-visible Markdown", () => {
     expect(after).toContain("/fixture/one/new.md");
     expect(after).not.toContain("/fixture/one/old.md");
     expect(before).toContain("/fixture/one/old.md");
+  });
+
+  test.each(["entries", "bytes"] as const)("preserves semantics and path isolation after %s eviction", kind => {
+    const text = `Cache eviction fixture ${kind}.\n\n${cacheSemantics}`;
+    const first = renderScoped(text, "/fixture/one");
+    const warm = renderScoped(text, "/fixture/two");
+    expect(parseCounts.get(text)).toBe(1);
+    expect(first).toContain("：/fixture/one/guide.md");
+    expect(warm).toContain("：/fixture/two/guide.md");
+
+    const count = kind === "entries" ? cacheBudget.entries + 1 : 4;
+    for (let index = 0; index < count; index += 1) {
+      const filler = `Eviction fixture ${kind} ${index}. ${kind === "bytes" ? "x".repeat(6000) : "Small body."}`;
+      renderScoped(filler, "/fixture/one");
+      renderScoped(filler, "/fixture/two");
+      expect(parseCounts.get(filler)).toBe(1);
+    }
+
+    const rebuilt = renderScoped(text, "/fixture/two");
+    expect(parseCounts.get(text)).toBe(2);
+    const withoutScope = renderScoped(text, null);
+    const firstAgain = renderScoped(text, "/fixture/one");
+    expect(parseCounts.get(text)).toBe(2);
+    expect(rebuilt).not.toContain("/fixture/one/guide.md");
+    expect(withoutScope).toContain("：./guide.md");
+    expect(withoutScope).not.toContain("/fixture/");
+    expect(firstAgain).not.toContain("/fixture/two/guide.md");
+    const normalizePath = (html: string) => html.replace(/\/fixture\/(?:one|two)\/guide\.md/g, "./guide.md");
+    for (const html of [warm, rebuilt, withoutScope, firstAgain]) {
+      expectCacheSemantics(html);
+      expect(normalizePath(html)).toBe(normalizePath(first));
+    }
+  });
+
+  test("renders oversize uncached Markdown independently in each path scope", () => {
+    const text = `Oversize fixture.\n\n${cacheSemantics}\n\n${"x".repeat(cacheBudget.markdownBytes / 2 + 1)}`;
+    const scopes = ["/fixture/one", "/fixture/two", null, "/fixture/one"];
+    for (const [index, scope] of scopes.entries()) {
+      const html = renderScoped(text, scope);
+      expectCacheSemantics(html);
+      expect(html).toContain(`：${scope ? `${scope}/guide.md` : "./guide.md"}`);
+      if (scope !== "/fixture/one") expect(html).not.toContain("/fixture/one/guide.md");
+      if (scope !== "/fixture/two") expect(html).not.toContain("/fixture/two/guide.md");
+      expect(parseCounts.get(text)).toBe(index + 1);
+    }
   });
 });

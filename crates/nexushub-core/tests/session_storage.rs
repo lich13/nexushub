@@ -310,6 +310,91 @@ fn storage_size_rejects_symlink_roots_and_directories() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn directory_size_rejects_cached_sources_replaced_with_symlinks() {
+    for replace_primary in [true, false] {
+        let temp = TempDir::new("storage-cached-link");
+        let directory = temp.path().join("native-id");
+        let primary = temp.path().join("native-id.jsonl");
+        fs::create_dir(&directory).unwrap();
+        fs::write(&primary, b"primary").unwrap();
+        fs::write(directory.join("state"), b"state").unwrap();
+        let owner = "cached-link-owner";
+        let initial = wait_for_complete(temp.path(), &directory, Some(&primary), owner);
+        assert_eq!(initial.bytes, Some(12));
+
+        let target = temp.path().join("unrelated-source");
+        let source = if replace_primary {
+            fs::write(&target, vec![b'x'; 4096]).unwrap();
+            &primary
+        } else {
+            fs::create_dir(&target).unwrap();
+            fs::write(target.join("unrelated-state"), vec![b'x'; 4096]).unwrap();
+            &directory
+        };
+        fs::rename(source, temp.path().join("original-source")).unwrap();
+        std::os::unix::fs::symlink(&target, source).unwrap();
+
+        assert_eq!(
+            directory_size(temp.path(), &directory, Some(&primary), owner),
+            SessionStorageSize::unavailable(StorageScope::Directory)
+        );
+        if replace_primary {
+            assert_eq!(
+                file_size(temp.path(), &primary),
+                SessionStorageSize::unavailable(StorageScope::File)
+            );
+        }
+
+        fs::remove_file(source).unwrap();
+        fs::rename(&target, source).unwrap();
+        let pending = directory_size(temp.path(), &directory, Some(&primary), owner);
+        assert_eq!(pending.status, StorageStatus::Pending);
+        assert_eq!(pending.bytes, None);
+        let refreshed = wait_for_complete(temp.path(), &directory, Some(&primary), owner);
+        assert_eq!(
+            refreshed.bytes,
+            Some(4096 + if replace_primary { 5 } else { 7 })
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_size_invalidates_replaced_directory_with_unchanged_timestamp() {
+    let temp = TempDir::new("storage-directory-identity");
+    let directory = temp.path().join("native-id");
+    let primary = temp.path().join("native-id.jsonl");
+    fs::create_dir(&directory).unwrap();
+    fs::write(&primary, b"primary").unwrap();
+    fs::write(directory.join("state"), b"old").unwrap();
+    let owner = "directory-identity-owner";
+    let initial = wait_for_complete(temp.path(), &directory, Some(&primary), owner);
+    assert_eq!(initial.bytes, Some(10));
+
+    let modified = fs::metadata(&directory).unwrap().modified().unwrap();
+    let replacement = temp.path().join("replacement");
+    fs::create_dir(&replacement).unwrap();
+    fs::write(replacement.join("state"), b"new-directory-state").unwrap();
+    fs::File::open(&replacement)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    fs::rename(&directory, temp.path().join("original-directory")).unwrap();
+    fs::rename(&replacement, &directory).unwrap();
+
+    let pending = directory_size(temp.path(), &directory, Some(&primary), owner);
+    assert_eq!(pending.status, StorageStatus::Pending);
+    assert_eq!(pending.bytes, None);
+    let refreshed = wait_for_complete(temp.path(), &directory, Some(&primary), owner);
+    assert_eq!(
+        refreshed.bytes,
+        Some(7 + b"new-directory-state".len() as u64)
+    );
+    assert_ne!(refreshed.bytes, initial.bytes);
+}
+
 #[test]
 fn grok_summary_reports_session_directory_size_after_polling() {
     let temp = TempDir::new("storage-grok");

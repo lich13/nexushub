@@ -317,7 +317,8 @@ impl<S: Default> JsonlCache<S> {
             .iter()
             .map(|entry| entry.weight.load(Ordering::Relaxed))
             .sum::<u64>();
-        while entries.len() > 64 || bytes > self.max_bytes {
+        while entries.len() > crate::resource_limits::SOURCE_CACHE_ENTRIES || bytes > self.max_bytes
+        {
             let Some(index) = entries
                 .iter()
                 .position(|entry| Arc::strong_count(entry) == 1)
@@ -356,19 +357,19 @@ impl HistoryJournal {
             self.epoch = info.epoch.to_owned();
         }
         if self.revision != revision {
-            let reset = reset || changed_ids.len() > 4096;
+            let reset = reset || changed_ids.len() > crate::resource_limits::HISTORY_CHANGED_IDS;
             self.changes.push_back(HistoryChange {
                 revision: revision.clone(),
                 changed_ids: if reset { Vec::new() } else { changed_ids },
                 reset,
             });
-            while self.changes.len() > 64
+            while self.changes.len() > crate::resource_limits::HISTORY_REVISIONS
                 || self
                     .changes
                     .iter()
                     .map(|change| change.changed_ids.len())
                     .sum::<usize>()
-                    > 4096
+                    > crate::resource_limits::HISTORY_CHANGED_IDS
             {
                 self.changes.pop_front();
             }
@@ -389,7 +390,7 @@ impl HistoryJournal {
                     reset |= change.reset;
                     changed_ids.extend(change.changed_ids.iter().cloned());
                 }
-                if changed_ids.len() > 4096 {
+                if changed_ids.len() > crate::resource_limits::HISTORY_CHANGED_IDS {
                     reset = true;
                     changed_ids.clear();
                 }
