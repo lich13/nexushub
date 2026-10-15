@@ -26,6 +26,7 @@ const instructionDisclosure = [
 ].join("\n");
 const environmentContext = "<environment_context>fixture-only</environment_context>";
 const instructionBlock = instructionDisclosure + environmentContext;
+const expectedInstructionContext = [instructionDisclosure, environmentContext].join("\n\n");
 const longInstructionDisclosure = [
   "# AGENTS.md instructions for /isolated/fictional-project",
   "",
@@ -37,6 +38,7 @@ const longInstructionDisclosure = [
   "</INSTRUCTIONS>"
 ].join("\n");
 const longInstructionBlock = longInstructionDisclosure + environmentContext;
+const expectedLongInstructionContext = [longInstructionDisclosure, environmentContext].join("\n\n");
 const trailingRequest = "Please inspect sample.txt and keep this request visible.";
 const formattedText = `${replyEnvelope}\n\n${instructionBlock}\n\n${trailingRequest}`;
 const longFormattedText = `${longInstructionBlock}\n\n${trailingRequest}`;
@@ -93,6 +95,9 @@ for (const provider of providers) {
 
       const article = page.locator(".user-message");
       await expect(article).toHaveCount(1);
+      const requestBubbles = article.locator(".user-message-bubble:not(.user-answer-bubble)");
+      await expect(requestBubbles).toHaveCount(1);
+      await expect(requestBubbles).toHaveText(trailingRequest);
       const answerNodes = article.locator(".user-answer");
       await expect(answerNodes).toHaveCount(2);
       expect(await answerNodes.nth(0).textContent()).toBe(answerOne);
@@ -130,16 +135,13 @@ for (const provider of providers) {
       await expect(instructions).toHaveCount(1);
       await expect(instructions).not.toHaveAttribute("open");
       const instructionSummary = instructions.locator(":scope > summary");
-      const lineCount = instructionDisclosure.split("\n").length;
-      const byteCount = new TextEncoder().encode(instructionDisclosure).length;
-      await expect(instructionSummary).toContainText(`${lineCount} 行 · ${byteCount} 字节`);
+      await expect(instructionSummary).toHaveText("上下文");
       await expect(instructions.locator(".user-instructions-body")).toHaveCount(0);
-      await expect(article.locator(".user-message-bubble").last()).toContainText(environmentContext);
       await instructionSummary.focus();
       await page.keyboard.press("Enter");
       await expect(instructions).toHaveAttribute("open", "");
       const instructionBody = instructions.locator(".user-instructions-body");
-      await expect(instructionBody).toHaveText(instructionDisclosure);
+      await expect(instructionBody).toHaveText(expectedInstructionContext);
       await expect(instructionBody.locator("h1, h2")).toHaveCount(0);
       await expect(instructionBody).toHaveCSS("white-space", "pre-wrap");
       await assertNoOverflow(page);
@@ -198,16 +200,16 @@ test("long user AGENTS body scrolls internally and keeps its choice across mobil
   const instructions = page.locator("details.user-instructions");
   await expect(instructions).not.toHaveAttribute("open");
   const summary = instructions.locator(":scope > summary");
-  const lineCount = longInstructionDisclosure.split("\n").length;
-  const byteCount = new TextEncoder().encode(longInstructionDisclosure).length;
-  await expect(summary).toContainText(`${lineCount} 行 · ${byteCount} 字节`);
+  await expect(summary).toHaveText("上下文");
   await expect(instructions.locator(".user-instructions-body")).toHaveCount(0);
-  await expect(page.locator(".user-message-bubble").last()).toContainText(environmentContext);
+  const requestBubble = page.locator(".user-message-bubble:not(.user-answer-bubble)");
+  await expect(requestBubble).toHaveCount(1);
+  await expect(requestBubble).toHaveText(trailingRequest);
 
   await summary.click();
   await expect(instructions).toHaveAttribute("open", "");
   const body = instructions.locator(".user-instructions-body");
-  await expect(body).toHaveText(longInstructionDisclosure);
+  await expect(body).toHaveText(expectedLongInstructionContext);
   await expect(body).toContainText("## Internal section");
   await expect(page.locator(".user-message-bubble").filter({ hasText: trailingRequest })).toBeVisible();
   await expect(body).toHaveCSS("max-height", "460px");

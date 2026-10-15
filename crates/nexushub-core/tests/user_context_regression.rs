@@ -19,7 +19,7 @@ fn context_pairs(message: &UserMessage) -> Vec<(String, String)> {
         .context_blocks
         .iter()
         .map(|block| {
-            let kind = serde_json::to_value(&block.kind).unwrap();
+            let kind = serde_json::to_value(block.kind).unwrap();
             (
                 kind.as_str()
                     .expect("context kind must serialize as a string")
