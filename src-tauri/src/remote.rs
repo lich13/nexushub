@@ -212,7 +212,7 @@ impl RemoteConnections {
             .json(args)
             .send()
             .await
-            .map_err(|_| safe_error("无法连接远程服务器，请检查地址和网络"))?;
+            .map_err(|_| safe_error("无法连接远程机器，请检查地址和网络"))?;
         let status = response.status();
         if status.is_redirection() {
             return Err(safe_error("服务器返回重定向，请填写最终 HTTPS 地址"));

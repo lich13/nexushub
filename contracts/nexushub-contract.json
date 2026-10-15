@@ -88,7 +88,7 @@
     "desktopTauriOnly": [
       "远程连接",
       "本机",
-      "远程服务器"
+      "远程机器"
     ],
     "forbidden": {
       "desktopEmbeddedTauri": [

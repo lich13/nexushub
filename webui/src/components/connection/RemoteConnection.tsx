@@ -6,16 +6,16 @@ export function MachineButton({ collapsed = false, onConfigure }: { collapsed?: 
   const connection = useConnection();
   const [error, setError] = useState("");
   return <div className="machine-control">
-    <label className={`machine-button ${collapsed ? "compact" : ""}`} title={connection.target === "local" ? "本机" : "远程服务器"}>
+    <label className={`machine-button ${collapsed ? "compact" : ""}`} title={connection.target === "local" ? "本机" : "远程机器"}>
       {connection.target === "local" ? <Monitor size={17} /> : <Cloud size={17} />}
-      {!collapsed && <span>{connection.target === "local" ? "本机" : "远程服务器"}</span>}
+      {!collapsed && <span>{connection.target === "local" ? "本机" : "远程机器"}</span>}
       <select aria-label="当前机器" value={connection.target} disabled={Boolean(connection.writes || connection.changing)} onChange={async event => {
         const target = event.target.value as MachineTarget;
         if (target === "remote" && !connection.configured) { onConfigure(); return; }
         setError("");
         try { await remoteSelect(target); } catch (error) { setError((error as Error).message); }
       }}>
-        <option value="local">本机</option><option value="remote">远程服务器</option>
+        <option value="local">本机</option><option value="remote">远程机器</option>
       </select>
     </label>
     {error && <span role="alert" className="form-error">{error}</span>}
