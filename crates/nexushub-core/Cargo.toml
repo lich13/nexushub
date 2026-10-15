@@ -26,3 +26,7 @@ toml.workspace = true
 toml_edit.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
+
+[dev-dependencies]
+syn = { version = "=2.0.117", features = ["full", "visit"] }
+quote = "=1.0.45"

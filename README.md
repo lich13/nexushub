@@ -93,6 +93,8 @@ Key 文件保存成功后立即删除。服务器只保存摘要，轮换或撤�
 
 ```bash
 corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+node scripts/check-wire-types.mjs
+node --test scripts/test-wire-types.mjs
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
