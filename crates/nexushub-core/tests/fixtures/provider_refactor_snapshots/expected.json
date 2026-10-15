@@ -1,0 +1,1024 @@
+{
+  "claude": {
+    "damagedDetail": {
+      "beforeCursor": null,
+      "events": [
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-damaged-user",
+          "kind": "user_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Read only this synthetic line.",
+          "timestamp": "2026-01-02T03:05:06Z",
+          "turnId": "claude-damaged-user",
+          "userMessage": {
+            "attachments": [],
+            "id": "claude-damaged-user",
+            "text": "Read only this synthetic line."
+          }
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-damaged-final:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Recovered after malformed row.",
+          "timestamp": "2026-01-02T03:05:08Z",
+          "turnId": "claude-damaged-user"
+        }
+      ],
+      "hasMore": false,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-1:784"
+          }
+        ],
+        "epoch": "runtime-epoch-1",
+        "reset": false,
+        "revision": "runtime-epoch-1:784"
+      },
+      "summary": {
+        "canDelete": false,
+        "canRename": false,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "deleteBlockReason": "会话含损坏记录，管理操作已禁用",
+        "formatVersion": "2.1.284",
+        "id": "claude-damaged-snapshot",
+        "lastMessage": "Recovered after malformed row.",
+        "messageCount": 2,
+        "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-damaged-project/transcript.jsonl",
+        "readError": "会话含损坏记录，管理操作已禁用",
+        "renameBlockReason": "会话含损坏记录，管理操作已禁用",
+        "sessionKey": "claude:fffa62c43f4e9467d94993a258acb6d9eeaaa2f6c5fc9aa387653ff005b0e359",
+        "status": "unknown",
+        "storageSize": {
+          "bytes": null,
+          "scope": "file",
+          "status": "unavailable"
+        },
+        "title": "Read only this synthetic line.",
+        "updatedAt": "2026-01-02T03:05:08Z"
+      },
+      "timeline": [
+        {
+          "id": "claude-damaged-user",
+          "title": "Read only this synthetic line."
+        }
+      ],
+      "totalEvents": 2
+    },
+    "damagedSummary": {
+      "canDelete": false,
+      "canRename": false,
+      "cwd": "/synthetic/provider-refactor/workspace",
+      "deleteBlockReason": "会话含损坏记录，管理操作已禁用",
+      "formatVersion": "2.1.284",
+      "id": "claude-damaged-snapshot",
+      "lastMessage": "Recovered after malformed row.",
+      "messageCount": 2,
+      "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-damaged-project/transcript.jsonl",
+      "readError": "会话含损坏记录，管理操作已禁用",
+      "renameBlockReason": "会话含损坏记录，管理操作已禁用",
+      "sessionKey": "claude:fffa62c43f4e9467d94993a258acb6d9eeaaa2f6c5fc9aa387653ff005b0e359",
+      "status": "unknown",
+      "storageSize": {
+        "bytes": null,
+        "scope": "file",
+        "status": "unavailable"
+      },
+      "title": "Read only this synthetic line.",
+      "updatedAt": "2026-01-02T03:05:08Z"
+    },
+    "full": {
+      "beforeCursor": null,
+      "events": [
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-user-1",
+          "kind": "user_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Inspect the synthetic sample.",
+          "timestamp": "2026-01-02T03:04:06Z",
+          "turnId": "claude-user-1",
+          "userMessage": {
+            "attachments": [],
+            "id": "claude-user-1",
+            "text": "Inspect the synthetic sample."
+          }
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-1:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "I will inspect the sample.",
+          "timestamp": "2026-01-02T03:04:07Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": "claude-call-read",
+          "detail": "{\n  \"file_path\": \"/synthetic/provider-refactor/sample.txt\"\n}",
+          "id": "claude-assistant-1:1",
+          "kind": "tool_call",
+          "result": "Synthetic file contents",
+          "role": "Read",
+          "status": "completed",
+          "text": "Read",
+          "timestamp": "2026-01-02T03:04:07Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": "claude-call-question",
+          "detail": "{\n  \"questions\": [\n    {\n      \"options\": [\n        {\n          \"description\": \"Retain the sample result.\",\n          \"label\": \"Keep\"\n        },\n        {\n          \"description\": \"Remove the sample result.\",\n          \"label\": \"Discard\"\n        }\n      ],\n      \"question\": \"Keep the synthetic result?\"\n    }\n  ]\n}",
+          "id": "claude-assistant-question:0",
+          "kind": "tool_call",
+          "result": "Keep",
+          "role": "AskUserQuestion",
+          "status": "completed",
+          "text": "AskUserQuestion",
+          "timestamp": "2026-01-02T03:04:10Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-final:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "The sample result is retained.",
+          "timestamp": "2026-01-02T03:04:12Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-user-2",
+          "kind": "user_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Confirm the final state.",
+          "timestamp": "2026-01-02T03:04:14Z",
+          "turnId": "claude-user-2",
+          "userMessage": {
+            "attachments": [],
+            "id": "claude-user-2",
+            "text": "Confirm the final state."
+          }
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-final-2:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Confirmed.",
+          "timestamp": "2026-01-02T03:04:15Z",
+          "turnId": "claude-user-2"
+        }
+      ],
+      "hasMore": false,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-2:3416"
+          }
+        ],
+        "epoch": "runtime-epoch-2",
+        "reset": false,
+        "revision": "runtime-epoch-2:3416"
+      },
+      "summary": {
+        "canDelete": true,
+        "canRename": true,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "deleteBlockReason": null,
+        "formatVersion": "2.1.284",
+        "id": "claude-refactor-snapshot",
+        "lastMessage": "Confirmed.",
+        "messageCount": 5,
+        "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
+        "readError": null,
+        "renameBlockReason": null,
+        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "status": "recent",
+        "storageSize": {
+          "bytes": 3416,
+          "scope": "file",
+          "status": "complete"
+        },
+        "title": "Inspect the synthetic sample.",
+        "updatedAt": "2026-01-02T03:04:16Z"
+      },
+      "timeline": [
+        {
+          "id": "claude-user-1",
+          "title": "Inspect the synthetic sample."
+        },
+        {
+          "id": "claude-user-2",
+          "title": "Confirm the final state."
+        }
+      ],
+      "totalEvents": 7
+    },
+    "latestPage": {
+      "beforeCursor": "claude-assistant-question:0",
+      "events": [
+        {
+          "callId": "claude-call-question",
+          "detail": "{\n  \"questions\": [\n    {\n      \"options\": [\n        {\n          \"description\": \"Retain the sample result.\",\n          \"label\": \"Keep\"\n        },\n        {\n          \"description\": \"Remove the sample result.\",\n          \"label\": \"Discard\"\n        }\n      ],\n      \"question\": \"Keep the synthetic result?\"\n    }\n  ]\n}",
+          "id": "claude-assistant-question:0",
+          "kind": "tool_call",
+          "result": "Keep",
+          "role": "AskUserQuestion",
+          "status": "completed",
+          "text": "AskUserQuestion",
+          "timestamp": "2026-01-02T03:04:10Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-final:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "The sample result is retained.",
+          "timestamp": "2026-01-02T03:04:12Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-user-2",
+          "kind": "user_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Confirm the final state.",
+          "timestamp": "2026-01-02T03:04:14Z",
+          "turnId": "claude-user-2",
+          "userMessage": {
+            "attachments": [],
+            "id": "claude-user-2",
+            "text": "Confirm the final state."
+          }
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-final-2:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Confirmed.",
+          "timestamp": "2026-01-02T03:04:15Z",
+          "turnId": "claude-user-2"
+        }
+      ],
+      "hasMore": true,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-2:3416"
+          }
+        ],
+        "epoch": "runtime-epoch-2",
+        "reset": false,
+        "revision": "runtime-epoch-2:3416"
+      },
+      "summary": {
+        "canDelete": true,
+        "canRename": true,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "deleteBlockReason": null,
+        "formatVersion": "2.1.284",
+        "id": "claude-refactor-snapshot",
+        "lastMessage": "Confirmed.",
+        "messageCount": 5,
+        "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
+        "readError": null,
+        "renameBlockReason": null,
+        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "status": "recent",
+        "storageSize": {
+          "bytes": 3416,
+          "scope": "file",
+          "status": "complete"
+        },
+        "title": "Inspect the synthetic sample.",
+        "updatedAt": "2026-01-02T03:04:16Z"
+      },
+      "timeline": [
+        {
+          "id": "claude-user-1",
+          "title": "Inspect the synthetic sample."
+        },
+        {
+          "id": "claude-user-2",
+          "title": "Confirm the final state."
+        }
+      ],
+      "totalEvents": 7
+    },
+    "listedSummary": {
+      "canDelete": true,
+      "canRename": true,
+      "cwd": "/synthetic/provider-refactor/workspace",
+      "deleteBlockReason": null,
+      "formatVersion": "2.1.284",
+      "id": "claude-refactor-snapshot",
+      "lastMessage": "Confirmed.",
+      "messageCount": 5,
+      "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
+      "readError": null,
+      "renameBlockReason": null,
+      "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+      "status": "recent",
+      "storageSize": {
+        "bytes": 3416,
+        "scope": "file",
+        "status": "complete"
+      },
+      "title": "Inspect the synthetic sample.",
+      "updatedAt": "2026-01-02T03:04:16Z"
+    },
+    "olderPage": {
+      "afterCursor": "n:claude-assistant-1:1",
+      "beforeCursor": null,
+      "events": [
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-user-1",
+          "kind": "user_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "Inspect the synthetic sample.",
+          "timestamp": "2026-01-02T03:04:06Z",
+          "turnId": "claude-user-1",
+          "userMessage": {
+            "attachments": [],
+            "id": "claude-user-1",
+            "text": "Inspect the synthetic sample."
+          }
+        },
+        {
+          "callId": null,
+          "detail": null,
+          "id": "claude-assistant-1:0",
+          "kind": "assistant_message",
+          "result": null,
+          "role": null,
+          "status": null,
+          "text": "I will inspect the sample.",
+          "timestamp": "2026-01-02T03:04:07Z",
+          "turnId": "claude-user-1"
+        },
+        {
+          "callId": "claude-call-read",
+          "detail": "{\n  \"file_path\": \"/synthetic/provider-refactor/sample.txt\"\n}",
+          "id": "claude-assistant-1:1",
+          "kind": "tool_call",
+          "result": "Synthetic file contents",
+          "role": "Read",
+          "status": "completed",
+          "text": "Read",
+          "timestamp": "2026-01-02T03:04:07Z",
+          "turnId": "claude-user-1"
+        }
+      ],
+      "hasMore": false,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-2:3416"
+          }
+        ],
+        "epoch": "runtime-epoch-2",
+        "reset": false,
+        "revision": "runtime-epoch-2:3416"
+      },
+      "summary": {
+        "canDelete": true,
+        "canRename": true,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "deleteBlockReason": null,
+        "formatVersion": "2.1.284",
+        "id": "claude-refactor-snapshot",
+        "lastMessage": "Confirmed.",
+        "messageCount": 5,
+        "path": "<FIXTURE_ROOT>/claude/config/projects/synthetic-project/transcript.jsonl",
+        "readError": null,
+        "renameBlockReason": null,
+        "sessionKey": "claude:6be8c4741ea59522b60205d7c918494aac9e086c004deedd460488112bcbe005",
+        "status": "recent",
+        "storageSize": {
+          "bytes": 3416,
+          "scope": "file",
+          "status": "complete"
+        },
+        "title": "Inspect the synthetic sample.",
+        "updatedAt": "2026-01-02T03:04:16Z"
+      },
+      "totalEvents": 7
+    }
+  },
+  "codex": {
+    "full": {
+      "before_cursor": null,
+      "blocks": [
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:06Z",
+          "display_kind": null,
+          "group_id": "turn-1",
+          "id": "codex-user-1",
+          "input": null,
+          "item_id": "codex-user-1",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "user",
+          "status": null,
+          "summary": null,
+          "text": "Inspect the synthetic sample.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-1",
+          "user_message": {
+            "attachments": [],
+            "id": "codex-user-1",
+            "text": "Inspect the synthetic sample."
+          }
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:07Z",
+          "display_kind": null,
+          "group_id": "turn-1",
+          "id": "codex-assistant-1",
+          "input": null,
+          "item_id": "codex-assistant-1",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "I will inspect the sample.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [],
+          "call_id": "codex-call-read",
+          "created_at": "2026-01-02T03:04:09Z",
+          "display_kind": "tool",
+          "group_id": "codex-call-read",
+          "id": "raw-4",
+          "input": "{\n  \"cmd\": \"read synthetic fixture\"\n}",
+          "item_id": null,
+          "kind": "function_call_output",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": true,
+          "role": "tool",
+          "status": "completed",
+          "summary": "Synthetic file contents",
+          "text": "Synthetic file contents",
+          "tool_name": "exec_command",
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [
+            {
+              "answers": [
+                "Keep"
+              ],
+              "note": null,
+              "question_id": "keep"
+            }
+          ],
+          "call_id": "codex-call-question",
+          "created_at": "2026-01-02T03:04:10Z",
+          "display_kind": "question_result",
+          "group_id": "codex-call-question",
+          "id": "raw-6",
+          "input": null,
+          "item_id": "codex-call-question",
+          "kind": "request_user_input_result",
+          "payload": {
+            "payload": {
+              "arguments": {
+                "questions": [
+                  {
+                    "id": "keep",
+                    "options": [
+                      {
+                        "description": "Retain the sample result.",
+                        "label": "Keep"
+                      },
+                      {
+                        "description": "Remove the sample result.",
+                        "label": "Discard"
+                      }
+                    ],
+                    "question": "Keep the synthetic result?"
+                  }
+                ]
+              },
+              "call_id": "codex-call-question",
+              "name": "request_user_input",
+              "type": "function_call"
+            },
+            "timestamp": "2026-01-02T03:04:10Z",
+            "turn_id": "turn-1",
+            "type": "response_item"
+          },
+          "plan_status": null,
+          "questions": [
+            {
+              "header": null,
+              "id": "keep",
+              "options": [
+                {
+                  "description": "Retain the sample result.",
+                  "label": "Keep"
+                },
+                {
+                  "description": "Remove the sample result.",
+                  "label": "Discard"
+                }
+              ],
+              "question": "Keep the synthetic result?"
+            }
+          ],
+          "resolved": true,
+          "role": "assistant",
+          "status": "completed",
+          "summary": "1/1 answered",
+          "text": "1/1 answered",
+          "tool_name": "request_user_input",
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:12Z",
+          "display_kind": null,
+          "group_id": "turn-1",
+          "id": "codex-assistant-2",
+          "input": null,
+          "item_id": "codex-assistant-2",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "The sample result is retained.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:13Z",
+          "display_kind": null,
+          "group_id": "turn-2",
+          "id": "codex-user-2",
+          "input": null,
+          "item_id": "codex-user-2",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "user",
+          "status": null,
+          "summary": null,
+          "text": "Confirm the final state.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-2",
+          "user_message": {
+            "attachments": [],
+            "id": "codex-user-2",
+            "text": "Confirm the final state."
+          }
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:14Z",
+          "display_kind": null,
+          "group_id": "turn-2",
+          "id": "codex-assistant-3",
+          "input": null,
+          "item_id": "codex-assistant-3",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "Confirmed.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-2"
+        }
+      ],
+      "has_more_blocks": false,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-3:2491"
+          }
+        ],
+        "epoch": "runtime-epoch-3",
+        "reset": false,
+        "revision": "runtime-epoch-3:2491"
+      },
+      "messages": [
+        {
+          "created_at": "2026-01-02T03:04:06Z",
+          "kind": "message",
+          "role": "user",
+          "text": "Inspect the synthetic sample."
+        },
+        {
+          "created_at": "2026-01-02T03:04:07Z",
+          "kind": "message",
+          "role": "assistant",
+          "text": "I will inspect the sample."
+        },
+        {
+          "created_at": "2026-01-02T03:04:12Z",
+          "kind": "message",
+          "role": "assistant",
+          "text": "The sample result is retained."
+        },
+        {
+          "created_at": "2026-01-02T03:04:13Z",
+          "kind": "message",
+          "role": "user",
+          "text": "Confirm the final state."
+        },
+        {
+          "created_at": "2026-01-02T03:04:14Z",
+          "kind": "message",
+          "role": "assistant",
+          "text": "Confirmed."
+        }
+      ],
+      "raw_event_count": 13,
+      "summary": {
+        "active_job_id": null,
+        "active_turn_id": null,
+        "archived_at": null,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "id": "codex-refactor-snapshot",
+        "last_event_kind": "task_complete",
+        "latest_message": "Confirmed.",
+        "message_count": 13,
+        "model": "fixture-model",
+        "pending_elicitation": null,
+        "rollout_path": "<FIXTURE_ROOT>/codex/rollout.jsonl",
+        "status": "Recent",
+        "title": "Synthetic provider snapshot",
+        "updated_at": "2026-01-02T03:04:14Z"
+      },
+      "timeline": [
+        {
+          "id": "codex-user-1",
+          "title": "Inspect the synthetic sample."
+        },
+        {
+          "id": "codex-user-2",
+          "title": "Confirm the final state."
+        }
+      ],
+      "total_blocks": 7
+    },
+    "latestPage": {
+      "before_cursor": "b:4",
+      "blocks": [
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:12Z",
+          "display_kind": null,
+          "group_id": "turn-1",
+          "id": "codex-assistant-2",
+          "input": null,
+          "item_id": "codex-assistant-2",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "The sample result is retained.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:13Z",
+          "display_kind": null,
+          "group_id": "turn-2",
+          "id": "codex-user-2",
+          "input": null,
+          "item_id": "codex-user-2",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "user",
+          "status": null,
+          "summary": null,
+          "text": "Confirm the final state.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-2",
+          "user_message": {
+            "attachments": [],
+            "id": "codex-user-2",
+            "text": "Confirm the final state."
+          }
+        },
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:14Z",
+          "display_kind": null,
+          "group_id": "turn-2",
+          "id": "codex-assistant-3",
+          "input": null,
+          "item_id": "codex-assistant-3",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "Confirmed.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-2"
+        }
+      ],
+      "has_more_blocks": true,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-3:2491"
+          }
+        ],
+        "epoch": "runtime-epoch-3",
+        "reset": false,
+        "revision": "runtime-epoch-3:2491"
+      },
+      "messages": [],
+      "raw_event_count": 13,
+      "summary": {
+        "active_job_id": null,
+        "active_turn_id": null,
+        "archived_at": null,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "id": "codex-refactor-snapshot",
+        "last_event_kind": "task_complete",
+        "latest_message": "Confirmed.",
+        "message_count": 13,
+        "model": "fixture-model",
+        "pending_elicitation": null,
+        "rollout_path": "<FIXTURE_ROOT>/codex/rollout.jsonl",
+        "status": "Recent",
+        "title": "Synthetic provider snapshot",
+        "updated_at": "2026-01-02T03:04:14Z"
+      },
+      "timeline": [
+        {
+          "id": "codex-user-1",
+          "title": "Inspect the synthetic sample."
+        },
+        {
+          "id": "codex-user-2",
+          "title": "Confirm the final state."
+        }
+      ],
+      "total_blocks": 7
+    },
+    "olderPage": {
+      "after_cursor": "n:raw-6",
+      "before_cursor": "b:1",
+      "blocks": [
+        {
+          "answers": [],
+          "call_id": null,
+          "created_at": "2026-01-02T03:04:07Z",
+          "display_kind": null,
+          "group_id": "turn-1",
+          "id": "codex-assistant-1",
+          "input": null,
+          "item_id": "codex-assistant-1",
+          "kind": "message",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": null,
+          "role": "assistant",
+          "status": null,
+          "summary": null,
+          "text": "I will inspect the sample.",
+          "tool_name": null,
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [],
+          "call_id": "codex-call-read",
+          "created_at": "2026-01-02T03:04:09Z",
+          "display_kind": "tool",
+          "group_id": "codex-call-read",
+          "id": "raw-4",
+          "input": "{\n  \"cmd\": \"read synthetic fixture\"\n}",
+          "item_id": null,
+          "kind": "function_call_output",
+          "payload": null,
+          "plan_status": null,
+          "questions": [],
+          "resolved": true,
+          "role": "tool",
+          "status": "completed",
+          "summary": "Synthetic file contents",
+          "text": "Synthetic file contents",
+          "tool_name": "exec_command",
+          "truncated": false,
+          "turn_id": "turn-1"
+        },
+        {
+          "answers": [
+            {
+              "answers": [
+                "Keep"
+              ],
+              "note": null,
+              "question_id": "keep"
+            }
+          ],
+          "call_id": "codex-call-question",
+          "created_at": "2026-01-02T03:04:10Z",
+          "display_kind": "question_result",
+          "group_id": "codex-call-question",
+          "id": "raw-6",
+          "input": null,
+          "item_id": "codex-call-question",
+          "kind": "request_user_input_result",
+          "payload": {
+            "payload": {
+              "arguments": {
+                "questions": [
+                  {
+                    "id": "keep",
+                    "options": [
+                      {
+                        "description": "Retain the sample result.",
+                        "label": "Keep"
+                      },
+                      {
+                        "description": "Remove the sample result.",
+                        "label": "Discard"
+                      }
+                    ],
+                    "question": "Keep the synthetic result?"
+                  }
+                ]
+              },
+              "call_id": "codex-call-question",
+              "name": "request_user_input",
+              "type": "function_call"
+            },
+            "timestamp": "2026-01-02T03:04:10Z",
+            "turn_id": "turn-1",
+            "type": "response_item"
+          },
+          "plan_status": null,
+          "questions": [
+            {
+              "header": null,
+              "id": "keep",
+              "options": [
+                {
+                  "description": "Retain the sample result.",
+                  "label": "Keep"
+                },
+                {
+                  "description": "Remove the sample result.",
+                  "label": "Discard"
+                }
+              ],
+              "question": "Keep the synthetic result?"
+            }
+          ],
+          "resolved": true,
+          "role": "assistant",
+          "status": "completed",
+          "summary": "1/1 answered",
+          "text": "1/1 answered",
+          "tool_name": "request_user_input",
+          "truncated": false,
+          "turn_id": "turn-1"
+        }
+      ],
+      "has_more_blocks": true,
+      "history": {
+        "changes": [
+          {
+            "changedIds": [],
+            "reset": false,
+            "revision": "runtime-epoch-3:2491"
+          }
+        ],
+        "epoch": "runtime-epoch-3",
+        "reset": false,
+        "revision": "runtime-epoch-3:2491"
+      },
+      "messages": [],
+      "raw_event_count": 13,
+      "summary": {
+        "active_job_id": null,
+        "active_turn_id": null,
+        "archived_at": null,
+        "cwd": "/synthetic/provider-refactor/workspace",
+        "id": "codex-refactor-snapshot",
+        "last_event_kind": "task_complete",
+        "latest_message": "Confirmed.",
+        "message_count": 13,
+        "model": "fixture-model",
+        "pending_elicitation": null,
+        "rollout_path": "<FIXTURE_ROOT>/codex/rollout.jsonl",
+        "status": "Recent",
+        "title": "Synthetic provider snapshot",
+        "updated_at": "2026-01-02T03:04:14Z"
+      },
+      "total_blocks": 7
+    }
+  }
+}
