@@ -337,7 +337,7 @@ fn native_question_answers(text: &str) -> Option<Vec<(String, usize)>> {
 
 pub fn rollout_async_questions(path: &Path) -> Result<Vec<AsyncQuestionCall>> {
     static CACHE: crate::read_cache::ReadCache<Vec<AsyncQuestionCall>> =
-        crate::read_cache::ReadCache::new(4 * 1024 * 1024);
+        crate::read_cache::ReadCache::new(crate::resource_limits::CODEX_QUESTION_CACHE_BYTES);
     CACHE.read(
         path,
         |calls, _| {

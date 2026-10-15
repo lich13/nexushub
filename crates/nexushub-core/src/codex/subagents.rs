@@ -320,7 +320,7 @@ impl Default for NativeState {
 }
 fn native_status(path: &Path) -> Result<SubagentStatus> {
     static CACHE: crate::jsonl_cache::JsonlCache<NativeState> =
-        crate::jsonl_cache::JsonlCache::new(1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_CACHE_BYTES);
     CACHE.read(
         path,
         |_| Ok(0),

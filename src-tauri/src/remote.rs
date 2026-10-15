@@ -20,8 +20,9 @@ use std::{
 };
 
 const KEYCHAIN_SERVICE: &str = "com.lich13.nexushub.remote";
-const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
-const CREDENTIAL_WAIT: Duration = Duration::from_secs(15);
+use nexushub_core::resource_limits::{
+    CREDENTIAL_WAIT, REMOTE_RESPONSE_BYTES as MAX_RESPONSE_BYTES,
+};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

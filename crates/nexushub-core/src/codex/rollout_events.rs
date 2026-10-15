@@ -46,7 +46,7 @@ pub fn thread_detail_page_from_summary(
     since: Option<&str>,
 ) -> Result<ThreadDetail> {
     static CACHE: crate::jsonl_cache::JsonlCache<DetailState> =
-        crate::jsonl_cache::JsonlCache::new(384 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_DETAIL_CACHE_BYTES);
     let Some(path) = summary.rollout_path.clone() else {
         return Ok(ThreadDetail {
             timeline: Some(Default::default()),
@@ -640,7 +640,7 @@ impl ScanState {
 }
 pub(crate) fn scan_rollout(path: &Path, _max_messages: usize) -> Result<RolloutScan> {
     static CACHE: crate::jsonl_cache::JsonlCache<ScanState> =
-        crate::jsonl_cache::JsonlCache::new(8 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CODEX_SCAN_CACHE_BYTES);
     CACHE.read(
         path,
         |_| Ok(0),

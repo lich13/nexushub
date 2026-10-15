@@ -1,3 +1,4 @@
+import { RENDER_CACHE_BUDGET } from "../../lib/domain/resourceBudgets";
 import { Check, Copy } from "lucide-react";
 import { memo, useContext, useMemo, useState, type ComponentProps } from "react";
 import Markdown, { defaultUrlTransform, type Options } from "react-markdown";
@@ -14,7 +15,7 @@ type RemarkPlugin = Extract<NonNullable<Options["remarkPlugins"]>[number], (...a
 type MarkdownParser = NonNullable<ThisParameterType<RemarkPlugin>["parser"]>;
 const compiledMarkdown = new Map<string, { json: string; bytes: number }>();
 let compiledMarkdownBytes = 0;
-const compiledMarkdownLimit = 8 * 1024 * 1024;
+const compiledMarkdownLimit = RENDER_CACHE_BUDGET.markdownBytes;
 
 // Cache the complete, context-free syntax pipeline across thread remounts.
 // react-markdown's URL handling and React components still run per render on
@@ -42,7 +43,7 @@ const reuseMarkdownTree: RemarkPlugin = function () {
     const json = JSON.stringify(tree);
     const bytes = (text.length + json.length) * 2;
     if (bytes <= compiledMarkdownLimit) {
-      while (compiledMarkdown.size >= 512 || compiledMarkdownBytes + bytes > compiledMarkdownLimit) {
+      while (compiledMarkdown.size >= RENDER_CACHE_BUDGET.entries || compiledMarkdownBytes + bytes > compiledMarkdownLimit) {
         const key = compiledMarkdown.keys().next().value;
         if (key === undefined) break;
         compiledMarkdownBytes -= compiledMarkdown.get(key)!.bytes;

@@ -5,7 +5,7 @@ use std::{
     time::SystemTime,
 };
 
-const MAX_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_BYTES: u64 = crate::resource_limits::CLAUDE_FILE_BYTES;
 
 #[cfg(test)]
 thread_local! { pub(super) static BODY_RECORDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
@@ -49,7 +49,7 @@ impl ReaderState {
         #[cfg(test)]
         BODY_RECORDS.with(|count| count.set(count.get() + 1));
         ensure!(
-            line.len() <= 32 * 1024 * 1024,
+            line.len() as u64 <= crate::resource_limits::CLAUDE_LINE_BYTES,
             "Claude 会话记录超出读取上限"
         );
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -116,7 +116,8 @@ impl ReaderState {
 
 pub(super) fn read(path: &Path) -> Result<Arc<Parsed>> {
     static CACHE: crate::jsonl_cache::JsonlCache<ReaderState> =
-        crate::jsonl_cache::JsonlCache::new(512 * 1024 * 1024).with_line_limit(32 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CLAUDE_DETAIL_CACHE_BYTES)
+            .with_line_limit(crate::resource_limits::CLAUDE_LINE_BYTES);
     CACHE.read(
         path,
         |size| {
@@ -199,8 +200,8 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
     // Keep only summary fields here, so revisiting an inactive list cannot
     // repeatedly evict and reparse every large transcript.
     static CACHE: crate::read_cache::ReadCache<Arc<Parsed>> =
-        crate::read_cache::ReadCache::new(8 * 1024 * 1024)
-            .with_entry_limit(2000)
+        crate::read_cache::ReadCache::new(crate::resource_limits::CLAUDE_SUMMARY_CACHE_BYTES)
+            .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
             .with_native_metadata();
     CACHE.read(
         path,

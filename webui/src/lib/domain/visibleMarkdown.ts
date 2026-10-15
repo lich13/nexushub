@@ -1,3 +1,4 @@
+import { RENDER_CACHE_BUDGET } from "./resourceBudgets";
 import { fromMarkdown } from "mdast-util-from-markdown";
 
 type Range = { start: number; end: number };
@@ -131,7 +132,7 @@ function instructionLabel(line: string): boolean {
 // so unchanged instructions do not need a fresh Markdown parse on every mount.
 const instructionCache = new Map<string, { segments: InstructionSegment[]; bytes: number }>();
 let instructionCacheBytes = 0;
-const instructionCacheLimit = 8 * 1024 * 1024;
+const instructionCacheLimit = RENDER_CACHE_BUDGET.instructionsBytes;
 
 export function instructionSegments(text: string): InstructionSegment[] {
   const cached = instructionCache.get(text);
@@ -143,7 +144,7 @@ export function instructionSegments(text: string): InstructionSegment[] {
   const segments = parseInstructionSegments(text);
   const bytes = text.length * 2 + segments.reduce((total, segment) => total + segment.text.length * 2 + 128, 0);
   if (bytes <= instructionCacheLimit) {
-    while (instructionCache.size >= 512 || instructionCacheBytes + bytes > instructionCacheLimit) {
+    while (instructionCache.size >= RENDER_CACHE_BUDGET.entries || instructionCacheBytes + bytes > instructionCacheLimit) {
       const key = instructionCache.keys().next().value;
       if (key === undefined) break;
       instructionCacheBytes -= instructionCache.get(key)!.bytes;

@@ -26,7 +26,7 @@ pub struct CredentialAccess {
 impl Default for CredentialAccess {
     fn default() -> Self {
         Self {
-            gate: Arc::new(Semaphore::new(1)),
+            gate: Arc::new(Semaphore::new(crate::resource_limits::CREDENTIAL_WORKERS)),
         }
     }
 }

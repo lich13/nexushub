@@ -211,7 +211,7 @@ struct CreationState {
 }
 pub(super) fn creation_names(path: &Path) -> Result<CreationNames> {
     static CACHE: crate::jsonl_cache::JsonlCache<CreationState> =
-        crate::jsonl_cache::JsonlCache::new(4 * 1024 * 1024);
+        crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_LIFECYCLE_CACHE_BYTES);
     CACHE.read(
         path,
         |_| Ok(0),

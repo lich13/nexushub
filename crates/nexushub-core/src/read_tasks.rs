@@ -5,8 +5,11 @@ use tokio::sync::Semaphore;
 static READERS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
     Arc::new(Semaphore::new(
         std::thread::available_parallelism()
-            .map_or(2, usize::from)
-            .clamp(2, 4),
+            .map_or(crate::resource_limits::READ_WORKERS_MIN, usize::from)
+            .clamp(
+                crate::resource_limits::READ_WORKERS_MIN,
+                crate::resource_limits::READ_WORKERS_MAX,
+            ),
     ))
 });
 

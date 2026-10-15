@@ -128,7 +128,7 @@ pub fn scan(provider: NativeProvider) -> Result<NativeScan> {
 
 pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
     static CACHE: crate::read_cache::ReadCache<Vec<Value>> =
-        crate::read_cache::ReadCache::new(32 * 1024 * 1024);
+        crate::read_cache::ReadCache::new(crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
     CACHE.read(
         path,
         |_, size| size.saturating_mul(5),

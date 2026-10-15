@@ -1,3 +1,4 @@
+import { RENDER_CACHE_BUDGET } from "./resourceBudgets";
 import type { UserContextBlock } from "../../types";
 import { literalMarkdownRanges, visibleMarkdown } from "./visibleMarkdown";
 
@@ -15,7 +16,7 @@ const tags: readonly [string, UserContextBlock["kind"]][] = [
 ];
 const cache = new Map<string, { projection: Projection; bytes: number }>();
 let cacheBytes = 0;
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_BYTES = RENDER_CACHE_BUDGET.contextBytes;
 
 export function visibleContextText(text: string): string {
   return visibleMarkdown(text, literalRanges(text));
@@ -29,7 +30,7 @@ export function projectUserMessage(text: string, contextBlocks?: UserContextBloc
   const projection = project(text);
   const bytes = 2 * (text.length + projection.text.length + projection.contextBlocks.reduce((sum, block) => sum + block.text.length, 0));
   if (bytes <= MAX_BYTES) {
-    while (cache.size >= 512 || cacheBytes + bytes > MAX_BYTES) {
+    while (cache.size >= RENDER_CACHE_BUDGET.entries || cacheBytes + bytes > MAX_BYTES) {
       const first = cache.keys().next().value!;
       cacheBytes -= cache.get(first)!.bytes;
       cache.delete(first);
