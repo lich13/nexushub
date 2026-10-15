@@ -13,6 +13,23 @@ use std::{
     sync::Mutex,
 };
 
+#[cfg(test)]
+mod maintenance_tests;
+
+#[cfg(test)]
+type MutationHook = Box<dyn FnMut(&str, &Path) -> Result<()>>;
+#[cfg(test)]
+thread_local! {
+    static TEST_MUTATION_HOOK: std::cell::RefCell<Option<MutationHook>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn mutation_checkpoint(stage: &str, quarantine: &Path) -> Result<()> {
+    TEST_MUTATION_HOOK.with(|slot| match slot.borrow_mut().as_mut() {
+        Some(hook) => hook(stage, quarantine),
+        None => Ok(()),
+    })
+}
+
 mod preview_context;
 pub(crate) use preview_context::PreviewContext;
 
@@ -526,6 +543,11 @@ fn execute_with_expected_archive(
         .iter()
         .map(|p| content_hash(p))
         .collect::<Result<Vec<_>>>()?;
+    let identities = selected
+        .paths
+        .iter()
+        .map(fs::symlink_metadata)
+        .collect::<std::io::Result<Vec<_>>>()?;
     let original_index = read_index(paths)?;
     ensure!(
         snapshot(paths, &tx, id, expected_archived)?.fingerprint == fingerprint,
@@ -574,7 +596,33 @@ fn execute_with_expected_archive(
             fs::rename(file, &staged)?;
             moved.push((file.clone(), staged));
         }
-        for (i, (_, staged)) in moved.iter().enumerate() {
+        #[cfg(test)]
+        mutation_checkpoint("moved", &quarantine)?;
+        for (i, (original, staged)) in moved.iter().enumerate() {
+            ensure!(
+                fs::symlink_metadata(original)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+                "原线程路径重新出现，暂不能删除"
+            );
+            let staged_identity = fs::symlink_metadata(staged)?;
+            ensure!(staged_identity.is_file(), "隔离后目标不是普通文件");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                ensure!(
+                    (
+                        staged_identity.dev(),
+                        staged_identity.ino(),
+                        staged_identity.nlink()
+                    ) == (identities[i].dev(), identities[i].ino(), 1),
+                    "隔离后文件身份发生变化，请重新预览"
+                );
+            }
+            ensure!(
+                staged_identity.len() == identities[i].len()
+                    && staged_identity.modified()? == identities[i].modified()?,
+                "隔离后文件发生变化，请重新预览"
+            );
             ensure!(
                 !fs::symlink_metadata(staged)?.file_type().is_symlink(),
                 "隔离后文件变为符号链接"
@@ -588,6 +636,8 @@ fn execute_with_expected_archive(
                 "隔离后无法确认线程已结束"
             );
         }
+        #[cfg(test)]
+        mutation_checkpoint("quarantined", &quarantine)?;
         ensure!(
             read_index(paths)? == original_index,
             "会话索引已被其他进程修改，请重新预览"
@@ -608,6 +658,8 @@ fn execute_with_expected_archive(
             fs::rename(candidate, paths.session_index())?;
             index_replaced = true;
         }
+        #[cfg(test)]
+        mutation_checkpoint("index_replaced", &quarantine)?;
         let retained = retained_thread_fingerprint(&tx, id)?;
         crate::archive::prepare_delete_threads(&tx, &[id.to_string()])?;
         crate::archive::cleanup_selected_threads(&tx)?;
@@ -619,6 +671,8 @@ fn execute_with_expected_archive(
             read_index(paths)? == rewritten_index,
             "删除期间会话索引发生变化"
         );
+        #[cfg(test)]
+        mutation_checkpoint("before_commit", &quarantine)?;
         tx.commit()?;
         Ok(())
     })();
