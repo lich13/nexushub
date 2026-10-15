@@ -1,9 +1,13 @@
 """Regression tests for workspace MSRV and shared dependency resolution checks."""
 import importlib.util
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
+
+# Dynamic source imports must not persist interpreter paths in repository bytecode.
+sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("check_workspaces", Path(__file__).with_name("check-workspaces.py"))
 check_workspaces = importlib.util.module_from_spec(spec)
