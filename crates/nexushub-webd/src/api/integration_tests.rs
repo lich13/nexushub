@@ -3208,3 +3208,215 @@ async fn subagent_rpc_rejects_client_paths_in_otherwise_valid_requests() {
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }
+
+mod maintenance_security {
+    use super::*;
+    use std::{io::Write, sync::Arc, time::Duration};
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturedLogs {
+        fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
+            let logs = self.clone();
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || logs.clone())
+                .finish()
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    struct FixtureDirectory(PathBuf);
+
+    impl FixtureDirectory {
+        fn new() -> Self {
+            let directory = unique_temp_dir("maintenance-security");
+            fs::create_dir_all(&directory).unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for FixtureDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("fixture directory cleanup failed");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn auth_failures_keep_credentials_out_of_responses_logs_and_audit() {
+        let directory = FixtureDirectory::new();
+        let path = directory.0.join("nexushub.sqlite");
+        let db = PanelDb::open(&path).unwrap();
+        let key = db.rotate_admin_api_key().unwrap();
+        let rejected = format!("nhk_{}", "bc".repeat(32));
+        let legacy = "fixture-legacy-session-value";
+        let bearer = "Bearer fixture-bearer-value";
+        let mut config = Config::default();
+        config.security.auth_rate_limit_per_minute = 1;
+        let app = router(crate::state::AppState::new(config, db.clone()))
+            .layer(tower_http::trace::TraceLayer::new_for_http());
+        let peer = Some("127.0.0.1:43210".parse().unwrap());
+        let logs = CapturedLogs::default();
+        async {
+            for expected in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
+                let response = api_key_request(
+                    app.clone(),
+                    &[
+                        ("x-api-key", &rejected),
+                        ("cookie", legacy),
+                        ("authorization", bearer),
+                        ("x-forwarded-for", &rejected),
+                    ],
+                    peer,
+                )
+                .await;
+                assert_eq!(response.status(), expected);
+                let headers = format!("{:?}", response.headers());
+                let body = to_bytes(response.into_body(), 4096).await.unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                for secret in [key.as_str(), rejected.as_str(), legacy, bearer] {
+                    assert!(
+                        !headers.contains(secret),
+                        "response headers exposed credentials"
+                    );
+                    assert!(!body.contains(secret), "response body exposed credentials");
+                }
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"],
+                    "API key authorization failed"
+                );
+            }
+            let response = api_key_request(app.clone(), &[("x-api-key", &key)], peer).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            assert!(!String::from_utf8(body.to_vec()).unwrap().contains(&key));
+        }
+        .with_subscriber(logs.subscriber())
+        .await;
+
+        let log_text = logs.text();
+        assert!(log_text.contains("finished processing request"));
+        let connection = Connection::open(&path).unwrap();
+        let audit: String = connection.query_row(
+            "SELECT group_concat(COALESCE(admin_id,'') || action || COALESCE(target_type,'') || COALESCE(target_id,'') || COALESCE(ip,'') || detail_json, '|') FROM audit_log",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(audit.matches("api.auth_denied").count(), 1);
+        assert!(audit.contains("127.0.0.1"), "source IP audit was lost");
+        for secret in [key.as_str(), rejected.as_str(), legacy, bearer] {
+            assert!(
+                !log_text.contains(secret),
+                "request logs exposed credentials"
+            );
+            assert!(
+                !audit.contains(secret),
+                "authentication audit exposed credentials"
+            );
+        }
+    }
+
+    struct BarkEchoServer {
+        base: String,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for BarkEchoServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn bark_echo_server(status: u16, code: i64, prefix: &'static str) -> BarkEchoServer {
+        let app = axum::Router::new().route(
+            "/push",
+            axum::routing::post(
+                move |axum::Json(request): axum::Json<serde_json::Value>| async move {
+                    let echoed = request["device_key"]
+                        .as_str()
+                        .expect("fixture request omitted its device key");
+                    (
+                        StatusCode::from_u16(status).unwrap(),
+                        axum::Json(json!({"code":code,"message":format!("{prefix} {echoed}")})),
+                    )
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        BarkEchoServer { base, task }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bark_error_responses_keep_echoed_device_keys_out_of_outcomes_and_logs() {
+        const DEVICE_KEY: &str = "fixture-bark-credential-value";
+        const TITLE: &str = "fixture private title";
+        const BODY: &str = "fixture private notification body";
+        for (status, code, prefix, reason) in [
+            (400, 400, "fixture echo", "http_status"),
+            (503, 503, "fixture echo", "http_status"),
+            (200, 400, "fixture echo", "bark_response_code"),
+            (200, 400, "BadDeviceToken", "apns_permanent_rejection"),
+        ] {
+            let server = bark_echo_server(status, code, prefix).await;
+            let mut config = Config::default();
+            config.probe.notifications.enabled = true;
+            config.probe.notifications.server_url = server.base.clone();
+            let request = crate::ProbeBarkRequest {
+                title: TITLE.into(),
+                body: BODY.into(),
+                dedupe_key: "fixture-maintenance-notification".into(),
+            };
+            let logs = CapturedLogs::default();
+            let outcome = crate::send_bark_notification(
+                &config,
+                DEVICE_KEY.as_bytes(),
+                &request,
+                Duration::from_secs(2),
+            )
+            .with_subscriber(logs.subscriber())
+            .await
+            .unwrap();
+            assert!(!outcome.sent && !outcome.skipped);
+            assert_eq!(outcome.http_status, Some(status));
+            assert_eq!(outcome.reason.as_deref(), Some(reason));
+            assert_eq!(outcome.request_count, 1);
+            let serialized = serde_json::to_string(&outcome).unwrap();
+            let debug = format!("{outcome:?}");
+            let log_text = logs.text();
+            assert!(log_text.contains("Bark delivery attempt"));
+            for secret in [DEVICE_KEY, TITLE, BODY] {
+                assert!(
+                    !serialized.contains(secret),
+                    "Bark outcome exposed request content"
+                );
+                assert!(
+                    !debug.contains(secret),
+                    "Bark debug output exposed request content"
+                );
+                assert!(
+                    !log_text.contains(secret),
+                    "Bark logs exposed request content"
+                );
+            }
+        }
+    }
+}
