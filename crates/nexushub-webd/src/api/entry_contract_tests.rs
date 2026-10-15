@@ -71,15 +71,19 @@ fn routes_keep_health_and_single_rpc_transport_surface() {
 #[test]
 fn rpc_surface_separates_retired_commands_from_current_allowlist() {
     let surface = src("rpc_surface.rs");
-    let commands = src("../../nexushub-core/src/services/commands.rs");
+    use nexushub_core::services::commands;
     assert!(surface.contains("is_transport_rpc_command"));
     assert!(surface.contains("is_business_rpc_command"));
-    assert!(commands.contains("RETIRED_COMMANDS"));
-    assert!(commands.contains("grok.list"));
-    assert!(commands.contains("pi.list"));
-    assert!(commands.contains("grok.deleteExecute"));
-    assert!(commands.contains("THREADS_SEND"));
-    assert!(commands.contains("RETIRED_COMMANDS"));
+    for command in ["grok.list", "grok.deleteExecute"] {
+        assert!(commands::is_allowed_rpc_command(command));
+        assert!(!commands::is_retired_command(command));
+    }
+    assert!(commands::is_retired_command("pi.list"));
+    assert!(commands::is_retired_command(commands::THREADS_SEND));
+    for command in commands::RETIRED_COMMANDS {
+        assert!(!commands::is_allowed_rpc_command(command));
+        assert!(!commands::is_allowed_transport_command(command));
+    }
 }
 
 #[test]
