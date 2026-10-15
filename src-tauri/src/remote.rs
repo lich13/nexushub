@@ -688,3 +688,6 @@ mod tests {
         assert!(state.begin_change(0).is_ok());
     }
 }
+
+#[cfg(test)]
+mod maintenance_tests;
