@@ -33,11 +33,11 @@ API 协议固定为 **2**，`system.capabilities` 返回协议、宿主和能力
 
 ## 本机 Codex 桌面协作
 
-`codex_desktop` 能力仅属于 macOS 的 `desktop_embedded_tauri`。七个 `codex.desktop.*` 桌面命令经类型化 query/API 和 Tauri 适配进入 `codex::desktop`；Linux dispatcher、远程 allowlist、原有 RPC 与 API 协议 2 保持原边界。旧服务没有该可选能力时继续阅读。归档、不可核验、远程来源和子线程不能执行。
+`codex_desktop` 能力仅属于 macOS 的 `desktop_embedded_tauri`。八个 `codex.desktop.*` 桌面命令经类型化 query/API 和 Tauri 适配进入 `codex::desktop`；Linux dispatcher、远程 allowlist、原有 RPC 与 API 协议 2 保持原边界。旧服务没有该可选能力时继续阅读。归档、不可核验、远程来源和子线程不能执行。
 
 IPC 通过私有 Unix socket 连接原生桌面，校验同 UID、文件身份、权限和 peer；逐次发现 owner，跟随精确本机线程。长度前缀帧上限 64MiB，连接/请求等待 10 秒；状态快照与补丁严格检查修订号、路径和预算，失步关闭。每个 App 最多四个会话 worker；只按需释放无队列的空闲 worker。独立的短生命周期 bundled helper 只读取模型/模式/技能/应用/插件目录或创建空线程，不执行 turn、resume 或队列；helper 串行门禁最多等待 20 秒，取得许可后每次原生操作另限 20 秒；多页目录并非整体只等待 20 秒。退出或取消时仅回收自有 helper。
 
-原生执行使用 `desktop/protocol.rs` 中固定的白名单，依据桌面 build 20586：stream=11、queue=2，start=2、steer=1、interrupt=4、settings=2、审批/问答/elicitation=1；initialize=0、owner discovery/follow=1。没有猜测或探测新的写入方法。协议不支持、owner 不可用、修订失步、超时分别返回固定中文提示；历史阅读仍可使用，不启用其他执行器。发送前重验线程存在、未归档、当前 owner 与状态；补充/停止绑定当前回合。NexusHub 自有发送队列独立于原生整表队列，不覆盖原生排队内容。只在已核验空闲状态时发送，并等待返回的确切回合终态才发送下一项；原生界面并发操作仍由原生桌面处理，IPC 不提供跨界面的原子空闲锁。
+原生执行使用 `desktop/protocol.rs` 中固定的白名单，依据桌面 build 20586：stream=11、queue=2，start=2、steer=1、interrupt=4、settings=2、审批/问答/elicitation=1；initialize=0、owner discovery/follow=1。没有猜测或探测新的写入方法。协议不支持、owner 不可用、修订失步、超时分别返回固定中文提示；前三种情况同时提示已核验 build 20586 和在桌面打开同一线程后重连，不探测新的协议；历史阅读仍可使用，不启用其他执行器。发送前重验线程存在、未归档、当前 owner 与状态；补充/停止绑定当前回合。NexusHub 自有发送队列独立于原生整表队列，不覆盖原生排队内容。只在已核验空闲状态时发送，并等待返回的确切回合终态才发送下一项；原生界面并发操作仍由原生桌面处理，IPC 不提供跨界面的原子空闲锁。
 
 自有数据库 schema 2 增加加密发送记录，schema 1 退役迁移保持独立完成标记。专属 Keychain 密钥通过 `CredentialAccess` 访问，没有开发密钥回退；缺失密钥时保留已有密文。跨进程私有文件锁限制唯一调度者。认领先落盘，只有原生确认或匹配 client message ID 后清除正文；断线/重启的未发项暂停，正在发送项标记结果不明，不自动重发。普通补充失败保留待取消，不能在恢复队列时改成新回合。新增非空引用区间以已解析引用索引保存，不依赖会过期的界面 handle；没有区间时沿用旧加密正文的逐字节格式，旧 client message ID 重试仍按原正文判等。停止先暂停本线程未发队列，移除结果不明记录需要明确核对。
 
@@ -47,17 +47,28 @@ WebUI 仅传不透明 handle，`referenceSpans` 为协议 2 内的可选字段�
 
 原生选择器路径和原生目录引用仅在 Rust 解析；选中文件及队列发送前核验规范路径、dev/inode、大小与修改身份。图片限 20MiB，仍使用 `localImage` 和既有附件字段；Mention 使用 `app://id` 和 `plugin://name@marketplace`，仅展示原生可访问应用与已安装启用插件。普通文件暂保留 `# Files mentioned by the user:` 兼容前缀；如同时有内联引用，Rust 在构造完整文本时统一平移区间。
 
+`codex.desktop.attachments` 只处理本机主窗口的接收区绑定、坐标更新、明确粘贴、草稿引用释放和解绑；请求只含 revision、session/binding、矩形与 handle，不含路径、URL、图片字节或原生方法名。Rust 接收 OS 拖放，核对窗口可见/聚焦、区域、当前来源和可写线程后复用文件选择核验，整批超限或含无效文件时整批拒绝。单窗口和多 WebView 的原生拖放路由分别处理；禁用通用前端 event listen 权限，防止 Tauri 默认拖放事件把原生路径送入 JS，只用专用 Channel 返回名称、种类和 handle。发送或选择文件期间暂停接收；隐藏、切换与解绑后丢弃迟到导入，普通文本粘贴保持原行为。
+
+粘贴只在明确的图片 paste 事件后读取系统 PNG/TIFF，不读取 HTML、文件 URL 或网络图片。单次捕获最多 64MiB，解码前按尺寸预留每像素 16 字节、共 128MiB 工作预算；只接受单图且深度不超过 16 位，输出 PNG 最多 20MiB，不缩放或降低质量。PNG 原样保留，TIFF 由系统框架无损转换；读取及转换后均核对 clipboard changeCount。导入串行，预算不代表系统剪贴板服务或进程 RSS 的硬上界。
+
+粘贴图片写入 NexusHub 数据库旁的私有附件目录（目录 0700、文件 0600、随机名、独占创建），写完并同步后捕获原有 `NativeReference::File` 身份，之后不改名或改写。图片为原生 owner 可读取的明文私有文件；归属和生命周期索引使用现有专属 Keychain 密钥加密，索引上限 1MiB，图片总量最多 512MiB/256 项。沿用跨进程 worker 锁，初始化/恢复后台工作取消也不提前释放锁。未提交草稿可显式释放或在 30 分钟后清理；隐藏/重连在授权有效期内保留草稿。发送前先原子持久化并同步保留标记，再交给原有队列，成功、失败、取消或结果不明均不自动删除这些图片，避免破坏原生历史。容量满时拒绝新粘贴，可继续使用文件选择器。启动只清理有完整归属证据的过期草稿，`Released` 标记允许接续草稿删除；密钥缺失、损坏/缺失索引、未知遗留文件或身份变化时保留文件并停止操作，不猜测崩溃后的归属，不新增数据库表或旧队列格式。
+
 审批 key 包含完整原生请求；文件审批另外绑定对应 turn/item 的实际 changes。展示不完整、未知权限/表单约束均不得批准，保留原生处理入口。命令与文件审批在 `supportedDecisions` 可选字段明确声明后，才显示“允许本次会话”；新增可选 `decision` 保留原 `allow` 布尔兼容，只接受已核验的 accept/decline/acceptForSession 及一致布尔值。未知决策为 UnsupportedProtocol，过期 key 为 RequestExpired；权限仍限 turn scope，不创建永久授权。问答只提交当前请求的精确 ID；原生另一侧完成请求后以新的原生状态撤下原请求。
+
+审批的可选 `review` 字段按已有字符串和结构投影命令、工作目录、原因、文件变化与网络/文件系统权限；旧 `body` 后备仍保留。未知字段放入折叠原文，命令用等宽文本、文件 diff 按文件折叠且展开才挂载；每个 diff 最多 32KiB、最多 100 文件、投影文本总量 64KiB，UTF-8 边界安全截断。原有 pretty body 16KiB/compact params 64KiB 审批守卫保持；截断或未完整显示时不能批准。序列化与请求哈希使用有界写入或流式处理，不克隆整份 params/changes，不改变完整请求绑定的哈希。
+
+协作状态直接取当前 `DesktopView`：等待请求优先于执行、发送、排队、结果不明/暂停和空闲；同一行显示待处理数，运行复用 `RunningIndicator`。断连、只读、隐藏或 detach 后不显示旧状态，不添加 IPC 方法或未知进度字段。
 
 Tauri 频道最多每秒十次投影视图，初值取自同一订阅；前端丢弃旧修订、旧连接或旧线程结果。仅当前协作线程通过 350ms 合并事件刷新详情；慢读取不被反复取消，期间的新事件在完成后触发一次尾刷新，包含审批完成和回合终态。原有阅读轮询保持，未添加全局高频轮询。隐藏/离开页面释放界面订阅和待刷新计时器，已提交的本机队列继续归原 worker；原有 monitor 和通知仍独立读取原生证据。
 
 ### 证据与未核实项
 
-本轮只读核对已安装 build 20586 的应用源码；`crates/nexushub-core/tests/fixtures/desktop-native-input/source-derived.json` 保存源文件标识、SHA-256 和脱敏合成输入，**不是桌面采集快照**。`conversation-turn-mutations` 确认内联字段为 camelCase `byteRange`；审批面板的 Qr / $r 与 follower 转发实现共同确认命令和文件的 `acceptForSession`。未复制原生源码到运行时代码，也未采集真实用户消息。
+1.3.1 的只读核对依据桌面 build 20586 应用源码；`crates/nexushub-core/tests/fixtures/desktop-native-input/source-derived.json` 保存源文件标识、SHA-256 和脱敏合成输入，**不是桌面采集快照**。`conversation-turn-mutations` 确认内联字段为 camelCase `byteRange`；审批面板的 Qr / $r 与 follower 转发实现共同确认命令和文件的 `acceptForSession`。未复制原生源码到运行时代码，也未采集真实用户消息。
 
-- **【未核实】** 桌面原生文件引用的完整 wire 形状；因此未替换文件兼容前缀，不宣称与原生气泡完全一致。
+- **【未核实】** 桌面原生文件引用的完整 wire 形状。1.3.2 未采集 liveCaptured snapshot，N0/N1 按批准范围跳过；因此普通文件兼容前缀和旧加密正文保持，不宣称与原生气泡完全一致。
 - **【未核实】** 文件审批 `cancel`、永久授权、策略修订和其他未列举决策；未暴露按钮或发送这些字符串。
 - **【未核实】** 本轮真实 skill/app/plugin/文件/图片 snapshot、两端操作及视觉/滚动体验；合成 socket 与 UI 单元测试不替代用户验收。
+- **【未核实】** 仅 IPC pending、rollout 未落盘时的漏通知。当前 monitor 依据原生 rollout，尚无可复现的漏通知证据，N6 不扩展 worker 通知，也不声称已经证明无缺口。
 - **【未核实】** 其他桌面 build 的兼容性；版本或状态不匹配时只读降级，由用户在 Codex 中继续处理。
 
 ## Provider 读取与历史
