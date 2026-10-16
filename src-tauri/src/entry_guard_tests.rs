@@ -18,10 +18,12 @@ mod tests {
             .split_once(']')
             .map(|(commands, _)| commands)
             .expect("generate_handler block must close");
-        body.lines()
+        // Inspect every registered path, including commands outside the older
+        // commands/remote modules, so new host-only modules cannot escape this guard.
+        body.split(',')
             .map(str::trim)
-            .filter(|line| line.starts_with("commands::") || line.starts_with("remote::"))
-            .map(|line| line.trim_end_matches(',').to_string())
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
             .collect()
     }
 
