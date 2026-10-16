@@ -36,7 +36,7 @@ pub struct CodexDesktopBridge {
     credentials: CredentialAccess,
     intent: AtomicU64,
     grants: Mutex<Grants>,
-    catalogs: Mutex<catalogs::CatalogCache>,
+    catalogs: catalogs::Catalogs,
 }
 
 struct BridgeRuntime {
@@ -61,7 +61,7 @@ impl CodexDesktopBridge {
             credentials,
             intent: AtomicU64::new(0),
             grants: Mutex::new(Grants::default()),
-            catalogs: Mutex::new(catalogs::CatalogCache::default()),
+            catalogs: catalogs::Catalogs::default(),
         }
     }
 
@@ -331,8 +331,9 @@ pub async fn action(
         let helper = DesktopHelper::installed(state.codex_paths().home)
             .await
             .map_err(desktop_error)?;
-        let mut catalogs = bridge.catalogs.lock().await;
-        catalogs
+        let intent = bridge.intent.load(Ordering::SeqCst);
+        bridge
+            .catalogs
             .read(
                 &helper,
                 cwd,
@@ -345,15 +346,19 @@ pub async fn action(
                     query: String::new(),
                     cursor: None,
                 },
+                || require_catalog_context(&remote, &bridge, request.revision, intent),
             )
             .await?;
-        catalogs.validate_settings(
-            request.revision,
-            &thread,
-            model,
-            reasoning_effort.as_deref(),
-            *mode,
-        )?;
+        bridge
+            .catalogs
+            .validate_settings(
+                request.revision,
+                &thread,
+                model,
+                reasoning_effort.as_deref(),
+                *mode,
+            )
+            .await?;
     }
     remote.require_local(request.revision)?;
     let worker = runtime.worker(&request.session_id).await?;
@@ -503,6 +508,19 @@ pub async fn create(
     Ok(DesktopCreatedThread { thread_id })
 }
 
+fn require_catalog_context(
+    remote: &RemoteConnections,
+    bridge: &CodexDesktopBridge,
+    revision: u64,
+    intent: u64,
+) -> Result<(), String> {
+    remote.require_local(revision)?;
+    if bridge.intent.load(Ordering::SeqCst) != intent {
+        return Err("所选线程已变化，目录结果已丢弃".into());
+    }
+    Ok(())
+}
+
 #[tauri::command(rename = "codex.desktop.catalog")]
 pub async fn catalog(
     state: State<'_, DesktopState>,
@@ -530,12 +548,13 @@ pub async fn catalog(
     let helper = DesktopHelper::installed(state.codex_paths().home)
         .await
         .map_err(desktop_error)?;
-    // Catalog I/O must not retain the grants lock used by sends and selection.
+    // Cache and grant locks never span the serial native helper operation.
+    let intent = bridge.intent.load(Ordering::SeqCst);
     let page = bridge
         .catalogs
-        .lock()
-        .await
-        .read(&helper, &cwd, &thread, &request)
+        .read(&helper, &cwd, &thread, &request, || {
+            require_catalog_context(&remote, &bridge, request.revision, intent)
+        })
         .await?;
     remote.require_local(request.revision)?;
     runtime.worker(session_id).await?;
