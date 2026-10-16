@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { actOnDesktopThread, attachDesktopThread, openDesktopThread, type DesktopAction, type DesktopView } from "../lib/query/desktop";
 import { beforeMachineChange, connectionSnapshot, useConnection } from "../lib/query/connection";
 import { useThreadCacheActions } from "../lib/query/threads";
+import { desktopRefresh } from "../lib/desktopRefresh";
 
 export function useCodexDesktop(threadId: string) {
   const connection = useConnection();
@@ -14,6 +15,7 @@ export function useCodexDesktop(threadId: string) {
   const lifetime = useRef(0);
   const current = useRef<DesktopView | null>(null);
   const events = useRef(0);
+  const refreshThread = useRef<(() => void) | null>(null);
   const previousThread = useRef(threadId);
 
   useEffect(() => {
@@ -30,22 +32,24 @@ export function useCodexDesktop(threadId: string) {
     if (switched || !attempt || connection.target !== "local" || !visible) return;
     let disposed = false;
     let detach: (() => Promise<void>) | undefined;
-    let refresh: ReturnType<typeof setTimeout> | undefined;
-    const valid = () => !disposed && generation === lifetime.current && connectionSnapshot().revision === connection.revision;
+    let sessionId: string | undefined;
+    const valid = () => !disposed && !document.hidden && generation === lifetime.current && connectionSnapshot().revision === connection.revision;
+    const refresh = desktopRefresh(() => cache.refreshDesktopThread(threadId), valid);
+    refreshThread.current = refresh.request;
     const receive = (next: DesktopView) => {
-      if (!valid() || next.threadId !== threadId) return;
+      if (!valid() || next.threadId !== threadId || sessionId && next.sessionId !== sessionId) return;
+      sessionId = next.sessionId;
       const previous = current.current;
+      if (previous && next.revision < previous.revision) return;
       events.current += 1;
       current.current = next; setView(next);
-      if (!refresh) refresh = setTimeout(() => {
-        refresh = undefined;
-        if (valid()) void cache.invalidateThread(threadId);
-      }, 350);
+      refresh.request();
       if (previous?.runtime !== next.runtime) void cache.invalidateThreads();
     };
     const cleanup = async () => {
       disposed = true;
-      clearTimeout(refresh);
+      refresh.dispose();
+      if (refreshThread.current === refresh.request) refreshThread.current = null;
       const release = detach; detach = undefined;
       if (release) await release().catch(() => {});
     };
@@ -78,7 +82,8 @@ export function useCodexDesktop(threadId: string) {
       if (!current.current || result.revision > current.current.revision || (events.current === sequence && result.revision === current.current.revision)) {
         current.current = result; setView(result);
       }
-      void cache.invalidateThreadAndThreads(threadId);
+      refreshThread.current?.();
+      void cache.invalidateThreads();
     } catch (reason) {
       if (generation === lifetime.current) setError(reason instanceof Error ? reason.message : "操作失败");
       throw reason;
