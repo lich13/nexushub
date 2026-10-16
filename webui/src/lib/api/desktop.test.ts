@@ -1,0 +1,172 @@
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { runtimeCapabilitiesFromResponse } from "../domain/capabilities";
+import type { DesktopView } from "./desktop";
+
+type ChannelFrame = { index: number; message?: DesktopView; end?: boolean };
+type ChannelCallback = (frame: ChannelFrame) => void;
+type InvokeHandler = (command: string, args?: Record<string, unknown>) => unknown;
+
+function view(threadId: string, sessionId = "session-fixture", revision = 1): DesktopView {
+  return {
+    sessionId, threadId, revision, connected: true, writable: true, runtime: "codex",
+    activeTurnId: null, model: null, reasoningEffort: null, mode: null,
+    requests: [], queue: [], error: null
+  };
+}
+
+function installBridge(handler?: InvokeHandler) {
+  const callbacks = new Map<number, ChannelCallback>();
+  let nextId = 1;
+  const transformCallback = vi.fn((callback: ChannelCallback) => {
+    const id = nextId++;
+    callbacks.set(id, callback);
+    return id;
+  });
+  const unregisterCallback = vi.fn((id: number) => { callbacks.delete(id); });
+  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    if (handler) return await handler(command, args);
+    if (command === "remote.select") {
+      return { target: "remote", revision: 1, baseUrl: "https://api.example.invalid/", configured: true };
+    }
+    if (command === "codex.desktop.attach" || command === "codex.desktop.action") return view("thread-fixture");
+    if (command === "codex.desktop.detach") return { ok: true };
+    return {};
+  });
+  vi.stubGlobal("__TAURI_INTERNALS__", { transformCallback, unregisterCallback });
+  vi.stubGlobal("__NEXUSHUB_TEST_INVOKE__", invoke);
+  return { callbacks, transformCallback, unregisterCallback, invoke };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.resetModules();
+});
+
+describe("Codex desktop transport", () => {
+  test("keeps only the newest full snapshot when channel frames arrive out of order", async () => {
+    const bridge = installBridge();
+    const { attachDesktopThread } = await import("./desktop");
+    const receive = vi.fn();
+    const attached = await attachDesktopThread("thread-fixture", receive);
+    const emit = bridge.callbacks.get(1)!;
+    const newest = view("thread-fixture", "session-fixture", 8);
+
+    emit({ index: 8, message: newest });
+    emit({ index: 7, message: view("thread-fixture", "session-fixture", 7) });
+
+    expect(receive).toHaveBeenCalledExactlyOnceWith(newest);
+    expect(attached.initial.revision).toBe(1);
+    await attached.detach();
+  });
+
+  test("detach closes the channel and unregisters its callback", async () => {
+    const bridge = installBridge();
+    const { attachDesktopThread } = await import("./desktop");
+    const receive = vi.fn();
+    const attached = await attachDesktopThread("thread-fixture", receive);
+    const emit = bridge.callbacks.get(1)!;
+
+    await attached.detach();
+    emit({ index: 1, message: view("thread-fixture") });
+
+    expect(bridge.unregisterCallback).toHaveBeenCalledExactlyOnceWith(1);
+    expect(bridge.callbacks.size).toBe(0);
+    expect(receive).not.toHaveBeenCalled();
+    expect(bridge.invoke).toHaveBeenLastCalledWith("codex.desktop.detach", {
+      request: { revision: 0, sessionId: "session-fixture" }
+    });
+  });
+
+  test("drops frames for another thread and for a previous machine revision", async () => {
+    const bridge = installBridge();
+    const { attachDesktopThread } = await import("./desktop");
+    const runtime = await import("../runtime");
+    const receive = vi.fn();
+    const attached = await attachDesktopThread("thread-fixture", receive);
+    const emit = bridge.callbacks.get(1)!;
+
+    emit({ index: 1, message: view("another-thread") });
+    expect(receive).not.toHaveBeenCalled();
+
+    await runtime.remoteSelect("remote");
+    emit({ index: 2, message: view("thread-fixture") });
+
+    expect(receive).not.toHaveBeenCalled();
+    await attached.detach();
+  });
+
+  test("unregisters the channel callback when attach fails", async () => {
+    const bridge = installBridge(command => {
+      if (command === "codex.desktop.attach") throw new Error("fixture attach failure");
+      if (command === "codex.desktop.detach") return { ok: true };
+      return {};
+    });
+    const { attachDesktopThread } = await import("./desktop");
+
+    await expect(attachDesktopThread("thread-fixture", vi.fn())).rejects.toThrow("fixture attach failure");
+
+    expect(bridge.transformCallback).toHaveBeenCalledOnce();
+    expect(bridge.unregisterCallback).toHaveBeenCalledExactlyOnceWith(1);
+    expect(bridge.callbacks.size).toBe(0);
+  });
+
+  test("refuses every desktop API on a remote machine before remote.invoke", async () => {
+    const bridge = installBridge();
+    const runtime = await import("../runtime");
+    const desktop = await import("./desktop");
+    await runtime.remoteSelect("remote");
+
+    const calls = [
+      () => desktop.attachDesktopThread("thread-fixture", vi.fn()),
+      () => desktop.actOnDesktopThread("session-fixture", { type: "resumeQueue" }),
+      () => desktop.openDesktopThread("thread-fixture"),
+      () => desktop.desktopCatalog({ sessionId: null, projectHandle: null, kind: "models", query: "", cursor: null }),
+      () => desktop.chooseDesktopItem("project"),
+      () => desktop.createDesktopThread("project-fixture")
+    ];
+
+    for (const call of calls) await expect(Promise.resolve().then(call)).rejects.toThrow("桌面协作仅支持本机 Codex");
+
+    expect(bridge.invoke.mock.calls.map(([command]) => command)).toEqual(["remote.select"]);
+    expect(bridge.invoke.mock.calls.map(([command]) => command)).not.toContain("remote.invoke");
+    expect(bridge.transformCallback).not.toHaveBeenCalled();
+  });
+
+  test("preserves the action and message identity in repeated transport attempts", async () => {
+    const bridge = installBridge();
+    const { actOnDesktopThread } = await import("./desktop");
+    const action = { type: "send" as const, messageId: "message-fixture", text: "fixture text", references: ["attachment-fixture"] };
+
+    await actOnDesktopThread("session-fixture", action);
+    await actOnDesktopThread("session-fixture", action);
+
+    const requests = bridge.invoke.mock.calls
+      .filter(([command]) => command === "codex.desktop.action")
+      .map(([, args]) => (args as { request: { sessionId: string; action: typeof action } }).request);
+    expect(requests).toHaveLength(2);
+    expect(requests.map(request => request.action.messageId)).toEqual(["message-fixture", "message-fixture"]);
+    expect(requests[0].action).toBe(action);
+    expect(requests[1].action).toBe(action);
+    expect(requests.map(request => request.sessionId)).toEqual(["session-fixture", "session-fixture"]);
+  });
+});
+
+test("desktop collaboration requires an explicit local runtime capability", () => {
+  const baseline = {
+    threads: true, jobs: true, probe: true, settings: true, job_history: true, app_updater: true,
+    systemd: false, linux_update_job: false, prune_backups: false
+  };
+  const missing = runtimeCapabilitiesFromResponse({
+    api_version: 2, host_surface: "desktop_embedded_tauri", capabilities: { ...baseline }
+  });
+  const remoteClaim = runtimeCapabilitiesFromResponse({
+    api_version: 2, host_surface: "linux_server_api", capabilities: { ...baseline, codex_desktop: true }
+  });
+  const localClaim = runtimeCapabilitiesFromResponse({
+    api_version: 2, host_surface: "desktop_embedded_tauri", capabilities: { ...baseline, codex_desktop: true }
+  });
+
+  expect(missing.codexDesktop).toBe(false);
+  expect(remoteClaim.codexDesktop).toBe(false);
+  expect(localClaim.codexDesktop).toBe(true);
+});

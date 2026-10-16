@@ -73,7 +73,7 @@ const apiSources = import.meta.glob([
 
 function apiCommandLiterals(): Set<string> {
   const out = new Set<string>();
-  const wrappers = new Set(["callCommand", "invokeNative", "changeConnection", "startProbeCommand", "runTypedUpdateCommand"]);
+  const wrappers = new Set(["callCommand", "invokeNative", "runtimeRpc", "changeConnection", "startProbeCommand", "runTypedUpdateCommand"]);
   const cwd = fileURLToPath(new URL("../../../", import.meta.url));
   const configPath = fileURLToPath(new URL("../../../tsconfig.app.json", import.meta.url));
   const api = new API({ cwd });

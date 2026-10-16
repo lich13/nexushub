@@ -2,7 +2,7 @@
 
 本文记录稳定的布局、交互和可访问性约束，不是面向用户的产品说明。
 
-NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. There is no composer or duplicate status card. Codex subagent details open only when requested.
+NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: neutral light/dark themes, a narrow task list and one readable conversation column. Only local, unarchived Codex main threads have a compact collaboration composer after connecting to the native desktop. Other history surfaces and subagent details remain read-only, with no duplicate status cards.
 
 ## Layout and interaction
 
@@ -17,6 +17,14 @@ NexusHub follows a quiet, compact reading workspace aligned with Codex Desktop: 
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup and job history under `更新与维护`; the retired system status panel and polling do not exist.
 - Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable and guard mutations; only fatal parse or identity errors suppress notification scanning.
 - The reading column has a 20px timeline rail outside the document flow on desktop and mobile. Its complete user-message index is independent of loaded or folded body pages. Only a bounded range of marks mounts; scrolling and Home/End/arrow keys reach every entry. A single hover/focus preview sizes to its text, capped at 280px on desktop and 240px on mobile, without a duplicate browser tooltip. Selecting an unloaded entry reads one bounded window; older/newer paging and 返回最新 preserve the reading context. Assistant replies, plans and activities retain search anchors without rail marks. `⌘F` on macOS and `Ctrl+F` elsewhere opens machine-scoped 当前线程/当前 Provider search.
+
+## 本机 Codex 协作区
+
+本机 Codex 列表提供新建线程，先用原生目录选择器选工作目录；空线程由 Codex 创建并打开。正文下方仅保留一个紧凑协作区，连接失败在原处说明并可在 Codex 中打开；不显示调试身份、协议版本或文件内部路径。远程、归档、子线程和其他 Provider 不显示发送入口。
+
+输入区支持文件/图片及原生技能、应用、已启用插件引用，引用以名称标签显示并可逐个移除。模型、思考强度和默认/Plan 模式采用原生可用目录。⌘/Ctrl+Enter 发送，输入法组合过程中不触发；运行时区分排队、补充和停止。等待队列可取消，暂停后由用户继续；结果不明保留记录，只有明确核对后才能移除，不自动重发。
+
+审批内容按需展开且高度受限；命令、文件变化和权限展示完整可核对内容后才允许确认。问答不预选答案，密码型回答不自动补全；不支持的请求提供在 Codex 中处理的入口。连接和请求失败保留草稿，迟到响应不得切换线程或恢复旧审批。既有阅读、历史分页、工具折叠、搜索定位与滚动锚点规则继续适用。
 
 ## User messages and attachments
 

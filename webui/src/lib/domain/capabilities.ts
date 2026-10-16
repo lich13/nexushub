@@ -4,6 +4,7 @@ export type RuntimeCapabilityMatrix = {
   runtimeKind: "desktop"; hostSurface: HostSurface; codexStatePaths: boolean;
   threadSubagents?: boolean;
   hiddenCleanupScan?: boolean;
+  codexDesktop?: boolean;
   updatePrune: boolean; threadCleanup: boolean; threadArchiveActions: boolean; updateServiceLabels: boolean;
 };
 export const desktopBootstrapCapabilities: RuntimeCapabilityMatrix = {
@@ -21,6 +22,7 @@ export function runtimeCapabilitiesFromResponse(status?: Partial<SystemCapabilit
     // Subagent collection arrived in 1.2.11; absent capability still means unsupported.
     threadSubagents: core.thread_subagents === true,
     hiddenCleanupScan: core.hidden_cleanup_scan === true,
+    codexDesktop: !remote && core.codex_desktop === true,
     threadCleanup: core.thread_cleanup === true, threadArchiveActions: core.thread_archive_actions === true,
     updateServiceLabels: remote && core.linux_update_job };
 }

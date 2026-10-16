@@ -9,8 +9,8 @@
 ## Architecture
 
 - Shared actions flow through `NexusHubUseCases` and the contract registry, then typed WebUI query/domain code and thin Linux/Tauri adapters.
-- Codex, Claude Code and Grok are read-first providers. Native rename and scoped deletion and Codex archive/restore are the only provider mutations. Claude rename only appends a verified `custom-title` to an inactive, known-format transcript; never install Claude, edit its configuration or infer permission waits from generic pending tools. Recheck identity, activity, symlinks and fingerprints before execution.
-- The NexusHub Goal feature and automatic recovery chain are retired. Goal RPC names remain only as unavailable contract tombstones. Codex native logs are retained as read-only error-monitor input; no scheduler, recovery retry or Goal database table remains.
+- Codex, Claude Code and Grok are read-first providers. Native rename, scoped deletion and Codex archive/restore remain guarded management operations. Local Codex main threads additionally support explicit collaboration through a verified native desktop owner; remote threads, subagents, Claude and Grok remain read-first. Claude rename only appends a verified `custom-title` to an inactive, known-format transcript; never install Claude, edit its configuration or infer permission waits from generic pending tools. Recheck identity, activity, symlinks and fingerprints before execution.
+- The NexusHub Goal feature and automatic recovery chain are retired. Goal RPC names remain only as unavailable contract tombstones. Codex native logs are retained as read-only error-monitor input; no Goal scheduler, recovery retry or Goal database table remains. The separate desktop outgoing queue stores only user-submitted messages and never runs models or edits the native queue.
 - Probe keeps error detection, persistent cursors, dedupe, retention and encrypted Bark delivery. Provider identities and terminal evidence are validated independently. Codex ordinary feedback requests are classified locally only after a verified terminal turn. Native asynchronous questions remain pending across tool acknowledgements and normal completion; all notification entrances use the shared question tracker, identity recheck and persistent per-call delivery claim. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable and guard mutations; only fatal parse or identity errors suppress notification scanning. Partial answers never change the original dedupe identity. Never replay questions older than the asynchronous enablement baseline.
 - Settings use one `更新与维护` surface and the retired `system.status` action cannot execute; capability bootstrap uses `system.capabilities`. File-path Markdown actions must preserve the source path and never invent a web origin.
 
@@ -18,6 +18,13 @@
 - Old web authentication, static assets and EventSource are retired. Preserve API authentication throttling, business audit, Bark encryption and notification state. Database erasure is limited to NexusHub's own retired web credentials, Pi integration and Gotify records; never migrate native provider databases.
 
 Grok display activity and deletion protection are separate: use one native-process snapshot per list or batch preview, validate PID identity/start time and read primary-turn events through the bounded incremental cache. A valid complete history with no verified native owner may enter deletion preview even when its last turn lacks an ending. Open ownership, unverifiable identity, corrupt records and partial writes remain protected. Menus and batch previews use the optional deletion eligibility, with the old status fallback for older servers. Recheck ownership and fingerprints before execution and after quarantine; never edit native registration or terminate user processes to release protection.
+
+## 本机 Codex 桌面协作
+
+- `codex.desktop.*` 只注册到 macOS Tauri，不进入 Linux RPC 或远程 allowlist；API 协议保持 2。使用固定原生 IPC 方法和版本，逐次核验本机 owner、线程、当前回合及审批请求。身份、状态修订或协议不明立即停止，不能回退到独立 CLI 执行或整表覆盖原生队列。
+- 独立短生命周期 helper 仅读取目录与创建空线程；对话执行始终交给已打开线程的原生桌面。文件和目录由 Rust 原生选择器授予不透明 handle，目录引用来自原生 catalog；不接受 WebUI 文件路径。队列中的文件引用发送前重验身份。
+- NexusHub 自有队列使用专属 Keychain 密钥加密，并持有跨进程唯一 worker 锁。发送前持久化认领，收到确认后清除正文；断线/重启保留暂停项，结果不明不得自动重发。停止先暂停本线程队列；补充绑定当前回合，失败补充不能转成下一回合。
+- 审批和问答以完整原生请求及文件 diff 身份绑定。未完整显示或不支持的表单留在 Codex 中处理，不默认批准、不扩大授权范围。机器切换、隐藏窗口和离开页面释放界面订阅，已授权的本机队列仍只属于原来源。
 
 ## UI and safety
 

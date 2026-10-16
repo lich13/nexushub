@@ -265,6 +265,7 @@ export type SystemCapabilities = {
   prune_backups: boolean;
   thread_cleanup?: boolean;
   hidden_cleanup_scan?: boolean;
+  codex_desktop?: boolean;
   thread_archive_actions?: boolean;
   thread_subagents?: boolean;
 };

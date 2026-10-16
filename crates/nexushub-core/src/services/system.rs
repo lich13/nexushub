@@ -66,6 +66,7 @@ impl FromStr for HostSurface {
 pub enum Capability {
     Threads,
     ThreadSubagents,
+    CodexDesktop,
     Jobs,
     Probe,
     Settings,
@@ -82,6 +83,7 @@ impl Capability {
     pub const ALL: &'static [Capability] = &[
         Capability::Threads,
         Capability::ThreadSubagents,
+        Capability::CodexDesktop,
         Capability::Jobs,
         Capability::Probe,
         Capability::Settings,
@@ -102,6 +104,7 @@ impl Capability {
         match self {
             Self::Threads => "threads",
             Self::ThreadSubagents => "thread_subagents",
+            Self::CodexDesktop => "codex_desktop",
             Self::Jobs => "jobs",
             Self::Probe => "probe",
             Self::Settings => "settings",
@@ -125,6 +128,9 @@ impl Capability {
             surface == HostSurface::LinuxServerApi && matches!(platform.kind, PlatformKind::Linux);
         let desktop_embedded = surface == HostSurface::DesktopEmbeddedTauri && shared_core;
         match self {
+            Self::CodexDesktop => {
+                surface == HostSurface::DesktopEmbeddedTauri && platform.kind == PlatformKind::Macos
+            }
             Self::Threads
             | Self::ThreadSubagents
             | Self::Jobs
@@ -144,6 +150,8 @@ pub struct SystemCapabilities {
     pub threads: bool,
     #[serde(default)]
     pub thread_subagents: bool,
+    #[serde(default)]
+    pub codex_desktop: bool,
     pub jobs: bool,
     pub probe: bool,
     pub settings: bool,
@@ -241,6 +249,7 @@ pub fn system_capabilities_for_surface(
         threads: Capability::Threads.is_supported_on_surface(platform, host_surface),
         thread_subagents: Capability::ThreadSubagents
             .is_supported_on_surface(platform, host_surface),
+        codex_desktop: Capability::CodexDesktop.is_supported_on_surface(platform, host_surface),
         jobs: Capability::Jobs.is_supported_on_surface(platform, host_surface),
         probe: Capability::Probe.is_supported_on_surface(platform, host_surface),
         settings: Capability::Settings.is_supported_on_surface(platform, host_surface),
