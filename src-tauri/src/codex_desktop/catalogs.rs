@@ -8,16 +8,20 @@ use nexushub_core::{
     codex::desktop::{
         helper::{CatalogQuery, DesktopHelper},
         references::NativeReference,
+        DesktopError,
     },
     security::hash_token,
     services::codex_desktop::*,
 };
 use serde_json::Value;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    future::Future,
     path::Path,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
+use tokio::sync::{Mutex, OnceCell};
 
 const MAX_ENTRIES: usize = 8;
 const MAX_ITEMS: usize = 20_000;
@@ -62,6 +66,103 @@ struct Snapshot {
     items: Vec<Item>,
     modes: Vec<String>,
     bytes: usize,
+}
+
+type Flight = OnceCell<Result<(), String>>;
+
+/// Metadata locks never cross helper I/O. A flight shares both success and
+/// failure with concurrent readers; its weak entry cannot retain failed results.
+#[derive(Default)]
+pub(super) struct Catalogs {
+    cache: Mutex<CatalogCache>,
+    flights: Mutex<HashMap<String, Weak<Flight>>>,
+}
+
+impl Catalogs {
+    pub async fn read(
+        &self,
+        helper: &DesktopHelper,
+        cwd: &Path,
+        thread: &str,
+        request: &DesktopCatalogRequest,
+        current: impl Fn() -> Result<(), String>,
+    ) -> Result<Page, String> {
+        self.read_with(
+            thread,
+            request,
+            current,
+            fetch(helper, cwd, thread, &request.kind),
+        )
+        .await
+    }
+
+    async fn read_with(
+        &self,
+        thread: &str,
+        request: &DesktopCatalogRequest,
+        current: impl Fn() -> Result<(), String>,
+        fetch: impl Future<Output = Result<(Vec<Item>, Vec<String>), String>>,
+    ) -> Result<Page, String> {
+        {
+            let mut cache = self.cache.lock().await;
+            current()?;
+            if let Some(page) = cache.cached(thread, request)? {
+                return Ok(page);
+            }
+        }
+        let key = catalog_key(thread, request);
+        let flight = {
+            let mut flights = self.flights.lock().await;
+            flights.retain(|_, value| value.strong_count() > 0);
+            if let Some(flight) = flights.get(&key).and_then(Weak::upgrade) {
+                flight
+            } else {
+                let flight = Arc::new(OnceCell::new());
+                flights.insert(key, Arc::downgrade(&flight));
+                flight
+            }
+        };
+        flight
+            .get_or_init(|| async {
+                {
+                    let mut cache = self.cache.lock().await;
+                    current()?;
+                    if cache.cached(thread, request)?.is_some() {
+                        return Ok(());
+                    }
+                }
+                let (items, modes) = fetch.await?;
+                let mut cache = self.cache.lock().await;
+                current()?;
+                cache.insert(thread, request, items, modes)?;
+                Ok(())
+            })
+            .await
+            .clone()?;
+        let mut cache = self.cache.lock().await;
+        current()?;
+        cache
+            .cached(thread, request)?
+            .ok_or_else(|| "引用列表已更新，请重新搜索".into())
+    }
+
+    pub async fn validate_settings(
+        &self,
+        revision: u64,
+        thread: &str,
+        model: &str,
+        effort: Option<&str>,
+        mode: DesktopMode,
+    ) -> Result<(), String> {
+        self.cache
+            .lock()
+            .await
+            .validate_settings(revision, thread, model, effort, mode)
+    }
+}
+
+fn catalog_key(thread: &str, request: &DesktopCatalogRequest) -> String {
+    hash_token(&format!("{}\n{thread}\n{}", request.revision, request.kind))
 }
 impl Snapshot {
     fn page(&self, request: &DesktopCatalogRequest) -> Result<Page, String> {
@@ -134,13 +235,11 @@ impl Page {
     }
 }
 impl CatalogCache {
-    pub async fn read(
+    fn cached(
         &mut self,
-        helper: &DesktopHelper,
-        cwd: &Path,
         thread: &str,
         request: &DesktopCatalogRequest,
-    ) -> Result<Page, String> {
+    ) -> Result<Option<Page>, String> {
         if request
             .cursor
             .as_ref()
@@ -153,45 +252,55 @@ impl CatalogCache {
         self.entries.retain(|entry| {
             entry.created.elapsed() < CACHE_AGE && entry.revision == request.revision
         });
-        let key = hash_token(&format!("{}\n{thread}\n{}", request.revision, request.kind));
-        let position =
-            if let Some(position) = self.entries.iter().position(|entry| entry.key == key) {
-                position
-            } else {
-                if request.cursor.is_some() {
-                    return Err("引用列表已更新，请重新搜索".into());
-                }
-                let (items, modes) = fetch(helper, cwd, thread, &request.kind).await?;
-                let bytes = items.iter().map(Item::bytes).sum::<usize>();
-                if items.len() > MAX_ITEMS || bytes > MAX_BYTES {
-                    return Err("引用列表超出容量限制".into());
-                }
-                while !self.entries.is_empty()
-                    && (self.entries.len() >= MAX_ENTRIES
-                        || self
-                            .entries
-                            .iter()
-                            .map(|entry| entry.bytes)
-                            .sum::<usize>()
-                            .saturating_add(bytes)
-                            > MAX_BYTES)
-                {
-                    self.entries.remove(0);
-                }
-                self.entries.push(Snapshot {
-                    key,
-                    revision: request.revision,
-                    thread: thread.into(),
-                    kind: request.kind.clone(),
-                    nonce: hash_token(&nexushub_core::crypto::SecretBox::random_key_material()),
-                    created: Instant::now(),
-                    items,
-                    modes,
-                    bytes,
-                });
-                self.entries.len() - 1
-            };
-        self.entries[position].page(request)
+        let key = catalog_key(thread, request);
+        if let Some(entry) = self.entries.iter().find(|entry| entry.key == key) {
+            return entry.page(request).map(Some);
+        }
+        if request.cursor.is_some() {
+            return Err("引用列表已更新，请重新搜索".into());
+        }
+        Ok(None)
+    }
+
+    fn insert(
+        &mut self,
+        thread: &str,
+        request: &DesktopCatalogRequest,
+        items: Vec<Item>,
+        modes: Vec<String>,
+    ) -> Result<(), String> {
+        limit(&items)?;
+        let bytes = items.iter().map(Item::bytes).sum::<usize>();
+        let key = catalog_key(thread, request);
+        self.entries.retain(|entry| {
+            entry.key != key
+                && entry.created.elapsed() < CACHE_AGE
+                && entry.revision == request.revision
+        });
+        while !self.entries.is_empty()
+            && (self.entries.len() >= MAX_ENTRIES
+                || self
+                    .entries
+                    .iter()
+                    .map(|entry| entry.bytes)
+                    .sum::<usize>()
+                    .saturating_add(bytes)
+                    > MAX_BYTES)
+        {
+            self.entries.remove(0);
+        }
+        self.entries.push(Snapshot {
+            key,
+            revision: request.revision,
+            thread: thread.into(),
+            kind: request.kind.clone(),
+            nonce: hash_token(&nexushub_core::crypto::SecretBox::random_key_material()),
+            created: Instant::now(),
+            items,
+            modes,
+            bytes,
+        });
+        Ok(())
     }
 
     pub fn validate_settings(
@@ -230,6 +339,14 @@ impl CatalogCache {
     }
 }
 
+fn catalog_error(error: DesktopError) -> String {
+    if error == DesktopError::Timeout {
+        "目录超时，可重试".into()
+    } else {
+        desktop_error(error)
+    }
+}
+
 async fn fetch(
     helper: &DesktopHelper,
     cwd: &Path,
@@ -246,7 +363,7 @@ async fn fetch(
                 let page = helper
                     .catalog(CatalogQuery::Models { cursor })
                     .await
-                    .map_err(desktop_error)?;
+                    .map_err(catalog_error)?;
                 for value in array(&page, "data")? {
                     if value["hidden"] == true {
                         continue;
@@ -276,7 +393,7 @@ async fn fetch(
             let result = helper
                 .catalog(CatalogQuery::Modes)
                 .await
-                .map_err(desktop_error)?;
+                .map_err(catalog_error)?;
             modes = array(&result, "data")?
                 .iter()
                 .filter_map(|value| value["mode"].as_str())
@@ -290,7 +407,7 @@ async fn fetch(
                     cwd: cwd.to_owned(),
                 })
                 .await
-                .map_err(desktop_error)?;
+                .map_err(catalog_error)?;
             for entry in array(&result, "data")? {
                 if entry["cwd"].as_str() != cwd.to_str() {
                     continue;
@@ -311,28 +428,14 @@ async fn fetch(
                     cwd: cwd.to_owned(),
                 })
                 .await
-                .map_err(desktop_error)?;
+                .map_err(catalog_error)?;
             for marketplace in array(&result, "marketplaces")? {
                 let market_name = identifier(marketplace, "name")?;
                 for plugin in array(marketplace, "plugins")? {
                     if !usable_plugin(plugin) {
                         continue;
                     }
-                    let name = identifier(plugin, "name")?;
-                    let display = plugin["interface"]["displayName"].as_str().unwrap_or(&name);
-                    let grant = GrantValue::Reference(
-                        NativeReference::plugin(name.clone(), &market_name)
-                            .map_err(desktop_error)?,
-                    );
-                    items.push(Item {
-                        id: identifier(plugin, "id")?,
-                        kind: "plugin".into(),
-                        name: description(Some(display)),
-                        description: description(plugin["interface"]["shortDescription"].as_str()),
-                        efforts: vec![],
-                        default_effort: None,
-                        grant: Some(grant),
-                    });
+                    items.push(plugin_item(plugin, &market_name)?);
                 }
             }
         }
@@ -358,7 +461,7 @@ async fn apps(helper: &DesktopHelper, thread: &str) -> Result<Vec<Item>, String>
                 cursor,
             })
             .await
-            .map_err(desktop_error)?;
+            .map_err(catalog_error)?;
         for app in array(&page, "data")? {
             if app["isAccessible"] != true || app["isEnabled"] == false {
                 continue;
@@ -390,6 +493,34 @@ async fn apps(helper: &DesktopHelper, thread: &str) -> Result<Vec<Item>, String>
 fn app_reference(id: &str, name: &str) -> Result<NativeReference, String> {
     NativeReference::app(name.to_owned(), format!("app://{id}")).map_err(desktop_error)
 }
+fn plugin_item(plugin: &Value, marketplace: &str) -> Result<Item, String> {
+    let name = identifier(plugin, "name")?;
+    let grant = GrantValue::Reference(
+        NativeReference::plugin(name.clone(), marketplace).map_err(catalog_error)?,
+    );
+    // The inserted @name must agree with the resolved native mention, which
+    // uses the plugin's canonical name. Keep its friendly title as description.
+    let display = plugin["interface"]["displayName"].as_str().unwrap_or(&name);
+    let summary = plugin["interface"]["shortDescription"]
+        .as_str()
+        .unwrap_or("");
+    let detail = if display == name {
+        summary.to_owned()
+    } else if summary.is_empty() {
+        display.to_owned()
+    } else {
+        format!("{display} · {summary}")
+    };
+    Ok(Item {
+        id: identifier(plugin, "id")?,
+        kind: "plugin".into(),
+        name,
+        description: description(Some(&detail)),
+        efforts: vec![],
+        default_effort: None,
+        grant: Some(grant),
+    })
+}
 fn append_skills(items: &mut Vec<Item>, skills: &[Value]) -> Result<(), String> {
     for skill in skills {
         if skill["enabled"] != true {
@@ -399,7 +530,7 @@ fn append_skills(items: &mut Vec<Item>, skills: &[Value]) -> Result<(), String> 
             continue;
         };
         let name = identifier(skill, "name")?;
-        let reference = NativeReference::skill(name.clone(), path.into()).map_err(desktop_error)?;
+        let reference = NativeReference::skill(name.clone(), path.into()).map_err(catalog_error)?;
         items.push(Item {
             id: path.into(),
             kind: "skill".into(),

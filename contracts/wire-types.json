@@ -9330,15 +9330,19 @@
         "async fn open (app : tauri :: AppHandle , state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , request : DesktopThreadRequest ,) -> Result < DesktopAck , String >",
         "async fn choose (remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopChooseRequest ,) -> Result < DesktopChoice , String >",
         "async fn create (app : tauri :: AppHandle , state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopCreateRequest ,) -> Result < DesktopCreatedThread , String >",
+        "fn require_catalog_context (remote : & RemoteConnections , bridge : & CodexDesktopBridge , revision : u64 , intent : u64 ,) -> Result < () , String >",
         "async fn catalog (state : State < '_ , DesktopState > , remote : State < '_ , RemoteConnections > , bridge : State < '_ , CodexDesktopBridge > , request : DesktopCatalogRequest ,) -> Result < DesktopCatalog , String >"
       ]
     },
     "src-tauri/src/codex_desktop/catalogs.rs": {
       "json": [],
       "signatures": [
+        "fn catalog_key (thread : & str , request : & DesktopCatalogRequest) -> String",
+        "fn catalog_error (error : DesktopError) -> String",
         "async fn fetch (helper : & DesktopHelper , cwd : & Path , thread : & str , kind : & str ,) -> Result < (Vec < Item > , Vec < String >) , String >",
         "async fn apps (helper : & DesktopHelper , thread : & str) -> Result < Vec < Item > , String >",
         "fn app_reference (id : & str , name : & str) -> Result < NativeReference , String >",
+        "fn plugin_item (plugin : & Value , marketplace : & str) -> Result < Item , String >",
         "fn append_skills (items : & mut Vec < Item > , skills : & [Value]) -> Result < () , String >",
         "fn usable_plugin (plugin : & Value) -> bool",
         "fn array < 'a > (value : & 'a Value , key : & str) -> Result < & 'a [Value] , String >",
