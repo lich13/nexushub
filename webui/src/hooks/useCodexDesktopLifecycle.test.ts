@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { DesktopAction, DesktopView } from "../lib/api/desktop";
+import { DesktopStatus } from "../components/chat/DesktopStatus";
 import { actOnDesktopThread, attachDesktopThread, openDesktopThread } from "../lib/query/desktop";
 import { useCodexDesktop } from "./useCodexDesktop";
 
@@ -121,6 +124,10 @@ function render(threadId: string): ReturnType<typeof useCodexDesktop> {
   throw new Error("desktop hook fixture did not settle");
 }
 
+function statusMarkup(view: DesktopView | null): string {
+  return renderToStaticMarkup(createElement(DesktopStatus, { view }));
+}
+
 function unmount() {
   for (const effect of [...lifecycle.effects].reverse()) effect?.cleanup?.();
   lifecycle.effects = [];
@@ -200,6 +207,7 @@ describe("Codex desktop hook lifecycle", () => {
     const disconnected = render("thread-fixture");
     expect(lifecycle.connection).toEqual({ target: "local", revision: 1 });
     expect(disconnected.view).toBeNull();
+    expect(statusMarkup(disconnected.view)).toBe("");
     expect(disconnected.busy).toBe(false);
     expect(connected.detach).toHaveBeenCalledOnce();
 
@@ -209,6 +217,7 @@ describe("Codex desktop hook lifecycle", () => {
 
     const afterLateResponses = render("thread-fixture");
     expect(afterLateResponses.view).toBeNull();
+    expect(statusMarkup(afterLateResponses.view)).toBe("");
     expect(afterLateResponses.error).toBe("");
   });
 
@@ -220,6 +229,7 @@ describe("Codex desktop hook lifecycle", () => {
 
     desktop = render("thread-new");
     expect(desktop.view).toBeNull();
+    expect(statusMarkup(desktop.view)).toBe("");
     expect(desktop.busy).toBe(false);
     desktop.connect();
     render("thread-new");
@@ -228,13 +238,17 @@ describe("Codex desktop hook lifecycle", () => {
     const newDetach = resolveAttachment(newAttachment, newView);
     await flushMicrotasks();
     expect(render("thread-new").view).toEqual(newView);
+    expect(statusMarkup(render("thread-new").view)).toContain("空闲");
 
-    const oldDetach = resolveAttachment(oldAttachment, desktopView("thread-old", "session-old", 99));
+    const staleOldView = { ...desktopView("thread-old", "session-old", 99), runtime: "active", activeTurnId: "stale-turn" };
+    const oldDetach = resolveAttachment(oldAttachment, staleOldView);
     await flushMicrotasks();
-    oldAttachment.receive(desktopView("thread-old", "session-old", 100));
+    oldAttachment.receive({ ...staleOldView, revision: 100 });
 
     expect(oldDetach).toHaveBeenCalledOnce();
     expect(render("thread-new").view).toEqual(newView);
+    expect(statusMarkup(render("thread-new").view)).toContain("空闲");
+    expect(statusMarkup(render("thread-new").view)).not.toContain("执行中");
     expect(newDetach).not.toHaveBeenCalled();
   });
 
@@ -251,11 +265,13 @@ describe("Codex desktop hook lifecycle", () => {
     notifyVisibility();
     const hidden = render("thread-visible");
     expect(hidden.view).toBeNull();
+    expect(statusMarkup(hidden.view)).toBe("");
     expect(hidden.busy).toBe(false);
     expect(connected.detach).toHaveBeenCalledOnce();
     expect(attachmentList()).toHaveLength(1);
-    connected.attachment.receive(desktopView("thread-visible", "session-thread-visible", 90));
+    connected.attachment.receive({ ...desktopView("thread-visible", "session-thread-visible", 90), runtime: "active", activeTurnId: "stale-turn" });
     expect(render("thread-visible").view).toBeNull();
+    expect(statusMarkup(render("thread-visible").view)).toBe("");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(lifecycle.cache.refreshDesktopThread).not.toHaveBeenCalled();
 
@@ -268,6 +284,7 @@ describe("Codex desktop hook lifecycle", () => {
     resolveAttachment(resumedAttachment, resumedView);
     await flushMicrotasks();
     expect(render("thread-visible").view).toEqual(resumedView);
+    expect(statusMarkup(render("thread-visible").view)).toContain("空闲");
   });
 
   test("a new session drops late stream updates from the previous session", async () => {
@@ -276,9 +293,12 @@ describe("Codex desktop hook lifecycle", () => {
     await vi.advanceTimersByTimeAsync(350);
     expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
     const current = render("thread-session").view;
+    expect(statusMarkup(current)).toContain("空闲");
 
-    connected.attachment.receive(desktopView("thread-session", "session-replaced", 90));
+    connected.attachment.receive({ ...desktopView("thread-session", "session-replaced", 90), runtime: "active", activeTurnId: "stale-turn" });
     expect(render("thread-session").view).toEqual(current);
+    expect(statusMarkup(render("thread-session").view)).toContain("空闲");
+    expect(statusMarkup(render("thread-session").view)).not.toContain("执行中");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(lifecycle.cache.refreshDesktopThread).toHaveBeenCalledTimes(1);
   });

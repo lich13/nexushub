@@ -1123,6 +1123,18 @@
     "DesktopReferenceSpan": {
       "core": "DesktopReferenceSpan",
       "webui": "DesktopReferenceSpan"
+    },
+    "DesktopReview": {
+      "core": "DesktopReview",
+      "webui": "DesktopReview"
+    },
+    "DesktopFileReview": {
+      "core": "DesktopFileReview",
+      "webui": "DesktopFileReview"
+    },
+    "DesktopPermissionsReview": {
+      "core": "DesktopPermissionsReview",
+      "webui": "DesktopPermissionsReview"
     }
   },
   "retiredActions": [

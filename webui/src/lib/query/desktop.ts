@@ -4,5 +4,5 @@ export {
   actOnDesktopThread, attachDesktopThread, chooseDesktopItem, createDesktopThread,
   desktopCatalog, openDesktopThread,
   type DesktopAction, type DesktopCatalogItem, type DesktopChosenItem, type DesktopMode,
-  type DesktopPendingRequest, type DesktopQuestion, type DesktopView
+  type DesktopPendingRequest, type DesktopQuestion, type DesktopView, type DesktopReview
 } from "../api/desktop";

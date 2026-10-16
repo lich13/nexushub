@@ -104,6 +104,10 @@
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopCreatedThread",
       "ts": "webui/src/lib/api/desktop.ts#DesktopCreatedThread"
     },
+    "DesktopFileReview": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopFileReview",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopFileReview"
+    },
     "DesktopMode": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopMode",
       "ts": "webui/src/lib/api/desktop.ts#DesktopMode"
@@ -111,6 +115,10 @@
     "DesktopPendingRequest": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPendingRequest",
       "ts": "webui/src/lib/api/desktop.ts#DesktopPendingRequest"
+    },
+    "DesktopPermissionsReview": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopPermissionsReview",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopPermissionsReview"
     },
     "DesktopQuestion": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopQuestion",
@@ -127,6 +135,10 @@
     "DesktopReferenceSpan": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopReferenceSpan",
       "ts": "webui/src/lib/api/desktop.ts#DesktopReferenceSpan"
+    },
+    "DesktopReview": {
+      "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopReview",
+      "ts": "webui/src/lib/api/desktop.ts#DesktopReview"
     },
     "DesktopSessionRequest": {
       "rust": "crates/nexushub-core/src/services/codex_desktop.rs#DesktopSessionRequest",
@@ -5277,6 +5289,34 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
+      "DesktopFileReview": {
+        "fields": [
+          {
+            "name": "path",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "kind",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "diff",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "truncated",
+            "serde": [],
+            "type": "bool"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
       "DesktopMode": {
         "kind": "enum",
         "serde": [
@@ -5338,6 +5378,31 @@
               "serde (default , skip_serializing_if = \"Vec::is_empty\")"
             ],
             "type": "Vec < String >"
+          },
+          {
+            "name": "review",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Option::is_none\")"
+            ],
+            "type": "Option < DesktopReview >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "DesktopPermissionsReview": {
+        "fields": [
+          {
+            "name": "network",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "file_system",
+            "serde": [],
+            "type": "Option < String >"
           }
         ],
         "kind": "struct",
@@ -5450,6 +5515,49 @@
         "kind": "struct",
         "serde": [
           "serde (rename_all = \"camelCase\" , deny_unknown_fields)"
+        ]
+      },
+      "DesktopReview": {
+        "fields": [
+          {
+            "name": "command",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "cwd",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "reason",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "changes",
+            "serde": [],
+            "type": "Vec < DesktopFileReview >"
+          },
+          {
+            "name": "permissions",
+            "serde": [],
+            "type": "Option < DesktopPermissionsReview >"
+          },
+          {
+            "name": "extra",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "truncated",
+            "serde": [],
+            "type": "bool"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
         ]
       },
       "DesktopSessionRequest": {
@@ -9632,27 +9740,30 @@
     },
     "webui/src/lib/api/desktop.ts": {
       "types": {
-        "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
-        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={revision:number;threadId:string};",
-        "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
-        "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
-        "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
+        "DesktopAck": "exporttypeDesktopAck={ok:boolean};",
         "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean;decision?:string}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
         "DesktopActionRequest": "exporttypeDesktopActionRequest=DesktopSessionRequest&{action:DesktopAction};",
-        "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
-        "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
-        "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",
-        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[]};",
-        "DesktopView": "exporttypeDesktopView={sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};",
-        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
-        "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
+        "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
         "DesktopCatalog": "exporttypeDesktopCatalog={items:DesktopCatalogItem[];nextCursor:string|null};",
+        "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",
+        "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
+        "DesktopChoice": "exporttypeDesktopChoice={item:DesktopChosenItem|null};",
         "DesktopChooseRequest": "exporttypeDesktopChooseRequest={revision:number;sessionId:string|null;kind:string};",
         "DesktopChosenItem": "exporttypeDesktopChosenItem={handle:string;name:string;kind:string};",
-        "DesktopChoice": "exporttypeDesktopChoice={item:DesktopChosenItem|null};",
         "DesktopCreateRequest": "exporttypeDesktopCreateRequest={revision:number;projectHandle:string};",
         "DesktopCreatedThread": "exporttypeDesktopCreatedThread={threadId:string};",
-        "DesktopAck": "exporttypeDesktopAck={ok:boolean};"
+        "DesktopFileReview": "exporttypeDesktopFileReview={path:string;kind:string;diff:string;truncated:boolean};",
+        "DesktopMode": "exporttypeDesktopMode=\"default\"|\"plan\";",
+        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[];review?:DesktopReview|null};",
+        "DesktopPermissionsReview": "exporttypeDesktopPermissionsReview={network:string|null;fileSystem:string|null};",
+        "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",
+        "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
+        "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
+        "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
+        "DesktopReview": "exporttypeDesktopReview={command:string|null;cwd:string|null;reason:string|null;changes:DesktopFileReview[];permissions:DesktopPermissionsReview|null;extra:string|null;truncated:boolean};",
+        "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
+        "DesktopThreadRequest": "exporttypeDesktopThreadRequest={revision:number;threadId:string};",
+        "DesktopView": "exporttypeDesktopView={sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};"
       },
       "calls": [
         "runtimeRpc<DesktopView>(\"codex.desktop.attach\",{request:{revision,threadId}satisfiesDesktopThreadRequest,onEvent:channel.value},true)",

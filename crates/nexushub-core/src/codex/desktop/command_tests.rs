@@ -1040,3 +1040,219 @@ fn unsupported_mcp_elicitation_modes_and_schema_features_fail_closed() {
         DesktopError::UnsupportedProtocol,
     );
 }
+
+#[test]
+fn command_approval_projects_structured_review_and_preserves_unknown_fields() {
+    let method = "item/commandExecution/requestApproval";
+    let state = request_replica(
+        method,
+        json!({
+            "threadId": THREAD_ID,
+            "turnId": TURN_ID,
+            "command": "fixture command",
+            "cwd": "/fixture/workspace",
+            "reason": "Synthetic approval reason",
+            "futureField": {"label": "fixture extra detail"}
+        }),
+    );
+
+    let projected = super::super::projection::view(&state, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    let review = request
+        .review
+        .as_ref()
+        .expect("command review is projected");
+
+    assert_eq!(review.command.as_deref(), Some("fixture command"));
+    assert_eq!(review.cwd.as_deref(), Some("/fixture/workspace"));
+    assert_eq!(review.reason.as_deref(), Some("Synthetic approval reason"));
+    let extra = review
+        .extra
+        .as_deref()
+        .expect("unknown fields remain reviewable");
+    assert!(extra.contains("\"futureField\""));
+    assert!(extra.contains("fixture extra detail"));
+    assert!(!review.truncated);
+    assert!(request.body.contains("fixture command"));
+    assert!(request.body.len() <= 16 * 1024);
+    assert!(request.can_accept);
+    assert_eq!(
+        request
+            .supported_decisions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["accept", "acceptForSession", "decline"]
+    );
+}
+
+#[test]
+fn file_approval_projects_each_change_with_its_path_kind_and_diff() {
+    let state = file_request_replica(json!([
+        {
+            "path": "fixture-first.txt",
+            "kind": "update",
+            "diff": "--- before\n+++ fixture first\n"
+        },
+        {
+            "path": "fixture-second.txt",
+            "kind": "create",
+            "diff": "+++ fixture second\n+synthetic content\n"
+        }
+    ]));
+
+    let projected = super::super::projection::view(&state, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    let review = request.review.as_ref().expect("file review is projected");
+
+    assert_eq!(review.changes.len(), 2);
+    assert_eq!(review.changes[0].path, "fixture-first.txt");
+    assert_eq!(review.changes[0].kind, "update");
+    assert_eq!(review.changes[0].diff, "--- before\n+++ fixture first\n");
+    assert!(!review.changes[0].truncated);
+    assert_eq!(review.changes[1].path, "fixture-second.txt");
+    assert_eq!(review.changes[1].kind, "create");
+    assert_eq!(
+        review.changes[1].diff,
+        "+++ fixture second\n+synthetic content\n"
+    );
+    assert!(!review.changes[1].truncated);
+    assert!(!review.truncated);
+    assert!(request.can_accept);
+    assert!(request
+        .supported_decisions
+        .iter()
+        .any(|decision| decision == "acceptForSession"));
+}
+
+#[test]
+fn oversized_utf8_diff_is_truncated_at_a_character_boundary_and_cannot_be_approved() {
+    let method = "item/fileChange/requestApproval";
+    let diff = "界".repeat(12 * 1024);
+    let original_diff_len = diff.len();
+    let state = file_request_replica(json!([{
+        "path": "fixture-large.txt",
+        "kind": "update",
+        "diff": diff
+    }]));
+    let projected = super::super::projection::view(&state, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    let review = request.review.as_ref().expect("file review is projected");
+    let file = &review.changes[0];
+
+    assert!(original_diff_len > 32 * 1024);
+    assert!(file.diff.len() <= 32 * 1024);
+    assert!(file.diff.len() < original_diff_len);
+    assert!(file.diff.chars().all(|character| character == '界'));
+    assert!(file.truncated);
+    assert!(review.truncated);
+    assert!(!request.can_accept);
+    assert!(request.supported_decisions.is_empty());
+
+    let approve = reply_command(
+        &state,
+        REQUEST_ID,
+        method,
+        Some(TURN_ID),
+        DesktopReply::Decision { allow: true },
+    );
+    assert_prepare_error(&approve, &state, DesktopError::UnsupportedProtocol);
+}
+
+#[test]
+fn more_than_one_hundred_file_changes_are_truncated_and_cannot_be_approved() {
+    let method = "item/fileChange/requestApproval";
+    let changes = (0..101)
+        .map(|index| {
+            json!({
+                "path": format!("fixture-file-{index:03}.txt"),
+                "kind": "update",
+                "diff": "+synthetic fixture line\n"
+            })
+        })
+        .collect::<Vec<_>>();
+    let state = file_request_replica(json!(changes));
+    let projected = super::super::projection::view(&state, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    let review = request.review.as_ref().expect("file review is projected");
+
+    assert_eq!(review.changes.len(), 100);
+    assert!(review.changes.iter().all(|file| !file.truncated));
+    assert!(review.truncated);
+    assert!(request.body.len() < 16 * 1024);
+    assert!(!request.can_accept);
+    assert!(request.supported_decisions.is_empty());
+
+    let approve = reply_command(
+        &state,
+        REQUEST_ID,
+        method,
+        Some(TURN_ID),
+        DesktopReply::Decision { allow: true },
+    );
+    assert_prepare_error(&approve, &state, DesktopError::UnsupportedProtocol);
+}
+
+#[test]
+fn existing_pretty_body_and_compact_params_limits_still_reject_approval() {
+    let method = "item/commandExecution/requestApproval";
+    let pretty_limited = request_replica(
+        method,
+        json!({
+            "threadId": THREAD_ID,
+            "turnId": TURN_ID,
+            "command": "fixture command",
+            "reason": "界".repeat(6 * 1024)
+        }),
+    );
+    let pretty_params_size =
+        serde_json::to_vec(&pretty_limited.pending_requests().next().unwrap()["params"])
+            .expect("fixture params serialize")
+            .len();
+    assert!(pretty_params_size > 16 * 1024);
+    assert!(pretty_params_size < 64 * 1024);
+    let projected = super::super::projection::view(&pretty_limited, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    assert!(request.body.len() <= 16 * 1024);
+    assert!(!request.review.as_ref().unwrap().truncated);
+    assert!(!request.can_accept);
+    let approve = reply_command(
+        &pretty_limited,
+        REQUEST_ID,
+        method,
+        Some(TURN_ID),
+        DesktopReply::Decision { allow: true },
+    );
+    assert_prepare_error(&approve, &pretty_limited, DesktopError::UnsupportedProtocol);
+
+    let compact_limited = request_replica(
+        method,
+        json!({
+            "threadId": THREAD_ID,
+            "turnId": TURN_ID,
+            "command": "fixture command",
+            "futureField": "x".repeat(64 * 1024 + 1)
+        }),
+    );
+    let compact_params_size =
+        serde_json::to_vec(&compact_limited.pending_requests().next().unwrap()["params"])
+            .expect("fixture params serialize")
+            .len();
+    assert!(compact_params_size > 64 * 1024);
+    let projected = super::super::projection::view(&compact_limited, "fixture-session", Vec::new());
+    let request = &projected.requests[0];
+    assert!(request.body.len() <= 16 * 1024);
+    assert!(!request.can_accept);
+    let approve = reply_command(
+        &compact_limited,
+        REQUEST_ID,
+        method,
+        Some(TURN_ID),
+        DesktopReply::Decision { allow: true },
+    );
+    assert_prepare_error(
+        &approve,
+        &compact_limited,
+        DesktopError::UnsupportedProtocol,
+    );
+}

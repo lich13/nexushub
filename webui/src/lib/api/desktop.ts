@@ -19,7 +19,10 @@ export type DesktopActionRequest = DesktopSessionRequest & { action: DesktopActi
 export type DesktopQueuedMessage = { id: string; status: string; kind: string; preview: string; createdAt: number };
 export type DesktopQuestionOption = { label: string; description: string };
 export type DesktopQuestion = { id: string; header: string; question: string; secret: boolean; options: DesktopQuestionOption[] };
-export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean; supportedDecisions?: string[] };
+export type DesktopFileReview = { path: string; kind: string; diff: string; truncated: boolean };
+export type DesktopPermissionsReview = { network: string | null; fileSystem: string | null };
+export type DesktopReview = { command: string | null; cwd: string | null; reason: string | null; changes: DesktopFileReview[]; permissions: DesktopPermissionsReview | null; extra: string | null; truncated: boolean };
+export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean; supportedDecisions?: string[]; review?: DesktopReview | null };
 export type DesktopView = {
   sessionId: string; threadId: string; revision: number; connected: boolean; writable: boolean;
   runtime: string; activeTurnId: string | null; model: string | null; reasoningEffort: string | null;
