@@ -4,6 +4,7 @@
 //!
 //! Wire versions were checked against desktop build 20586. New mutations must
 //! pass the dedicated native protocol checks before being exposed by Tauri.
+pub mod attachments;
 pub mod commands;
 mod framing;
 pub mod helper;

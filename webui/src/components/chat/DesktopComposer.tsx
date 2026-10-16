@@ -4,6 +4,7 @@ import { chooseDesktopItem, createDesktopThread, desktopCatalog, type DesktopCat
 import { emptyReferenceDraft, editReferenceDraft, inlineReferenceQuery, insertDesktopReference, removeDesktopReference, toDesktopReferenceSpans } from "../../lib/desktopReferences";
 import { useDesktopReferenceCatalog } from "../../hooks/useDesktopReferenceCatalog";
 import { useCodexDesktop } from "../../hooks/useCodexDesktop";
+import { useDesktopAttachments } from "../../hooks/useDesktopAttachments";
 import { DesktopRequests } from "./DesktopRequests";
 import { DesktopStatus } from "./DesktopStatus";
 import { ConfirmDialog } from "../common/ConfirmDialog";
@@ -31,6 +32,9 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   const [draft, setDraft] = useState(emptyReferenceDraft);
   const { text, references } = draft;
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const attachmentRegion = useRef<HTMLFormElement>(null);
+  const currentSession = useRef<string>();
+  currentSession.current = view?.sessionId;
   const [selection, setSelection] = useState({ start: 0, end: 0, focused: false });
   const [dismissed, setDismissed] = useState("");
   const [selectedOption, setSelectedOption] = useState(0);
@@ -42,6 +46,17 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   const identity = useRef<{ payload: string; id: string }>();
   const discardTrigger = useRef<HTMLButtonElement>(null);
   const writable = Boolean(view?.connected && view.writable);
+  const attachments = useDesktopAttachments(writable && !busy && !choosing ? view?.sessionId : undefined, attachmentRegion, references.map(item => item.handle), items => {
+    setDraft(value => {
+      const additions = items.filter(item => !value.references.some(reference => reference.handle === item.handle));
+      if (value.references.length + additions.length > 32) {
+        setLocalError("引用数量超出限制，本次附件未添加");
+        attachments.release(additions.map(item => item.handle));
+        return value;
+      }
+      return { ...value, references: [...value.references, ...additions] };
+    });
+  }, setLocalError);
   const active = Boolean(view?.activeTurnId);
   const query = inlineReferenceQuery(text, selection.start, selection.end);
   const queryKey = JSON.stringify(query);
@@ -73,10 +88,15 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
   };
   const attachFile = async () => {
     if (!view) return;
+    const session = view.sessionId;
     setChoosing(true); setLocalError("");
     try {
       const { item } = await chooseDesktopItem("file", view.sessionId);
-      if (item) setDraft(value => ({ ...value, references: value.references.some(reference => reference.handle === item.handle) ? value.references : [...value.references, item].slice(0, 32) }));
+      if (item && currentSession.current === session) setDraft(value => {
+        if (value.references.some(reference => reference.handle === item.handle)) return value;
+        if (value.references.length >= 32) { setLocalError("引用数量超出限制，本次附件未添加"); return value; }
+        return { ...value, references: [...value.references, item] };
+      });
     } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "无法添加附件"); }
     finally { setChoosing(false); }
   };
@@ -94,10 +114,11 @@ export function DesktopComposer({ threadId }: { threadId: string }) {
         </li>)}</ol>
         {view!.queue.some(item => item.status === "held" && item.kind === "queue") && <button disabled={locked} onClick={() => { void desktop.act({ type: "resumeQueue" }).catch(() => {}); }}>继续发送队列</button>}
       </details>}
-      <form onSubmit={event => { event.preventDefault(); void send(); }}>
-        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.name}<button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => setDraft(value => removeDesktopReference(value, item.handle))}><X size={12} /></button></span>)}</div>}
+      <form ref={attachmentRegion} onSubmit={event => { event.preventDefault(); void send(); }}>
+        {references.length > 0 && <div className="desktop-reference-chips">{references.map(item => <span key={item.handle}>{item.name}<button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => { attachments.release([item.handle]); setDraft(value => removeDesktopReference(value, item.handle)); }}><X size={12} /></button></span>)}</div>}
         <textarea ref={textarea} aria-label="发送给 Codex" aria-autocomplete="list" aria-controls={inline ? "desktop-reference-options" : undefined} aria-expanded={Boolean(inline)} aria-activedescendant={inline && catalog.items[option] ? `desktop-reference-option-${option}` : undefined}
           placeholder={active ? "添加下一条消息，或补充当前回合…" : "与 Codex 协作…"} rows={2} maxLength={131072} value={text} disabled={locked}
+          onPaste={attachments.paste}
           onFocus={() => setSelection(value => ({ ...value, focused: true }))} onBlur={() => setSelection(value => ({ ...value, focused: false }))}
           onSelect={event => setSelection({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd, focused: true })}
           onChange={event => { setDraft(value => editReferenceDraft(value, event.target.value)); setSelection({ start: event.target.selectionStart ?? event.target.value.length, end: event.target.selectionEnd ?? event.target.value.length, focused: true }); setSelectedOption(0); }}

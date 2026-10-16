@@ -244,6 +244,67 @@ pub struct DesktopChoice {
     pub item: Option<DesktopChosenItem>,
 }
 
+/// Native attachment receiver. No client path, URL, bytes or method names.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopAttachmentRequest {
+    pub revision: u64,
+    pub session_id: String,
+    pub action: DesktopAttachmentAction,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum DesktopAttachmentAction {
+    Bind {
+        bounds: DesktopAttachmentBounds,
+        handles: Vec<String>,
+    },
+    Bounds {
+        binding_id: String,
+        bounds: DesktopAttachmentBounds,
+        handles: Vec<String>,
+    },
+    Paste {
+        binding_id: String,
+    },
+    Release {
+        binding_id: String,
+        handles: Vec<String>,
+    },
+    Unbind {
+        binding_id: String,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopAttachmentBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopAttachmentEvent {
+    pub binding_id: String,
+    pub items: Vec<DesktopChosenItem>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopAttachmentResult {
+    pub binding_id: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopCreateRequest {

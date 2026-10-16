@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { runtimeCapabilitiesFromResponse } from "../domain/capabilities";
-import type { DesktopView } from "./desktop";
+import type { DesktopAttachmentEvent, DesktopView } from "./desktop";
 
-type ChannelFrame = { index: number; message?: DesktopView; end?: boolean };
+type ChannelFrame = { index: number; message?: DesktopView | DesktopAttachmentEvent; end?: boolean };
 type ChannelCallback = (frame: ChannelFrame) => void;
 type InvokeHandler = (command: string, args?: Record<string, unknown>) => unknown;
 
@@ -29,6 +29,7 @@ function installBridge(handler?: InvokeHandler) {
       return { target: "remote", revision: 1, baseUrl: "https://api.example.invalid/", configured: true };
     }
     if (command === "codex.desktop.attach" || command === "codex.desktop.action") return view("thread-fixture");
+    if (command === "codex.desktop.attachments") return { bindingId: "binding-fixture" };
     if (command === "codex.desktop.detach") return { ok: true };
     return {};
   });
@@ -148,6 +149,71 @@ describe("Codex desktop transport", () => {
     expect(requests[0].action).toBe(action);
     expect(requests[1].action).toBe(action);
     expect(requests.map(request => request.sessionId)).toEqual(["session-fixture", "session-fixture"]);
+  });
+
+  test("sends only bounds and opaque handles through a dedicated attachment channel", async () => {
+    const bridge = installBridge();
+    const { bindDesktopAttachments } = await import("./desktop");
+    const bounds = { x: 24, y: 36, width: 420, height: 180 };
+    const handles = ["file-handle-fixture"];
+    const binding = await bindDesktopAttachments("session-fixture", bounds, handles, vi.fn());
+
+    const firstCall = bridge.invoke.mock.calls.find(([command]) => command === "codex.desktop.attachments");
+    expect(firstCall).toBeTruthy();
+    const [command, rawArgs] = firstCall!;
+    expect(command).toBe("codex.desktop.attachments");
+    const args = rawArgs as { request: Record<string, any>; onEvent: string };
+    expect(args.request).toEqual({
+      revision: 0,
+      sessionId: "session-fixture",
+      action: { type: "bind", bounds, handles }
+    });
+    expect(Object.keys(args.request).sort()).toEqual(["action", "revision", "sessionId"]);
+    expect(Object.keys(args.request.action).sort()).toEqual(["bounds", "handles", "type"]);
+    expect(args.onEvent).toBe("__CHANNEL__:1");
+    expect(bridge.transformCallback).toHaveBeenCalledOnce();
+    expect(JSON.stringify(args.request)).not.toMatch(/path|bytes/i);
+
+    const nextBounds = { x: 30, y: 42, width: 400, height: 160 };
+    await binding.update(nextBounds, handles);
+    await binding.paste();
+    await binding.release(handles);
+    await binding.close();
+
+    const requests = bridge.invoke.mock.calls
+      .filter(([name]) => name === "codex.desktop.attachments")
+      .map(([, callArgs]) => (callArgs as { request: { revision: number; sessionId: string; action: unknown } }).request);
+    expect(requests).toEqual([
+      { revision: 0, sessionId: "session-fixture", action: { type: "bind", bounds, handles } },
+      { revision: 0, sessionId: "session-fixture", action: { type: "bounds", bindingId: "binding-fixture", bounds: nextBounds, handles } },
+      { revision: 0, sessionId: "session-fixture", action: { type: "paste", bindingId: "binding-fixture" } },
+      { revision: 0, sessionId: "session-fixture", action: { type: "release", bindingId: "binding-fixture", handles } },
+      { revision: 0, sessionId: "session-fixture", action: { type: "unbind", bindingId: "binding-fixture" } }
+    ]);
+    expect(bridge.unregisterCallback).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  test("ignores other bindings, stale machine revisions, and events after close", async () => {
+    const bridge = installBridge();
+    const { bindDesktopAttachments } = await import("./desktop");
+    const runtime = await import("../runtime");
+    const receive = vi.fn();
+    const binding = await bindDesktopAttachments("session-fixture", { x: 0, y: 0, width: 200, height: 100 }, [], receive);
+    const emit = bridge.callbacks.get(1)!;
+    const item = { handle: "file-handle-fixture", name: "image.png", kind: "file" };
+
+    emit({ index: 1, message: { bindingId: "another-binding", items: [item], error: null } });
+    emit({ index: 2, message: { bindingId: "binding-fixture", items: [item], error: null } });
+    expect(receive).toHaveBeenCalledExactlyOnceWith({ bindingId: "binding-fixture", items: [item], error: null });
+
+    await runtime.remoteSelect("remote");
+    emit({ index: 3, message: { bindingId: "binding-fixture", items: [item], error: null } });
+    expect(receive).toHaveBeenCalledOnce();
+
+    await binding.close();
+    emit({ index: 4, message: { bindingId: "binding-fixture", items: [item], error: null } });
+    expect(receive).toHaveBeenCalledOnce();
+    expect(bridge.unregisterCallback).toHaveBeenCalledExactlyOnceWith(1);
   });
 });
 

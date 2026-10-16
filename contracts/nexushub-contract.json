@@ -769,6 +769,18 @@
       "requestDto": "DesktopCreateRequest",
       "responseDto": "DesktopCreatedThread",
       "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.attachments",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.attachments",
+      "tauriCommand": "codex_desktop::attachments",
+      "webuiWrapper": "bindDesktopAttachments",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopAttachmentRequest",
+      "responseDto": "DesktopAttachmentResult",
+      "hostOnlyReason": "Verified native OS clipboard/drop ingress in the local macOS main window; no client paths and no Linux or remote registration"
     }
   ],
   "dtoCatalog": {
@@ -1135,6 +1147,26 @@
     "DesktopPermissionsReview": {
       "core": "DesktopPermissionsReview",
       "webui": "DesktopPermissionsReview"
+    },
+    "DesktopAttachmentRequest": {
+      "core": "DesktopAttachmentRequest",
+      "webui": "DesktopAttachmentRequest"
+    },
+    "DesktopAttachmentAction": {
+      "core": "DesktopAttachmentAction",
+      "webui": "DesktopAttachmentAction"
+    },
+    "DesktopAttachmentBounds": {
+      "core": "DesktopAttachmentBounds",
+      "webui": "DesktopAttachmentBounds"
+    },
+    "DesktopAttachmentEvent": {
+      "core": "DesktopAttachmentEvent",
+      "webui": "DesktopAttachmentEvent"
+    },
+    "DesktopAttachmentResult": {
+      "core": "DesktopAttachmentResult",
+      "webui": "DesktopAttachmentResult"
     }
   },
   "retiredActions": [
