@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.1": [
+        "本机 Codex 支持输入 $ / @ 选择技能、应用和插件，保留原生桌面执行与加密队列",
+        "改进目录重试、协作进度刷新与协议错误提示，支持已核实的命令和文件会话审批。",
+    ],
     "1.3.0": [
         "本机 Codex 主线程支持新建、续聊、排队、补充与停止，仍由原生桌面执行",
         "接入模型、模式、引用及待处理请求，保留远程与其他 Provider 的现有阅读和管理功能。",
@@ -167,6 +171,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.1":
+        sections = {
+            "版本概览": ["本版完善本机 Codex 桌面协作的引用输入、目录读取、进度同步和审批体验；对话仍由原生桌面执行。"],
+            "功能调整": [
+                "输入 $ 搜索技能、@ 搜索应用与插件；上下键选择、Enter/Tab 插入、Escape 关闭，所选引用显示可读占位文字与可移除标签。",
+                "命令和文件审批仅在当前请求声明支持时显示“允许本次会话”；权限请求仍限本回合，不增加永久授权。",
+            ],
+            "问题修复": [
+                "目录读取不再长时间占用缓存锁，同源并发查询合并；超时可重试，应用或插件单侧失败保留另一侧结果。",
+                "校验引用的身份和 UTF-8 区间，修复插件显示名与原生名称不一致的问题，保留中文和 emoji 前后的正确占位位置。",
+                "协作事件合并刷新当前线程，慢读取不被反复取消；隐藏、切换线程与断开后丢弃旧响应，并保留回合结束后的最终刷新。",
+                "协议不兼容、线程未由桌面持有、状态失步和超时使用清晰的固定提示，失败时仍可阅读历史。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，引用区间与会话审批使用可选字段；协作仍仅供本机 macOS 主线程，远程和其他 Provider 的边界保持不变。",
+                "保留旧加密队列正文格式与幂等身份，结果不明不自动重发；升级保留配置、凭据、通知状态及原生会话。",
+                "协议依据桌面 build 20586 源码与合成测试核对。普通文件保留现有兼容编码；未核实的原生文件编码、文件 cancel 和其他桌面版本不宣称已支持。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装 macOS App。安装后在原生桌面打开同一主线程，连接后用 $ / @ 发送，检查桌面进度和两侧审批同步。",
+                "真实引用展示、两侧操作、视觉与滚动体验待用户验收；本轮合成测试不替代实机结论。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.3.0":
         sections = {
