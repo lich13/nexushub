@@ -103,7 +103,11 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 
 `CredentialAccess` 以一个信号量许可串行后台凭据操作。读取等待上限 15 秒覆盖排队和执行；已进入原生 API 的工作不能取消，超时/取消仍持有许可至真实结束。尚未开始的阻塞任务可取消。保存/移除只在等待许可时允许超时，事务开始后等待提交或回滚；`ChangeGuard` 随后台事务保留切换保护。读取 Key 和验证能力后再次核对 revision、目标与地址，回写也必须匹配；错误不返回原生异常正文。
 
+`ServerConfig` 在配置加载及绑定前验证回环监听；允许 IPv4 127.0.0.0/8、IPv6 ::1，IPv4 映射地址按其 IPv4 值判断。拒绝发生于数据库打开、后台任务启动及配置迁移写回之前，错误不回显输入；原有默认端口和旧回环端口迁移保留。
+
 服务端只接受一个 `x-api-key`，保存 SHA-256 摘要并常量时间比较；失败限流与审计不含凭据，合法 Key 不被失败尝试锁死。来源 IP 是现有安全审计内容。CLI 轮换立即使旧 Key 失效，撤销拒绝所有业务 RPC。systemd 保持文件系统隔离，只为已配置 Provider 根开放精确 `ReadWritePaths`，缺少 Claude 目录不阻止启动。
+
+更新任务与 Probe helper 使用内部 `ProcessCommand` 的 program/args 直接启动，不执行配置 shell 字符串。现行和完整匹配的历史默认更新命令映射到固定包装器及参数；自定义 shell、环境赋值、管道、重定向和命令替换返回固定错误。任务名称、状态、输出处理、互斥与审计字段保留；备份清理直接运行固定 Python 参数，保留最近三份。序列化 command 字段仅保留兼容展示，不改变 wire shape；Hook/配置文本的 shell_quote 统一实现并保留既有引用策略。
 
 ## 通知与监测
 
@@ -112,6 +116,8 @@ React 只向原生 IPC 传命令、参数及连接 revision。Rust 固定 allowl
 原生 Codex 问题解析位于 `codex/user_input.rs`，统一同步 question、异步 title 和字符串/对象选项。tracker 以原始 turn/call/question 身份配对完整回复，处理明确取消与替换；工具确认、背景进度或正常完成不能关闭尚未回答的问题。异步 monitor 独立于列表状态，与 Hook、passive、Stop 共用发送前复核。启用基线和原子 per-call 认领保证首次跳过旧历史、部分回答不产生新身份，重启/TTL 过期不重发已确认调用。
 
 Claude 通知复用 provider monitor 的游标和原子认领；仅明确完成/失败、未解决 AskUserQuestion 或绑定 pending 主工具的权限请求符合条件。不从普通待完成工具猜权限，不使用 Codex 自然语言推断；原生记录未保存的权限不能通知。首次启用和兼容读取器升级建立基线，新请求取代未发送旧事件，发送时复核身份和 pending 状态。
+
+Bark 保存和发送前共用 URL 校验。HTTPS 拒绝回环、未指定、链路本地、IPv4 私网、IPv6 ULA 及对应映射地址；拒绝数字 IP 别名、非法 authority 和 URL 凭据。保留普通 HTTPS 主机名与真实 HTTP 回环服务，不作 DNS 解析。无效配置保留原值并停止投递，不改用默认服务携带原密钥发送。
 
 `bark` 复用支持 HTTP/2 的连接池并禁重定向，分类 DNS、连接、TLS、超时、读取、HTTP 及业务拒绝；已知永久 APNs 错误优先。原始异常仅用于内部分类，对外保留安全分类、状态码、耗时、次数及匿名关联，不输出 Key 或正文。
 
@@ -163,12 +169,12 @@ Hook 短等待，后台每轮最多领取 10 项；重试在来源验证前后�
 
 ## 构建、CI 与发布
 
-根 Cargo workspace 构建共享核心和 Linux webd；`src-tauri` 独立 workspace 避免服务端构建引入桌面平台依赖，路径依赖共享核心。两份锁文件独立解析，Tauri 自身允许额外主版本；共享依赖约束、实际选择和最低 Rust 要求需一起检查。核心与桌面最低 Rust 声明为 1.86，日常使用已安装 stable。`check-workspaces.py` 精确比较共同直接依赖的声明与锁定结果；当前允许的 `toml` 0.8 解析差异是根 workspace 0.8.23、桌面 0.8.2。Tauri 额外的 dirs、reqwest、toml 主版本属于独立依赖链，不能据此强行统一。
+根 Cargo workspace 构建共享核心和 Linux webd；`src-tauri` 独立 workspace 避免服务端构建引入桌面平台依赖，路径依赖共享核心。两份锁文件独立解析，Tauri 自身允许额外主版本；共享依赖约束、实际选择和最低 Rust 要求需一起检查。核心与桌面最低 Rust 声明为 1.88；开发与 CI 由 rust-toolchain.toml 固定为 1.99.0，CI 另用 1.88.0 检查受支持的 Linux 服务与 macOS 桌面目标。`check-workspaces.py` 精确比较共同直接依赖的声明与锁定结果；当前允许的 `toml` 0.8 解析差异是根 workspace 0.8.23、桌面 0.8.2。Tauri 额外的 dirs、reqwest、toml 主版本属于独立依赖链，不能据此强行统一。
 
 升级共享依赖时先确认两侧 manifest、feature 和实际依赖链，再定向更新两份锁文件、运行两侧 Rust 检查和三项 CI；不得为消除合法多版本而全量更新。产品版本以根 Cargo workspace 为准，JSON/Tauri manifest 和两份 lock 的自身 package 必须精确一致；契约 schemaVersion 与 API 协议单独校验。
 
-CI 保留 Frontend checks、Backend checks、macOS Tauri checks。第三方 Action 固定 SHA，权限按作业收敛；缓存区分平台、锁文件与构建参数。依赖安全审计输出非阻塞报告，不自动升级依赖。交互性能预算使用生产构建、可见 macOS 窗口、串行 Chromium/WebKit 和关闭 trace 的命令；单一阈值与 JSON 测量结果由既有 `@desktop-performance` 测试提供，复现见 README。
+CI 保留 Frontend checks、Backend checks、macOS Tauri checks。第三方 Action 固定 SHA，权限按作业收敛；Frontend/Backend/Tauri 超时为 30/45/60 分钟。Cargo test、clippy 和正式构建均使用 --locked，包括 Tauri 传递的 Cargo 参数。缓存区分平台、架构、工具版本、锁文件与构建参数，覆盖 Cargo、pnpm、固定版本 cargo-audit 和 Playwright 浏览器；Linux 浏览器系统依赖仍正常安装。cargo audit/pnpm audit 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。定向修复必须审阅两份锁文件，不自动批量升级。交互性能预算使用生产构建、可见 macOS 窗口、串行 Chromium/WebKit 和关闭 trace 的命令；单一阈值与 JSON 测量结果由既有 `@desktop-performance` 测试提供，复现见 README。
 
-Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共七项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`nexushub-webd-linux-x86_64.tar.gz`/校验文件。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
+Release guard 核对 tag/版本、契约、隐私和同提交三项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`nexushub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
 
-正式安装复用同提交成品，先远程 API 后 App；部署输入不进入仓库。在线下载先校验发布 SHA-256，部署比对本地与远端文件 SHA-256；解包拒绝路径穿越、链接及特殊文件。程序与部署文件通过同文件系统临时文件原子替换，普通安装失败恢复本轮替换项，不回滚业务数据库或原生会话；在线更新仍使用既有异步重启，成功调度不等于新进程已启动，也不提供崩溃自动恢复。安装成功/启动检查与用户功能验收分开报告。维护六份当前文档并使用普通增量提交，历史由 Git 和 Release 保留。
+正式安装复用同提交成品，先远程 API 后 App；部署输入不进入仓库。Linux 归档用现有 Tauri 签名工具生成带版本 trusted comment 的分离签名，私钥仅从 GitHub Secrets 环境提供。在线下载先校验发布 SHA-256，再用预装 Minisign 与固定公钥验签，失败不解包；指定版本需与已签名版本相同，解包后核对布局、ELF x86_64 平台及程序版本。旧 updater 首次升级由可信客户端先验签；显式本地 --archive/--binary 运维方式保留。部署另比对本地与远端文件 SHA-256。解包拒绝路径穿越、链接、特殊文件及重复成员；目录与可执行文件统一 0755，普通文件 0644，不继承特殊位或可写权限。程序与部署文件通过同文件系统临时文件原子替换，普通安装失败恢复本轮替换项，不回滚业务数据库或原生会话；在线更新仍使用既有异步重启，成功调度不等于新进程已启动，也不提供崩溃自动恢复。安装成功/启动检查与用户功能验收分开报告。维护六份当前文档并使用普通增量提交，历史由 Git 和 Release 保留。
