@@ -16,6 +16,7 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod desktop_submissions;
 mod native_probe;
 mod notification_channels;
 pub use native_probe::NativeDelivery;
@@ -140,6 +141,31 @@ impl PanelDb {
     }
 
     fn migrate(&self) -> Result<()> {
+        const SCHEMA_VERSION: i64 = 2;
+        {
+            let conn = self.conn.lock().expect("db mutex");
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+            let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            if version >= SCHEMA_VERSION {
+                return Ok(());
+            }
+        }
+        let _migration = migration_lock::MigrationLock::acquire(&self.path)?;
+        self.migrate_retirements()?;
+        let mut conn = self.conn.lock().expect("db mutex");
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < SCHEMA_VERSION {
+            let tx = conn.transaction()?;
+            tx.execute_batch(desktop_submissions::SCHEMA)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    // Called with the cross-process migration lock. Schema 1 remains a separate
+    // checkpoint, so adding the encrypted desktop ledger never repeats erasure.
+    fn migrate_retirements(&self) -> Result<()> {
         // Schema 1 records completion of the protocol-2 retirements. Successful
         // reopens do not traverse event JSON or repeat schema/data migrations.
         const SCHEMA_VERSION: i64 = 1;
@@ -153,7 +179,6 @@ impl PanelDb {
         }
         // VACUUM must run outside a SQL transaction. Hold an OS advisory lock
         // across all retirement transactions and recheck after waiting.
-        let _migration = migration_lock::MigrationLock::acquire(&self.path)?;
         let conn = self.conn.lock().expect("db mutex");
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version >= SCHEMA_VERSION {

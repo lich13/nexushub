@@ -70,7 +70,7 @@ fn a_completed_upgrade_skips_retirement_cleanup_and_event_scans_on_reopen() {
     );
     drop(upgraded);
     let connection = fixture.connection();
-    assert_eq!(user_version(&connection), 1);
+    assert_eq!(user_version(&connection), 2);
     assert_eq!(
         connection
             .query_row(
@@ -130,7 +130,7 @@ fn a_completed_upgrade_skips_retirement_cleanup_and_event_scans_on_reopen() {
         Some("preserve-fixture-cursor")
     );
     drop(reopened);
-    assert_eq!(user_version(&fixture.connection()), 1);
+    assert_eq!(user_version(&fixture.connection()), 2);
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn concurrent_opens_serialize_a_legacy_upgrade_and_preserve_business_state() {
     }
 
     let connection = fixture.connection();
-    assert_eq!(user_version(&connection), 1);
+    assert_eq!(user_version(&connection), 2);
     assert_eq!(
         connection
             .query_row(
@@ -290,5 +290,74 @@ fn a_failed_retirement_keeps_version_zero_and_resumes_without_losing_business_da
         Some("resume-fixture-cursor")
     );
     drop(resumed);
-    assert_eq!(user_version(&fixture.connection()), 1);
+    assert_eq!(user_version(&fixture.connection()), 2);
+}
+
+#[test]
+fn schema_one_upgrade_adds_the_desktop_ledger_without_repeating_retirement_cleanup() {
+    let fixture = Fixture::new();
+    let db = PanelDb::open(&fixture.path).unwrap();
+    db.set_setting("probe_error_monitor_cursor", "schema-one-fixture-cursor")
+        .unwrap();
+    drop(db);
+
+    let schema_one = fixture.connection();
+    schema_one
+        .execute_batch(
+            "DROP TABLE codex_desktop_submissions;
+             INSERT INTO settings(key,value,updated_at)
+                 VALUES('probe_logs_db_last_maintain','protected-schema-one-fixture',3);
+             CREATE TRIGGER reject_schema_one_retirement_cleanup
+             BEFORE DELETE ON settings
+             WHEN OLD.key='probe_logs_db_last_maintain'
+             BEGIN SELECT RAISE(ABORT,'schema-one retirement cleanup repeated'); END;
+             PRAGMA user_version=1;",
+        )
+        .unwrap();
+    drop(schema_one);
+
+    let upgraded = PanelDb::open(&fixture.path).unwrap();
+    assert_eq!(
+        upgraded
+            .get_setting("probe_error_monitor_cursor")
+            .unwrap()
+            .as_deref(),
+        Some("schema-one-fixture-cursor")
+    );
+    drop(upgraded);
+
+    let connection = fixture.connection();
+    assert_eq!(user_version(&connection), 2);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT value FROM settings WHERE key='probe_logs_db_last_maintain'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "protected-schema-one-fixture"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type='table' AND name='codex_desktop_submissions'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type='trigger' AND name='reject_schema_one_retirement_cleanup'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
