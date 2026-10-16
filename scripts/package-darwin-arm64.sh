@@ -186,7 +186,7 @@ fi
 [[ -x "${TAURI_CLI}" ]] || die "missing Tauri CLI: ${TAURI_CLI}"
 
 if [[ "${SKIP_HELPER_BUILD:-0}" != "1" ]]; then
-  cargo build --release --package nexushub-webd
+  cargo build --release --package nexushub-webd --locked
 fi
 
 HELPER_BINARY="${CARGO_TARGET_DIR:-${ROOT}/target}/release/nexushub-webd"
@@ -201,7 +201,7 @@ python3 "${ROOT}/scripts/tauri-build-config.py" \
 TAURI_BUILD_CONFIG="${TEMP_TAURI_CONFIG}"
 
 if [[ "${SKIP_TAURI_BUILD:-0}" != "1" ]]; then
-  "${TAURI_CLI}" build --config "${TAURI_BUILD_CONFIG}" --bundles app,dmg
+  "${TAURI_CLI}" build --config "${TAURI_BUILD_CONFIG}" --bundles app,dmg -- --locked
 fi
 
 APP_BUNDLE="$(find_tauri_artifact "NexusHub.app")"
