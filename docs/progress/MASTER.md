@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-当前正式版本为 1.3.0；下一补丁 1.3.1 的核心改动已完成本地必要检查，尚未发布，manifest 版本将在收尾同步。正式发布状态、中文说明与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，对应提交的完整回归结果见 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml)。历史改动与测量记录由 Git 和 Release 保留。
+当前维护版本为 1.3.1。正式发布状态、中文说明与八项资产以 [GitHub Release](https://github.com/lich13/nexushub/releases) 为准，对应提交的完整回归结果见 [CI](https://github.com/lich13/nexushub/actions/workflows/ci.yml)。历史改动与测量记录由 Git 和 Release 保留。
 
 ## 当前改动
 
@@ -26,6 +26,8 @@
 | 安装、格式与隐私 | `bash scripts/test-install-script.sh`、两套 workspace 的 fmt check、`python3 scripts/privacy-check.py --git-objects` 与 `git diff --check` 退出 0；隐私扫描覆盖本轮源码提交与当前文档工作树。签名/安装行为未改。 |
 
 首次 core 编译因私有请求方法收紧后的旧测试调用和新增测试比较类型失败（101），修正后重跑完整 core 命令通过。首次前端全量测试发现 DTO 名单遗漏（1），补齐后重跑统一 typecheck 和全量测试通过。早期目录分页测试使用超出服务端页上限的 fixture 并错误期待累计页，已按实际有界分页契约修正；单文件 tsc 尝试因 TS5112 的命令用法失败，后续统一 typecheck 覆盖。
+
+收尾仅同步 1.3.1 版本、当前文档和六节发布说明，没有继续修改产品代码或依赖。两套 workspace 的 locked metadata、`check-versions.py --tag v1.3.1`、`test-tauri-build-config.py`、`test-install-script.sh`（含签名、ShellCheck、版本、workspace、隐私与审计策略检查）和 `git diff --check` 均退出 0；源码检查复用上表结果，最终提交的完整回归以三项 CI 为准。
 
 原生文件输入形状、file cancel、其他桌面 build、真实引用操作、两端审批与视觉/滚动体验仍为【未核实】或待用户验收。合成 socket 验证请求、问答与 elicitation 的状态撤下，不替代真实入口结论；所有身份、文件与队列测试使用隔离 fixture。
 
