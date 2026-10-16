@@ -1119,6 +1119,10 @@
     "DesktopAck": {
       "core": "DesktopAck",
       "webui": "DesktopAck"
+    },
+    "DesktopReferenceSpan": {
+      "core": "DesktopReferenceSpan",
+      "webui": "DesktopReferenceSpan"
     }
   },
   "retiredActions": [

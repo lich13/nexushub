@@ -214,6 +214,32 @@ impl WorkerLoop {
         resolved: Vec<NativeReference>,
     ) -> Result<()> {
         self.session.state().check_writable()?;
+        let spans = match &action {
+            DesktopAction::Send {
+                message_id,
+                text,
+                references,
+                reference_spans,
+            }
+            | DesktopAction::Steer {
+                message_id,
+                text,
+                references,
+                reference_spans,
+                ..
+            } => {
+                let spans = super::references::resolve_spans(references, reference_spans)?;
+                MessageInput {
+                    client_id: message_id.clone(),
+                    text: text.clone(),
+                    references: resolved.clone(),
+                    reference_spans: spans.clone(),
+                }
+                .validate()?;
+                spans
+            }
+            _ => Vec::new(),
+        };
         match action {
             DesktopAction::Send {
                 message_id, text, ..
@@ -225,7 +251,7 @@ impl WorkerLoop {
                         &source,
                         &thread,
                         &message_id,
-                        &json!({"kind":"queue","text":text,"references":resolved}),
+                        &submission_body("queue", &text, &resolved, &spans),
                     )
                 })
                 .await?;
@@ -245,12 +271,13 @@ impl WorkerLoop {
                 let id = message_id.clone();
                 let body_text = text.clone();
                 let body_references = resolved.clone();
+                let body_spans = spans.clone();
                 storage(&self.ledger, move |ledger| {
                     ledger.enqueue(
                         &source,
                         &thread,
                         &id,
-                        &json!({"kind":"steer","text":body_text,"references":body_references}),
+                        &submission_body("steer", &body_text, &body_references, &body_spans),
                     )
                 })
                 .await?;
@@ -280,6 +307,7 @@ impl WorkerLoop {
                             client_id: message_id.clone(),
                             text,
                             references: resolved,
+                            reference_spans: spans,
                         },
                         expected_turn_id: turn_id,
                     },
@@ -464,6 +492,12 @@ impl WorkerLoop {
         let references =
             serde_json::from_value(body.get("references").cloned().unwrap_or_else(|| json!([])))
                 .map_err(|_| DesktopError::InvalidInput)?;
+        let reference_spans = serde_json::from_value(
+            body.get("referenceSpans")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        )
+        .map_err(|_| DesktopError::InvalidInput)?;
         let id = item.id.clone();
         let claimed_id = id.clone();
         let source = self.source.clone();
@@ -481,6 +515,7 @@ impl WorkerLoop {
                 client_id: id.clone(),
                 text,
                 references,
+                reference_spans,
             }),
         )
         .await
@@ -586,6 +621,21 @@ async fn storage<T: Send + 'static>(
         .map_err(|_| DesktopError::Unavailable)
 }
 
+fn submission_body(
+    kind: &str,
+    text: &str,
+    references: &[NativeReference],
+    spans: &[super::references::ReferenceSpan],
+) -> serde_json::Value {
+    let mut body = json!({"kind":kind,"text":text,"references":references});
+    // Ledger identity compares decrypted bytes. Empty metadata MUST preserve
+    // the exact 1.3.0 body, including retries after an application upgrade.
+    if !spans.is_empty() {
+        body["referenceSpans"] = json!(spans);
+    }
+    body
+}
+
 fn validate_action(action: &DesktopAction) -> Result<()> {
     // Bound the channel before taking ownership; input validation is repeated
     // by the native command builder immediately before dispatch.
@@ -598,6 +648,7 @@ fn validate_action(action: &DesktopAction) -> Result<()> {
             message_id,
             text,
             references,
+            ..
         }
         | DesktopAction::Steer {
             message_id,

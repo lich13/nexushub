@@ -9,6 +9,38 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Encrypted queue metadata uses a resolved reference index, not an expiring
+/// UI grant. Ranges remain relative to the user's text until wire construction.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReferenceSpan {
+    pub reference: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+pub(super) fn resolve_spans(
+    handles: &[String],
+    spans: &[crate::services::codex_desktop::DesktopReferenceSpan],
+) -> Result<Vec<ReferenceSpan>> {
+    if spans.len() > 32 {
+        return Err(DesktopError::InvalidInput);
+    }
+    spans
+        .iter()
+        .map(|span| {
+            Ok(ReferenceSpan {
+                reference: handles
+                    .iter()
+                    .position(|handle| handle == &span.handle)
+                    .ok_or(DesktopError::InvalidInput)?,
+                start: span.start,
+                end: span.end,
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileIdentity {
     device: u64,
@@ -186,6 +218,14 @@ impl NativeReference {
             Self::App { name, path } | Self::Plugin { name, path } => {
                 Some(json!({"type":"mention","name":name,"path":path}))
             }
+            Self::File { .. } => None,
+        }
+    }
+
+    pub(super) fn placeholder(&self) -> Option<String> {
+        match self {
+            Self::Skill { name, .. } => Some(format!("${name}")),
+            Self::App { name, .. } | Self::Plugin { name, .. } => Some(format!("@{name}")),
             Self::File { .. } => None,
         }
     }

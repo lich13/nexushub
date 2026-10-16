@@ -37,11 +37,15 @@ pub enum DesktopAction {
         message_id: String,
         text: String,
         references: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reference_spans: Vec<DesktopReferenceSpan>,
     },
     Steer {
         message_id: String,
         text: String,
         references: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reference_spans: Vec<DesktopReferenceSpan>,
         turn_id: String,
     },
     Stop {
@@ -72,6 +76,15 @@ pub enum DesktopAction {
         accept: bool,
         content: Option<Value>,
     },
+}
+
+/// UTF-8 offsets in the user's text, never a native path or native wire object.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopReferenceSpan {
+    pub handle: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
