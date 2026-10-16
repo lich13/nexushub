@@ -1,0 +1,215 @@
+//! Local macOS desktop contracts. These are intentionally absent from the
+//! authenticated Linux RPC allowlist; remote sources remain read-only here.
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopThreadRequest {
+    pub revision: u64,
+    pub thread_id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopSessionRequest {
+    pub revision: u64,
+    pub session_id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopActionRequest {
+    pub revision: u64,
+    pub session_id: String,
+    pub action: DesktopAction,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum DesktopAction {
+    Send {
+        message_id: String,
+        text: String,
+        references: Vec<String>,
+    },
+    Steer {
+        message_id: String,
+        text: String,
+        references: Vec<String>,
+        turn_id: String,
+    },
+    Stop {
+        turn_id: String,
+    },
+    CancelQueued {
+        message_id: String,
+    },
+    DismissUnknown {
+        message_id: String,
+    },
+    ResumeQueue,
+    Settings {
+        model: String,
+        reasoning_effort: Option<String>,
+        mode: DesktopMode,
+    },
+    Decide {
+        request_key: String,
+        allow: bool,
+    },
+    Answer {
+        request_key: String,
+        answers: Vec<DesktopAnswer>,
+    },
+    Elicitation {
+        request_key: String,
+        accept: bool,
+        content: Option<Value>,
+    },
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopMode {
+    Default,
+    Plan,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopAnswer {
+    pub question_id: String,
+    pub answers: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopView {
+    pub session_id: String,
+    pub thread_id: String,
+    pub revision: u64,
+    pub connected: bool,
+    pub writable: bool,
+    pub runtime: String,
+    pub active_turn_id: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub mode: Option<DesktopMode>,
+    pub requests: Vec<DesktopPendingRequest>,
+    pub queue: Vec<DesktopQueuedMessage>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopQueuedMessage {
+    pub id: String,
+    pub status: String,
+    pub kind: String,
+    pub preview: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPendingRequest {
+    pub key: String,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub questions: Vec<DesktopQuestion>,
+    pub form_schema: Option<Value>,
+    pub can_accept: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub secret: bool,
+    pub options: Vec<DesktopQuestionOption>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopQuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopCatalogRequest {
+    pub revision: u64,
+    pub session_id: Option<String>,
+    pub project_handle: Option<String>,
+    pub kind: String,
+    pub query: String,
+    pub cursor: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCatalog {
+    pub items: Vec<DesktopCatalogItem>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCatalogItem {
+    pub handle: String,
+    pub kind: String,
+    pub name: String,
+    pub description: String,
+    pub reasoning_efforts: Vec<String>,
+    pub default_reasoning_effort: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopChooseRequest {
+    pub revision: u64,
+    pub session_id: Option<String>,
+    pub kind: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopChosenItem {
+    pub handle: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopChoice {
+    pub item: Option<DesktopChosenItem>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopCreateRequest {
+    pub revision: u64,
+    pub project_handle: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCreatedThread {
+    pub thread_id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DesktopAck {
+    pub ok: bool,
+}
