@@ -1,3 +1,4 @@
+use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     crypto::SecretBox,
     platform::{PlatformKind, PlatformPaths},
@@ -30,6 +31,24 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
+}
+
+impl ServerConfig {
+    /// The API is reached through the authenticated reverse proxy, never a LAN socket.
+    pub fn validate_listen(&self) -> Result<()> {
+        let address = match self.listen.ip() {
+            IpAddr::V6(ip) => ip
+                .to_ipv4_mapped()
+                .map(IpAddr::V4)
+                .unwrap_or(IpAddr::V6(ip)),
+            address => address,
+        };
+        anyhow::ensure!(
+            address.is_loopback(),
+            "server.listen must be a loopback address"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,7 +361,7 @@ fn default_prune_command() -> String {
 }
 
 fn default_panel_update_command() -> String {
-    "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string()
+    crate::update::default_panel_update_command()
 }
 
 fn default_panel_precheck_command() -> String {
@@ -351,10 +370,10 @@ fn default_panel_precheck_command() -> String {
 
 fn default_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
     match platform.kind {
-        PlatformKind::Linux => "/usr/local/bin/nexushub-webd-update --precheck".to_string(),
+        PlatformKind::Linux => crate::update::PANEL_PRECHECK_DEFAULT.to_string(),
         PlatformKind::Macos => format!(
             "test -d {}",
-            shell_quote(&platform.data_dir.display().to_string())
+            shell_quote(&platform.data_dir.display().to_string(), QuoteStyle::Always)
         ),
         PlatformKind::Windows => "nexushub-update --precheck".to_string(),
     }
@@ -365,8 +384,14 @@ fn default_doctor_command_for_platform(platform: &PlatformPaths) -> String {
         PlatformKind::Linux => "/home/ubuntu/codex-admin/bin/codex-cloud-doctor".to_string(),
         _ => format!(
             "{} --config {} doctor",
-            shell_quote(&platform.daemon_binary().display().to_string()),
-            shell_quote(&platform.config_file.display().to_string())
+            shell_quote(
+                &platform.daemon_binary().display().to_string(),
+                QuoteStyle::Always
+            ),
+            shell_quote(
+                &platform.config_file.display().to_string(),
+                QuoteStyle::Always
+            )
         ),
     }
 }
@@ -374,15 +399,21 @@ fn default_doctor_command_for_platform(platform: &PlatformPaths) -> String {
 fn default_desktop_doctor_command_for_platform(platform: &PlatformPaths) -> String {
     format!(
         "{} --config {} doctor",
-        shell_quote(&platform.daemon_binary().display().to_string()),
-        shell_quote(&platform.config_file.display().to_string())
+        shell_quote(
+            &platform.daemon_binary().display().to_string(),
+            QuoteStyle::Always
+        ),
+        shell_quote(
+            &platform.config_file.display().to_string(),
+            QuoteStyle::Always
+        )
     )
 }
 
 fn default_desktop_panel_precheck_command_for_platform(platform: &PlatformPaths) -> String {
     format!(
         "test -d {}",
-        shell_quote(&platform.data_dir.display().to_string())
+        shell_quote(&platform.data_dir.display().to_string(), QuoteStyle::Always)
     )
 }
 
@@ -399,10 +430,6 @@ fn default_desktop_workspace_for_platform(platform: &PlatformPaths, home: &Path)
         PlatformKind::Linux | PlatformKind::Macos => home.join("nexushub-workspace"),
         PlatformKind::Windows => home.join("NexusHub/workspace"),
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn current_home_dir() -> PathBuf {
@@ -531,8 +558,9 @@ impl Config {
         let migrated = retired_push.or(previous);
         let mut config: Self = toml::from_str(migrated.as_deref().unwrap_or(&text))
             .with_context(|| format!("parse config {}", path.display()))?;
+        config.server.validate_listen()?;
         config.load_sibling_env(path)?;
-        config.normalize();
+        config.normalize()?;
         if let Some(updated) = migrated {
             replace_config_atomically(path, &text, &updated)?;
         }
@@ -549,7 +577,8 @@ impl Config {
         fs::write(path, text).with_context(|| format!("write config {}", path.display()))
     }
 
-    pub fn normalize(&mut self) {
+    pub fn normalize(&mut self) -> Result<()> {
+        self.server.validate_listen()?;
         if self.server.listen
             == SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), LEGACY_LOOPBACK_PORT)
         {
@@ -580,31 +609,16 @@ impl Config {
         if self.update.panel_update_command.trim().is_empty() {
             self.update.panel_update_command = default_panel_update_command();
         }
-        if self
-            .update
-            .panel_update_command
-            .contains("codex-cloud-panel-update")
-            || self
-                .update
-                .panel_update_command
-                .contains("lich13/codex-cloud-panel")
-        {
+        if crate::update::is_legacy_panel_update(&self.update.panel_update_command) {
             self.update.panel_update_command = default_panel_update_command();
         }
         if self.update.panel_precheck_command.trim().is_empty() {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
-        if self
-            .update
-            .panel_precheck_command
-            .contains("codex-cloud-panel")
-            || self
-                .update
-                .panel_precheck_command
-                .contains("http://127.0.0.1:15732/healthz")
-        {
+        if crate::update::is_legacy_panel_precheck(&self.update.panel_precheck_command) {
             self.update.panel_precheck_command = default_panel_precheck_command();
         }
+        Ok(())
     }
 
     pub fn secret_box(&self) -> Result<SecretBox> {
@@ -639,9 +653,8 @@ impl ProbeConfig {
     pub fn normalize(&mut self) {
         self.poll_seconds = self.poll_seconds.clamp(5, 3_600);
         self.recent_limit = self.recent_limit.clamp(1, 500);
-        if !valid_probe_notification_server_url(&self.notifications.server_url) {
-            self.notifications.server_url = default_bark_server_url();
-        }
+        // Preserve invalid destinations so send-time validation fails closed. Replacing
+        // one with the default service could disclose a key belonging to another server.
         if self.notifications.group.trim().is_empty() {
             self.notifications.group = default_probe_notification_group();
         }
@@ -681,41 +694,85 @@ fn env_file_value(text: &str, key: &str) -> Option<String> {
 }
 
 pub fn valid_probe_notification_server_url(value: &str) -> bool {
-    let trimmed = value.trim();
-    if let Some(rest) = trimmed.strip_prefix("https://") {
-        return has_non_empty_url_host(rest);
+    use url::Host;
+
+    // Reject parser repairs (backslashes, control characters and numeric-IP aliases)
+    // before checking the canonical URL. No DNS resolution is performed here.
+    let value = value.trim();
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace() || ch == '\\')
+    {
+        return false;
     }
-    let Some(rest) = trimmed.strip_prefix("http://") else {
+    let Some((scheme, rest)) = value.split_once("://") else {
         return false;
     };
-    let Some(host) = url_host(rest) else {
+    if !matches!(scheme, "https" | "http") {
         return false;
-    };
-    is_loopback_host(host)
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host == "127.0.0.1"
-        || host == "[::1]"
-        || host == "::1"
-        || host.starts_with("127.")
-}
-
-fn has_non_empty_url_host(rest: &str) -> bool {
-    url_host(rest).is_some_and(|host| !host.trim().is_empty())
-}
-
-fn url_host(rest: &str) -> Option<&str> {
+    }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') {
-        return None;
+    if authority.is_empty() || authority.contains(['@', '%']) {
+        return false;
     }
-    if authority.starts_with('[') {
-        let end = authority.find(']')?;
-        return Some(&authority[..=end]);
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return false;
     }
-    authority.split(':').next()
+    let Some(host) = parsed.host() else {
+        return false;
+    };
+    let raw_host = if authority.starts_with('[') {
+        let Some(end) = authority.find(']') else {
+            return false;
+        };
+        &authority[1..end]
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    let ip = match host {
+        Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+        Host::Domain(_) => None,
+    };
+    if let Some(ip) = ip {
+        // WHATWG accepts 127.1, octal, hexadecimal and integer IPv4 forms. Only
+        // literal, unambiguous IP spellings are valid notification destinations.
+        if raw_host.parse::<IpAddr>().ok() != Some(ip) {
+            return false;
+        }
+        let ip = match ip {
+            IpAddr::V6(ip) => ip
+                .to_ipv4_mapped()
+                .map(IpAddr::V4)
+                .unwrap_or(IpAddr::V6(ip)),
+            ip => ip,
+        };
+        if scheme == "http" {
+            return ip.is_loopback();
+        }
+        return match ip {
+            IpAddr::V4(ip) => {
+                !(ip.is_loopback() || ip.is_unspecified() || ip.is_private() || ip.is_link_local())
+            }
+            IpAddr::V6(ip) => {
+                !(ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local())
+            }
+        };
+    }
+    let Host::Domain(host) = host else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    if scheme == "http" {
+        return host == "localhost";
+    }
+    !host.is_empty() && host != "localhost" && !host.ends_with(".localhost")
 }
 
 fn deserialize_optional_string_field<'de, D>(
@@ -1253,19 +1310,19 @@ mod tests {
     fn probe_notification_server_url_requires_https_except_loopback_http() {
         let mut config = Config::default();
         config.probe.notifications.server_url = "http://example.com".to_string();
-        config.normalize();
+        config.normalize().unwrap();
 
-        assert_eq!(config.probe.notifications.server_url, "https://api.day.app");
+        assert_eq!(config.probe.notifications.server_url, "http://example.com");
 
         config.probe.notifications.server_url = "http://127.0.0.1:8080".to_string();
-        config.normalize();
+        config.normalize().unwrap();
         assert_eq!(
             config.probe.notifications.server_url,
             "http://127.0.0.1:8080"
         );
 
         config.probe.notifications.server_url = "https://bark.example.com".to_string();
-        config.normalize();
+        config.normalize().unwrap();
         assert_eq!(
             config.probe.notifications.server_url,
             "https://bark.example.com"
@@ -1632,7 +1689,7 @@ custom = { token = "fixture-custom-value" }
         config.update.panel_precheck_command =
             "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz".to_string();
 
-        config.normalize();
+        config.normalize().unwrap();
 
         assert_eq!(config.codex.host_label, "configured-host");
         assert_eq!(config.server.listen.to_string(), "127.0.0.1:15742");
@@ -1659,7 +1716,7 @@ custom = { token = "fixture-custom-value" }
             let mut config = Config::default();
             config.update.precheck_command = legacy.to_string();
 
-            config.normalize();
+            config.normalize().unwrap();
 
             assert_eq!(
                 config.update.precheck_command,
@@ -1673,7 +1730,7 @@ custom = { token = "fixture-custom-value" }
         let mut config = Config::default();
         config.update.precheck_command = "/opt/custom/precheck --strict".to_string();
 
-        config.normalize();
+        config.normalize().unwrap();
 
         assert_eq!(
             config.update.precheck_command,

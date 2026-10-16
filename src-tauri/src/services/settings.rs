@@ -153,14 +153,19 @@ pub(crate) fn probe_fixed_shell_job_with_state(
         )
         .with_data(serde_json::to_value(diagnostic_plan)?));
     }
+    let process = probe_service::probe_process_command(
+        state.platform(),
+        &state.platform().config_file,
+        action,
+    );
     let job_id = if let Some(group) = job.exclusive_group.as_deref() {
         state
             .jobs
-            .start_exclusive_shell_job(&job.kind, &job.title, job.command.clone(), group)?
+            .start_exclusive_process_job(&job.kind, &job.title, process, group)?
     } else {
         state
             .jobs
-            .start_shell_job(&job.kind, &job.title, job.command.clone())?
+            .start_process_job(&job.kind, &job.title, process)?
     };
     Ok(ok_action(
         command,
@@ -346,12 +351,12 @@ mod tests {
     }
 
     #[test]
-    fn probe_fixed_shell_job_consumes_core_job_command_without_rebuilding_it() {
+    fn probe_fixed_process_job_executes_the_core_command_with_literal_arguments() {
         let (_temp, state, platform) = command_test_state(PlatformKind::Macos);
         std::fs::create_dir_all(platform.daemon_binary().parent().unwrap()).unwrap();
         std::fs::write(
             platform.daemon_binary(),
-            "#!/bin/sh\necho core-command-marker\n",
+            "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -363,6 +368,7 @@ mod tests {
             permissions.set_mode(0o755);
             std::fs::set_permissions(platform.daemon_binary(), permissions).unwrap();
         }
+        assert!(platform.config_file.to_string_lossy().contains(' '));
         let core_plan = probe_service::plan_probe_action_with_device_key(
             &state.config(),
             state.platform(),
@@ -370,18 +376,47 @@ mod tests {
             false,
         )
         .unwrap();
-        let expected_command = core_plan.job.as_ref().unwrap().command.clone();
+        let expected_process = probe_service::probe_process_command(
+            state.platform(),
+            &platform.config_file,
+            probe_service::ProbeAction::BarkTest,
+        );
+        assert_eq!(expected_process.program, platform.daemon_binary());
+        assert_eq!(
+            expected_process.args,
+            vec![
+                "--config".into(),
+                platform.config_file.as_os_str().to_owned(),
+                "probe".into(),
+                "bark-test".into(),
+            ]
+        );
 
         let response = probe_action_with_state(&state, probe_service::ProbeAction::BarkTest)
             .expect("Probe action should start a fixed job");
         let job_id = response.job_id.expect("job id");
-        let job = state.db.job(&job_id).unwrap().expect("job record");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let job = loop {
+            let job = state.db.job(&job_id).unwrap().expect("job record");
+            if job.status == "succeeded" || job.status == "failed" {
+                break job;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Probe process job did not finish in time"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
 
         assert!(response.available);
+        assert_eq!(job.status, "succeeded");
         assert_eq!(job.kind, core_plan.job.as_ref().unwrap().kind);
         assert_eq!(job.title, core_plan.job.as_ref().unwrap().title);
-        assert!(expected_command.contains("--config"));
-        assert!(expected_command.contains("probe bark-test"));
+        let expected_output = format!(
+            "<--config>\n<{}>\n<probe>\n<bark-test>\n",
+            platform.config_file.display()
+        );
+        assert_eq!(job.output, expected_output.trim_end_matches('\n'));
     }
 
     #[test]
@@ -403,17 +438,27 @@ mod tests {
     }
 
     #[test]
-    fn probe_action_source_uses_core_plan_job_command() {
-        let source = settings_source_before_test_module();
+    fn probe_process_command_preserves_config_path_as_one_argument() {
+        let (_temp, _state, platform) = command_test_state(PlatformKind::Macos);
+        let config_path = platform.config_file.clone();
+        assert!(config_path.to_string_lossy().contains(' '));
 
-        assert!(
-            source.contains("job.command.clone()"),
-            "Probe action execution must pass the core plan job.command into JobRunner"
-        );
-        assert!(
-            !source.contains("fixed_probe_shell_command"),
-            "Tauri adapter must not rebuild Probe shell commands"
-        );
+        for (action, subcommand) in [
+            (probe_service::ProbeAction::BarkTest, "bark-test"),
+            (probe_service::ProbeAction::InstallHooks, "hooks-install"),
+        ] {
+            let process = probe_service::probe_process_command(&platform, &config_path, action);
+            assert_eq!(process.program, platform.daemon_binary());
+            assert_eq!(
+                process.args,
+                vec![
+                    "--config".into(),
+                    config_path.as_os_str().to_owned(),
+                    "probe".into(),
+                    subcommand.into(),
+                ]
+            );
+        }
     }
 
     #[test]

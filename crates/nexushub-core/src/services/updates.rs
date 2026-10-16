@@ -103,6 +103,19 @@ pub struct LinuxUpdateJobSpec {
     pub exclusive_group: Option<String>,
 }
 
+impl LinuxUpdateJobSpec {
+    pub fn process_command(&self) -> Result<crate::jobs::ProcessCommand> {
+        match self.kind.as_str() {
+            "nexushub_update_check" => update::panel_process(&self.command, true),
+            "nexushub_update_install" => update::panel_process(&self.command, false),
+            "nexushub_update_prune" if self.command == update::panel_prune_command() => Ok(
+                crate::jobs::ProcessCommand::new("python3", ["-c", update::PANEL_PRUNE_SCRIPT]),
+            ),
+            _ => anyhow::bail!("unsupported managed update command"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MacosUpdaterJobSpec {
     pub kind: String,
@@ -432,26 +445,28 @@ pub fn linux_update_job_spec(config: &Config, plan: UpdateJobPlan) -> Result<Lin
         anyhow::bail!("only Linux WebUI can start server update jobs");
     }
     let exclusive_group = plan.exclusive.then(|| "nexushub-webd-update".to_string());
-    match plan.action {
-        UpdateAction::Check => Ok(LinuxUpdateJobSpec {
+    let spec = match plan.action {
+        UpdateAction::Check => LinuxUpdateJobSpec {
             kind: "nexushub_update_check".to_string(),
             title: "NexusHub update precheck".to_string(),
             command: config.update.panel_precheck_command.clone(),
             exclusive_group,
-        }),
-        UpdateAction::Install => Ok(LinuxUpdateJobSpec {
+        },
+        UpdateAction::Install => LinuxUpdateJobSpec {
             kind: "nexushub_update_install".to_string(),
             title: "NexusHub update install".to_string(),
             command: update::panel_update_command(&config.update.panel_update_command),
             exclusive_group,
-        }),
-        UpdateAction::Prune => Ok(LinuxUpdateJobSpec {
+        },
+        UpdateAction::Prune => LinuxUpdateJobSpec {
             kind: "nexushub_update_prune".to_string(),
             title: "NexusHub update backup prune".to_string(),
             command: update::panel_prune_command(),
             exclusive_group,
-        }),
-    }
+        },
+    };
+    spec.process_command()?;
+    Ok(spec)
 }
 
 fn derive_macos_recent_check_status(

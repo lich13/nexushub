@@ -105,7 +105,7 @@ pub(crate) async fn start_probe_action(
     let platform = http_update_platform();
     let config_path = probe_config_path();
     let plan = linux_adapter::linux_probe_action_plan(&state, &platform, action, &config_path)?;
-    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan)
+    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)
         .map_err(|err| api_error(StatusCode::CONFLICT, &err.to_string()))?;
     ok(json!({"job_id": id}))
 }

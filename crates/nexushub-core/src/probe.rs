@@ -1,3 +1,4 @@
+use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     codex::{extract_proposed_plan_text, resolve_codex_paths, ResolvedCodexPaths, ThreadSummary},
     config::Config,
@@ -554,16 +555,28 @@ impl ProbeRuntime {
     fn hook_command(&self) -> String {
         format!(
             "{} --config {} probe hook-stop",
-            shell_quote(&self.paths.daemon_binary().display().to_string()),
-            shell_quote(&self.paths.config_file.display().to_string())
+            shell_quote(
+                &self.paths.daemon_binary().display().to_string(),
+                QuoteStyle::Minimal
+            ),
+            shell_quote(
+                &self.paths.config_file.display().to_string(),
+                QuoteStyle::Minimal
+            )
         )
     }
 
     fn request_user_input_hook_command(&self) -> String {
         format!(
             "{} --config {} probe hook-request-user-input",
-            shell_quote(&self.paths.daemon_binary().display().to_string()),
-            shell_quote(&self.paths.config_file.display().to_string())
+            shell_quote(
+                &self.paths.daemon_binary().display().to_string(),
+                QuoteStyle::Minimal
+            ),
+            shell_quote(
+                &self.paths.config_file.display().to_string(),
+                QuoteStyle::Minimal
+            )
         )
     }
 
@@ -608,17 +621,6 @@ impl ProbeRuntime {
             suggestions.push("enable Stop hook management before installing hooks".to_string());
         }
         suggestions
-    }
-}
-
-fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
-    {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 

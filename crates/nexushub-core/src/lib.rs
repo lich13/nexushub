@@ -21,6 +21,7 @@ pub mod security;
 mod selected_codex;
 pub mod services;
 pub mod session_storage;
+pub mod shell;
 pub mod system;
 pub mod update;
 

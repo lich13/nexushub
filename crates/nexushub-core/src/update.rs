@@ -53,12 +53,10 @@ pub fn panel_update_command(configured: &str) -> String {
 }
 
 pub fn default_panel_update_command() -> String {
-    "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string()
+    PANEL_UPDATE_DEFAULT.to_string()
 }
 
-pub fn panel_prune_command() -> String {
-    r#"python3 - <<'PY'
-from pathlib import Path
+pub const PANEL_PRUNE_SCRIPT: &str = r#"from pathlib import Path
 import shutil
 
 root = Path("/var/lib/nexushub-webd/backups/release-updates")
@@ -72,9 +70,47 @@ for path in remove:
     shutil.rmtree(path)
     print(f"removed {path}")
 
-print(f"kept {len(backups) - len(remove)} release update backups")
-PY"#
-    .to_string()
+print(f"kept {len(backups) - len(remove)} release update backups")"#;
+
+pub fn panel_prune_command() -> String {
+    format!("python3 - <<'PY'\n{PANEL_PRUNE_SCRIPT}\nPY")
+}
+
+pub const PANEL_UPDATE_DEFAULT: &str =
+    "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest";
+pub const PANEL_PRECHECK_DEFAULT: &str = "/usr/local/bin/nexushub-webd-update --precheck";
+
+pub fn is_legacy_panel_update(value: &str) -> bool {
+    matches!(value,
+        "/usr/local/bin/codex-cloud-panel-update --repo lich13/codex-cloud-panel --version latest" |
+        "/usr/local/bin/codex-cloud-panel-update --repo lich13/nexushub --version latest" |
+        "/usr/local/bin/nexushub-webd-update --repo lich13/codex-cloud-panel --version latest")
+}
+
+pub fn is_legacy_panel_precheck(value: &str) -> bool {
+    matches!(value,
+        "test -x /usr/local/bin/nexushub-webd-update && systemctl is-active nexushub-webd && curl -fsS http://127.0.0.1:15742/healthz" |
+        "test -x /usr/local/bin/codex-cloud-panel-update && systemctl is-active codex-cloud-panel && curl -fsS http://127.0.0.1:15732/healthz" |
+        "/usr/local/bin/codex-cloud-panel-update --precheck" |
+        "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz")
+}
+
+/// Exact compatibility entries only. Never tokenize or execute user-supplied shell text.
+pub fn panel_process(command: &str, precheck: bool) -> anyhow::Result<crate::jobs::ProcessCommand> {
+    let valid = if precheck {
+        command == PANEL_PRECHECK_DEFAULT || is_legacy_panel_precheck(command)
+    } else {
+        command.is_empty() || command == PANEL_UPDATE_DEFAULT || is_legacy_panel_update(command)
+    };
+    anyhow::ensure!(valid, "unsupported managed update command");
+    Ok(crate::jobs::ProcessCommand::new(
+        "/usr/local/bin/nexushub-webd-update",
+        if precheck {
+            vec!["--precheck"]
+        } else {
+            vec!["--repo", "lich13/nexushub", "--version", "latest"]
+        },
+    ))
 }
 
 pub fn analyze_job_failure(

@@ -162,11 +162,6 @@ async fn send(
         return failure("configuration", "invalid_device_key_encoding", false, false);
     };
     let server = config.probe.notifications.server_url.trim();
-    let server = if server.is_empty() {
-        "https://api.day.app"
-    } else {
-        server
-    };
     if !valid_probe_notification_server_url(server) {
         return failure("configuration", "invalid_server_url", false, false);
     }
@@ -262,4 +257,111 @@ async fn send(
     result.retry_after_ms = delay;
     result.request_count = 1;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_url(scheme: &str, authority: &str) -> String {
+        format!("{scheme}://{authority}")
+    }
+
+    #[tokio::test]
+    async fn invalid_server_urls_fail_without_network_delivery_or_retry() {
+        let request = ProbeBarkRequest {
+            title: "fixture title".into(),
+            body: "fixture body".into(),
+            dedupe_key: "fixture-event".into(),
+        };
+
+        for (case, server_url) in [
+            ("empty", String::new()),
+            ("whitespace", " \t ".into()),
+            ("https private ipv4", fixture_url("https", "192.168.1.12")),
+            (
+                "https mapped private ipv6",
+                fixture_url("https", "[::ffff:192.168.1.12]"),
+            ),
+            ("https numeric alias short", fixture_url("https", "127.1")),
+            (
+                "https numeric alias integer",
+                fixture_url("https", "2130706433"),
+            ),
+            (
+                "https credential authority",
+                fixture_url("https", "fixturekey@example.invalid"),
+            ),
+        ] {
+            let mut config = Config::default();
+            config.probe.notifications.enabled = true;
+            config.probe.notifications.server_url = server_url.clone();
+
+            let outcome = send(
+                &config,
+                b"fixturekey",
+                &request,
+                "fixture body",
+                0,
+                1,
+                "fixture-id",
+                Duration::from_millis(10),
+            )
+            .await;
+
+            assert_eq!(
+                outcome.reason.as_deref(),
+                Some("invalid_server_url"),
+                "{case}"
+            );
+            assert_eq!(
+                outcome.error_category.as_deref(),
+                Some("configuration"),
+                "{case}"
+            );
+            assert_eq!(outcome.request_count, 0, "{case}");
+            assert_eq!(outcome.attempts, 0, "{case}");
+            assert!(!outcome.retryable, "{case}");
+            assert!(!outcome.uncertain, "{case}");
+            assert!(!outcome.sent, "{case}");
+            assert!(!outcome.skipped, "{case}");
+            assert!(outcome.http_status.is_none(), "{case}");
+            assert!(outcome.request_url.is_none(), "{case}");
+            assert_eq!(config.probe.notifications.server_url, server_url, "{case}");
+
+            let outcome = send_chunk(
+                &config,
+                b"fixturekey",
+                &request,
+                "fixture body",
+                0,
+                1,
+                "fixture-id",
+                1,
+                Duration::from_millis(10),
+            )
+            .await;
+
+            assert_eq!(
+                outcome.reason.as_deref(),
+                Some("invalid_server_url"),
+                "{case}"
+            );
+            assert_eq!(
+                outcome.error_category.as_deref(),
+                Some("configuration"),
+                "{case}"
+            );
+            assert_eq!(outcome.request_count, 0, "{case}");
+            assert_eq!(outcome.attempts, 1, "{case}");
+            assert!(!outcome.retryable, "{case}");
+            assert!(!outcome.uncertain, "{case}");
+            assert!(!outcome.sent, "{case}");
+            assert!(!outcome.skipped, "{case}");
+            assert!(outcome.http_status.is_none(), "{case}");
+            assert!(outcome.request_url.is_none(), "{case}");
+            assert!(outcome.notifications_enabled, "{case}");
+            assert_eq!(config.probe.notifications.server_url, server_url, "{case}");
+        }
+    }
 }

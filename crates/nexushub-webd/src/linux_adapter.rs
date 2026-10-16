@@ -51,6 +51,7 @@ pub fn start_probe_action_plan(
     state: &AppState,
     auth: &AuthContext,
     plan: probe_service::ProbeActionPlan,
+    config_path: &Path,
 ) -> Result<String> {
     let action = plan.action;
     let spec = plan
@@ -65,10 +66,11 @@ pub fn start_probe_action_plan(
         None,
         json!({"args": spec.args, "action": action.as_rpc_action()}),
     )?;
+    let process = probe_service::probe_process_command(state.platform(), config_path, action);
     let group = spec.exclusive_group.as_deref().unwrap_or(&spec.kind);
     state
         .jobs
-        .start_exclusive_shell_job(&spec.kind, &spec.title, spec.command, group)
+        .start_exclusive_process_job(&spec.kind, &spec.title, process, group)
 }
 
 pub fn list_threads_read_model(
@@ -331,6 +333,13 @@ pub fn start_update_action_plan(
     let spec = plan
         .linux_job
         .ok_or_else(|| anyhow!("Linux update job is unavailable"))?;
+    let process = spec.process_command()?;
+    // RPC tests must never start an installed updater or prune real backups.
+    #[cfg(test)]
+    let process = {
+        let _ = process;
+        nexushub_core::jobs::ProcessCommand::new("true", std::iter::empty::<&str>())
+    };
     if let Some(audit_action) = audit_action {
         state.db.record_audit(
             Some(&auth.admin_id),
@@ -344,11 +353,11 @@ pub fn start_update_action_plan(
     if let Some(group) = spec.exclusive_group.as_deref() {
         state
             .jobs
-            .start_exclusive_shell_job(&spec.kind, &spec.title, spec.command, group)
+            .start_exclusive_process_job(&spec.kind, &spec.title, process, group)
     } else {
         state
             .jobs
-            .start_shell_job(&spec.kind, &spec.title, spec.command)
+            .start_process_job(&spec.kind, &spec.title, process)
     }
 }
 
