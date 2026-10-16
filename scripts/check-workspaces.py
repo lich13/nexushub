@@ -27,6 +27,9 @@ def direct_version(packages, owner, dependency):
 def check(root):
     workspace = load(root, "Cargo.toml")["workspace"]
     desktop = load(root, "src-tauri/Cargo.toml")
+    toolchain = load(root, "rust-toolchain.toml")["toolchain"]
+    if toolchain["channel"] != "1.99.0" or workspace["package"]["rust-version"] != "1.88":
+        raise ValueError("expected pinned Rust 1.99.0 and validated MSRV 1.88")
     if desktop["package"]["rust-version"] != workspace["package"]["rust-version"]:
         raise ValueError("Tauri and core must declare the same MSRV")
     core_lock = load(root, "Cargo.lock")["package"]
