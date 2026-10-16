@@ -23,9 +23,10 @@ import { SubagentSummary } from "./SubagentSummary";
 import { getThread, getThreadBlocks } from "../../lib/api/threads";
 import { useHistoryScroll } from "../../lib/useHistoryScroll";
 import { HistoryLoading } from "../common/HistoryLoading";
-import { machineScope } from "../../lib/query/connection";
+import { machineScope, useConnection } from "../../lib/query/connection";
 import { codexTimelinePage, useTimelineWindow } from "../../lib/useTimelineWindow";
 import { TimelineHistoryStatus } from "../common/TimelineHistoryStatus";
+import { DesktopComposer } from "./DesktopComposer";
 
 
 
@@ -47,6 +48,7 @@ export function Conversation(props: {
   onSearchMiss?: () => void;
 }) {
   const { detail, slot } = props;
+  const connection = useConnection();
   const summary = props.selectedSummary?.id === detail.summary.id
     ? { ...detail.summary, ...props.selectedSummary }
     : detail.summary;
@@ -210,6 +212,7 @@ export function Conversation(props: {
         <TimelineHistoryStatus navigation={{ ...navigation, busy: navigation.busy || history.loading }} />
         {!blocks.length && <div className="muted-row">暂无消息</div>}
       </div></div>
+      {!archived && props.capabilities.codexDesktop === true && connection.target === "local" && <DesktopComposer key={`${connection.revision}:${props.threadId}`} threadId={props.threadId} />}
     </main>
     {selectedAgent && <SubagentPanel key={`${selectedAgent.machine}:${props.threadId}:${selectedAgent.agent?.agentId ?? "list"}`} rootThreadId={props.threadId} initialAgent={selectedAgent.agent} rootSubagents={slot.subagents ?? detail.subagents} docked={docked} onClose={closeAgent} />}
   </div>;

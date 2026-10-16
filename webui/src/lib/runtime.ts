@@ -10,7 +10,11 @@ export type RemoteInvokeResponse = unknown;
 export type RuntimeContext = { kind: "desktop" };
 type RpcArgs = Record<string, unknown> | undefined;
 type RuntimeGlobal = typeof globalThis & {
-  __TAURI_INTERNALS__?: { invoke?: (command: string, args?: RpcArgs) => Promise<unknown> };
+  __TAURI_INTERNALS__?: {
+    invoke?: (command: string, args?: RpcArgs) => Promise<unknown>;
+    transformCallback?: (callback: (frame: { index: number; message?: unknown; end?: boolean }) => void) => number;
+    unregisterCallback?: (id: number) => void;
+  };
   __NEXUSHUB_DESKTOP_RUNTIME__?: boolean;
   __NEXUSHUB_TEST_INVOKE__?: (command: string, args?: RpcArgs) => Promise<unknown> | unknown;
 };
@@ -32,6 +36,23 @@ export async function invokeNative<T = unknown>(command: string, args?: RpcArgs)
     throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "桌面操作失败");
   }
   throw new RuntimeUnavailableError("请使用 NexusHub App", command);
+}
+
+/** Channel frames are full views. Drop late/out-of-order fetches so an old
+ * native state cannot restore a completed question or approval. */
+export function createNativeChannel<T>(receive: (view: T) => void) {
+  const runtime = (globalThis as RuntimeGlobal).__TAURI_INTERNALS__;
+  if (!runtime?.transformCallback || !runtime.unregisterCallback) throw new Error("当前入口不支持桌面协作，请使用 NexusHub App");
+  const unregister = runtime.unregisterCallback;
+  let closed = false;
+  let last = -1;
+  const id = runtime.transformCallback(frame => {
+    if (closed || !Number.isSafeInteger(frame.index) || frame.index <= last) return;
+    last = frame.index;
+    if (frame.end) { closed = true; unregister(id); return; }
+    if (frame.message) receive(frame.message as T);
+  });
+  return { value: `__CHANNEL__:${id}`, close: () => { if (!closed) { closed = true; unregister(id); } } };
 }
 
 const listeners = new Set<() => void>();
@@ -91,6 +112,9 @@ export async function remoteSelect(target: MachineTarget) {
 export function remoteInvoke<T = unknown>(request: RemoteInvokeRequest) { return invokeNative<T>("remote.invoke", { request }); }
 
 const reads = new Set(["cleanup.hiddenDryRun", "system.capabilities", "system.version", "system.platform", "system.providers", "threads.list", "threads.detail", "threads.subagentDetail", "threads.blocks", "jobs.list", "jobs.detail", "probe.status", "probe.settings.get", "probe.events", "updates.status", "grok.list", "grok.detail", "grok.deletePreview", "claude.list", "claude.detail", "claude.deletePreview", "sessions.attachmentRead", "sessions.search", "sessions.bulkPreview"]);
+// Local desktop subscriptions/catalogs are reads, but never routed to remote.invoke.
+reads.add("codex.desktop.attach");
+reads.add("codex.desktop.catalog");
 const pendingJobs = new Set<string>();
 export async function runtimeRpc<T = unknown>(command: string, args?: RpcArgs, localOnly = false): Promise<T> {
   if (connection.changing) throw new Error("连接切换中，请稍后重试");

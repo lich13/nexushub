@@ -221,6 +221,46 @@ fn real_serialization_preserves_omission_null_and_enum_spelling() {
     let roundtrip: UserMessage = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(roundtrip).unwrap(), value);
 }
+
+#[test]
+fn desktop_contract_actions_roundtrip_and_send_rejects_client_paths() {
+    use nexushub_core::services::codex_desktop::{
+        DesktopActionRequest, DesktopChoice, DesktopView,
+    };
+    for action in [
+        json!({"type":"send","messageId":"fixture","text":"request","references":["opaque-reference"]}),
+        json!({"type":"steer","messageId":"fixture","text":"request","references":[],"turnId":"turn-fixture"}),
+        json!({"type":"stop","turnId":"turn-fixture"}),
+        json!({"type":"cancelQueued","messageId":"fixture"}),
+        json!({"type":"dismissUnknown","messageId":"fixture"}),
+        json!({"type":"resumeQueue"}),
+        json!({"type":"settings","model":"model-fixture","reasoningEffort":null,"mode":"plan"}),
+        json!({"type":"decide","requestKey":"request-fixture","allow":false}),
+        json!({"type":"answer","requestKey":"request-fixture","answers":[{"questionId":"question-fixture","answers":["answer"]}]}),
+        json!({"type":"elicitation","requestKey":"request-fixture","accept":false,"content":null}),
+    ] {
+        let wire = json!({"revision":7,"sessionId":"session-fixture","action":action});
+        let request: DesktopActionRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        if matches!(wire["action"]["type"].as_str(), Some("send" | "steer")) {
+            let mut with_path = wire;
+            with_path["action"]["path"] = json!("/fixture/unselected");
+            assert!(serde_json::from_value::<DesktopActionRequest>(with_path).is_err());
+        }
+    }
+    let view = json!({
+        "sessionId":"session-fixture","threadId":"thread-fixture","revision":7,
+        "connected":false,"writable":false,"runtime":"idle","activeTurnId":null,
+        "model":null,"reasoningEffort":null,"mode":null,"requests":[],"queue":[],"error":null
+    });
+    let decoded: DesktopView = serde_json::from_value(view.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), view);
+    assert_eq!(
+        serde_json::to_value(DesktopChoice { item: None }).unwrap(),
+        json!({"item":null})
+    );
+}
+
 #[test]
 fn missing_adapters_and_changed_dynamic_envelopes_are_detected() {
     let source = "pub fn reply(id: String) -> Value { json!({\"id\": id, \"items\": []}) }";

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildDemoFixture, buildDemoPlatformOverview, buildDemoSystemCapabilities, type DemoFixtureKey } from "./demoCore";
 
 const fixtureKeys: DemoFixtureKey[] = ["linux-api", "macos-tauri"];
-const sharedKeys = ["app_updater", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
+const sharedKeys = ["app_updater", "codex_desktop", "job_history", "jobs", "probe", "settings", "thread_archive_actions", "thread_cleanup", "thread_subagents", "threads"];
 const retiredKeys = ["admin_password", "csrf", "nginx", "public_endpoint", "security_settings", "turnstile", "web_auth"];
 
 describe("machine demo fixtures", () => {
@@ -21,7 +21,7 @@ describe("machine demo fixtures", () => {
     const view = buildDemoFixture("macos-tauri");
     expect(view.system.host_surface).toBe("desktop_embedded_tauri");
     expect(Object.keys(view.system.capabilities).sort()).toEqual(sharedKeys);
-    expect(view.system.capabilities).toMatchObject({ app_updater: true, thread_cleanup: true, thread_archive_actions: true, systemd: false, linux_update_job: false, prune_backups: false });
+    expect(view.system.capabilities).toMatchObject({ app_updater: true, codex_desktop: true, thread_cleanup: true, thread_archive_actions: true, systemd: false, linux_update_job: false, prune_backups: false });
     expect(view.platform).toMatchObject({ kind: "macos", service_kind: "tauri", service_name: "NexusHub.app" });
     expect(JSON.stringify(view)).not.toMatch(/systemd|Nginx|Turnstile|管理员密码|公网入口|Linux prune|Linux update/i);
   });
@@ -30,7 +30,7 @@ describe("machine demo fixtures", () => {
     const view = buildDemoSystemCapabilities("linux-api");
     expect(view.host_surface).toBe("linux_server_api");
     expect(Object.keys(view.capabilities).sort()).toEqual([...sharedKeys, "systemd", "linux_update_job", "prune_backups", "hidden_cleanup_scan"].sort());
-    expect(view.capabilities).toMatchObject({ systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
+    expect(view.capabilities).toMatchObject({ codex_desktop: false, systemd: true, linux_update_job: true, prune_backups: true, hidden_cleanup_scan: false });
     expect(buildDemoPlatformOverview("linux-api")).toMatchObject({ kind: "linux", data_dir: "/srv/nexushub-demo", config_file: "/srv/nexushub-demo/config.toml", log_dir: "/srv/nexushub-demo/logs", service_kind: "systemd", service_name: "nexushub-webd" });
   });
 

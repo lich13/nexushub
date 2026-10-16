@@ -23,6 +23,8 @@ import { latestAssistantCopyText, threadResumeCommand } from "../../lib/domain/c
 import { sharedDisabledStates } from "../../lib/domain/visualContract";
 import type { SessionSearchResult } from "../../types";
 import { useSearchWorkspace } from "../common/SessionSearch";
+import { NewDesktopThread } from "./DesktopComposer";
+import { useConnection } from "../../lib/query/connection";
 
 export const statusTabs = [
   { id: "all", label: "全部" },
@@ -42,6 +44,7 @@ export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView
 }) {
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
+  const connection = useConnection();
   const {
     threadCache,
     messageStore,
@@ -70,6 +73,7 @@ export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView
       onSelect={selectThread}
       onRefresh={() => threadCache.invalidateThreads()}
       loading={threads.isLoading}
+      newThread={capabilities.codexDesktop === true && connection.target === "local" ? <NewDesktopThread onCreated={async id => { setStatus("all"); setQ(""); await threadCache.invalidateThreads(); selectThread(id); }} /> : undefined}
       error={threads.error?.message}
       onBatchSucceeded={(keys) => { for (const key of keys) threadCache.clearArchivedThreadClientState(messageStore, key); if (resolvedSelected && keys.includes(resolvedSelected)) selectThread(null); }}
     />
@@ -117,7 +121,7 @@ export function ChatWorkspace({ mobileThreadsOpen, setMobileThreadsOpen, setView
   );
 }
 
-function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading, error, onBatchSucceeded }: {
+function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect, onRefresh, loading, error, onBatchSucceeded, newThread }: {
   status: string;
   q: string;
   setQ: (value: string) => void;
@@ -129,6 +133,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
   loading: boolean;
   error?: string;
   onBatchSucceeded: (keys: string[]) => void;
+  newThread?: import("react").ReactNode;
 }) {
   const batch = useSessionSelection("codex", `${status}\0${q}`, threads.map(t => t.id), onBatchSucceeded);
   const rename = useReadOnlyThreadActions({});
@@ -145,6 +150,7 @@ function ThreadList({ status, q, setQ, setStatus, threads, selectedId, onSelect,
           <strong>Codex</strong>
         </div>
         <div className="thread-title-actions">
+          {newThread}
           <button className="icon-button compact" onClick={onRefresh} title="刷新任务"><RefreshCw size={16} /></button>
         </div>
       </div>

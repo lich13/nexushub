@@ -74,7 +74,7 @@ export function current(fixture) {
         if (ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) {
           types[node.name.text]=normalized(node.getText(source));
         }
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ["callCommand","invokeNative","changeConnection","startProbeCommand","runTypedUpdateCommand"].includes(node.expression.text)) {
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ["callCommand","invokeNative","runtimeRpc","changeConnection","startProbeCommand","runTypedUpdateCommand"].includes(node.expression.text)) {
           calls.push(normalized(node.getText(source)));
         }
         node.forEachChild(visit);

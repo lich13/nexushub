@@ -104,6 +104,32 @@ fn restore_credential(entry: &keyring::Entry, value: Option<&str>) -> Result<(),
 }
 
 impl RemoteConnections {
+    pub(crate) fn credential_access(&self) -> CredentialAccess {
+        self.credentials.clone()
+    }
+
+    pub(crate) fn require_local(&self, revision: u64) -> Result<(), String> {
+        let current = self.state.lock().expect("connection state");
+        if current.changing
+            || current.prefs.revision != revision
+            || current.prefs.target != MachineTarget::Local
+        {
+            return Err(safe_error("连接已变化，操作已取消"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin_local_write(&self, revision: u64) -> Result<LocalWriteGuard, String> {
+        let mut current = self.state.lock().expect("connection state");
+        if current.changing
+            || current.prefs.revision != revision
+            || current.prefs.target != MachineTarget::Local
+        {
+            return Err(safe_error("连接已变化，操作已取消"));
+        }
+        current.writes += 1;
+        Ok(LocalWriteGuard(self.state.clone()))
+    }
     pub fn load(data_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(data_dir).map_err(|_| safe_error("无法创建连接配置目录"))?;
         let path = data_dir.join("remote-connection.json");
@@ -363,6 +389,12 @@ fn compatible_capabilities(value: Value) -> Result<SystemCapabilitiesResponse, S
 }
 
 struct ChangeGuard(Arc<Mutex<ConnectionState>>);
+pub(crate) struct LocalWriteGuard(Arc<Mutex<ConnectionState>>);
+impl Drop for LocalWriteGuard {
+    fn drop(&mut self) {
+        self.0.lock().expect("connection state").writes -= 1;
+    }
+}
 impl Drop for ChangeGuard {
     fn drop(&mut self) {
         self.0.lock().expect("connection state").changing = false;
@@ -685,6 +717,37 @@ mod tests {
         let guard = state.begin_change(0).unwrap();
         assert!(state.begin_change(0).is_err());
         drop(guard);
+        assert!(state.begin_change(0).is_ok());
+    }
+
+    #[test]
+    fn local_write_guard_rejects_stale_remote_and_changing_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = RemoteConnections::load(dir.path()).unwrap();
+
+        assert!(state.begin_local_write(1).is_err());
+        {
+            let mut current = state.state.lock().unwrap();
+            current.prefs.target = MachineTarget::Remote;
+            current.prefs.revision = 2;
+        }
+        assert!(state.begin_local_write(2).is_err());
+
+        {
+            let mut current = state.state.lock().unwrap();
+            current.prefs.target = MachineTarget::Local;
+            current.prefs.revision = 0;
+            current.changing = true;
+        }
+        assert!(state.begin_local_write(0).is_err());
+
+        state.state.lock().unwrap().changing = false;
+        let guard = state.begin_local_write(0).unwrap();
+        assert_eq!(state.state.lock().unwrap().writes, 1);
+        assert!(state.begin_change(0).is_err());
+
+        drop(guard);
+        assert_eq!(state.state.lock().unwrap().writes, 0);
         assert!(state.begin_change(0).is_ok());
     }
 }

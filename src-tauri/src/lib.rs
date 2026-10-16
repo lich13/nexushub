@@ -1,3 +1,4 @@
+mod codex_desktop;
 mod commands;
 mod desktop_boot;
 // Domain commands live in commands/*; overview owns desktop state and startup paths.
@@ -14,6 +15,13 @@ pub use services::updates::desktop_update_status_with_state;
 
 pub fn run() {
     let active_handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        codex_desktop::attach,
+        codex_desktop::action,
+        codex_desktop::detach,
+        codex_desktop::open,
+        codex_desktop::catalog,
+        codex_desktop::choose,
+        codex_desktop::create,
         commands::plans::savePlanMarkdown,
         remote::remoteGet,
         remote::remoteVerify,
@@ -90,9 +98,11 @@ pub fn run() {
             ) {
                 eprintln!("Probe error monitor LaunchAgent repair failed: {err}");
             }
-            app.manage(remote::RemoteConnections::load(
-                &state.config().paths.data_dir,
-            )?);
+            let remote = remote::RemoteConnections::load(&state.config().paths.data_dir)?;
+            app.manage(codex_desktop::CodexDesktopBridge::new(
+                remote.credential_access(),
+            ));
+            app.manage(remote);
             app.manage(state);
             let main_window_config = app
                 .config()

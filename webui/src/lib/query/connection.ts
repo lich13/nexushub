@@ -1,1 +1,1 @@
-export { remoteGet, remoteVerify, remoteSave, remoteRemove, remoteSelect, useConnection, machineScope, type MachineTarget } from "../runtime";
+export { beforeMachineChange, connectionSnapshot, remoteGet, remoteVerify, remoteSave, remoteRemove, remoteSelect, useConnection, machineScope, type MachineTarget } from "../runtime";

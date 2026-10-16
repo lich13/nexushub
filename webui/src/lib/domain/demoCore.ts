@@ -14,6 +14,7 @@ type CapabilityFieldValues = Record<DemoFixtureKey, boolean>;
 const capabilityFields = {
   threads: { "linux-api": true, "macos-tauri": true },
   thread_subagents: { "linux-api": true, "macos-tauri": true },
+  codex_desktop: { "linux-api": false, "macos-tauri": true },
   jobs: { "linux-api": true, "macos-tauri": true },
   probe: { "linux-api": true, "macos-tauri": true },
   settings: { "linux-api": true, "macos-tauri": true },
@@ -30,6 +31,7 @@ const capabilityFields = {
 const macosEnumerableCapabilityKeys: readonly (keyof SystemCapabilities)[] = [
   "threads",
   "thread_subagents",
+  "codex_desktop",
   "jobs",
   "probe",
   "settings",

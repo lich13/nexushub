@@ -7,6 +7,7 @@
   "capabilities": [
     "threads",
     "thread_subagents",
+    "codex_desktop",
     "jobs",
     "probe",
     "settings",
@@ -36,6 +37,7 @@
     "desktop_embedded_tauri": [
       "threads",
       "thread_subagents",
+      "codex_desktop",
       "jobs",
       "probe",
       "settings",
@@ -55,7 +57,7 @@
       "异常",
       "归档"
     ],
-    "interaction": "read-only history; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
+    "interaction": "read-only history; verified local Codex desktop collaboration; explicit archive restoration; keyboard menus and focus-return dialogs; visible-only polling with started-job tracking",
     "navigation": [
       "Codex",
       "Claude Code",
@@ -683,6 +685,90 @@
       "dtoOwner": "claude",
       "requestDto": "ClaudeDeleteRequest",
       "responseDto": "ClaudeMutationResponse"
+    },
+    {
+      "id": "codex.desktop.attach",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.attach",
+      "tauriCommand": "codex_desktop::attach",
+      "webuiWrapper": "attachDesktopThread",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopThreadRequest",
+      "responseDto": "DesktopView",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.action",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.action",
+      "tauriCommand": "codex_desktop::action",
+      "webuiWrapper": "actOnDesktopThread",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopActionRequest",
+      "responseDto": "DesktopView",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.detach",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.detach",
+      "tauriCommand": "codex_desktop::detach",
+      "webuiWrapper": "detachDesktopThread",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopSessionRequest",
+      "responseDto": "DesktopAck",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.open",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.open",
+      "tauriCommand": "codex_desktop::open",
+      "webuiWrapper": "openDesktopThread",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopThreadRequest",
+      "responseDto": "DesktopAck",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.catalog",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.catalog",
+      "tauriCommand": "codex_desktop::catalog",
+      "webuiWrapper": "desktopCatalog",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopCatalogRequest",
+      "responseDto": "DesktopCatalog",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.choose",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.choose",
+      "tauriCommand": "codex_desktop::choose",
+      "webuiWrapper": "chooseDesktopItem",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopChooseRequest",
+      "responseDto": "DesktopChoice",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
+    },
+    {
+      "id": "codex.desktop.create",
+      "kind": "rpc",
+      "scope": "host_only",
+      "coreUseCase": "desktop.codex.create",
+      "tauriCommand": "codex_desktop::create",
+      "webuiWrapper": "createDesktopThread",
+      "dtoOwner": "codex_desktop",
+      "requestDto": "DesktopCreateRequest",
+      "responseDto": "DesktopCreatedThread",
+      "hostOnlyReason": "Verified local macOS desktop owner and NexusHub queue; never registered with Linux RPC or remote.invoke"
     }
   ],
   "dtoCatalog": {
@@ -953,6 +1039,86 @@
     "SubagentCollection": {
       "core": "SubagentCollection",
       "webui": "SubagentCollection"
+    },
+    "DesktopThreadRequest": {
+      "core": "DesktopThreadRequest",
+      "webui": "DesktopThreadRequest"
+    },
+    "DesktopSessionRequest": {
+      "core": "DesktopSessionRequest",
+      "webui": "DesktopSessionRequest"
+    },
+    "DesktopActionRequest": {
+      "core": "DesktopActionRequest",
+      "webui": "DesktopActionRequest"
+    },
+    "DesktopAction": {
+      "core": "DesktopAction",
+      "webui": "DesktopAction"
+    },
+    "DesktopMode": {
+      "core": "DesktopMode",
+      "webui": "DesktopMode"
+    },
+    "DesktopAnswer": {
+      "core": "DesktopAnswer",
+      "webui": "DesktopAnswer"
+    },
+    "DesktopView": {
+      "core": "DesktopView",
+      "webui": "DesktopView"
+    },
+    "DesktopQueuedMessage": {
+      "core": "DesktopQueuedMessage",
+      "webui": "DesktopQueuedMessage"
+    },
+    "DesktopPendingRequest": {
+      "core": "DesktopPendingRequest",
+      "webui": "DesktopPendingRequest"
+    },
+    "DesktopQuestion": {
+      "core": "DesktopQuestion",
+      "webui": "DesktopQuestion"
+    },
+    "DesktopQuestionOption": {
+      "core": "DesktopQuestionOption",
+      "webui": "DesktopQuestionOption"
+    },
+    "DesktopCatalogRequest": {
+      "core": "DesktopCatalogRequest",
+      "webui": "DesktopCatalogRequest"
+    },
+    "DesktopCatalog": {
+      "core": "DesktopCatalog",
+      "webui": "DesktopCatalog"
+    },
+    "DesktopCatalogItem": {
+      "core": "DesktopCatalogItem",
+      "webui": "DesktopCatalogItem"
+    },
+    "DesktopChooseRequest": {
+      "core": "DesktopChooseRequest",
+      "webui": "DesktopChooseRequest"
+    },
+    "DesktopChosenItem": {
+      "core": "DesktopChosenItem",
+      "webui": "DesktopChosenItem"
+    },
+    "DesktopChoice": {
+      "core": "DesktopChoice",
+      "webui": "DesktopChoice"
+    },
+    "DesktopCreateRequest": {
+      "core": "DesktopCreateRequest",
+      "webui": "DesktopCreateRequest"
+    },
+    "DesktopCreatedThread": {
+      "core": "DesktopCreatedThread",
+      "webui": "DesktopCreatedThread"
+    },
+    "DesktopAck": {
+      "core": "DesktopAck",
+      "webui": "DesktopAck"
     }
   },
   "retiredActions": [
