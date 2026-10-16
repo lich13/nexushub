@@ -5001,6 +5001,13 @@
                 "name": "allow",
                 "serde": [],
                 "type": "bool"
+              },
+              {
+                "name": "decision",
+                "serde": [
+                  "serde (default , skip_serializing_if = \"Option::is_none\")"
+                ],
+                "type": "Option < String >"
               }
             ],
             "name": "Decide",
@@ -5324,6 +5331,13 @@
             "name": "can_accept",
             "serde": [],
             "type": "bool"
+          },
+          {
+            "name": "supported_decisions",
+            "serde": [
+              "serde (default , skip_serializing_if = \"Vec::is_empty\")"
+            ],
+            "type": "Vec < String >"
           }
         ],
         "kind": "struct",
@@ -9623,12 +9637,12 @@
         "DesktopSessionRequest": "exporttypeDesktopSessionRequest={revision:number;sessionId:string};",
         "DesktopAnswer": "exporttypeDesktopAnswer={questionId:string;answers:string[]};",
         "DesktopReferenceSpan": "exporttypeDesktopReferenceSpan={handle:string;start:number;end:number};",
-        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
+        "DesktopAction": "exporttypeDesktopAction=|{type:\"send\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[]}|{type:\"steer\";messageId:string;text:string;references:string[];referenceSpans?:DesktopReferenceSpan[];turnId:string}|{type:\"stop\";turnId:string}|{type:\"cancelQueued\"|\"dismissUnknown\";messageId:string}|{type:\"resumeQueue\"}|{type:\"settings\";model:string;reasoningEffort:string|null;mode:DesktopMode}|{type:\"decide\";requestKey:string;allow:boolean;decision?:string}|{type:\"answer\";requestKey:string;answers:DesktopAnswer[]}|{type:\"elicitation\";requestKey:string;accept:boolean;content:unknown|null};",
         "DesktopActionRequest": "exporttypeDesktopActionRequest=DesktopSessionRequest&{action:DesktopAction};",
         "DesktopQueuedMessage": "exporttypeDesktopQueuedMessage={id:string;status:string;kind:string;preview:string;createdAt:number};",
         "DesktopQuestionOption": "exporttypeDesktopQuestionOption={label:string;description:string};",
         "DesktopQuestion": "exporttypeDesktopQuestion={id:string;header:string;question:string;secret:boolean;options:DesktopQuestionOption[]};",
-        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean};",
+        "DesktopPendingRequest": "exporttypeDesktopPendingRequest={key:string;kind:string;title:string;body:string;questions:DesktopQuestion[];formSchema:unknown|null;canAccept:boolean;supportedDecisions?:string[]};",
         "DesktopView": "exporttypeDesktopView={sessionId:string;threadId:string;revision:number;connected:boolean;writable:boolean;runtime:string;activeTurnId:string|null;model:string|null;reasoningEffort:string|null;mode:DesktopMode|null;requests:DesktopPendingRequest[];queue:DesktopQueuedMessage[];error:string|null;};",
         "DesktopCatalogRequest": "exporttypeDesktopCatalogRequest={revision:number;sessionId:string|null;projectHandle:string|null;kind:string;query:string;cursor:string|null};",
         "DesktopCatalogItem": "exporttypeDesktopCatalogItem={handle:string;kind:string;name:string;description:string;reasoningEfforts:string[];defaultReasoningEffort:string|null};",

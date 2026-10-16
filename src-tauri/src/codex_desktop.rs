@@ -179,28 +179,7 @@ impl BridgeRuntime {
 }
 
 pub(crate) fn desktop_error(error: DesktopError) -> String {
-    match error {
-        DesktopError::OwnerUnavailable => "请先在 Codex 中打开此线程，再重新连接",
-        DesktopError::Unavailable => "Codex 桌面当前不可用",
-        DesktopError::ReadOnly => "此线程仅支持阅读",
-        DesktopError::Busy => "线程正在处理其他请求，请稍后重试",
-        DesktopError::InvalidInput => "输入内容无效或超出限制",
-        DesktopError::InvalidIdentity | DesktopError::UnsafeSocket => {
-            "无法确认 Codex 桌面或线程身份"
-        }
-        DesktopError::Timeout => "Codex 桌面未及时响应",
-        DesktopError::RequestExpired => "该请求已失效，请查看最新状态",
-        DesktopError::Rejected => "Codex 未接受此操作",
-        DesktopError::OutcomeUnknown => "发送结果未确认，请先在 Codex 中核对，勿重复发送",
-        DesktopError::Disconnected => "Codex 桌面连接已断开，请重新连接",
-        DesktopError::InvalidFrame
-        | DesktopError::UnsupportedProtocol
-        | DesktopError::OutOfSync
-        | DesktopError::FrameTooLarge => {
-            "当前 Codex 桌面状态无法安全处理，请重新连接或在 Codex 中继续"
-        }
-    }
-    .into()
+    error.user_message().into()
 }
 
 async fn verify_thread(state: &DesktopState, thread_id: &str) -> Result<(), String> {

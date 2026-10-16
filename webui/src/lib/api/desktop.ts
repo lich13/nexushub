@@ -12,14 +12,14 @@ export type DesktopAction =
   | { type: "cancelQueued" | "dismissUnknown"; messageId: string }
   | { type: "resumeQueue" }
   | { type: "settings"; model: string; reasoningEffort: string | null; mode: DesktopMode }
-  | { type: "decide"; requestKey: string; allow: boolean }
+  | { type: "decide"; requestKey: string; allow: boolean; decision?: string }
   | { type: "answer"; requestKey: string; answers: DesktopAnswer[] }
   | { type: "elicitation"; requestKey: string; accept: boolean; content: unknown | null };
 export type DesktopActionRequest = DesktopSessionRequest & { action: DesktopAction };
 export type DesktopQueuedMessage = { id: string; status: string; kind: string; preview: string; createdAt: number };
 export type DesktopQuestionOption = { label: string; description: string };
 export type DesktopQuestion = { id: string; header: string; question: string; secret: boolean; options: DesktopQuestionOption[] };
-export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean };
+export type DesktopPendingRequest = { key: string; kind: string; title: string; body: string; questions: DesktopQuestion[]; formSchema: unknown | null; canAccept: boolean; supportedDecisions?: string[] };
 export type DesktopView = {
   sessionId: string; threadId: string; revision: number; connected: boolean; writable: boolean;
   runtime: string; activeTurnId: string | null; model: string | null; reasoningEffort: string | null;

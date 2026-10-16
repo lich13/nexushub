@@ -66,6 +66,8 @@ pub enum DesktopAction {
     Decide {
         request_key: String,
         allow: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<String>,
     },
     Answer {
         request_key: String,
@@ -139,6 +141,8 @@ pub struct DesktopPendingRequest {
     pub questions: Vec<DesktopQuestion>,
     pub form_schema: Option<Value>,
     pub can_accept: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_decisions: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

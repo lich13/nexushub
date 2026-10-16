@@ -331,7 +331,8 @@ async fn unsupported_versions_and_native_error_text_are_not_exposed() {
         let mut reader = FrameReader::default();
 
         let future_request = read_wire(&mut reader, &mut peer).await;
-        assert_eq!(future_request["method"], "future-method");
+        assert_eq!(future_request["method"], "thread-owner-discovery");
+        assert_eq!(future_request["version"], 1);
         write_wire(
             &mut peer,
             &json!({
@@ -345,7 +346,7 @@ async fn unsupported_versions_and_native_error_text_are_not_exposed() {
         .await;
 
         let hostile_request = read_wire(&mut reader, &mut peer).await;
-        assert_eq!(hostile_request["method"], "hostile-native-error");
+        assert_eq!(hostile_request["method"], "thread-owner-discovery");
         write_wire(
             &mut peer,
             &json!({
@@ -375,12 +376,20 @@ async fn unsupported_versions_and_native_error_text_are_not_exposed() {
         assert_peer_closed(&mut peer).await;
     });
 
-    let unsupported = expect_error(session.request("future-method", 99, json!({})).await);
+    let unsupported = expect_error(
+        session
+            .request(super::protocol::Method::DiscoverOwner, json!({}))
+            .await,
+    );
     assert_eq!(unsupported, DesktopError::UnsupportedProtocol);
     assert!(!unsupported.to_string().contains(SENTINEL));
     assert!(!format!("{unsupported:?}").contains(SENTINEL));
 
-    let sanitized = expect_error(session.request("hostile-native-error", 1, json!({})).await);
+    let sanitized = expect_error(
+        session
+            .request(super::protocol::Method::DiscoverOwner, json!({}))
+            .await,
+    );
     assert_eq!(sanitized, DesktopError::Unavailable);
     assert!(!sanitized.to_string().contains(SENTINEL));
     assert!(!format!("{sanitized:?}").contains(SENTINEL));
