@@ -286,6 +286,7 @@ pub async fn action(
     request: DesktopActionRequest,
 ) -> Result<DesktopView, String> {
     let _guard = remote.begin_local_write(request.revision)?;
+    let intent = bridge.intent.load(Ordering::SeqCst);
     let runtime = bridge.runtime(&state).await?;
     remote.require_local(request.revision)?;
     let worker = runtime.worker(&request.session_id).await?;
@@ -331,7 +332,6 @@ pub async fn action(
         let helper = DesktopHelper::installed(state.codex_paths().home)
             .await
             .map_err(desktop_error)?;
-        let intent = bridge.intent.load(Ordering::SeqCst);
         bridge
             .catalogs
             .read(
@@ -529,6 +529,7 @@ pub async fn catalog(
     request: DesktopCatalogRequest,
 ) -> Result<DesktopCatalog, String> {
     remote.require_local(request.revision)?;
+    let intent = bridge.intent.load(Ordering::SeqCst);
     if request.query.len() > 256 {
         return Err("搜索内容超出限制".into());
     }
@@ -549,7 +550,6 @@ pub async fn catalog(
         .await
         .map_err(desktop_error)?;
     // Cache and grant locks never span the serial native helper operation.
-    let intent = bridge.intent.load(Ordering::SeqCst);
     let page = bridge
         .catalogs
         .read(&helper, &cwd, &thread, &request, || {
