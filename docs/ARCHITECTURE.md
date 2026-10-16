@@ -8,12 +8,12 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| Codex | 原生 state/index/rollout/log 读取与身份核验，改名、归档、恢复及绑定预览的删除 |
+| Codex | 原生 state/index/rollout/log 读取与身份核验，受保护的管理操作，以及本机主线程的原生桌面协作 |
 | Claude Code | 递归发现、分支历史、原生进程身份、受保护的改名和单会话删除 |
 | Grok Build | 原生目录发现、主回合历史、登记与进程校验、改名及定向删除 |
 | Probe | 错误与终态识别、游标、基线、去重、脱敏、保留策略和加密 Bark 投递 |
-| NexusHub 数据库与配置 | 自有设置、任务、事件、投递及迁移；不包含原生 Provider 数据迁移 |
-| WebUI | 展示契约、查询状态、执行分组、字面用户消息、搜索、附件和本地 Plan 导出 |
+| NexusHub 数据库与配置 | 自有设置、任务、事件、投递、加密发送队列及迁移；不包含原生 Provider 数据迁移 |
+| WebUI | 展示契约、查询状态、执行分组、搜索、附件、Plan 导出及本机 Codex 协作输入区 |
 | 打包 | macOS ARM64 Tauri App/updater 与 Linux x86_64 无界面 webd |
 
 主窗口由 `desktop_boot` 隐藏创建，只在初始化时最大化一次或使用工作区回退，Ready 显示；Reopen 只显示、恢复和聚焦，不重新设置几何尺寸。
