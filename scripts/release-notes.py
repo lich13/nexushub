@@ -8,6 +8,10 @@ import sys
 
 
 HIGHLIGHTS: dict[str, list[str]] = {
+    "1.3.0": [
+        "本机 Codex 主线程支持新建、续聊、排队、补充与停止，仍由原生桌面执行",
+        "接入模型、模式、引用及待处理请求，保留远程与其他 Provider 的现有阅读和管理功能。",
+    ],
     "1.2.23": [
         "限制 API 回环监听、受控更新命令和 Bark 地址，保持现有功能与协议兼容",
         "Linux 更新增加分离签名验证，规范解包权限并强化依赖审计与构建门禁。",
@@ -163,6 +167,41 @@ def highlights(version: str) -> list[str]:
 def render(version: str, *, updater: bool = False) -> str:
     if updater:
         return f"NexusHub {version}：" + "；".join(highlights(version)[:2])
+
+    if version == "1.3.0":
+        sections = {
+            "版本概览": ["本版接入本机 Codex 桌面协作，在 NexusHub 中继续对话，由原生桌面执行。现有三个 Provider 的阅读、通知与管理功能继续保留。"],
+            "功能调整": [
+                "本机普通主线程可新建、续聊、排队发送、补充当前回合或停止；模型、推理强度和模式沿用原生桌面可用选项。",
+                "支持选择文件、图片及可用的技能、应用和插件引用；已支持的问题和审批可在面板处理，无法安全表达的请求回到原生桌面处理。",
+                "NexusHub 独立保存待发送队列，在线程空闲且原生桌面持有该线程时逐项交付；不覆盖原生桌面的队列。",
+            ],
+            "问题修复": [
+                "兼容当前原生 App 内置 CLI 的目录布局，处理连接取消、迟到响应及机器切换，避免旧线程状态覆盖当前页面。",
+                "发送前重新检查线程状态、引用文件身份和请求内容；结果不确定的发送不自动重试，防止重复提交。",
+                "断开或重启后待发送项目保留为暂停状态，恢复前需确认；停止当前回合也会暂停尚未交付的项目。",
+            ],
+            "兼容性与迁移": [
+                "API 协议保持 2，新增协作命令仅供本机 macOS App 使用；远程、归档、子线程及 Claude Code、Grok 不提供协作输入。",
+                "队列存储在 NexusHub 自有数据库并使用独立钥匙串密钥加密；升级保留既有连接、凭据、通知状态与原生会话。",
+                "原生桌面协议不兼容、线程未由桌面持有或身份无法核验时停止协作，不回退为后台 CLI 执行。",
+            ],
+            "支持平台与资产": [
+                "macOS ARM64：DMG／校验文件、updater 压缩包／签名及仅映射 darwin-aarch64 的 latest.json。",
+                "Linux x86_64：API 服务包、SHA-256 校验文件与 .sig 分离签名；共八项发布资产。",
+            ],
+            "升级提示": [
+                "先升级远程 API，再安装 macOS App。使用协作前打开兼容的原生 Codex 桌面并打开目标线程；新建空线程在首次发送前没有聊天内容。",
+                "首次使用可能出现系统钥匙串授权。安装后请用专用线程验证发送、排队、补充、停止、引用及审批；视觉、滚动和日常使用待用户验收。",
+                "macOS 包没有 Developer ID 签名或 Apple 公证；Minisign 用于验证归档来源，不能替代系统代码签名。",
+            ],
+        }
+        lines = [f"# NexusHub {version}", ""]
+        for heading, paragraphs in sections.items():
+            lines.extend([f"## {heading}", ""])
+            lines.extend(f"- {paragraph}" for paragraph in paragraphs)
+            lines.append("")
+        return "\n".join(lines)
 
     if version == "1.2.23":
         sections = {
