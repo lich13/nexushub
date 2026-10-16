@@ -96,26 +96,21 @@ else
   BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 fi
 
+SAFETY="/usr/share/nexushub-webd/install-safety.py"
+PUBLIC_KEY="/usr/share/nexushub-webd/updater.pub"
+command -v minisign >/dev/null 2>&1 && [[ -f "${PUBLIC_KEY}" && -f "${SAFETY}" ]] || {
+  echo "installed signature verifier and public key are required" >&2
+  exit 1
+}
 curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"
 curl -fL "${BASE_URL}/${ASSET}.sha256" -o "${TMP_DIR}/${ASSET}.sha256"
-SAFETY="/usr/share/nexushub-webd/install-safety.py"
-python3 "${SAFETY}" verify "${TMP_DIR}/${ASSET}" "${TMP_DIR}/${ASSET}.sha256"
+curl -fL "${BASE_URL}/${ASSET}.sig" -o "${TMP_DIR}/${ASSET}.sig"
+SIGNED_VERSION="$(python3 "${SAFETY}" verify "${TMP_DIR}/${ASSET}" "${TMP_DIR}/${ASSET}.sha256" "${TMP_DIR}/${ASSET}.sig" "${PUBLIC_KEY}" "${VERSION}")"
 mkdir "${TMP_DIR}/payload"
 python3 "${SAFETY}" extract "${TMP_DIR}/${ASSET}" "${TMP_DIR}/payload"
-
 ROOT="${TMP_DIR}/payload/nexushub-webd-linux-${ARCH}"
-if [[ -z "${ROOT}" ]]; then
-  echo "extracted archive root not found" >&2
-  exit 1
-fi
+python3 "${SAFETY}" validate-payload "${ROOT}" "${SIGNED_VERSION}"
 
-python3 - "$("${ROOT}/bin/nexushub-webd" --version)" <<'PYVERSION'
-import re, sys
-match = re.fullmatch(r"nexushub-webd (\d+)\.(\d+)\.(\d+)", sys.argv[1])
-if not match or tuple(map(int, match.groups())) < (1, 2, 0):
-    raise SystemExit("refusing release with retired web authentication")
-PYVERSION
-[[ ! -d "${ROOT}/webui" && ! -f "${ROOT}/deploy/web-update.sh" ]] || { echo "refusing retired web payload" >&2; exit 1; }
 "${ROOT}/deploy/install.sh" --archive "${TMP_DIR}/${ASSET}" --no-enable
 
 # Let the update job finish and persist its successful result before the

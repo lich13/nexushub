@@ -12,6 +12,7 @@ from pathlib import Path
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SAFETY_PATH = ROOT / "deploy/nexushub-webd/install-safety.py"
 INSTALL_PATH = ROOT / "deploy/nexushub-webd/install.sh"
 UPDATE_PATH = ROOT / "deploy/nexushub-webd/update.sh"
+UPDATER_PUB_PATH = ROOT / "deploy/nexushub-webd/updater.pub"
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("install_safety", SAFETY_PATH)
 if spec is None or spec.loader is None:
@@ -50,7 +52,22 @@ def make_archive(path: Path, members: list[tuple[str, bytes, bytes, int, str]]) 
             add_member(archive, name, kind, data, mode, linkname)
 
 
+def elf64_header(machine: int = 62) -> bytes:
+    ident = b"\x7fELF" + bytes((2, 1, 1, 0, 0)) + bytes(7)
+    fields = struct.pack("<HHIQQQIHHHHHH", 2, machine, 1, 0x400000, 64, 0, 0, 64, 56, 1, 64, 0, 0)
+    return ident + fields
+
+
 class InstallSafetyTests(unittest.TestCase):
+    PAYLOAD_NAME = "nexushub-webd-linux-x86_64"
+    REQUIRED_PAYLOAD_FILES = (
+        "bin/nexushub-webd",
+        "deploy/install.sh",
+        "deploy/update.sh",
+        "deploy/install-safety.py",
+        "deploy/updater.pub",
+    )
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="nexushub-install-test-")
         self.root = Path(self.temp.name)
@@ -65,6 +82,89 @@ class InstallSafetyTests(unittest.TestCase):
             safety.extract(path, destination)
         self.assertEqual(list(destination.iterdir()), [])
 
+    def make_payload(
+        self,
+        parent: Path | None = None,
+        *,
+        header: bytes | None = None,
+        missing: tuple[str, ...] = (),
+    ) -> Path:
+        parent = self.root if parent is None else parent
+        parent.mkdir(parents=True, exist_ok=True)
+        root = parent / self.PAYLOAD_NAME
+        root.mkdir()
+        for relative in self.REQUIRED_PAYLOAD_FILES:
+            if relative in missing:
+                continue
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(header if relative == "bin/nexushub-webd" and header is not None else b"fixture\n")
+        return root
+
+    def assert_payload_rejected_before_binary(
+        self,
+        root: Path,
+        expected_error: str,
+        signed_version: str = "1.2.23",
+    ) -> None:
+        with mock.patch.object(safety.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, expected_error):
+                safety.validate_payload(root, signed_version)
+            run.assert_not_called()
+
+    def test_validate_payload_accepts_elf64_le_x86_64_and_signed_version(self) -> None:
+        root = self.make_payload(header=elf64_header())
+        binary = root / "bin/nexushub-webd"
+        result = mock.Mock(returncode=0, stdout=b"nexushub-webd 1.2.23\n")
+
+        with mock.patch.object(safety.subprocess, "run", return_value=result) as run:
+            safety.validate_payload(root, "1.2.23")
+
+        run.assert_called_once_with([str(binary), "--version"], capture_output=True, timeout=30, check=False)
+
+    def test_validate_payload_rejects_invalid_payload_before_binary(self) -> None:
+        cases = (
+            ("missing required file", {"missing": ("deploy/updater.pub",)}, "invalid release layout"),
+            ("extra root", {"extra_root": True}, "invalid release layout"),
+            ("retired webui layout", {"retired": "webui"}, "retired release layout"),
+            ("retired web-update layout", {"retired": "deploy/web-update.sh"}, "retired release layout"),
+            ("wrong platform", {"header": elf64_header(183)}, "invalid release platform"),
+            ("retired signed version", {"signed_version": "1.1.99"}, "retired web authentication"),
+        )
+        for name, options, expected_error in cases:
+            with self.subTest(case=name):
+                parent = self.root / name.replace(" ", "-")
+                root = self.make_payload(
+                    parent,
+                    header=options.get("header", elf64_header()),
+                    missing=options.get("missing", ()),
+                )
+                if options.get("extra_root"):
+                    (parent / "extra-root").mkdir()
+                retired = options.get("retired")
+                if retired == "webui":
+                    (root / "webui").mkdir()
+                elif retired is not None:
+                    retired_path = root / retired
+                    retired_path.parent.mkdir(parents=True, exist_ok=True)
+                    retired_path.write_bytes(b"retired fixture\n")
+                self.assert_payload_rejected_before_binary(
+                    root,
+                    expected_error,
+                    options.get("signed_version", "1.2.23"),
+                )
+
+    def test_validate_payload_rejects_binary_version_mismatch(self) -> None:
+        root = self.make_payload(header=elf64_header())
+        binary = root / "bin/nexushub-webd"
+        result = mock.Mock(returncode=0, stdout=b"nexushub-webd 1.2.24\n")
+
+        with mock.patch.object(safety.subprocess, "run", return_value=result) as run:
+            with self.assertRaisesRegex(ValueError, "release binary version mismatch"):
+                safety.validate_payload(root, "1.2.23")
+
+        run.assert_called_once_with([str(binary), "--version"], capture_output=True, timeout=30, check=False)
+
     def test_checksum_rejects_bad_digest_wrong_target_and_multiple_lines(self) -> None:
         archive = self.root / "release.tar.gz"
         archive.write_bytes(b"synthetic archive bytes")
@@ -73,15 +173,15 @@ class InstallSafetyTests(unittest.TestCase):
 
         checksum.write_text(f"{'0' * 64}  {archive.name}\n", encoding="ascii")
         with self.assertRaises(ValueError):
-            safety.verify(archive, checksum)
+            safety.verify_checksum(archive, checksum)
 
         checksum.write_text(f"{good}  other.tar.gz\n", encoding="ascii")
         with self.assertRaises(ValueError):
-            safety.verify(archive, checksum)
+            safety.verify_checksum(archive, checksum)
 
         checksum.write_text(f"{good}  {archive.name}\n{good}  {archive.name}\n", encoding="ascii")
         with self.assertRaises(ValueError):
-            safety.verify(archive, checksum)
+            safety.verify_checksum(archive, checksum)
 
     def test_extract_rejects_corrupt_gzip(self) -> None:
         archive = self.root / "broken.tar.gz"
@@ -110,22 +210,34 @@ class InstallSafetyTests(unittest.TestCase):
                 make_archive(archive, members)
                 self.assert_archive_rejected(archive)
 
-    def test_extract_accepts_regular_payload_and_preserves_executable_mode(self) -> None:
+    def test_extract_normalizes_directory_executable_and_regular_file_modes(self) -> None:
         archive = self.root / "safe.tar.gz"
         payload = b"synthetic executable payload"
         make_archive(
             archive,
             [
-                ("nexushub-webd-linux-x86_64", tarfile.DIRTYPE, b"", 0o755, ""),
-                ("nexushub-webd-linux-x86_64/bin/nexushub-webd", tarfile.REGTYPE, payload, 0o751, ""),
-                ("nexushub-webd-linux-x86_64/deploy/update.sh", tarfile.REGTYPE, b"#!/bin/sh\n", 0o755, ""),
+                ("nexushub-webd-linux-x86_64", tarfile.DIRTYPE, b"", 0o4777, ""),
+                ("nexushub-webd-linux-x86_64/bin/nexushub-webd", tarfile.REGTYPE, payload, 0o4751, ""),
+                ("nexushub-webd-linux-x86_64/deploy/update.sh", tarfile.REGTYPE, b"#!/bin/sh\n", 0o0750, ""),
+                ("nexushub-webd-linux-x86_64/deploy/config.example.toml", tarfile.REGTYPE, b"fixture\n", 0o2640, ""),
             ],
         )
         destination = self.root / "extract"
+        destination.mkdir()
+        destination.chmod(0o700)
         safety.extract(archive, destination)
+        root = destination / "nexushub-webd-linux-x86_64"
         binary = destination / "nexushub-webd-linux-x86_64/bin/nexushub-webd"
         self.assertEqual(binary.read_bytes(), payload)
-        self.assertEqual(stat.S_IMODE(binary.stat().st_mode), 0o751)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((root / "bin").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((root / "deploy").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(binary.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((root / "deploy/update.sh").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((root / "deploy/config.example.toml").stat().st_mode), 0o644)
+        for path in (destination, root, root / "bin", binary, root / "deploy/update.sh", root / "deploy/config.example.toml"):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o7000, 0)
 
     def test_atomic_copy_replaces_file_and_applies_requested_mode(self) -> None:
         source = self.root / "source"
@@ -204,6 +316,7 @@ class InstallSafetyTests(unittest.TestCase):
         unit = systemd_dir / "nexushub-webd.service"
         dropin = dropin_dir / "20-provider-session-paths.conf"
         safety_copy = share_dir / "install-safety.py"
+        updater_key = share_dir / "updater.pub"
         wrappers = [
             bin_dir / "nexushub-codex-precheck",
             bin_dir / "nexushub-codex-update",
@@ -220,6 +333,7 @@ class InstallSafetyTests(unittest.TestCase):
             unit: (b"old systemd unit\n", 0o644),
             dropin: (b"old drop-in\n", 0o644),
             safety_copy: (b"old helper\n", 0o644),
+            updater_key: (b"old trusted public key\n", 0o644),
             wrappers[0]: (b"old wrapper\n", 0o755),
         }
         for path, (content, mode) in preserved.items():
@@ -236,6 +350,7 @@ class InstallSafetyTests(unittest.TestCase):
         next_env = self.root / "next-env"
         next_env.write_text("SYNTHETIC_KEY=value\n", encoding="utf-8")
         call_log = self.root / "systemctl.log"
+        replacement_log = self.root / "replace.log"
 
         assignments = {
             "INSTALL_BIN": install_bin,
@@ -259,6 +374,7 @@ class InstallSafetyTests(unittest.TestCase):
             "INSTALL_CONFIG_SOURCE": next_config,
             "INSTALL_ENV_SOURCE": next_env,
             "TEST_SYSTEMCTL_LOG": call_log,
+            "TEST_REPLACE_LOG": replacement_log,
         }
         set_lines = "\n".join(f"{key}={shlex.quote(str(value))}" for key, value in assignments.items())
         harness = f"""#!/usr/bin/env bash
@@ -266,6 +382,10 @@ set -Eeuo pipefail
 source {shlex.quote(str(INSTALL_PATH))}
 require_root() {{ :; }}
 install_dirs() {{ :; }}
+replace_file() {{
+  printf '%s\\n' "$2" >> "${{TEST_REPLACE_LOG}}"
+  python3 "${{SAFETY}}" replace "${{TRANSACTION}}" "$1" "$2" "$3"
+}}
 retire_web_payload() {{ :; }}
 install_codex_home_write_paths() {{ :; }}
 install_config() {{
@@ -300,6 +420,8 @@ main --binary {shlex.quote(str(binary))}
         self.assertEqual(result.returncode, 77, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
         calls = call_log.read_text(encoding="utf-8").splitlines()
         self.assertIn("restart nexushub-webd.service", calls)
+        replaced_targets = replacement_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn(str(updater_key), replaced_targets)
         for path, (content, mode) in preserved.items():
             with self.subTest(path=str(path)):
                 self.assertEqual(path.read_bytes(), content)
@@ -310,6 +432,37 @@ main --binary {shlex.quote(str(binary))}
         self.assertEqual(database.read_bytes(), b"business database fixture")
         self.assertEqual(stat.S_IMODE(database.stat().st_mode), 0o600)
 
+    def test_install_fails_closed_when_minisign_is_missing(self) -> None:
+        fake_bin = self.root / "missing-minisign-bin"
+        fake_bin.mkdir()
+        python_stub = fake_bin / "python3"
+        python_stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        python_stub.chmod(0o755)
+        install_marker = self.root / "install-started"
+        harness = f"""#!/usr/bin/env bash
+set -Eeuo pipefail
+source {shlex.quote(str(INSTALL_PATH))}
+require_root() {{ :; }}
+install_dirs() {{ printf 'called\\n' > {shlex.quote(str(install_marker))}; }}
+PATH={shlex.quote(str(fake_bin))}
+main --binary {shlex.quote(str(self.root / 'unused-binary'))} --domain example.invalid
+"""
+        harness_path = self.root / "missing-minisign-harness.sh"
+        harness_path.write_text(harness, encoding="utf-8")
+        result = subprocess.run(
+            ["/bin/bash", str(harness_path)],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("required command not found: minisign", result.stderr)
+        self.assertFalse(install_marker.exists(), "installer advanced without minisign")
+
     def test_update_download_failures_stop_before_systemd_or_installer(self) -> None:
         real_id = shutil.which("id")
         self.assertIsNotNone(real_id)
@@ -318,6 +471,21 @@ main --binary {shlex.quote(str(binary))}
                 fixture = self.root / f"update-{fail_at}"
                 fake_bin = fixture / "bin"
                 fake_bin.mkdir(parents=True)
+                helper = fixture / "install-safety.py"
+                helper.write_text("# fixture helper; download is expected to fail first\n", encoding="utf-8")
+                public_key = fixture / "updater.pub"
+                public_key.write_text("fixture public key\n", encoding="utf-8")
+                update_text = UPDATE_PATH.read_text(encoding="utf-8")
+                for name, installed, replacement in (
+                    ("SAFETY", '/usr/share/nexushub-webd/install-safety.py', helper),
+                    ("PUBLIC_KEY", '/usr/share/nexushub-webd/updater.pub', public_key),
+                ):
+                    line = f'{name}="{installed}"'
+                    self.assertEqual(update_text.count(line), 1)
+                    update_text = update_text.replace(line, f"{name}={shlex.quote(str(replacement))}")
+                update_script = fixture / "update.sh"
+                update_script.write_text(update_text, encoding="utf-8")
+                update_script.chmod(0o755)
                 call_log = fixture / "calls.jsonl"
                 id_script = fake_bin / "id"
                 id_script.write_text(
@@ -327,6 +495,9 @@ main --binary {shlex.quote(str(binary))}
                     encoding="utf-8",
                 )
                 id_script.chmod(0o755)
+                minisign_stub = fake_bin / "minisign"
+                minisign_stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                minisign_stub.chmod(0o755)
                 curl_script = fake_bin / "curl"
                 curl_script.write_text(
                     f"#!{sys.executable}\n"
@@ -363,7 +534,7 @@ main --binary {shlex.quote(str(binary))}
                     }
                 )
                 result = subprocess.run(
-                    ["bash", str(UPDATE_PATH), "--version", "latest"],
+                    ["/bin/bash", str(update_script), "--version", "latest"],
                     cwd=ROOT,
                     env=environment,
                     text=True,

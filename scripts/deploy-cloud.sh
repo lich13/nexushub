@@ -32,6 +32,9 @@ fi
 [[ "${DOMAIN}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]] || { echo "invalid NEXUSHUB_DOMAIN" >&2; exit 1; }
 [[ "${PATH_PREFIX}" =~ ^/[a-zA-Z0-9_/-]+/$ ]] || { echo "invalid path prefix" >&2; exit 1; }
 [[ "${EXPECTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid version" >&2; exit 1; }
+# Bootstrap from the trusted checkout, including on hosts whose old updater did not verify signatures.
+python3 deploy/nexushub-webd/install-safety.py verify "${ARCHIVE}" "${ARCHIVE}.sha256" "${ARCHIVE}.sig" deploy/nexushub-webd/updater.pub "${EXPECTED_VERSION}" >/dev/null
+ssh "${HOST}" 'command -v minisign >/dev/null' || { echo "install minisign from the host package manager before deployment" >&2; exit 1; }
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/nexushub-deploy.XXXXXXXX")"
 REMOTE_STAGE="$(ssh "${HOST}" 'mktemp -d /tmp/nexushub-deploy.XXXXXXXX')"
 [[ "${REMOTE_STAGE}" =~ ^/tmp/nexushub-deploy\.[a-zA-Z0-9]+$ ]] || { echo "invalid remote staging path" >&2; exit 1; }
