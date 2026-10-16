@@ -4,6 +4,8 @@ NexusHub 的 Linux 版本只提供管理 API 和健康检查。它不提供网�
 
 部署时从仓库外显式提供 SSH 主机、HTTPS 域名和归档路径。域名、主机、API Key、用户会话和配置不写入 Git。
 
+默认 Linux 配置、Codex 包装器及 systemd 写入白名单假设宿主普通用户为 `ubuntu`，并保留 root 与 ubuntu 的既有会话根。其他用户布局需在部署前核对配置及准确的会话写入路径；不能把整个 home 或凭据目录加入写入白名单。
+
 ## 服务与隔离
 
 - 程序：`/usr/local/bin/nexushub-webd`
