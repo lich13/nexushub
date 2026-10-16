@@ -77,21 +77,15 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn discovery_keeps_new_and_legacy_chatgpt_cli_paths_in_priority_order() {
+fn discovery_keeps_new_and_legacy_chatgpt_cli_fallbacks_in_priority_order() {
     let candidates = discover_codex_candidates();
     let new_path =
         PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex");
     let legacy_path = PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex");
 
-    let new_position = candidates
-        .iter()
-        .position(|candidate| candidate == &new_path)
-        .expect("discover the current ChatGPT CLI package path");
-    let legacy_position = candidates
-        .iter()
-        .position(|candidate| candidate == &legacy_path)
-        .expect("retain the previous ChatGPT CLI path");
-    assert!(new_position < legacy_position);
+    // PATH has priority and may itself contain the legacy bundle. Check the
+    // fixed fallbacks without mistaking a user PATH entry for that fallback.
+    assert!(candidates.ends_with(&[new_path, legacy_path]));
 }
 
 #[tokio::test]
