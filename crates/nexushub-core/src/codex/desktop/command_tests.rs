@@ -1,8 +1,9 @@
 use super::super::projection::state_request_key;
-use super::super::references::NativeReference;
+use super::super::references::{resolve_spans, NativeReference};
 use super::super::state::NativeState;
 use super::super::{DesktopError, DesktopEvent};
 use super::{CollaborationMode, DesktopCommand, DesktopReply, MessageInput};
+use crate::services::codex_desktop::DesktopReferenceSpan;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::{fs, path::PathBuf};
@@ -102,6 +103,53 @@ fn assert_prepare_error(command: &DesktopCommand, state: &NativeState, expected:
         Err(actual) => assert_eq!(actual, expected),
         Ok(_) => panic!("command unexpectedly produced a native request"),
     }
+}
+
+#[test]
+fn reference_spans_resolve_only_selected_handles_with_stable_indexes_and_limit() {
+    let handles = vec!["fixture-handle-a".into(), "fixture-handle-b".into()];
+    let spans = vec![
+        DesktopReferenceSpan {
+            handle: "fixture-handle-b".into(),
+            start: 2,
+            end: 7,
+        },
+        DesktopReferenceSpan {
+            handle: "fixture-handle-a".into(),
+            start: 11,
+            end: 19,
+        },
+    ];
+
+    let resolved = resolve_spans(&handles, &spans).expect("selected handles resolve");
+    assert_eq!(
+        resolved
+            .iter()
+            .map(|span| (span.reference, span.start, span.end))
+            .collect::<Vec<_>>(),
+        [(1, 2, 7), (0, 11, 19)]
+    );
+    assert!(matches!(
+        resolve_spans(
+            &handles,
+            &[DesktopReferenceSpan {
+                handle: "fixture-forged-handle".into(),
+                start: 0,
+                end: 1,
+            }]
+        ),
+        Err(DesktopError::InvalidInput)
+    ));
+    assert_eq!(
+        resolve_spans(&handles, &vec![spans[0].clone(); 32])
+            .expect("the inclusive span limit is accepted")
+            .len(),
+        32
+    );
+    assert!(matches!(
+        resolve_spans(&handles, &vec![spans[0].clone(); 33]),
+        Err(DesktopError::InvalidInput)
+    ));
 }
 
 #[test]
@@ -514,6 +562,180 @@ fn command_and_file_approval_emit_one_accept_or_decline_decision() {
             assert_eq!(request.params.as_object().unwrap().len(), 3);
         }
     }
+}
+
+#[test]
+fn decision_parser_preserves_legacy_boolean_and_rejects_unknown_or_conflicting_values() {
+    assert!(matches!(
+        DesktopReply::decision(true, None),
+        Ok(DesktopReply::Decision { allow: true })
+    ));
+    assert!(matches!(
+        DesktopReply::decision(false, None),
+        Ok(DesktopReply::Decision { allow: false })
+    ));
+    assert!(matches!(
+        DesktopReply::decision(true, Some("accept")),
+        Ok(DesktopReply::Decision { allow: true })
+    ));
+    assert!(matches!(
+        DesktopReply::decision(false, Some("decline")),
+        Ok(DesktopReply::Decision { allow: false })
+    ));
+    assert!(matches!(
+        DesktopReply::decision(true, Some("acceptForSession")),
+        Ok(DesktopReply::AcceptForSession)
+    ));
+
+    for (allow, decision) in [
+        (true, "decline"),
+        (false, "accept"),
+        (false, "acceptForSession"),
+        (true, "fixture-unknown-decision"),
+    ] {
+        assert!(matches!(
+            DesktopReply::decision(allow, Some(decision)),
+            Err(DesktopError::UnsupportedProtocol)
+        ));
+    }
+}
+
+#[test]
+fn session_approval_maps_only_complete_command_and_file_requests() {
+    for (request_method, native_method, state) in [
+        (
+            "item/commandExecution/requestApproval",
+            "thread-follower-command-approval-decision",
+            request_replica(
+                "item/commandExecution/requestApproval",
+                json!({
+                    "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
+                    "command": "fixture command"
+                }),
+            ),
+        ),
+        (
+            "item/fileChange/requestApproval",
+            "thread-follower-file-approval-decision",
+            file_request_replica(json!([{
+                "path":"fixture.txt",
+                "diff":"--- before\n+++ fixture content\n",
+                "kind":"update"
+            }])),
+        ),
+    ] {
+        let command = reply_command(
+            &state,
+            REQUEST_ID,
+            request_method,
+            Some(TURN_ID),
+            DesktopReply::AcceptForSession,
+        );
+        let request = command
+            .prepare(&state)
+            .expect("complete command and file reviews allow session acceptance");
+        assert_eq!(request.method, native_method);
+        assert_eq!(request.params["decision"], "acceptForSession");
+        assert_eq!(request.params.as_object().unwrap().len(), 3);
+        let projected = super::super::projection::view(&state, "fixture-session", vec![]);
+        assert!(projected.requests[0]
+            .supported_decisions
+            .iter()
+            .any(|decision| decision == "acceptForSession"));
+    }
+
+    let incomplete_command = request_replica(
+        "item/commandExecution/requestApproval",
+        json!({"threadId":THREAD_ID,"turnId":TURN_ID}),
+    );
+    let incomplete_command_reply = reply_command(
+        &incomplete_command,
+        REQUEST_ID,
+        "item/commandExecution/requestApproval",
+        Some(TURN_ID),
+        DesktopReply::AcceptForSession,
+    );
+    assert_prepare_error(
+        &incomplete_command_reply,
+        &incomplete_command,
+        DesktopError::UnsupportedProtocol,
+    );
+    assert!(
+        !super::super::projection::view(&incomplete_command, "fixture-session", vec![]).requests[0]
+            .supported_decisions
+            .iter()
+            .any(|decision| decision == "acceptForSession")
+    );
+
+    let incomplete_file = file_request_replica(json!([{
+        "path":"fixture.txt",
+        "kind":"update"
+    }]));
+    let incomplete_file_reply = reply_command(
+        &incomplete_file,
+        REQUEST_ID,
+        "item/fileChange/requestApproval",
+        Some(TURN_ID),
+        DesktopReply::AcceptForSession,
+    );
+    assert_prepare_error(
+        &incomplete_file_reply,
+        &incomplete_file,
+        DesktopError::UnsupportedProtocol,
+    );
+    assert!(
+        !super::super::projection::view(&incomplete_file, "fixture-session", vec![]).requests[0]
+            .supported_decisions
+            .iter()
+            .any(|decision| decision == "acceptForSession")
+    );
+
+    let permissions = request_replica(
+        "item/permissions/requestApproval",
+        json!({
+            "threadId":THREAD_ID,
+            "turnId":TURN_ID,
+            "permissions":{"network":true,"fileSystem":{"read":["/fixture/workspace"]}}
+        }),
+    );
+    let allow_permissions = reply_command(
+        &permissions,
+        REQUEST_ID,
+        "item/permissions/requestApproval",
+        Some(TURN_ID),
+        DesktopReply::Decision { allow: true },
+    );
+    let native_request = allow_permissions
+        .prepare(&permissions)
+        .expect("permission approval remains valid for this turn");
+    assert_eq!(
+        native_request.method,
+        "thread-follower-permissions-request-approval-response"
+    );
+    assert_eq!(native_request.params["response"]["scope"], "turn");
+    assert_eq!(
+        native_request.params["response"]["permissions"]["network"],
+        true
+    );
+    let session_permissions = reply_command(
+        &permissions,
+        REQUEST_ID,
+        "item/permissions/requestApproval",
+        Some(TURN_ID),
+        DesktopReply::AcceptForSession,
+    );
+    assert_prepare_error(
+        &session_permissions,
+        &permissions,
+        DesktopError::UnsupportedProtocol,
+    );
+    assert!(
+        !super::super::projection::view(&permissions, "fixture-session", vec![]).requests[0]
+            .supported_decisions
+            .iter()
+            .any(|decision| decision == "acceptForSession")
+    );
 }
 
 #[test]

@@ -138,6 +138,7 @@ pub enum DesktopReply {
     Decision {
         allow: bool,
     },
+    AcceptForSession,
     Answers {
         answers: Vec<(String, Vec<String>)>,
     },
@@ -147,10 +148,35 @@ pub enum DesktopReply {
     },
 }
 
+impl DesktopReply {
+    /// Build 20586's command/file approval panels and follower handlers agree on
+    /// these strings. Keep the legacy boolean; do not infer any other scope.
+    pub(super) fn decision(allow: bool, decision: Option<&str>) -> Result<Self> {
+        match (allow, decision) {
+            (_, None) | (true, Some("accept")) | (false, Some("decline")) => {
+                Ok(Self::Decision { allow })
+            }
+            (true, Some("acceptForSession")) => Ok(Self::AcceptForSession),
+            _ => Err(DesktopError::UnsupportedProtocol),
+        }
+    }
+}
+
 pub(super) struct NativeRequest {
     pub method: &'static str,
     pub version: u64,
     pub params: Value,
+}
+
+impl NativeRequest {
+    pub(super) fn new(method: super::protocol::Method, params: Value) -> Self {
+        let (method, version) = method.wire();
+        Self {
+            method,
+            version,
+            params,
+        }
+    }
 }
 
 pub struct CommandResult {
@@ -169,13 +195,12 @@ impl DesktopCommand {
     pub(super) fn prepare(&self, state: &NativeState) -> Result<NativeRequest> {
         state.check_writable()?;
         let conversation_id = state.thread_id();
-        let (method, version, params) = match self {
+        let (method, params) = match self {
             Self::Start(message) => {
                 state.check_idle()?;
                 message.validate()?;
                 (
-                    "thread-follower-start-turn",
-                    2,
+                    super::protocol::Method::Start,
                     json!({"conversationId":conversation_id,"turnStart":{
                         "request":{"threadId":conversation_id,"clientUserMessageId":message.client_id,
                             "input":message.input(),"attachments":message.attachments()},
@@ -195,8 +220,7 @@ impl DesktopCommand {
                     .as_str()
                     .ok_or(DesktopError::ReadOnly)?;
                 (
-                    "thread-follower-steer-turn",
-                    1,
+                    super::protocol::Method::Steer,
                     json!({"conversationId":conversation_id,"input":message.input(),
                     "attachments":message.attachments(),"clientUserMessageId":message.client_id,
                     "restoreMessage":{
@@ -213,8 +237,7 @@ impl DesktopCommand {
                     return Err(DesktopError::RequestExpired);
                 }
                 (
-                    "thread-follower-interrupt-turn",
-                    4,
+                    super::protocol::Method::Interrupt,
                     json!({"conversationId":conversation_id,"mode":"user-stop",
                         "expectedTurnId":expected_turn_id}),
                 )
@@ -234,8 +257,7 @@ impl DesktopCommand {
                     }
                 }
                 (
-                    "thread-follower-update-thread-settings",
-                    2,
+                    super::protocol::Method::Settings,
                     json!({"conversationId":conversation_id,"threadSettings":{
                         "collaborationMode":{"mode":mode.as_str(),"settings":{
                             "model":model,"reasoning_effort":reasoning_effort,
@@ -260,6 +282,7 @@ impl DesktopCommand {
                 if matches!(
                     response,
                     DesktopReply::Decision { allow: true }
+                        | DesktopReply::AcceptForSession
                         | DesktopReply::Answers { .. }
                         | DesktopReply::Elicitation { accept: true, .. }
                 ) && !super::projection::can_approve(state, request)
@@ -269,15 +292,25 @@ impl DesktopCommand {
                 let (method, field, result) = match (method.as_str(), response) {
                     ("item/commandExecution/requestApproval", DesktopReply::Decision { allow }) => {
                         (
-                            "thread-follower-command-approval-decision",
+                            super::protocol::Method::CommandDecision,
                             "decision",
                             json!(if *allow { "accept" } else { "decline" }),
                         )
                     }
                     ("item/fileChange/requestApproval", DesktopReply::Decision { allow }) => (
-                        "thread-follower-file-approval-decision",
+                        super::protocol::Method::FileDecision,
                         "decision",
                         json!(if *allow { "accept" } else { "decline" }),
+                    ),
+                    ("item/commandExecution/requestApproval", DesktopReply::AcceptForSession) => (
+                        super::protocol::Method::CommandDecision,
+                        "decision",
+                        json!("acceptForSession"),
+                    ),
+                    ("item/fileChange/requestApproval", DesktopReply::AcceptForSession) => (
+                        super::protocol::Method::FileDecision,
+                        "decision",
+                        json!("acceptForSession"),
                     ),
                     ("item/permissions/requestApproval", DesktopReply::Decision { allow }) => {
                         let requested = &request["params"]["permissions"];
@@ -291,7 +324,7 @@ impl DesktopCommand {
                             return Err(DesktopError::UnsupportedProtocol);
                         }
                         (
-                            "thread-follower-permissions-request-approval-response",
+                            super::protocol::Method::Permissions,
                             "response",
                             json!({"permissions":if *allow { requested.clone() } else {json!({})},"scope":"turn"}),
                         )
@@ -319,7 +352,7 @@ impl DesktopCommand {
                             result.insert(id.clone(), json!({"answers":values}));
                         }
                         (
-                            "thread-follower-submit-user-input",
+                            super::protocol::Method::Answers,
                             "response",
                             json!({"answers":result}),
                         )
@@ -338,7 +371,7 @@ impl DesktopCommand {
                             )?;
                         }
                         (
-                            "thread-follower-submit-mcp-server-elicitation-response",
+                            super::protocol::Method::Elicitation,
                             "response",
                             json!({"action":if *accept {"accept"} else {"decline"},"content":if *accept {content.clone()} else {None}}),
                         )
@@ -347,14 +380,10 @@ impl DesktopCommand {
                 };
                 let mut params = json!({"conversationId":conversation_id,"requestId":request_id});
                 params[field] = result;
-                (method, 1, params)
+                (method, params)
             }
         };
-        Ok(NativeRequest {
-            method,
-            version,
-            params,
-        })
+        Ok(NativeRequest::new(method, params))
     }
 
     pub(super) fn result(&self, value: &Value) -> Result<CommandResult> {

@@ -8,6 +8,7 @@ pub mod commands;
 mod framing;
 pub mod helper;
 pub mod projection;
+mod protocol;
 pub mod references;
 mod session;
 mod socket;
@@ -17,12 +18,10 @@ pub use session::DesktopSession;
 
 use crate::resource_limits::CODEX_DESKTOP_CONNECT_WAIT;
 use framing::{FrameReader, FrameWriter};
+use protocol::{Method, QUEUE_VERSION, STREAM_VERSION};
 use serde_json::{json, Value};
 use std::{fmt, path::Path, time::Duration};
 use tokio::{io::AsyncWriteExt, net::UnixStream, time::timeout};
-
-const STREAM_VERSION: u64 = 11;
-const QUEUE_VERSION: u64 = 2;
 
 /// Fixed classifications only: never include native errors, paths or content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +68,33 @@ impl fmt::Display for DesktopError {
 }
 
 impl std::error::Error for DesktopError {}
+
+impl DesktopError {
+    /// Safe user-facing classification shared by command errors and stream
+    /// updates. Display remains a fixed English classification for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::OwnerUnavailable => "请先在 Codex 中打开此线程，再重新连接",
+            Self::Unavailable => "Codex 桌面当前不可用，请打开 Codex 后连接",
+            Self::ReadOnly => "此线程仅支持阅读",
+            Self::Busy => "线程正在处理其他请求，请稍后重试",
+            Self::InvalidInput => "输入内容无效或超出限制",
+            Self::InvalidIdentity | Self::UnsafeSocket => "无法确认 Codex 桌面或线程身份",
+            Self::Timeout => "Codex 桌面未及时响应，请重试连接",
+            Self::RequestExpired => "该请求已失效，请查看最新状态",
+            Self::Rejected => "Codex 未接受此操作",
+            Self::OutcomeUnknown => "发送结果未确认，请先在 Codex 中核对，勿重复发送",
+            Self::Disconnected => "Codex 桌面连接已断开，请重新连接",
+            Self::UnsupportedProtocol => {
+                "当前 Codex 桌面协议不受支持，可继续阅读，请在 Codex 中操作"
+            }
+            Self::OutOfSync => "Codex 桌面状态已失步，请重新连接；当前仍可阅读",
+            Self::InvalidFrame | Self::FrameTooLarge => {
+                "当前 Codex 桌面状态无法安全处理，请重新连接或在 Codex 中继续"
+            }
+        }
+    }
+}
 
 type Result<T> = std::result::Result<T, DesktopError>;
 
@@ -118,13 +144,12 @@ impl DesktopReadSession {
                 revision: None,
             };
             let response = session
-                .request("initialize", 0, json!({"clientType":"nexushub"}))
+                .request(Method::Initialize, json!({"clientType":"nexushub"}))
                 .await?;
             session.client_id = identity(&response["result"]["clientId"])?;
             let response = session
                 .request(
-                    "thread-owner-discovery",
-                    1,
+                    Method::DiscoverOwner,
                     json!({"hostId":"local","conversationId":conversation_id}),
                 )
                 .await?;
@@ -240,7 +265,8 @@ impl DesktopReadSession {
         Ok(None)
     }
 
-    async fn request(&mut self, method: &str, version: u64, params: Value) -> Result<Value> {
+    async fn request(&mut self, method: Method, params: Value) -> Result<Value> {
+        let (method, version) = method.wire();
         let request_id = uuid::Uuid::new_v4().to_string();
         let source = (!self.client_id.is_empty()).then_some(self.client_id.as_str());
         self.send(&json!({
@@ -270,9 +296,10 @@ impl DesktopReadSession {
     }
 
     async fn follow(&mut self, following: bool) -> Result<()> {
+        let (method, version) = Method::Follow.wire();
         self.send(&json!({
             "type":"broadcast", "sourceClientId":self.client_id,
-            "method":"thread-stream-following-changed", "version":1,
+            "method":method, "version":version,
             "targetClientIds":[self.owner_id],
             "params":{"hostId":"local","conversationId":self.conversation_id,"following":following}
         }))

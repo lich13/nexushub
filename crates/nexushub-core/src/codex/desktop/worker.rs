@@ -170,7 +170,7 @@ impl WorkerLoop {
                 let mut view = self.make_view();
                 view.connected = false;
                 view.writable = false;
-                view.error = Some(error.to_string());
+                view.error = Some(error.user_message().into());
                 self.view.send_replace(view);
                 break;
             }
@@ -198,7 +198,7 @@ impl WorkerLoop {
             self.last_error = error;
         }
         let mut view = self.make_view();
-        view.error = self.last_error.map(|error| error.to_string());
+        view.error = self.last_error.map(|error| error.user_message().into());
         self.view.send_replace(view);
     }
     async fn refresh_queue(&mut self) -> Result<()> {
@@ -384,9 +384,16 @@ impl WorkerLoop {
                 })
                 .await?;
             }
-            DesktopAction::Decide { request_key, allow } => {
-                self.reply(&request_key, DesktopReply::Decision { allow })
-                    .await?;
+            DesktopAction::Decide {
+                request_key,
+                allow,
+                decision,
+            } => {
+                self.reply(
+                    &request_key,
+                    DesktopReply::decision(allow, decision.as_deref())?,
+                )
+                .await?;
             }
             DesktopAction::Answer {
                 request_key,

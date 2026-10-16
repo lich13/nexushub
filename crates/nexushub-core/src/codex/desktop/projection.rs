@@ -195,6 +195,13 @@ fn project_request(state: &NativeState, request: &Value) -> DesktopPendingReques
         form_schema: (kind == "elicitation" && can_accept)
             .then(|| params["requestedSchema"].clone()),
         can_accept,
+        supported_decisions: if can_accept && matches!(kind, "command" | "file") {
+            ["accept", "acceptForSession", "decline"]
+                .map(str::to_owned)
+                .to_vec()
+        } else {
+            Vec::new()
+        },
     }
 }
 

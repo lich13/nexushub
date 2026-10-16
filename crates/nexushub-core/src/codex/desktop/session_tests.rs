@@ -1,5 +1,5 @@
 use super::super::{
-    commands::{CollaborationMode, CommandResult, DesktopCommand, MessageInput},
+    commands::{CollaborationMode, CommandResult, DesktopCommand, DesktopReply, MessageInput},
     framing::{write_frame, FrameReader, FrameWriter},
     references::NativeReference,
     state::{NativeState, RuntimeState},
@@ -77,6 +77,41 @@ fn active_state() -> Value {
         "requests": [],
         "cwd": "/fixture/workspace"
     })
+}
+
+fn active_state_with_request(method: &str, params: Value) -> Value {
+    let mut state = active_state();
+    state["requests"] = json!([{
+        "id": "fixture-pending-request",
+        "method": method,
+        "params": params
+    }]);
+    state
+}
+
+fn reply_command_for_state(
+    initial_state: &Value,
+    method: &str,
+    response: DesktopReply,
+) -> DesktopCommand {
+    let mut state = NativeState::new(THREAD_ID).expect("fixture thread ID is valid");
+    state
+        .apply(DesktopEvent::Snapshot {
+            revision: 1,
+            state: initial_state.clone(),
+        })
+        .expect("fixture snapshot is accepted");
+    let request_id = json!("fixture-pending-request");
+    let request = state
+        .pending_request(&request_id, method)
+        .expect("fixture request is pending");
+    DesktopCommand::Reply {
+        request_id,
+        expected_request_key: super::super::projection::state_request_key(&state, request),
+        method: method.into(),
+        expected_turn_id: Some(TURN_ID.into()),
+        response,
+    }
 }
 
 fn session_pair_with_state(initial_state: Value) -> (DesktopSession, UnixStream) {
@@ -351,6 +386,144 @@ async fn state_patches_received_while_waiting_for_response_are_applied() {
         TURN_ID
     );
     broker_task.await.expect("fixture broker task completes");
+}
+
+#[tokio::test]
+async fn native_handling_removes_pending_approvals_questions_and_elicitations() {
+    let mut file_state = active_state();
+    file_state["turns"][0]["items"] = json!([{
+        "id": "fixture-file-change-item",
+        "type": "fileChange",
+        "changes": [{
+            "path": "fixture.txt",
+            "diff": "--- before\n+++ fixture content\n",
+            "kind": "update"
+        }]
+    }]);
+    file_state["requests"] = json!([{
+        "id": "fixture-pending-request",
+        "method": "item/fileChange/requestApproval",
+        "params": {
+            "threadId": THREAD_ID,
+            "turnId": TURN_ID,
+            "itemId": "fixture-file-change-item"
+        }
+    }]);
+
+    let cases = vec![
+        (
+            "item/commandExecution/requestApproval",
+            "thread-follower-command-approval-decision",
+            active_state_with_request(
+                "item/commandExecution/requestApproval",
+                json!({"threadId":THREAD_ID,"turnId":TURN_ID,"command":"fixture command"}),
+            ),
+            DesktopReply::Decision { allow: true },
+        ),
+        (
+            "item/fileChange/requestApproval",
+            "thread-follower-file-approval-decision",
+            file_state,
+            DesktopReply::Decision { allow: true },
+        ),
+        (
+            "item/tool/requestUserInput",
+            "thread-follower-submit-user-input",
+            active_state_with_request(
+                "item/tool/requestUserInput",
+                json!({
+                    "threadId":THREAD_ID,
+                    "turnId":TURN_ID,
+                    "questions":[{"id":"fixture-question","question":"Fixture question"}]
+                }),
+            ),
+            DesktopReply::Answers {
+                answers: vec![("fixture-question".into(), vec!["fixture answer".into()])],
+            },
+        ),
+        (
+            "mcpServer/elicitation/request",
+            "thread-follower-submit-mcp-server-elicitation-response",
+            active_state_with_request(
+                "mcpServer/elicitation/request",
+                json!({
+                    "threadId":THREAD_ID,
+                    "turnId":TURN_ID,
+                    "mode":"form",
+                    "message":"Fixture request",
+                    "requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}
+                }),
+            ),
+            DesktopReply::Elicitation {
+                accept: true,
+                content: Some(json!({"name":"fixture answer"})),
+            },
+        ),
+    ];
+
+    for (request_method, native_method, initial_state, response) in cases {
+        let command = reply_command_for_state(&initial_state, request_method, response);
+        let (mut session, mut broker) = session_pair_with_state(initial_state);
+        let broker_task = tokio::spawn(async move {
+            let recheck = read_frame(&mut broker)
+                .await
+                .expect("owner recheck is sent");
+            assert_eq!(recheck["method"], "thread-owner-discovery");
+            send_owner_response(&mut broker, &recheck, OWNER_ID).await;
+
+            let mutation = read_frame(&mut broker)
+                .await
+                .expect("pending request response is sent to the verified owner");
+            assert_eq!(mutation["method"], native_method);
+            assert_eq!(mutation["params"]["requestId"], "fixture-pending-request");
+
+            let patch = json!({
+                "type":"broadcast",
+                "sourceClientId":OWNER_ID,
+                "method":"thread-stream-state-changed",
+                "version":11,
+                "params":{
+                    "conversationId":THREAD_ID,
+                    "change":{
+                        "type":"patches",
+                        "revision":2,
+                        "baseRevision":1,
+                        "patches":[{"op":"replace","path":["requests"],"value":[]}]
+                    }
+                }
+            });
+            write_frame(&mut broker, &patch)
+                .await
+                .expect("native handling removes the pending request");
+            write_frame(
+                &mut broker,
+                &json!({
+                    "type":"response",
+                    "requestId":mutation["requestId"],
+                    "resultType":"success",
+                    "handledByClientId":OWNER_ID,
+                    "result":{"ok":true}
+                }),
+            )
+            .await
+            .expect("native handling confirmation is written");
+        });
+
+        let result = session
+            .execute(&command)
+            .await
+            .expect("native reply is confirmed");
+        assert!(result.turn_id.is_none());
+        broker_task.await.expect("fixture broker task completes");
+        assert_eq!(session.state().revision(), Some(2));
+        assert_eq!(session.state().pending_requests().count(), 0);
+        assert!(matches!(
+            session
+                .state()
+                .pending_request(&json!("fixture-pending-request"), request_method),
+            Err(DesktopError::RequestExpired)
+        ));
+    }
 }
 
 #[tokio::test]

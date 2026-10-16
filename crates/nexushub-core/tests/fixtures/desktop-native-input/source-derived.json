@@ -21,7 +21,7 @@
       {
         "name": "pending-request-item-panel-dfa886732b99.js",
         "sha256": "6cf1e3bf4ba1b9a497d038b8508538f23db9575234219b9ec5cca8a7c6e49622",
-        "observedBehavior": "file approval uses acceptForSession"
+        "observedBehavior": "command/file panels map acceptForSession; follower handlers forward decision unchanged"
       }
     ],
     "rangeContract": {

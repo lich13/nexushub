@@ -102,6 +102,42 @@ fn source_id() -> String {
 }
 
 #[test]
+fn user_messages_are_fixed_safe_and_keep_desktop_failures_distinct() {
+    let messages = [
+        (
+            DesktopError::OwnerUnavailable,
+            "请先在 Codex 中打开此线程，再重新连接",
+        ),
+        (DesktopError::RequestExpired, "该请求已失效，请查看最新状态"),
+        (
+            DesktopError::OutcomeUnknown,
+            "发送结果未确认，请先在 Codex 中核对，勿重复发送",
+        ),
+        (
+            DesktopError::UnsupportedProtocol,
+            "当前 Codex 桌面协议不受支持，可继续阅读，请在 Codex 中操作",
+        ),
+        (
+            DesktopError::OutOfSync,
+            "Codex 桌面状态已失步，请重新连接；当前仍可阅读",
+        ),
+        (DesktopError::UnsafeSocket, "无法确认 Codex 桌面或线程身份"),
+    ];
+
+    for (error, expected) in messages {
+        let message = error.user_message();
+        assert_eq!(message, expected);
+        assert!(!message.contains("fixture"));
+        assert!(!message.contains("/tmp/"));
+    }
+    for left in 0..messages.len() {
+        for right in left + 1..messages.len() {
+            assert_ne!(messages[left].1, messages[right].1);
+        }
+    }
+}
+
+#[test]
 fn empty_spans_preserve_legacy_ledger_bytes_and_nonempty_spans_bind_identity() {
     use super::super::references::{NativeReference, ReferenceSpan};
     let fixture = Fixture::new();

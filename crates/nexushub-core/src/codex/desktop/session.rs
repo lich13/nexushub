@@ -93,11 +93,10 @@ impl DesktopSession {
     async fn recheck_owner(&mut self, changed: &mut impl FnMut(&NativeState)) -> Result<()> {
         let response = self
             .exchange(
-                NativeRequest {
-                    method: "thread-owner-discovery",
-                    version: 1,
-                    params: json!({"hostId":"local","conversationId":self.state.thread_id()}),
-                },
+                NativeRequest::new(
+                    super::protocol::Method::DiscoverOwner,
+                    json!({"hostId":"local","conversationId":self.state.thread_id()}),
+                ),
                 false,
                 changed,
             )
