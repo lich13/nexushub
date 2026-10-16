@@ -1,3 +1,4 @@
+use nexushub_core::shell::{shell_quote, QuoteStyle};
 mod cli;
 mod hooks;
 mod monitor_start;
@@ -322,13 +323,25 @@ async fn install_probe_hooks_with_repair(
     let platform = PlatformPaths::current();
     let hook_command = format!(
         "{} --config {} probe hook-stop",
-        shell_quote(&platform.daemon_binary().display().to_string()),
-        shell_quote(&platform.config_file.display().to_string())
+        shell_quote(
+            &platform.daemon_binary().display().to_string(),
+            QuoteStyle::Minimal
+        ),
+        shell_quote(
+            &platform.config_file.display().to_string(),
+            QuoteStyle::Minimal
+        )
     );
     let request_user_input_hook_command = format!(
         "{} --config {} probe hook-request-user-input",
-        shell_quote(&platform.daemon_binary().display().to_string()),
-        shell_quote(&platform.config_file.display().to_string())
+        shell_quote(
+            &platform.daemon_binary().display().to_string(),
+            QuoteStyle::Minimal
+        ),
+        shell_quote(
+            &platform.config_file.display().to_string(),
+            QuoteStyle::Minimal
+        )
     );
     let mut root = read_hooks_json(&hooks_path)?;
     let hooks_json_changed = ensure_probe_hook(&mut root, "Stop", "*", &hook_command, None)
@@ -492,17 +505,6 @@ fn read_hooks_json(path: &Path) -> Result<Value> {
     }
     let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
-}
-
-fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
-    {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
 }
 
 fn ensure_probe_hook(
@@ -1098,6 +1100,7 @@ async fn serve(config_path: PathBuf, host_surface: HostSurface) -> Result<()> {
     api::spawn_probe_status_refresh(state.clone());
     let app = api::router(state).layer(TraceLayer::new_for_http());
     let addr: SocketAddr = config.server.listen;
+    config.server.validate_listen()?;
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;

@@ -1,11 +1,13 @@
 use nexushub_core::{
     config::Config,
+    jobs::ProcessCommand,
     platform::{PlatformKind, PlatformPaths},
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
         macos_updater_update_available_output, update_action_plan, update_status,
-        update_status_with_capability, update_status_with_recent_check_job, UpdateAction,
-        UpdateExecutionMethod, UpdateFailureCategory, UpdateState, MACOS_UPDATER_CHECKING_OUTPUT,
+        update_status_with_capability, update_status_with_recent_check_job, LinuxUpdateJobSpec,
+        UpdateAction, UpdateExecutionMethod, UpdateFailureCategory, UpdateState,
+        MACOS_UPDATER_CHECKING_OUTPUT,
     },
 };
 
@@ -141,18 +143,27 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
 #[test]
 fn linux_update_job_specs_are_planned_in_core_service() {
     let mut config = Config::for_platform_kind(PlatformKind::Linux);
-    config.update.panel_precheck_command = "nexushub-webd-update --precheck".to_string();
-    config.update.panel_update_command = "nexushub-webd-update --install".to_string();
+    config.update.panel_precheck_command =
+        "/usr/local/bin/nexushub-webd-update --precheck".to_string();
+    config.update.panel_update_command =
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string();
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let precheck =
         linux_update_job_spec(&config, update_action_plan(&platform, UpdateAction::Check)).unwrap();
     assert_eq!(precheck.kind, "nexushub_update_check");
     assert_eq!(precheck.title, "NexusHub update precheck");
-    assert_eq!(precheck.command, "nexushub-webd-update --precheck");
+    assert_eq!(
+        precheck.command,
+        "/usr/local/bin/nexushub-webd-update --precheck"
+    );
     assert_eq!(
         precheck.exclusive_group.as_deref(),
         Some("nexushub-webd-update")
+    );
+    assert_eq!(
+        precheck.process_command().unwrap(),
+        ProcessCommand::new("/usr/local/bin/nexushub-webd-update", ["--precheck"])
     );
 
     let install = linux_update_job_spec(
@@ -161,12 +172,30 @@ fn linux_update_job_specs_are_planned_in_core_service() {
     )
     .unwrap();
     assert_eq!(install.kind, "nexushub_update_install");
-    assert_eq!(install.command, "nexushub-webd-update --install");
+    assert_eq!(
+        install.command,
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
+    );
+    assert_eq!(
+        install.process_command().unwrap(),
+        ProcessCommand::new(
+            "/usr/local/bin/nexushub-webd-update",
+            ["--repo", "lich13/nexushub", "--version", "latest"]
+        )
+    );
 
     let prune =
         linux_update_job_spec(&config, update_action_plan(&platform, UpdateAction::Prune)).unwrap();
     assert_eq!(prune.kind, "nexushub_update_prune");
     assert!(prune.command.contains("release update backups"));
+    let prune_process = prune.process_command().unwrap();
+    assert_eq!(prune_process.program, std::path::PathBuf::from("python3"));
+    assert_eq!(prune_process.args.len(), 2);
+    assert_eq!(prune_process.args[0].to_string_lossy(), "-c");
+    assert_eq!(
+        prune_process.args[1].to_string_lossy(),
+        nexushub_core::update::PANEL_PRUNE_SCRIPT
+    );
 
     let mac = PlatformPaths::for_kind(PlatformKind::Macos);
     assert!(
@@ -175,6 +204,90 @@ fn linux_update_job_specs_are_planned_in_core_service() {
             .to_string()
             .contains("only Linux WebUI")
     );
+}
+
+#[test]
+fn linux_update_process_accepts_exact_historical_defaults_and_rejects_shell_variants() {
+    let expected_update = ProcessCommand::new(
+        "/usr/local/bin/nexushub-webd-update",
+        ["--repo", "lich13/nexushub", "--version", "latest"],
+    );
+    let historical_updates = [
+        "/usr/local/bin/codex-cloud-panel-update --repo lich13/codex-cloud-panel --version latest",
+        "/usr/local/bin/codex-cloud-panel-update --repo lich13/nexushub --version latest",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/codex-cloud-panel --version latest",
+    ];
+    for command in historical_updates {
+        let spec = LinuxUpdateJobSpec {
+            kind: "nexushub_update_install".to_string(),
+            title: "fixture update".to_string(),
+            command: command.to_string(),
+            exclusive_group: None,
+        };
+        assert_eq!(
+            spec.process_command().unwrap(),
+            expected_update,
+            "{command}"
+        );
+    }
+
+    let expected_precheck =
+        ProcessCommand::new("/usr/local/bin/nexushub-webd-update", ["--precheck"]);
+    let historical_prechecks = [
+        "test -x /usr/local/bin/nexushub-webd-update && systemctl is-active nexushub-webd && curl -fsS http://127.0.0.1:15742/healthz",
+        "test -x /usr/local/bin/codex-cloud-panel-update && systemctl is-active codex-cloud-panel && curl -fsS http://127.0.0.1:15732/healthz",
+        "/usr/local/bin/codex-cloud-panel-update --precheck",
+        "test -x /usr/local/bin/nexushub-update && systemctl is-active nexushub && curl -fsS http://127.0.0.1:15732/healthz",
+    ];
+    for command in historical_prechecks {
+        let spec = LinuxUpdateJobSpec {
+            kind: "nexushub_update_check".to_string(),
+            title: "fixture precheck".to_string(),
+            command: command.to_string(),
+            exclusive_group: None,
+        };
+        assert_eq!(
+            spec.process_command().unwrap(),
+            expected_precheck,
+            "{command}"
+        );
+    }
+
+    let rejected = [
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest; touch marker",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest && true",
+        "FIXTURE=1 /usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest | cat",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest > marker",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version $(touch marker)",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version `touch marker`",
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version 'latest with spaces'",
+        "/tmp/nexushub-webd-update --repo lich13/nexushub --version latest",
+    ];
+    for command in rejected {
+        let spec = LinuxUpdateJobSpec {
+            kind: "nexushub_update_install".to_string(),
+            title: "fixture update".to_string(),
+            command: command.to_string(),
+            exclusive_group: None,
+        };
+        let error = spec
+            .process_command()
+            .expect_err("non-exact update shell text must be rejected");
+        assert_eq!(error.to_string(), "unsupported managed update command");
+        assert!(
+            !error.to_string().contains(command),
+            "rejection error must not echo the configured command"
+        );
+    }
+
+    let rejected_precheck = LinuxUpdateJobSpec {
+        kind: "nexushub_update_check".to_string(),
+        title: "fixture precheck".to_string(),
+        command: "/usr/local/bin/nexushub-webd-update --precheck; touch marker".to_string(),
+        exclusive_group: None,
+    };
+    assert!(rejected_precheck.process_command().is_err());
 }
 
 #[test]

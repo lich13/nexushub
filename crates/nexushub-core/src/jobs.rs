@@ -3,7 +3,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    ffi::OsString,
     future::Future,
+    path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex},
 };
@@ -13,6 +15,25 @@ use tokio::{
     sync::broadcast,
 };
 use uuid::Uuid;
+
+/// Internal execution data, deliberately separate from serialized display commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessCommand {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+}
+
+impl ProcessCommand {
+    pub fn new(
+        program: impl Into<PathBuf>,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEvent {
@@ -42,25 +63,30 @@ impl JobRunner {
         self.tx.subscribe()
     }
 
-    pub fn start_shell_job(&self, kind: &str, title: &str, command: String) -> Result<String> {
-        self.start_shell_job_inner(kind, title, command, None)
-    }
-
-    pub fn start_exclusive_shell_job(
+    pub fn start_process_job(
         &self,
         kind: &str,
         title: &str,
-        command: String,
+        command: ProcessCommand,
+    ) -> Result<String> {
+        self.start_process_job_inner(kind, title, command, None)
+    }
+
+    pub fn start_exclusive_process_job(
+        &self,
+        kind: &str,
+        title: &str,
+        command: ProcessCommand,
         group: &str,
     ) -> Result<String> {
-        self.start_shell_job_inner(kind, title, command, Some(group))
+        self.start_process_job_inner(kind, title, command, Some(group))
     }
 
-    fn start_shell_job_inner(
+    fn start_process_job_inner(
         &self,
         kind: &str,
         title: &str,
-        command: String,
+        command: ProcessCommand,
         exclusive_group: Option<&str>,
     ) -> Result<String> {
         let exclusive_group_lock_key = exclusive_group.map(exclusive_group_key);
@@ -87,7 +113,7 @@ impl JobRunner {
         let id_for_task = id.clone();
         let exclusive_group = exclusive_group.map(str::to_string);
         spawn_job_task(async move {
-            let result = run_shell_command(
+            let result = run_process_command(
                 &db,
                 &tx,
                 &running,
@@ -122,21 +148,20 @@ impl JobRunner {
     }
 }
 
-async fn run_shell_command(
+async fn run_process_command(
     db: &PanelDb,
     tx: &broadcast::Sender<JobEvent>,
     running: &Arc<Mutex<HashMap<String, u32>>>,
     job_id: &str,
-    command: &str,
+    command: &ProcessCommand,
     exclusive_group: Option<String>,
 ) -> Result<()> {
-    let mut child = Command::new("bash")
-        .arg("-lc")
-        .arg(command)
+    let mut child = Command::new(&command.program)
+        .args(&command.args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawn job command: {command}"))?;
+        .context("unable to start managed job")?;
     if let Some(pid) = child.id() {
         running
             .lock()
@@ -258,19 +283,19 @@ mod tests {
         let mut events = runner.subscribe();
 
         let first = runner
-            .start_exclusive_shell_job(
+            .start_exclusive_process_job(
                 "panel_update_start",
                 "Panel update",
-                "sleep 0.2".to_string(),
+                super::ProcessCommand::new("sleep", ["0.2"]),
                 "panel_update",
             )
             .unwrap();
         assert!(!first.is_empty());
 
-        let second = runner.start_exclusive_shell_job(
+        let second = runner.start_exclusive_process_job(
             "panel_update_prune",
             "Panel prune",
-            "true".to_string(),
+            super::ProcessCommand::new("true", std::iter::empty::<&str>()),
             "panel_update",
         );
         assert!(second.is_err());
@@ -278,10 +303,10 @@ mod tests {
         wait_for_job_status(&mut events, &first, "succeeded").await;
         assert!(runner.exclusive_group_job("panel_update").is_none());
 
-        let third = runner.start_exclusive_shell_job(
+        let third = runner.start_exclusive_process_job(
             "panel_update_prune",
             "Panel prune",
-            "true".to_string(),
+            super::ProcessCommand::new("true", std::iter::empty::<&str>()),
             "panel_update",
         );
         assert!(third.is_ok());
@@ -315,10 +340,10 @@ mod tests {
         let runner = JobRunner::new(db.clone());
 
         let job_id = runner
-            .start_exclusive_shell_job(
+            .start_exclusive_process_job(
                 "probe_bark_test",
                 "Probe Bark test",
-                "true".to_string(),
+                super::ProcessCommand::new("true", std::iter::empty::<&str>()),
                 "probe:bark-test",
             )
             .unwrap();

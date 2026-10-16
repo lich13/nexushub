@@ -10,6 +10,7 @@ use nexushub_core::codex::{MessageBlock, ThreadDetail, ThreadStatus, ThreadSumma
 use nexushub_core::{
     config::Config,
     db::{JobRecord, PanelDb},
+    jobs::ProcessCommand,
     platform::{PlatformKind, PlatformPaths},
     services::{
         app_server_threads::{
@@ -17,7 +18,7 @@ use nexushub_core::{
             app_server_thread_summaries, apply_app_server_thread_detail, archived_filter,
             merge_thread_summaries, thread_title,
         },
-        probe::PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+        probe::{probe_process_command, ProbeAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS},
         threads as thread_service,
     },
 };
@@ -25,7 +26,9 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 use std::collections::HashSet;
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -90,9 +93,10 @@ fn mark_codex_home(home: &std::path::Path) {
 fn authenticated_test_state() -> (crate::state::AppState, String) {
     let mut config = Config::default();
     config.codex.bridge_enabled = false;
-    config.update.panel_precheck_command = "true".to_string();
-    config.update.panel_update_command = "true".to_string();
-    config.update.prune_command = "true".to_string();
+    config.update.panel_precheck_command =
+        "/usr/local/bin/nexushub-webd-update --precheck".to_string();
+    config.update.panel_update_command =
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string();
 
     let db = PanelDb::open(":memory:").unwrap();
     let api_key = db.rotate_admin_api_key().unwrap();
@@ -470,7 +474,7 @@ async fn retired_pi_commands_are_unavailable() {
 }
 
 #[test]
-fn linux_probe_actions_execute_shared_core_job_command() {
+fn linux_probe_actions_route_through_shared_core_adapter() {
     let api_source = include_str!("probe.rs")
         .split("\nmod tests {")
         .next()
@@ -506,10 +510,6 @@ fn linux_probe_actions_execute_shared_core_job_command() {
         );
     }
     assert!(
-        adapter_source.contains("spec.command"),
-        "Linux adapter should execute ProbeFixedJobSpec.command planned by nexushub-core"
-    );
-    assert!(
         adapter_source.contains("patch_probe_config_toml"),
         "Linux adapter is the only nexushub-webd module that applies Probe settings TOML patches"
     );
@@ -521,6 +521,37 @@ fn linux_probe_actions_execute_shared_core_job_command() {
         adapter_source.contains("UpdateUseCases::new"),
         "Linux adapter should request update action plans through UpdateUseCases"
     );
+}
+
+#[test]
+fn linux_probe_process_command_preserves_paths_as_literal_arguments() {
+    let platform = PlatformPaths::for_kind_with_home(
+        PlatformKind::Macos,
+        std::path::Path::new("/synthetic/runtime security/home with spaces"),
+    );
+    let config_path =
+        PathBuf::from("/synthetic/runtime security/config path with spaces; fixture.toml");
+    let cases = [
+        (ProbeAction::BarkTest, "bark-test"),
+        (ProbeAction::InstallHooks, "hooks-install"),
+    ];
+
+    for (action, subcommand) in cases {
+        let process = probe_process_command(&platform, &config_path, action);
+        assert_eq!(process.program, platform.daemon_binary());
+        assert_eq!(
+            process,
+            ProcessCommand::new(
+                platform.daemon_binary(),
+                [
+                    OsString::from("--config"),
+                    config_path.as_os_str().to_owned(),
+                    OsString::from("probe"),
+                    OsString::from(subcommand),
+                ],
+            )
+        );
+    }
 }
 
 #[test]
@@ -711,10 +742,12 @@ async fn panel_update_routes_require_api_key_and_start_fixed_panel_jobs() {
 }
 
 #[test]
-fn linux_update_adapter_builds_shell_job_specs_outside_core_service() {
+fn linux_update_adapter_builds_process_job_specs_outside_core_service() {
     let mut config = Config::for_platform_kind(PlatformKind::Linux);
-    config.update.panel_precheck_command = "nexushub-update --precheck".to_string();
-    config.update.panel_update_command = "nexushub-update --install".to_string();
+    config.update.panel_precheck_command =
+        "/usr/local/bin/nexushub-webd-update --precheck".to_string();
+    config.update.panel_update_command =
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest".to_string();
     let platform = PlatformPaths::for_kind(PlatformKind::Linux);
 
     let precheck = update_service::linux_update_job_spec(
@@ -723,7 +756,14 @@ fn linux_update_adapter_builds_shell_job_specs_outside_core_service() {
     )
     .unwrap();
     assert_eq!(precheck.kind, "nexushub_update_check");
-    assert_eq!(precheck.command, "nexushub-update --precheck");
+    assert_eq!(
+        precheck.command,
+        "/usr/local/bin/nexushub-webd-update --precheck"
+    );
+    assert_eq!(
+        precheck.process_command().unwrap(),
+        ProcessCommand::new("/usr/local/bin/nexushub-webd-update", ["--precheck"])
+    );
 
     let install = update_service::linux_update_job_spec(
         &config,
@@ -731,7 +771,17 @@ fn linux_update_adapter_builds_shell_job_specs_outside_core_service() {
     )
     .unwrap();
     assert_eq!(install.kind, "nexushub_update_install");
-    assert_eq!(install.command, "nexushub-update --install");
+    assert_eq!(
+        install.command,
+        "/usr/local/bin/nexushub-webd-update --repo lich13/nexushub --version latest"
+    );
+    assert_eq!(
+        install.process_command().unwrap(),
+        ProcessCommand::new(
+            "/usr/local/bin/nexushub-webd-update",
+            ["--repo", "lich13/nexushub", "--version", "latest"]
+        )
+    );
 
     let prune = update_service::linux_update_job_spec(
         &config,

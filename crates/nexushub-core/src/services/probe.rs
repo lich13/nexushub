@@ -1,3 +1,4 @@
+use crate::shell::{shell_quote, QuoteStyle};
 use crate::{
     codex::{self, CodexPaths, ThreadStatus, ThreadSummary},
     config::Config,
@@ -936,6 +937,26 @@ fn probe_fixed_job_spec(
     })
 }
 
+pub fn probe_process_command(
+    platform: &PlatformPaths,
+    config_path: &Path,
+    action: ProbeAction,
+) -> crate::jobs::ProcessCommand {
+    let subcommand = match action {
+        ProbeAction::BarkTest => "bark-test",
+        ProbeAction::InstallHooks => "hooks-install",
+    };
+    crate::jobs::ProcessCommand::new(
+        platform.daemon_binary(),
+        [
+            std::ffi::OsString::from("--config"),
+            config_path.as_os_str().to_owned(),
+            "probe".into(),
+            subcommand.into(),
+        ],
+    )
+}
+
 fn fixed_probe_shell_command(
     platform: &PlatformPaths,
     config_path: &Path,
@@ -949,20 +970,9 @@ fn fixed_probe_shell_command(
     parts.extend(args.iter().cloned());
     parts
         .iter()
-        .map(|part| shell_quote(part))
+        .map(|part| shell_quote(part, QuoteStyle::MinimalWithEquals))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '/' | '.' | ':' | '='))
-    {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
 }
 
 fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> {
