@@ -16,6 +16,7 @@ jobs:
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -31,14 +32,18 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-v1-pnpm-
+          key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
       - run: node scripts/check-wire-types.mjs
       - run: node --test scripts/test-wire-types.mjs
       - run: corepack pnpm@12.11.2 --dir webui typecheck
       - run: corepack pnpm@12.11.2 --dir webui test
       - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
       - run: corepack pnpm@12.11.2 --dir webui exec playwright install --with-deps chromium webkit
       - run: corepack pnpm@12.11.2 --dir webui exec playwright test --grep-invert @desktop-performance
         env:
@@ -50,9 +55,8 @@ jobs:
           name: frontend-browser-failures
           path: ${{ runner.temp }}/nexushub-browser
 
-      - name: Report pnpm advisories (non-blocking)
-        continue-on-error: true
-        run: corepack pnpm@12.11.2 --dir webui audit --json > "${RUNNER_TEMP}/pnpm-audit.json"
+      - name: Enforce pnpm advisory policy
+        run: node scripts/security-audit.mjs pnpm "${RUNNER_TEMP}/pnpm-audit.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -63,47 +67,12 @@ jobs:
   backend:
     name: Backend checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
         with:
-          node-version: 24.21.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-v1-cargo-backend-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-v1-cargo-backend-
-      - run: python3 scripts/privacy-check.py --git-objects
-      - run: cargo fmt --all -- --check
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Ensure ShellCheck is available
-        run: command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
-      - run: bash scripts/test-install-script.sh
-      - name: Report Rust advisories (non-blocking)
-        continue-on-error: true
-        shell: bash
-        run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit --json --file Cargo.lock > "${RUNNER_TEMP}/cargo-audit-core.json" || true
-          cargo audit --json --file src-tauri/Cargo.lock > "${RUNNER_TEMP}/cargo-audit-desktop.json" || true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: cargo-audit
-          path: ${{ runner.temp }}/cargo-audit-*.json
-          if-no-files-found: ignore
-
-  tauri:
-    name: macOS Tauri checks
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+          toolchain: 1.99.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 12.11.2
@@ -117,8 +86,74 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-v1-pnpm-${{ hashFiles('webui/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-v1-pnpm-
+          key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
+      - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-backend-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-backend-
+      - run: python3 scripts/privacy-check.py --git-objects
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Install script verification tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck minisign
+      - run: bash scripts/test-install-script.sh
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: cargo-audit-cache
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-audit-0.22.2-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+      - name: Install pinned cargo-audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version 0.22.2 --locked --force
+      - name: Enforce Rust advisory policy
+        shell: bash
+        run: |
+          status=0
+          node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-core.json" Cargo.lock || status=1
+          node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-desktop.json" src-tauri/Cargo.lock || status=1
+          exit "${status}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: cargo-audit
+          path: ${{ runner.temp }}/cargo-audit-*.json
+          if-no-files-found: ignore
+      - name: Check server MSRV
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          cargo +1.88.0 check --workspace --locked
+
+  tauri:
+    name: macOS Tauri checks
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
+        with:
+          toolchain: 1.99.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.21.0
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(corepack pnpm@12.11.2 store path --silent)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-${{ hashFiles('webui/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-24.21.0-pnpm-12.11.2-
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -126,12 +161,16 @@ jobs:
             ~/.cargo/git
             target
             src-tauri/target
-          key: ${{ runner.os }}-v1-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-v1-cargo-tauri-
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-tauri-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99.0-cargo-tauri-
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - run: corepack pnpm@12.11.2 --dir webui install --frozen-lockfile
       - run: corepack pnpm@12.11.2 --dir webui test
       - run: corepack pnpm@12.11.2 --dir webui build:tauri
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-1.63.0-${{ hashFiles('webui/pnpm-lock.yaml') }}
       - run: corepack pnpm@12.11.2 --dir webui exec playwright install chromium webkit
       - name: Check desktop interaction budget on macOS production build
         # Measure visible desktop windows. Headless Chromium's hosted-macOS
@@ -145,5 +184,9 @@ jobs:
         with:
           name: desktop-performance-failures
           path: ${{ runner.temp }}/nexushub-desktop-performance
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Check desktop MSRV
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          cargo +1.88.0 check --manifest-path src-tauri/Cargo.toml --locked
